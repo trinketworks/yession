@@ -1145,9 +1145,11 @@ to whatever still reproduces once the fixes have landed.
     - **A `cgroup-parent` is the repo's to name, and the host's to make.** Nothing in yession
       creates the parent cgroup or gives it a limit. On this repo's host, the Colima start
       wrapper in the nix-darwin config makes `/yession` at every boot, with a limit of the VM's
-      RAM less 768 MiB. Where the parent is missing, Docker makes it with no limit, which
-      changes nothing. A `memory:` is also not checked against the parent's limit, only against
-      the daemon's total.
+      RAM less 768 MiB. A bare name (`yession`) is spelled for the daemon's cgroup driver:
+      `/yession` under cgroupfs, `yession.slice` under systemd. A path is refused under
+      systemd. Where the parent is missing, Docker (cgroupfs) or systemd makes it with no
+      limit, which changes nothing. A `memory:` is also not checked against the parent's limit,
+      only against the daemon's total.
     - **No `${VAR}` in an entrypoint.** compose interpolates from the host's environment at parse
       time. That is the wrong environment here: the sandbox's is the one that means something.
       Nothing has needed it. The string form is read into words and nothing else. A value that
@@ -1298,10 +1300,10 @@ to whatever still reproduces once the fixes have landed.
   repository's build, or a `dev` watch takes no slot, and can still push the pool into the
   kernel's OOM killer, which then picks the largest process in ANY session. The slot is
   admission, not a limit: what bounds one container is a per-container memory limit (#1312), and
-  what keeps the daemon itself out of reach is the pool cgroup, `cgroup-parent: /yession`. The
-  host's Colima start wrapper (in the nix-darwin config) makes that pool at every boot, not
-  yession. Where it is missing, Docker makes `/yession` with no limit, and the daemon is again
-  in reach.
+  what keeps the daemon itself out of reach is the pool cgroup, `cgroup-parent: yession`
+  (`/yession` on the VM's cgroupfs driver). The host's Colima start wrapper (in the nix-darwin
+  config) makes that pool at every boot, not yession. Where it is missing, Docker makes
+  `/yession` with no limit, and the daemon is again in reach.
 - **The composition E2E and install smoke run on Linux/CI.** Other platforms' npm resolution rides
   npm's own optional-dependency machinery, unverified per-commit.
 - **No per-platform build matrix for the npm route, no code signing.** Release CI ships one

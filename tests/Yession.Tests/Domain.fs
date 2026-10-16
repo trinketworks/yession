@@ -2602,6 +2602,23 @@ let private configTests =
             | Ok _ -> failwith "the systemd driver takes only a slice name"
             | Error reason -> Expect.stringContains reason "systemd cgroup driver" "the refusal names the driver"
 
+        // One file, two drivers: the operator's Colima VM uses cgroupfs and CI's docker
+        // uses systemd. A bare name is the pool under both, spelled for each.
+        testCase "a bare cgroup-parent names the pool under either driver" <| fun () ->
+            let bare = CgroupParent.parse "yession" |> expect
+            let spelled driver =
+                CgroupParent.forDriver (Some bare) driver |> expect |> Option.map CgroupParent.value
+            Expect.equal (spelled "cgroupfs") (Some "/yession") "a path from the root under cgroupfs"
+            Expect.equal (spelled "systemd") (Some "yession.slice") "a slice under systemd"
+            // A path or a slice is written for one driver, and is not changed.
+            let slice = CgroupParent.parse "yession.slice" |> expect
+            Expect.equal (CgroupParent.forDriver (Some slice) "cgroupfs") (Ok (Some slice)) "a slice as written"
+            let nested = CgroupParent.parse "/yession/builds" |> expect
+            Expect.equal (CgroupParent.forDriver (Some nested) "cgroupfs") (Ok (Some nested)) "a path as written"
+            match CgroupParent.forDriver (Some nested) "systemd" with
+            | Ok _ -> failwith "a path is still refused under systemd"
+            | Error reason -> Expect.stringContains reason "A bare name, like yession" "the refusal says which spelling works under both"
+
         // A repo saying where the session's checkouts should appear in its own container.
         testCase "a sandbox can say where it wants the checkouts" <| fun () ->
             let file =

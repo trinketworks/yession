@@ -212,6 +212,30 @@ let tests =
                 (Some (Yession.Domain.Sandboxes.PlainValue "trinketworks/yession"))
                 "dev points gh at this repo, which its rewritten remote no longer says"
 
+        // The release's Docker tier creates this repo's dev container on CI's daemon, which
+        // uses the systemd cgroup driver; the operator's Colima VM uses cgroupfs. A
+        // declaration that only one driver takes passed `test` once, and failed every
+        // release after it. This asks both drivers, with no docker, through the same pure
+        // check the backend runs before it pulls (`ContainerSpec.forDaemon`).
+        testCase "the containers this repo declares are ones both cgroup drivers take" <| fun () ->
+            let r = repo "trinketworks/yession"
+            let dir = TestFiles.tempDir "yession-config-"
+            TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
+            TestFiles.write (RepoConfig.pathIn dir r) (TestFiles.read "yession.yaml")
+            let file = (RepoConfig.read dir r |> expect |> Option.get).File
+            // The operator's VM, the smallest daemon this repo is run on.
+            let vm = 8L * 1024L * 1024L * 1024L
+            let containers =
+                file.Sandboxes
+                |> Map.toList
+                |> List.choose (fun (name, decl) -> decl.Container |> Option.map (fun c -> SandboxName.value name, c))
+            Expect.isNonEmpty containers "this repo declares containers"
+            for name, container in containers do
+                for driver in [ "cgroupfs"; "systemd" ] do
+                    match Yession.Domain.Sandboxes.ContainerSpec.forDaemon container vm driver with
+                    | Ok _ -> ()
+                    | Error reason -> failwithf "%s: a %s daemon refuses it: %s" name driver reason
+
         testCase "a repo with no file asks for nothing, and that is not an error" <| fun () ->
             // The ordinary case. Most repos will never carry one.
             let r = repo "octo/plain"

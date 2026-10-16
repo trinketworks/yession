@@ -49,7 +49,8 @@ and `frames`) first lock a slot under `/nix/var/yession/build-slots`, on the `/n
 all sandboxes share. When every slot is held, the verb prints `build slot: waiting for another
 session's build (held by …) …` and waits. That is not a hang. Do not kill it or retry it. A
 killed holder releases its slot at once. `yession.yaml` sets `TASKS_BUILD_SLOTS` (the slot
-count, 2) for `dev` and `gate`. Where it is unset (a laptop, CI), nothing waits.
+count, 2) for `dev` and `gate`, because two 3 GiB builds fit the host's ~7 GiB pool
+(`cgroup-parent: yession`). Where it is unset (a laptop, CI), nothing waits.
 `TASKS_BUILD_SLOTS=0` builds now without a slot. `TASKS_BUILD_SLOT_TIMEOUT` is the wait in
 minutes before the verb fails (default 60). See `withBuildSlot` in `tasks.fsx`.
 

@@ -73,10 +73,14 @@ sandboxes:
       # VM's total, so that an overrun of the sum stays inside it and the daemon lives.
       # yession does not make it. The host's Colima start wrapper (in the nix-darwin
       # config) makes `/sys/fs/cgroup/yession` at every boot, with memory.max = VM RAM -
-      # 768 MiB (~7 GiB of the 8 GiB VM) and pids.max = 32768. A path, because the daemon
-      # uses the cgroupfs driver. Where the pool is missing, docker makes the cgroup itself
-      # with no limit, and the containers run as if no parent was named.
-      cgroup-parent: /yession
+      # 768 MiB (~7 GiB of the 8 GiB VM) and pids.max = 32768.
+      #
+      # A bare name, not a path: this file is read by daemons of both cgroup drivers.
+      # Under cgroupfs (the Colima VM) it is `/yession`; under systemd (CI's docker) it is
+      # `yession.slice`. A path is refused under systemd, and refused the dev container on
+      # CI once. Where the pool is missing, docker or systemd makes it with no limit, and
+      # the containers run as if no parent was named.
+      cgroup-parent: yession
     # Wishes, not needs. `github` is the operator's GitHub connection, so `git push` works
     # from a terminal where one is offered. Where the operator offers a warm nix store
     # volume under `nix-container-store`, the container mounts it and the first build
@@ -136,7 +140,7 @@ sandboxes:
       image: nixos/nix
       entrypoint: nix develop --impure --command
       memory: 3g   # as in `dev`
-      cgroup-parent: /yession   # as in `dev`: the host's pool
+      cgroup-parent: yession   # as in `dev`: the host's pool, under either driver
     wants: [ github, nix-container-store ]
 
     # The same reasons as `dev`; `like:` does not exist yet, so both are written twice.

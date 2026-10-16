@@ -1673,13 +1673,10 @@ module DockerSandbox =
                     // say, and a declaration this host cannot give is refused before it
                     // costs a pull (`ContainerMemory.forDaemon`).
                     // The cgroup parent likewise: whether a name is one this daemon takes
-                    // depends on its cgroup driver (`CgroupParent.forDriver`).
+                    // depends on its cgroup driver, and a bare name is spelled for
+                    // it (`CgroupParent.forDriver`).
                     let! daemon = client.info () |> Interop.awaitPromise
-                    let limits =
-                        ContainerMemory.forDaemon container.Memory (int64 daemon.MemTotal)
-                        |> Result.bind (fun memory ->
-                            CgroupParent.forDriver container.CgroupParent daemon.CgroupDriver
-                            |> Result.map (fun parent -> memory, parent))
+                    let limits = ContainerSpec.forDaemon container (int64 daemon.MemTotal) daemon.CgroupDriver
                     match limits with
                     | Error reason -> return Error reason
                     | Ok (memory, cgroupParent) ->
