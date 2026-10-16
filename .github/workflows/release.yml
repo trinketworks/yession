@@ -120,6 +120,9 @@ jobs:
     needs: verify
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    # Above the suites' own budgets, never below them: verify.yml's `verify` job says why. `verify`
+    # and `bench` above are calls, which cannot carry one; the jobs they call carry their own.
+    timeout-minutes: 25
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -209,6 +212,7 @@ jobs:
     needs: verify
     if: github.ref == 'refs/heads/master'
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -276,6 +280,7 @@ jobs:
       group: release-publish
       cancel-in-progress: false
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       # The versioning policy lives in tasks.fsx; the package:npm job computed it — reuse it here
       # rather than recompute, so this job needs no devenv/dotnet just for the tag name.
