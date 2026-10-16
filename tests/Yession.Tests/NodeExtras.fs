@@ -388,6 +388,29 @@ let portsTests =
 
 // --- WebSocket ------------------------------------------------------------------------------
 
+/// What a promise came to, as it lands: nothing while it waits, then the message it was rejected
+/// with, or the word `settled`. Read through `landed`, which gives up rather than hanging,
+/// because a promise that never settles is the fault the cases that use it are about.
+let private landing (promise: JS.Promise<'T>) : unit -> string option =
+    let outcome = ref None
+    promise
+    |> Promise.map (fun _ -> outcome.Value <- Some "settled")
+    |> Promise.catch (fun error -> outcome.Value <- Some error.Message)
+    |> ignore
+    fun () -> outcome.Value
+
+/// What `landing` saw within two seconds — on loopback, or with no carrier at all, a promise
+/// that has not settled by then is one that never will — and a sentence saying so when it saw
+/// nothing.
+let private landed (outcome: unit -> string option) : Async<string> =
+    async {
+        let! _ = Yession.Tests.Support.settledWithin 2000 (fun () -> (outcome ()).IsSome)
+
+        match outcome () with
+        | Some said -> return said
+        | None -> return "nothing: it was still waiting after 2s"
+    }
+
 /// Connect, do something once the socket is open, and answer with the first frame that comes
 /// back — then close, because the provider's `stop` waits for its connections.
 ///
@@ -441,6 +464,27 @@ let socketTests =
             Expect.stringContains seen "from-a-later-version" "the control frame arrived as text"
             do! provider.stop () |> Interop.awaitPromise
         }
+
+        // `Cdp.connect` over a socket that fails, which only a real one can do. The address is
+        // one the provider listened on and has stopped listening on, so nothing answers there.
+        testCaseAsync "a CDP connection nothing answers is rejected, saying it never opened" <| async {
+            let! provider = Attach.startProvider () |> Interop.awaitPromise
+            // Read while it listens: a stopped server has no port to say.
+            let address = sprintf "ws://127.0.0.1:%d/" provider.port
+            do! provider.stop () |> Interop.awaitPromise
+            let! said = landed (landing (Cdp.connect address))
+            Expect.stringContains said "closed before it opened" "what the connection came to"
+        }
+
+        // The provider's `/abrupt` takes the upgrade and drops the connection, answering nothing:
+        // a browser that went away with a command outstanding.
+        testCaseAsync "a CDP command in flight when its socket drops is rejected" <| async {
+            let! provider = Attach.startProvider () |> Interop.awaitPromise
+            let! session = Cdp.connect (sprintf "ws://127.0.0.1:%d/abrupt" provider.port) |> Interop.awaitPromise
+            let! said = landed (landing (Cdp.Page.enable session))
+            do! provider.stop () |> Interop.awaitPromise
+            Expect.stringContains said "closed (code" "what the command came to"
+        }
     ]
 
 // --- The Chrome DevTools Protocol ---------------------------------------------------------------
@@ -450,7 +494,8 @@ let socketTests =
 // `Receive` by hand. That is the half of the binding the compiler cannot check — the method
 // names and parameter keys a command writes, and the keys an answer and an event are read by —
 // and it is checked here against the protocol's own spelling, written out beside each case.
-// The socket under `Cdp.connect` is the WebSocket binding, which `socketTests` drives.
+// The socket under `Cdp.connect` is the WebSocket binding, which `socketTests` drives, and
+// `connect` itself over a socket that fails.
 
 /// A session over nothing, and every frame it has transmitted.
 let private cdpSession () : Cdp.Session * ResizeArray<string> =
@@ -706,6 +751,26 @@ let cdpTests =
             let session, _ = cdpSession ()
             session.Receive """{"method":"Page.loadEventFired","params":{"timestamp":1}}"""
             Expect.isEmpty session.Events "nothing kept"
+
+        // --- When the carrier goes away -------------------------------------------------------
+        //
+        // Nothing will answer a command now, so waiting is the one wrong outcome. `connect` is
+        // what tells a session its socket closed; `socketTests` drives that over a real one.
+
+        testCaseAsync "a command in flight when the connection ends is rejected with why it ended" <| async {
+            let session, _ = cdpSession ()
+            let outcome = landing (Cdp.Page.navigate session "about:blank")
+            session.Ended "the browser went away"
+            let! said = landed outcome
+            Expect.stringContains said "the browser went away" "what the command came to"
+        }
+
+        testCaseAsync "a command sent once the connection has ended is rejected at once" <| async {
+            let session, _ = cdpSession ()
+            session.Ended "the browser went away"
+            let! said = landed (landing (Cdp.Page.navigate session "about:blank"))
+            Expect.stringContains said "the browser went away" "what the command came to"
+        }
     ]
 
 // --- Aborting, relaying, and what was thrown ----------------------------------------------------

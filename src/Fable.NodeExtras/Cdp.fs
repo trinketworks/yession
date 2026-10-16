@@ -141,6 +141,12 @@ module Cdp =
     type internal ScreencastAckParams =
         abstract sessionId: int with get, set
 
+    /// A command sent and not yet settled: what its answer does, and what the carrier going away
+    /// does instead.
+    type internal Waiting =
+        { Answer: Incoming -> unit
+          Abandon: string -> unit }
+
     // --- A session ---------------------------------------------------------------------------
 
     /// One conversation with a browser, over whatever carries its text frames. `connect` is the
@@ -151,38 +157,61 @@ module Cdp =
     /// A command is answered by the frame carrying its `id`, whatever order the answers come
     /// in. A frame naming a `method` is an event, and is kept in `Events` if it is one of the
     /// four decoded.
+    ///
+    /// A carrier that goes away says so through `Ended`, and from then on nothing waits: a
+    /// command still awaiting its answer is rejected with why, and one sent afterwards is
+    /// rejected at once. Neither would ever be answered, and a promise that never settles is a
+    /// caller hung with nothing to say — until a deadline somewhere else kills it, naming that.
     type Session(transmit: string -> unit, close: unit -> unit) =
-        let pending = Dictionary<int, Incoming -> unit> ()
+        let pending = Dictionary<int, Waiting> ()
         let events = ResizeArray<Event> ()
         let mutable nextId = 1
+        let mutable ended : string option = None
 
         /// Every event heard so far, in the order it arrived.
         member _.Events: ResizeArray<Event> = events
 
-        /// End the conversation. Commands still awaiting an answer are not answered.
+        /// End the conversation from this side. The carrier closing is what settles the
+        /// commands still awaiting an answer (`Ended`).
         member _.Close() : unit = close ()
+
+        /// The carrier is gone, and `why` says how. Every command still waiting is rejected with
+        /// it; a second end changes nothing, because the first one already said.
+        member _.Ended(why: string) : unit =
+            if ended.IsNone then
+                ended <- Some why
+                let waiting = List.ofSeq pending.Values
+                pending.Clear ()
+
+                for command in waiting do
+                    command.Abandon why
 
         /// Send a command and wait for its answer. A refusal rejects, with the command's name and
         /// the browser's reason: a protocol fault is a fault in the caller, and the alternative —
         /// the empty answer a swallowed one reads as — surfaces somewhere else.
         member internal _.Call<'Params>(methodName: string, parameters: 'Params) : JS.Promise<Incoming> =
             Promise.create (fun resolve reject ->
-                let id = nextId
-                nextId <- nextId + 1
+                match ended with
+                | Some why -> reject (exn $"CDP %s{methodName} was not sent: %s{why}")
+                | None ->
+                    let id = nextId
+                    nextId <- nextId + 1
 
-                pending.[id] <-
-                    (fun reply ->
-                        match reply.error with
-                        | Some fault -> reject (exn $"CDP %s{methodName} was refused: %s{fault.message}")
-                        | None -> resolve reply)
+                    pending.[id] <-
+                        { Answer =
+                            fun reply ->
+                                match reply.error with
+                                | Some fault -> reject (exn $"CDP %s{methodName} was refused: %s{fault.message}")
+                                | None -> resolve reply
+                          Abandon = fun why -> reject (exn $"CDP %s{methodName} was never answered: %s{why}") }
 
-                let envelope =
-                    jsOptions<Envelope<'Params>> (fun o ->
-                        o.id <- id
-                        o.``method`` <- methodName
-                        o.``params`` <- parameters)
+                    let envelope =
+                        jsOptions<Envelope<'Params>> (fun o ->
+                            o.id <- id
+                            o.``method`` <- methodName
+                            o.``params`` <- parameters)
 
-                transmit (JS.JSON.stringify envelope))
+                    transmit (JS.JSON.stringify envelope))
 
         /// A screencast frame is acknowledged as it arrives, or the browser stops sending them.
         /// An acknowledgement the browser refuses (a frame that was in flight when the
@@ -225,30 +254,53 @@ module Cdp =
 
             match incoming.id with
             | Some id when pending.ContainsKey id ->
-                let settle = pending.[id]
+                let command = pending.[id]
                 pending.Remove id |> ignore
-                settle incoming
+                command.Answer incoming
             | _ ->
                 match incoming.``method`` with
                 | Some name -> this.Hear (name, incoming)
                 | None -> ()
 
+    /// What a closed socket said of itself, for a sentence about it.
+    let private describeClose (closed: CloseEvent) : string =
+        match closed.reason with
+        | "" -> $"code %d{closed.code}, no reason given"
+        | reason -> $"code %d{closed.code}: %s{reason}"
+
     /// Open a session on the address a browser gave for one of its pages
-    /// (`webSocketDebuggerUrl`). The promise settles once the socket is open.
+    /// (`webSocketDebuggerUrl`). The promise settles once the socket is open, and REJECTS when it
+    /// closes first, saying so: it used to wait for an `open` that was never coming, so a
+    /// browser that had gone, or an address that was never a debugger's, hung its caller until
+    /// some other deadline ended it under that deadline's name. A socket that closes after it
+    /// opened ends the session (`Session.Ended`), so what was waiting on it is rejected too.
+    ///
+    /// Both are decided at `close`, the one event every ending reaches: `error` always comes
+    /// before it and says nothing it does not (`CloseEvent`). An address `WebSocket` cannot parse
+    /// throws as it is constructed, which rejects this promise with the parser's words.
     ///
     /// CDP is a TEXT protocol, and the frame type says so rather than a cast: a binary frame on
     /// this wire is not a message that failed to parse, it is a wire that is not CDP.
     let connect (url: string) : JS.Promise<Session> =
-        Promise.create (fun resolve _ ->
+        Promise.create (fun resolve reject ->
             let socket = WebSockets.connect url
             let session = Session ((fun text -> socket.sendText text), (fun () -> socket.close ()))
+            let opened = ref false
 
             socket.onMessage (fun frame ->
                 match WebSockets.payload frame with
                 | Frame.Binary _ -> ()
                 | Frame.Text text -> session.Receive text)
 
-            socket.onOpen (fun () -> resolve session))
+            socket.onOpen (fun () ->
+                opened.Value <- true
+                resolve session)
+
+            socket.onClose (fun closed ->
+                if opened.Value then
+                    session.Ended $"the socket to %s{url} closed (%s{describeClose closed})"
+                else
+                    reject (exn $"CDP: no session on %s{url}: the socket closed before it opened (%s{describeClose closed})")))
 
     // --- Finding a page to connect to -------------------------------------------------------
 
