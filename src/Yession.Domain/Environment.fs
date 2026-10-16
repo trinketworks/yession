@@ -281,11 +281,18 @@ module PidsLimit =
 
 /// The cgroup that a container's cgroup is put under — `docker run --cgroup-parent`.
 ///
-/// With one parent for every sandbox (`/yession`), the host can give the parent a memory
+/// With one parent for every sandbox (the pool), the host can give the parent a memory
 /// limit below its total. When all the sandboxes together reach it, the kernel kills inside
 /// that parent, and the processes outside it (the daemon, its shims) are not candidates.
 /// Who makes that parent and gives it its limit is the host's operator, not this setting:
 /// if the parent does not exist, docker makes it with no limit, which changes nothing.
+///
+/// Three spellings. A bare name (`yession`: no `/`, no `.slice`) names the pool under
+/// either cgroup driver: `/yession` under cgroupfs, `yession.slice` under systemd
+/// (`forDriver`). A path (`/yession`) is for cgroupfs only, and a slice name
+/// (`yession.slice`) is passed as written. One file is read by daemons of both drivers
+/// (the operator's Colima VM is cgroupfs, CI's docker is systemd), so a repo writes the
+/// bare name.
 ///
 /// `None` — the usual — keeps the daemon's own parent.
 type CgroupParent = private CgroupParent of string
@@ -302,16 +309,27 @@ module CgroupParent =
         elif text.Split '/' |> Array.contains ".." then Error (sprintf "cgroup-parent cannot climb, and '%s' does" text)
         else Ok (CgroupParent text)
 
-    /// The parent, checked against the daemon's cgroup driver before anything is pulled.
-    /// Under the systemd driver docker accepts only a slice name (`yession.slice`); under
-    /// cgroupfs, a path (`/yession`). A refusal here names the driver, which docker's own
-    /// refusal at create does not.
+    /// A name that is neither a path nor a slice: the pool, spelled for no driver yet.
+    let private isBareName (text: string) = not (text.Contains "/") && not (text.EndsWith ".slice")
+
+    /// The parent this daemon is given, decided before anything is pulled.
+    ///
+    /// A bare name is spelled for the driver: `/<name>` under cgroupfs, `<name>.slice`
+    /// under systemd. Under systemd, if the slice does not exist, systemd makes it with no
+    /// limit — the same as a missing cgroupfs pool, and the containers run as if no parent
+    /// was named.
+    ///
+    /// A path or a slice name is checked, not changed. Under the systemd driver docker
+    /// takes only a slice name, so a path is refused here. The refusal names the driver,
+    /// which docker's own refusal at create does not.
     let forDriver (declared: CgroupParent option) (driver: string) : Result<CgroupParent option, string> =
         match declared with
+        | Some (CgroupParent name) when isBareName name ->
+            Ok (Some (CgroupParent (if driver = "systemd" then name + ".slice" else "/" + name)))
         | Some (CgroupParent path) when driver = "systemd" && not (path.EndsWith ".slice") ->
             Error (
                 sprintf
-                    "the container declares cgroup-parent: %s, and the docker daemon uses the systemd cgroup driver, which takes only a slice name, like yession.slice"
+                    "the container declares cgroup-parent: %s, and the docker daemon uses the systemd cgroup driver, which takes only a slice name, like yession.slice. A bare name, like yession, works under both drivers"
                     path)
         | declared -> Ok declared
 
@@ -366,6 +384,20 @@ module ContainerSpec =
           OomScoreAdj = None
           PidsLimit = None
           CgroupParent = None }
+
+    /// The memory ceiling and the cgroup parent THIS daemon creates the container with,
+    /// from its total memory and its cgroup driver (`docker info`). Pure, so a test can ask
+    /// what a daemon it does not have would say (`ContainerMemory.forDaemon`,
+    /// `CgroupParent.forDriver`).
+    let forDaemon
+        (container: ContainerSpec)
+        (daemonTotal: int64)
+        (cgroupDriver: string)
+        : Result<ContainerMemory * CgroupParent option, string> =
+        ContainerMemory.forDaemon container.Memory daemonTotal
+        |> Result.bind (fun memory ->
+            CgroupParent.forDriver container.CgroupParent cgroupDriver
+            |> Result.map (fun parent -> memory, parent))
 
 /// What the sandbox IS, and the distinction is load-bearing rather than descriptive.
 ///

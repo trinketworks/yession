@@ -386,11 +386,16 @@ included. So every container also gets an OOM score adjustment of 500 (`oom-scor
 1000). The daemon's processes are below zero, so the kernel kills a sandbox process first.
 Every container also gets a process limit of 4096 (`pids-limit:`), so a fork bomb uses up its
 own container and not the host. `cgroup-parent:` puts the container's cgroup under a parent,
-such as `/yession`, that the host's operator gives a memory limit below the VM's total. An OOM
-then stays inside that parent. With no parent declared, the daemon's own is used. Yession does
-not make the parent. On this repo's host, the Colima start wrapper in the nix-darwin config
-makes `/yession` at every boot, with memory.max = VM RAM - 768 MiB. When the parent is missing,
-Docker makes it with no limit, and an OOM can again reach the daemon.
+the pool, that the host's operator gives a memory limit below the VM's total. An OOM then
+stays inside that parent. With no parent declared, the daemon's own is used. The spelling
+depends on the daemon's cgroup driver, so a bare name (`yession`) is spelled for it:
+`/yession` under cgroupfs and `yession.slice` under systemd (`CgroupParent.forDriver`). A path
+(`/yession`) or a slice name (`yession.slice`) is passed as written, and a path is refused
+under systemd. One `yession.yaml` is read by both: the operator's Colima VM uses cgroupfs and
+CI's docker uses systemd. Yession does not make the parent. On this repo's host, the Colima
+start wrapper in the nix-darwin config makes `/yession` at every boot, with memory.max = VM
+RAM - 768 MiB. When the parent is missing, Docker (cgroupfs) or systemd makes it with no limit,
+and an OOM can again reach the daemon.
 
 The file has two top-level keys, and one is a version. **The whole file is sandboxes**,
 because a sandbox is the only scope where "two repos both said something" has a total answer.
