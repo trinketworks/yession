@@ -50,6 +50,10 @@ let private keyOf (el: HTMLElement) : string = el.getAttribute Dom.Hooks.tail
 /// offset over sub-pixel line heights never lands on the bottom exactly. NARROW, and that is
 /// the point: "at the end" is where the newest line is fully on screen, and a reader a line
 /// short of it is not there.
+///
+/// The slack also absorbs the pixel the chat's timeline always overflows by, so it bounces
+/// on iOS (`Style.timeline`): a short conversation at `scrollTop` 0 is at its end, and is not
+/// written down to 1. Narrow the slack below 1px and that has to be answered here.
 let private atEnd (el: HTMLElement) : bool =
     el.scrollTop + el.clientHeight >= el.scrollHeight - 4.0
 

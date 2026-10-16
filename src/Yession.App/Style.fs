@@ -1981,8 +1981,21 @@ module Style =
     /// column is one Tab reaches: the fault the card stopped being an overlay to fix.
     /// What takes the room carries the way back, and here that is the card's own way out
     /// (`askWay`): the conversation is one press away for as long as it is not drawn.
+    ///
+    /// ALWAYS SCROLLS, by one pixel at least, so it bounces like a native iOS scroll view
+    /// even when there is nothing more to see: iOS rubber-bands only a box that overflows,
+    /// and hands the gesture of one that does not to the document, which `html`'s
+    /// `overscroll-behavior: none` (app/tailwind.css) holds still. The pixel is the `::after`
+    /// — absolutely placed just under the box (`relative` makes the box its containing
+    /// block), so it adds scroll without entering the flex column the `::before` fills, and
+    /// sits inside a long conversation's content where it adds nothing. `overscroll-y-contain`
+    /// keeps the bounce in here rather than chaining it to the page. The pixel means "at the
+    /// end" cannot be `scrollTop + clientHeight = scrollHeight` with no slack: see
+    /// `Tail.atEnd` (app/browser/Tail.fs), whose 4px slack is what absorbs it.
     let timeline =
-        "flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-8 pb-6 flex flex-col gap-6 "
+        "relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain "
+        + "px-8 pb-6 flex flex-col gap-6 "
+        + "after:absolute after:inset-x-0 after:top-full after:h-px "
         + "before:grow [&>*:first-child]:mt-0 too-short:hidden "
         + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:before:-mb-1 break-words "
         + focusRingInset
