@@ -5366,12 +5366,19 @@ let editorTests =
                 let! measured = boxesOf page [ conversation; conversation + " > :last-child" ]
                 let! padding = Probe.computed page conversation "padding-bottom"
                 let! scroll = Probe.scroll page conversation
-                let fits = scroll |> Option.exists (fun s -> s.Height <= s.ClientHeight)
+                let over, top =
+                    match scroll with
+                    | Some s -> s.Height - s.ClientHeight, s.Top
+                    | None -> failwith "the conversation's scroll box could not be read"
+                // One pixel over, and only one: the timeline always overflows by that much so
+                // iOS bounces it even when short (`Style.timeline`). Being scrolled to the end
+                // takes `scrollTop` to that pixel, which is why `gap` is measured in the
+                // column's content rather than on screen.
                 let gap =
                     match measured, padding |> Option.filter (fun p -> p.EndsWith "px") with
-                    | [ c; last ], Some padding -> c.Bottom - float (padding.Substring (0, padding.Length - 2)) - last.Bottom
+                    | [ c; last ], Some padding -> c.Bottom - float (padding.Substring (0, padding.Length - 2)) - top - last.Bottom
                     | _ -> failwith "the conversation, its last item or its padding could not be read"
-                Expect.isTrue fits "the conversation is shorter than its column, so where it ends is a choice"
+                Expect.equal over 1.0 "the conversation is shorter than its column but for the pixel it bounces on, so where it ends is a choice"
                 Expect.isTrue (abs gap < 1.0) (sprintf "the last item ends %.0fpx above the column's foot" gap)
                 return ()
             }

@@ -395,7 +395,9 @@
 
    `overscroll-behavior` is what stops the rubber band happening at all: without it a flick
    that runs the timeline off its end chains to the document and bounces the whole app. An
-   app shell that fills the viewport has nowhere to bounce TO. */
+   app shell that fills the viewport has nowhere to bounce TO. The timeline still bounces
+   on its own, even when short: it always overflows by a pixel and contains its overscroll
+   (`Style.timeline`). */
 @layer base {
   html {
     background-color: var(--color-bg);
