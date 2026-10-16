@@ -404,7 +404,7 @@ let private answerTests =
             Expect.isTrue (ClientModel.launchOffered failed) "still offered over its own failure"
             let html = render failed
             Expect.stringContains html "data-repo-picker=\"choosing\"" "drawn"
-            Expect.stringContains html "could not clone repo" "beside the timeline's own account of it"
+            Expect.stringContains (Support.readable html) "could not clone repo" "beside the timeline's own account of it"
     ]
 
 /// What one message asks of the session, on a client in the given state.

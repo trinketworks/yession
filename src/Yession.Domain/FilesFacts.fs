@@ -61,7 +61,7 @@ module FileChanged =
         let where =
             if f.Sandbox = SandboxRef.defaultRef then "" else sprintf " in %s" (SandboxRef.render f.Sandbox)
         match f.Change with
-        | FileChange.Edited (1, removed, added) -> Phrase.text (sprintf "edited %s%s (−%d +%d)" f.Path where removed added)
+        | FileChange.Edited (1, removed, added) -> Phrase.deed "edited" (Phrase.text (sprintf "%s%s (−%d +%d)" f.Path where removed added))
         | FileChange.Edited (replaced, removed, added) ->
-            Phrase.text (sprintf "edited %s%s in %d places (−%d +%d)" f.Path where replaced removed added)
-        | FileChange.Written lines -> Phrase.text (sprintf "wrote %s%s (%d lines)" f.Path where lines)
+            Phrase.deed "edited" (Phrase.text (sprintf "%s%s in %d places (−%d +%d)" f.Path where replaced removed added))
+        | FileChange.Written lines -> Phrase.deed "wrote" (Phrase.text (sprintf "%s%s (%d lines)" f.Path where lines))

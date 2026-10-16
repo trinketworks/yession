@@ -1193,6 +1193,10 @@ module Style =
     // kin sit beside a status word. `whitespace-nowrap` keeps mark and name on one line.
     let entity = "inline whitespace-nowrap"
     let entityName = "text-ink"
+    /// A deed's verb (`Entity.verb`): light and dim, so the thing it was done to — an entity,
+    /// a command's description — is where the eye lands. One class for every verb on the
+    /// timeline, so "ran", "started" and "shared" cannot drift apart.
+    let deedVerb = "font-light text-small text-ink-dim"
     /// A reference that is somewhere to go — a repository, a pull request, on their host — is
     /// a real link and LOOKS like the links in the transcript's prose: blue, underlined, a
     /// step brighter under the pointer (`proseLink`, the one hyperlink face on this page).
@@ -2742,11 +2746,9 @@ module Style =
     let chatChipCommand = "font-terminal text-code-sm text-ink-dim truncate min-w-0 flex-auto"
     /// A ran command's line: "ran" and what ran, truncated together as one sentence.
     let chatChipLine = "truncate min-w-0 flex-1"
-    /// "ran" — the act's voice, the step `actNoteText` gives "started sandbox".
-    let chatChipVerb = "font-light text-small text-ink-dim"
-    /// What ran, when its author described it: prose a step brighter than its verb, as an
-    /// act's named thing (`entityName`) is beside its deed.
-    let chatChipName = "text-small text-ink"
+    /// What ran, when its author described it: prose a step brighter than its verb
+    /// (`deedVerb`), as an act's named thing (`entityName`) is.
+    let chatChipName = cls [ "text-small"; entityName ]
     /// A stretch item's sentence — prose, not mono: nothing was typed that we recorded.
     let chatChipText = "font-light text-small text-ink-dim truncate min-w-0 flex-1"
 

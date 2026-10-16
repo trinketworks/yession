@@ -324,7 +324,8 @@ let behindFold (key: FoldKey) (model: ClientModel) : string =
 
 /// The words a reader READS in some markup, with the tags taken out.
 let readable (markup: string) : string =
-    System.Text.RegularExpressions.Regex.Replace(markup, "<[^>]*>", " ").Replace("  ", " ").Trim ()
+    let words = System.Text.RegularExpressions.Regex.Replace (markup, "<[^>]*>", " ")
+    System.Text.RegularExpressions.Regex.Replace(words, "\\s+", " ").Trim ()
 
 /// One template, rendered the same way — for a piece of the view that can be asked about
 /// on its own (an entity, a phrase) without standing up the whole page around it.

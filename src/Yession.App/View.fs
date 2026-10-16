@@ -2772,9 +2772,9 @@ module View =
             let title, shown, folded =
                 match act with
                 | Act.SandboxStarted s ->
-                    [ Segment.Text "started sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ], [], sandboxStartFacts by act s
+                    Phrase.deed "started" [ Segment.Text "sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ], [], sandboxStartFacts by act s
                 | Act.SandboxStarting s ->
-                    [ Segment.Text "starting sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ], [], [ toldRow act ]
+                    Phrase.deed "starting" [ Segment.Text "sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ], [], [ toldRow act ]
                 | Act.FileChanged { FileChanged.Diff = Some diff } -> Act.deed act, [], fileChangeFacts act diff
                 | Act.RepoCapabilitiesChanged c -> Act.deed act, [], capabilityFacts act c
                 | _ -> Act.deed act, actNoteParticulars by act, [ toldRow act ]
@@ -2991,7 +2991,7 @@ module View =
                         data-terminal-id="{TerminalId.value terminalId}"
                         aria-label="{Dom.Text.commandChip (BlockLabel.ofBlock block) (terminalBlockStatusWord model block.Status) where}"
                         @click={Ev(fun _ -> dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalId, blockId)))))}>
-                  <span class="{Style.chatChipLine}" title="{block.Command}"><span class="{Style.chatChipVerb}">{Dom.Text.ran}</span> {what}</span>
+                  <span class="{Style.chatChipLine}" title="{block.Command}">{Entity.verb Dom.Text.ran} {what}</span>
                   <span class="shrink-0">{terminalBlockStatusAt model terminalId block}</span>
                 </button>"""
         // A command the agent's call asked for, before its block exists — or when it never
@@ -3052,7 +3052,7 @@ module View =
                         title="{title}"
                         ?disabled={Option.isNone opens}
                         @click={Ev(fun _ -> opens |> Option.iter (fun terminal -> dispatch (OpenInPaneMsg (Reading terminal))))}>
-                  <span class="{Style.chatChipLine}"><span class="{Style.chatChipVerb}">{Dom.Text.ran}</span> {what}</span>
+                  <span class="{Style.chatChipLine}">{Entity.verb Dom.Text.ran} {what}</span>
                   <span class="shrink-0">{statusLine}</span>
                 </button>"""
         let cardLine (chip: string) =

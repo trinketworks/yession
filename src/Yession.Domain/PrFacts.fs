@@ -456,7 +456,7 @@ module PrWatched =
 
     /// What the watch SAYS on the timeline (see RepoFacts.fs for why prose lives beside
     /// the event).
-    let phrase (p: PrWatched) : Phrase = [ Segment.Text "PR "; Segment.Ref (EntityRef.Pr p.PwPr); Segment.Text " watched" ]
+    let phrase (p: PrWatched) : Phrase = [ Segment.Text "PR "; Segment.Ref (EntityRef.Pr p.PwPr); Segment.Text " "; Segment.Verb "watched" ]
 
     /// Where the waiting began, and what it began from: the state at the moment the watch
     /// started, said whole so a reader knows what the first transition will be from.
@@ -530,7 +530,7 @@ type PrWatchReadability =
 
 module PrCreated =
 
-    let phrase (p: PrCreated) : Phrase = [ Segment.Text "PR "; Segment.Ref (EntityRef.Pr p.Pr); Segment.Text " opened" ]
+    let phrase (p: PrCreated) : Phrase = [ Segment.Text "PR "; Segment.Ref (EntityRef.Pr p.Pr); Segment.Text " "; Segment.Verb "opened" ]
 
     /// What it was called and where it goes, which the headline holds back so a list of
     /// openings reads as a list of numbers first.
@@ -540,7 +540,7 @@ module PrCreated =
 
 module PrUnwatched =
 
-    let phrase (p: PrUnwatched) : Phrase = [ Segment.Text "PR "; Segment.Ref (EntityRef.Pr p.Pr); Segment.Text " unwatched" ]
+    let phrase (p: PrUnwatched) : Phrase = [ Segment.Text "PR "; Segment.Ref (EntityRef.Pr p.Pr); Segment.Text " "; Segment.Verb "unwatched" ]
 
 module PrTransitioned =
 

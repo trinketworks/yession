@@ -83,7 +83,7 @@ module McpServerNoted =
     /// said to the same reader, and the reader is the agent as much as the person, so both
     /// say what the agent can do about it.
     let available (m: McpServerNoted) : Phrase =
-        Phrase.text (sprintf "shared %s tools" (McpServerName.value m.Name))
+        Phrase.deed "shared" (Phrase.text (sprintf "%s tools" (McpServerName.value m.Name)))
 
     let unavailable (m: McpServerNoted) : Phrase =
-        Phrase.text (sprintf "withdrew %s tools" (McpServerName.value m.Name))
+        Phrase.deed "withdrew" (Phrase.text (sprintf "%s tools" (McpServerName.value m.Name)))

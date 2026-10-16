@@ -179,7 +179,7 @@ module WorkSandboxStarted =
 
     /// The one thing worth deciding from at a glance: which sandbox, on what backend.
     let phrase (s: WorkSandboxStarted) : Phrase =
-        [ Segment.Text "started sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox); Segment.Text (sprintf " (%s)" s.Backend) ]
+        Phrase.deed "started" [ Segment.Text "sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox); Segment.Text (sprintf " (%s)" s.Backend) ]
 
     /// Everything the headline holds back, each fact its own phrase: what the sandbox is
     /// FOR, where its checkout sits, whose credential rode in, and where this host could
@@ -228,21 +228,21 @@ module WorkSandboxStarting =
     /// Short headline, like the start it resolves into: which sandbox, on what backend.
     /// What it is for rides the particulars, not the headline.
     let phrase (s: WorkSandboxStarting) : Phrase =
-        [ Segment.Text "starting sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox); Segment.Text (sprintf " (%s)" s.Backend) ]
+        Phrase.deed "starting" [ Segment.Text "sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox); Segment.Text (sprintf " (%s)" s.Backend) ]
 
     let particulars (s: WorkSandboxStarting) : Phrase list = s.Description |> Option.map Phrase.text |> Option.toList
 
 module WorkSandboxStartFailed =
 
     let phrase (s: WorkSandboxStartFailed) : Phrase =
-        [ Segment.Text "sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox); Segment.Text " could not start" ]
+        [ Segment.Text "sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox); Segment.Text " "; Segment.Verb "could not start" ]
 
     let particulars (s: WorkSandboxStartFailed) : Phrase list = [ Phrase.text s.Reason ]
 
 module WorkSandboxStopped =
 
     let phrase (s: WorkSandboxStopped) : Phrase =
-        [ Segment.Text "stopped sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ]
+        Phrase.deed "stopped" [ Segment.Text "sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ]
 
 module ShellProfileSet =
 
@@ -250,7 +250,7 @@ module ShellProfileSet =
     /// that is the particular, because "set shell profile for X" is already one clause and
     /// where terminals start is the second fact a reader asks about separately.
     let phrase (p: ShellProfileSet) : Phrase =
-        [ Segment.Text "set shell profile for "; Segment.Ref (EntityRef.Sandbox p.Sandbox) ]
+        Phrase.deed "set" [ Segment.Text "shell profile for "; Segment.Ref (EntityRef.Sandbox p.Sandbox) ]
 
     let particulars (p: ShellProfileSet) : Phrase list =
         match p.WorkingDirectory with

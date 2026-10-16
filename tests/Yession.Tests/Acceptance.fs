@@ -1395,7 +1395,7 @@ let private uiChecklistTests =
                     Conversation = { representativeModel.Conversation with Recent = List.rev ([ note ]) } }
             let html = Support.render model
             Expect.isTrue (html.Contains "data-act-note") "the note hook renders"
-            Expect.isTrue (html.Contains "removed repo ") "the act reads as its sentence"
+            Expect.isTrue ((Support.readable html).Contains "removed repo ") "the act reads as its sentence"
             Expect.isTrue
                 (html.Contains (Dom.attr "data-entity" (EntityRef.said (EntityRef.Repo (RepoRef.create "octo/hello" |> expect)))))
                 "naming its repository as a reference"
@@ -1427,7 +1427,7 @@ let private uiChecklistTests =
             // a failure of this case rather than of whatever it is watching.
             let openedAt = html.LastIndexOf ("<article", noteStart)
             let article = html.Substring (openedAt, html.IndexOf ("</article>", openedAt) - openedAt)
-            Expect.isTrue (article.Contains "added repo ") "the headline is what the act was"
+            Expect.isTrue ((Support.readable article).Contains "added repo ") "the headline is what the act was"
             Expect.isTrue (article.Contains "data-act-detail") "and the particulars are their own element"
             let detail = article.Substring (article.IndexOf "data-act-detail")
             Expect.isTrue (detail.Contains "on branch main") "carrying what the headline left out"
@@ -1457,7 +1457,7 @@ let private uiChecklistTests =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Recent = List.rev ([ edited ]) } }
             let html = Support.render model
-            Expect.isTrue (html.Contains "edited src/A.fs") "the headline names the file"
+            Expect.isTrue ((Support.readable html).Contains "edited src/A.fs") "the headline names the file"
             // Behind the disclosure, which is where a diff belongs: the line says what
             // happened, the fold says what changed.
             let diff = Support.behindFold (FoldKey.Act (MessageId.create "msg-edit" |> expect)) model
@@ -1486,7 +1486,7 @@ let private uiChecklistTests =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Recent = List.rev ([ written ]) } }
             let html = Support.render model
-            Expect.isTrue (html.Contains "wrote src/B.fs") "the headline says it was written"
+            Expect.isTrue ((Support.readable html).Contains "wrote src/B.fs") "the headline says it was written"
             Expect.isFalse (html.Contains "data-act-fact=\"diff\"") "nothing pretends to be a diff"
 
         // A repository a sentence points at is somewhere a person can go, and the reference
@@ -1855,7 +1855,7 @@ let private uiChecklistTests =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Recent = List.rev ([ note ]) } }
             let html = Support.render model
-            Expect.isTrue (html.Contains "removed repo ") "the act reads as its sentence"
+            Expect.isTrue ((Support.readable html).Contains "removed repo ") "the act reads as its sentence"
             Expect.isFalse (html.Contains "data-act-detail") "and no second line under it"
 
         // A turn nobody asked for (Plan 20, stage 2). The agent may now speak with nobody

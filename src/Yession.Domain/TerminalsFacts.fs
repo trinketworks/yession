@@ -462,7 +462,7 @@ module GitCredentialSpent =
     /// and that person everywhere else. The deployment is not a party a screen draws, so it
     /// stays a word.
     let deed (g: GitCredentialSpent) : Phrase =
-        [ Segment.Text "pushed to "; Segment.Ref (EntityRef.Repo g.Repo) ]
+        Phrase.deed "pushed" [ Segment.Text "to "; Segment.Ref (EntityRef.Repo g.Repo) ]
 
     /// Typed under a lease: no block on the timeline says what ran, so the note says where
     /// it was typed.

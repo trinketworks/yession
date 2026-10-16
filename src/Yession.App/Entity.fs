@@ -234,6 +234,12 @@ module Entity =
     let render (model: ClientModel) (by: ActorRef) (entity: EntityRef) : TemplateResult =
         draw model (name model by entity) entity
 
+    /// What was done, drawn: the one look every deed's verb has — "started" on a sandbox's
+    /// note, "ran" on a command's chip — so the thing it was done to always reads brighter
+    /// beside it, whatever either is restyled to.
+    let verb (words: string) : TemplateResult =
+        html $"""<span class="{Style.deedVerb}" data-deed-verb>{words}</span>"""
+
     /// A sentence, drawn: its words as words and each reference as `render` draws it. What
     /// the agent reads as `Phrase.said` and what a person reads here are the same segments,
     /// collapsed by two readers with two opinions — which is the whole reason a phrase is
@@ -243,5 +249,6 @@ module Entity =
         |> List.map (fun segment ->
             match segment with
             | Segment.Text words -> html $"""{words}"""
+            | Segment.Verb words -> verb words
             | Segment.Ref entity -> render model by entity)
 
