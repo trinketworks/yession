@@ -125,6 +125,7 @@ module Entity =
         | EntityRef.Sandbox _ -> "sandbox"
         | EntityRef.Pr _ -> "pr"
         | EntityRef.Content _ -> "content"
+        | EntityRef.McpServer _ -> "mcp-server"
 
     /// What a reference is called on a screen, in a sentence attributed to `by`. A person by
     /// the name the roster knows; a repo by `owner/repo` — the host is the mark's to say,
@@ -154,6 +155,7 @@ module Entity =
         // has to say which bytes it means. An artifact path knows its own name; any other
         // content is called by its file name, which is what `repos/…` will want.
         | EntityRef.Content ref -> ContentName.ofRef ref
+        | EntityRef.McpServer server -> McpServerName.value server
 
     /// Where a reference leads, and whether that is out of this session or into it — which is
     /// one question, because it decides both the URL and what a click does.
@@ -176,7 +178,8 @@ module Entity =
             Inside (RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative (SessionRoute.Content ref)), ref)
         | EntityRef.Actor _
         | EntityRef.Connection _
-        | EntityRef.Sandbox _ -> Nowhere
+        | EntityRef.Sandbox _
+        | EntityRef.McpServer _ -> Nowhere
 
     /// One reference, drawn: its mark and its name, inline, the same wherever a sentence
     /// points at it. `data-entity` carries the prose spelling (`EntityRef.said`), so a test
@@ -207,6 +210,7 @@ module Entity =
                 html $"""<span class="{Style.entityMark}" aria-hidden="true">{connectionMark connection}</span>"""
             | EntityRef.Sandbox _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.sandboxSm}</span>"""
             | EntityRef.Pr _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.prSm}</span>"""
+            | EntityRef.McpServer _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.serverSm}</span>"""
             // The mark says which KIND of content this is, because that is what decides what
             // tapping it does: a picture opens in the pane, anything else downloads. Read off
             // the name's media type (`ContentKind`), which is the same rule the pane will use —

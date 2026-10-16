@@ -41,6 +41,8 @@ type EntityRef =
     /// `artifacts/chart.png`, and `repos/octo/hello/README.md` is the same chip the day
     /// something serves it. What each is CALLED is read back off the path (`Entity.name`).
     | Content of ContentRef
+    /// An MCP server the session was given — what "shared serial tools" is about.
+    | McpServer of McpServerName
 
 module EntityRef =
 
@@ -66,6 +68,8 @@ module EntityRef =
         // spelling a message body links to, which is what lets a link in prose and a reference
         // in a fold draw as one chip.
         | EntityRef.Content ref -> ContentRef.url ref
+        // Its name, which is also the namespace its tools' wire names carry.
+        | EntityRef.McpServer name -> McpServerName.value name
 
 /// One piece of a sentence: words, the deed the words are about, or a thing they name.
 [<RequireQualifiedAccess>]
