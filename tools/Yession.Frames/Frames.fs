@@ -16,7 +16,8 @@ module Yession.Frames
 // and passes `--manager` here (`tasks.fsx`). A still is what `.agents/skills/ui-exploration`
 // once did with a script of its own — a true device viewport, the hover and focus a desktop
 // has, the `{vw, docW, overflowX}` ground truth printed beside the picture — moved here so
-// there is one Chromium launcher, one way of finding the browser, and one camera.
+// there is one camera. The browser under it is `Fable.NodeExtras.Chromium`'s, so there is one
+// launcher and one way of finding the browser for everything on Node that drives one.
 //
 // It answers the question a person asks when a page "jumps": WHAT was on the screen at each
 // moment, and WHICH render put it there. A render counter and a DOM diff say what the client
@@ -86,8 +87,9 @@ module Yession.Frames
 //
 // Chromium only, because the screencast is a CDP feature. WebKit needs a different camera
 // (timed screenshots through Playwright), and the stamps make that comparable when it exists.
-// The browser is the one the suite uses (`PLAYWRIGHT_BROWSERS_PATH`, see `Browser.fs`), so
-// run this inside the dev shell; `CHROMIUM_PATH` overrides it, as there.
+// The browser is the one the suite uses (`PLAYWRIGHT_BROWSERS_PATH`, found as `Browser.fs` finds
+// it, by `Fable.NodeExtras.Chromium`), so run this inside the dev shell; `CHROMIUM_PATH`
+// overrides it, as there.
 //
 // Caveats that shape what it can say. The stamp changes every animation frame, so it FORCES
 // a paint per frame — frame counts are the stamp's, and a frame whose only change is the
@@ -120,16 +122,12 @@ let private bytesOfBase64 (data: string) : Node.Buffer.Buffer =
 /// Time, through the Domain's one port for it (`Clock.fs`): the waits between polls and the
 /// wall-clock the landing window is measured against are the same question asked twice, and a
 /// camera that answered one with `setTimeout` and the other with `Date.now` would have two
-/// clocks, only one of which anything can turn.
+/// clocks, only one of which anything can turn. The launcher's waits are among them: it is
+/// handed `delay` rather than keeping a clock of its own.
 let private clock = Clock.system
 
 let private delay (ms: int) : JS.Promise<unit> =
     clock.After (TimeSpan.FromMilliseconds (float ms)) |> Async.StartAsPromise
-
-let private env (name: string) : string =
-    match Fable.NodeExtras.ProcessEnv.get name with
-    | Some value -> value
-    | None -> ""
 
 /// Stop. Typed as returning ANYTHING because it does not return, which is what an `abort`
 /// deep in a promise needs: there is no value to answer with.
@@ -153,11 +151,6 @@ let private say (line: string) : unit = JS.console.log line
 let private joinTwo (a: string) (b: string) : string = Node.Api.path.join (a, b)
 let private writeText (path: string) (text: string) : unit = Node.Api.fs.writeFileSync (path, box text)
 let private writeBytes (path: string) (bytes: Node.Buffer.Buffer) : unit = Node.Api.fs.writeFileSync (path, box bytes)
-let private readText (path: string) : string = Node.Api.fs.readFileSync (path, "utf8")
-let private readDir (path: string) : string array = Node.Api.fs.readdirSync (U2.Case1 path) |> Seq.toArray
-let private exists (path: string) : bool = Node.Api.fs.existsSync (U2.Case1 path)
-let private isDirectory (path: string) : bool = try (Node.Api.fs.statSync (U2.Case1 path)).isDirectory () with _ -> false
-let private realPath (path: string) : string = try Node.Api.fs.realpathSync (U2.Case1 path) with _ -> path
 
 /// A frame's picture as a digest, which is how a repeated picture is told from a new one.
 let private sha1Of (text: string) : string =
@@ -166,134 +159,11 @@ let private sha1Of (text: string) : string =
 
 let private escapeHtml (s: string) = s.Replace("&", "&amp;").Replace ("<", "&lt;")
 
-// --- Chromium ----------------------------------------------------------------------------------
-
-/// The same rule as the suite's (`Browser.fs`): `CHROMIUM_PATH` if set, else the executable
-/// found BY NAME under a `chromium-<revision>` directory of `PLAYWRIGHT_BROWSERS_PATH`. No
-/// fallback to a system Chrome, for the reason given there — a revision is pinned so the
-/// picture matches what the suite drives.
-let private chromiumExecutableNames = set [ "chrome"; "Google Chrome for Testing"; "Chromium" ]
-
-let private chromiumPath () : string =
-    match env "CHROMIUM_PATH" with
-    | "" ->
-        match env "PLAYWRIGHT_BROWSERS_PATH" with
-        | "" -> abort "no Chromium: PLAYWRIGHT_BROWSERS_PATH is unset (the dev shell sets it); outside it, set CHROMIUM_PATH"
-        | root ->
-            let rec walk (dir: string) : string list =
-                readDir dir
-                |> Array.toList
-                |> List.collect (fun name ->
-                    let path = joinTwo dir name
-                    if isDirectory path then walk path
-                    elif chromiumExecutableNames.Contains name then [ path ]
-                    else [])
-            let revisions =
-                if isDirectory root then
-                    readDir root |> Array.filter (fun d -> d.StartsWith "chromium-") |> Array.sort |> Array.toList
-                else []
-            match revisions |> List.collect (fun d -> try walk (realPath (joinTwo root d)) with _ -> []) with
-            | found :: _ -> found
-            | [] -> abort (sprintf "no Chromium under %s (%d chromium-* revision(s)); set CHROMIUM_PATH" root (List.length revisions))
-    | given -> given
-
 // --- CDP ---------------------------------------------------------------------------------------
 
 // The protocol is `Fable.NodeExtras.Cdp`'s: every command this camera sends is declared there with
 // the arguments it means, and every answer and event comes back typed.
 module Cdp = Fable.NodeExtras.Cdp
-
-/// How much of Chromium's stderr is kept to explain a launch that failed: its LAST bytes,
-/// because a refusal is the last thing it says, and a browser that started keeps talking
-/// on stderr for as long as it runs.
-let private stderrKept = 4096
-
-/// A headless Chromium on a debugging port of the OS's choosing, read back from the file it
-/// writes into its profile directory — no port to collide on.
-///
-/// A Chromium that will not start says why on stderr and exits, so both are watched: an exit
-/// before the port file appears fails the launch AT ONCE, with the code and what it said.
-/// With stderr ignored, the only sentence left was "never wrote DevToolsActivePort", ten
-/// seconds later, for every cause alike.
-let private launch
-    (executable: string)
-    (width: int)
-    (height: int)
-    (extra: string list)
-    : JS.Promise<Node.ChildProcess.ChildProcess * string> =
-    promise {
-        let profile = Node.Api.fs.mkdtempSync (joinTwo (Node.Api.os.tmpdir ()) "yession-frames-")
-        // `--no-sandbox` as root, as Playwright passes it: Chromium refuses to start as uid 0
-        // with its own sandbox on, and an agent's work sandbox runs as root. The suite never
-        // met this because it launches through Playwright; this camera met it as a browser
-        // that exited before writing its port. The sandbox it gives up is Chromium's
-        // renderer confinement, inside a container that is already the boundary.
-        let sandbox = if Fable.NodeExtras.Processes.isRoot () then [ "--no-sandbox" ] else []
-        let args =
-            // `--use-mock-keychain`, as Playwright passes: without it a Chromium the OS has not
-            // seen before stops in its network service, waiting on a Keychain prompt nobody
-            // can answer, and the first navigation never gets a response.
-            [ "--headless=new"; "--remote-debugging-port=0"; sprintf "--user-data-dir=%s" profile; "--no-first-run"
-              "--use-mock-keychain"; "--password-store=basic"; "--ignore-certificate-errors"
-              sprintf "--window-size=%d,%d" width height ]
-            @ sandbox @ extra @ [ "about:blank" ]
-        let child =
-            Fable.NodeExtras.ChildProcesses.spawn
-                executable
-                args
-                { Cwd = None
-                  Env = Fable.NodeExtras.ChildEnv.Adding Map.empty
-                  Streams = { Stdin = Fable.NodeExtras.Stdio.Ignore; Stdout = Fable.NodeExtras.Stdio.Ignore; Stderr = Fable.NodeExtras.Stdio.Pipe }
-                  Detached = false }
-        // Read for the browser's whole life, not only the launch: a pipe nobody drains fills,
-        // and a Chromium blocked writing a log line is a camera that stops filming.
-        let said = ref ""
-        Fable.NodeExtras.Readables.text (Fable.NodeExtras.ChildProcessStreams.stderr child) (fun chunk ->
-            let kept = said.Value + chunk
-            said.Value <- if kept.Length > stderrKept then kept.Substring (kept.Length - stderrKept) else kept)
-        // How it ended, kept apart: an exit's code (`None` when a signal took it), and the
-        // spawn's own error, which is the only place a missing or non-executable binary says
-        // so — Chromium never ran, so its stderr is empty and the errno is the whole answer.
-        let exited : int option option ref = ref None
-        let unspawned : string option ref = ref None
-        Fable.NodeExtras.ChildProcessStreams.onExit child (fun code -> exited.Value <- Some code)
-        Fable.NodeExtras.ChildProcessStreams.onError child (fun error ->
-            unspawned.Value <- Some (Fable.NodeExtras.StreamError.describe error))
-        /// Say why, with what Chromium said, and stop — the browser with it, if it is still up.
-        let failed (why: string) : unit =
-            let stderr = said.Value.Trim ()
-            if exited.Value.IsNone && unspawned.Value.IsNone then child.kill () |> ignore
-            abort (sprintf "%s\n%s" why (if stderr = "" then "(Chromium wrote nothing to stderr)" else stderr))
-        let portFile = joinTwo profile "DevToolsActivePort"
-        let mutable port = ""
-        let mutable waited = 0
-        while port = "" && exited.Value.IsNone && unspawned.Value.IsNone && waited < 100 do
-            if exists portFile then
-                port <- (readText portFile).Split('\n').[0].Trim ()
-            if port = "" then
-                do! delay 100
-                waited <- waited + 1
-        if port = "" then
-            match unspawned.Value, exited.Value with
-            | Some why, _ -> failed (sprintf "Chromium (%s) could not be started: %s. Its stderr:" executable why)
-            | None, Some (Some code) -> failed (sprintf "Chromium (%s) exited with code %d before writing DevToolsActivePort. Its stderr:" executable code)
-            | None, Some None -> failed (sprintf "Chromium (%s) was ended by a signal before writing DevToolsActivePort. Its stderr:" executable)
-            | None, None -> failed (sprintf "Chromium (%s) never wrote DevToolsActivePort in 10s. Its stderr:" executable)
-        let mutable target = ""
-        waited <- 0
-        while target = "" && waited < 50 do
-            try
-                let! page = Cdp.pageOn port
-                match page with
-                | Some address -> target <- address
-                | None -> ()
-            with _ -> ()
-            if target = "" then
-                do! delay 200
-                waited <- waited + 1
-        if target = "" then failwith "Chromium offered no page target"
-        return child, target
-    }
 
 /// What an evaluated expression gave, as the kind it was asked for. A throw in the expression
 /// is printed rather than swallowed, because a probe that silently evaluates to nothing is a
@@ -645,8 +515,12 @@ let private run () =
             if desktop then
                 [ "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4" ]
             else []
-        let! child, target = launch (chromiumPath ()) width height pointer
-        let! cdp = Cdp.connect target
+        let! launched = Fable.NodeExtras.Chromium.launch delay width height pointer
+        let browser =
+            match launched with
+            | Ok browser -> browser
+            | Error why -> abort why
+        let! cdp = Cdp.connect browser.Page
         do! Cdp.Page.enable cdp
         do! Cdp.Runtime.enable cdp
         do! Cdp.Network.enable cdp
@@ -688,7 +562,7 @@ let private run () =
             writeBytes picture (bytesOfBase64 shot)
             say (sprintf "wrote %s (%dx%d)" picture width height)
             cdp.Close ()
-            child.kill () |> ignore
+            Fable.NodeExtras.Chromium.close browser
             do! stopCreated ()
             // A page that never landed is a failed picture of SOMETHING, kept because what the
             // tab showed is usually why — and said with a code, so a caller cannot read it as a
@@ -890,7 +764,7 @@ let private run () =
             if not (List.isEmpty lines) then say (sprintf "#%d t=%d %s" r.N r.T (String.concat " ; " lines))
 
         cdp.Close ()
-        child.kill () |> ignore
+        Fable.NodeExtras.Chromium.close browser
         do! stopCreated ()
         exitWith 0
     }
