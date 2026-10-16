@@ -10,6 +10,8 @@ in `tasks.fsx` probes each one and holds the refusal text. Read those, not a cop
 - Two things still skip: a capability the tier did not ask for, and the runtime partition (a Node suite
   on the CLR, or the reverse).
 - `verify`'s tiers live in `.github/verify-tiers.json`.
+- `Chromium`: a real Chromium on Node, started by the camera's launcher (`Fable.NodeExtras.Chromium`)
+  for the CDP client's suite. `Browser` is Playwright on the .NET CLR, and neither grants the other.
 - `LiveGitHub`: in a Claude Code container `GITHUB_TOKEN` is a placeholder. The agent proxy swaps in the
   real credential, and only through `HTTPS_PROXY`. It authenticates EVERY request to GitHub, so no
   anonymous case can run there.

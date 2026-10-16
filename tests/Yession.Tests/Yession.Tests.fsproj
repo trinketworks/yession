@@ -82,6 +82,8 @@
     <Compile Include="TabStrips.fs" />
     <Compile Include="Attach.fs" />
     <Compile Include="NodeExtras.fs" />
+    <!-- After NodeExtras.fs, whose list of CDP commands it sends to a real Chromium. -->
+    <Compile Include="CdpChromium.fs" />
     <!-- Before the first suite with a property in it (Timeline's tab keys). -->
     <Compile Include="Hedgehog.fs" />
     <Compile Include="Timeline.fs" />

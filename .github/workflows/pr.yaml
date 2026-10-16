@@ -139,8 +139,10 @@ jobs:
       # whole examples directory advertises.
       # `Caddy` is one browser case: the proxy example's Caddyfile in front of a real Manager,
       # which is the only run the file the README tells an operator to deploy ever gets.
-      - name: Cheap tier + browser + native WebRTC/host E2E + sandbox escape probes + serial + jumpstarter + caddy
-        run: devenv shell -- check Browser Ports Native Srt Serial Jumpstarter Caddy
+      # `Chromium` costs this box nothing it lacks: the browser is here for `Browser`, and its
+      # one suite drives the CDP client the camera speaks against it, on Node, in seconds.
+      - name: Cheap tier + browser + native WebRTC/host E2E + sandbox escape probes + serial + jumpstarter + caddy + chromium
+        run: devenv shell -- check Browser Chromium Ports Native Srt Serial Jumpstarter Caddy
 
   # What a person waits for, and whether this pull request made it worse. Its own job, parallel
   # to `test`, so it costs nothing on the gate's critical path — and blocking, because a

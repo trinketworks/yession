@@ -21,57 +21,14 @@ module Chromium =
 
     // --- Finding it -------------------------------------------------------------------------
 
-    /// What the browser's executable is called, by platform: `chrome` on Linux, the app
-    /// bundle's binary on macOS. Matched by NAME, because the directories around it differ per
-    /// platform and have changed name across Playwright builds.
-    let private executableNames = set [ "chrome"; "Google Chrome for Testing"; "Chromium" ]
-
-    /// A variable's value, with one set to nothing read as one not set.
-    let private named (name: string) : string option =
-        match ProcessEnv.get name with
-        | Some "" -> None
-        | value -> value
-
-    /// The suite's rule (`tests/Yession.Tests/Browser.fs`): `CHROMIUM_PATH` if set, else the
-    /// executable found BY NAME under a `chromium-<revision>` directory of
-    /// `PLAYWRIGHT_BROWSERS_PATH`. No fallback to a system Chrome, for the reason given there —
-    /// a revision is pinned so the browser driven here is the one the suite drives.
-    let private executable () : Result<string, string> =
-        match named "CHROMIUM_PATH" with
-        | Some given -> Ok given
-        | None ->
-            match named "PLAYWRIGHT_BROWSERS_PATH" with
-            | None ->
-                Error "no Chromium: PLAYWRIGHT_BROWSERS_PATH is unset (the dev shell sets it); outside it, set CHROMIUM_PATH"
-            | Some root ->
-                let join (a: string) (b: string) : string = Node.Api.path.join (a, b)
-                let entries (dir: string) : string list = Node.Api.fs.readdirSync (U2.Case1 dir) |> Seq.toList
-
-                let isDirectory (path: string) : bool =
-                    try (Node.Api.fs.statSync (U2.Case1 path)).isDirectory () with _ -> false
-
-                let realPath (path: string) : string =
-                    try Node.Api.fs.realpathSync (U2.Case1 path) with _ -> path
-
-                let rec walk (dir: string) : string list =
-                    entries dir
-                    |> List.collect (fun name ->
-                        let path = join dir name
-                        if isDirectory path then walk path
-                        elif executableNames.Contains name then [ path ]
-                        else [])
-
-                // `chromium-*` and not `chromium*`: `chromium_headless_shell-<rev>` sits beside it
-                // and is a different, cut-down browser.
-                let revisions =
-                    if isDirectory root then
-                        entries root |> List.filter (fun d -> d.StartsWith "chromium-") |> List.sort
-                    else []
-
-                match revisions |> List.collect (fun d -> try walk (realPath (join root d)) with _ -> []) with
-                | found :: _ -> Ok found
-                | [] ->
-                    Error (sprintf "no Chromium under %s (%d chromium-* revision(s)); set CHROMIUM_PATH" root (List.length revisions))
+    /// What finding Chromium reads, read here through Node: the rule itself is
+    /// `ChromiumExecutable`, which `tasks.fsx` asks too, through System.IO.
+    let private machine : ChromiumMachine =
+        { Variable = fun name -> ProcessEnv.get name
+          Entries = fun dir -> Node.Api.fs.readdirSync (U2.Case1 dir) |> Seq.toList
+          IsDirectory = fun path -> try (Node.Api.fs.statSync (U2.Case1 path)).isDirectory () with _ -> false
+          Resolve = fun path -> try Node.Api.fs.realpathSync (U2.Case1 path) with _ -> path
+          Join = fun a b -> Node.Api.path.join (a, b) }
 
     // --- Starting and stopping it -------------------------------------------------------------
 
@@ -130,7 +87,7 @@ module Chromium =
         (extra: string list)
         : JS.Promise<Result<Launched, string>> =
         promise {
-            match executable () with
+            match ChromiumExecutable.find machine with
             | Error why -> return Error why
             | Ok executable ->
                 let profile =
