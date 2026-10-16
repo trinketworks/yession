@@ -26,6 +26,8 @@
     <Compile Include="NodeExtras.fs" />
     <!-- After NodeExtras.fs, whose `WebSockets` a CDP session speaks over. -->
     <Compile Include="Cdp.fs" />
+    <!-- After Cdp.fs, whose `pageOn` names the page a launched browser hands over. -->
+    <Compile Include="Chromium.fs" />
   </ItemGroup>
 
   <ItemGroup>
