@@ -66,7 +66,7 @@ Run the task scripts: `devenv shell -- <task>`, or bare inside the shell. The ma
 enforces it).
 
 A Claude Code container has Chromium (`$PLAYWRIGHT_BROWSERS_PATH`) and the `node-datachannel`
-addon preinstalled. The `Browser` and `Native` capabilities work (see Testing).
+addon preinstalled. The `Browser`, `Chromium` and `Native` capabilities work (see Testing).
 
 ## Build interface
 

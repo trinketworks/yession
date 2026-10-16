@@ -1455,23 +1455,13 @@ let private jumpstarterAvailable () =
 let private caddyAvailable () = probeSucceeds "caddy" [ "version" ]
 
 // A Chromium the Node launcher (`Fable.NodeExtras.Chromium`) can start: found by the rule it
-// finds one by (`ChromiumExecutable`, loaded above), reading this machine through System.IO,
-// and then RUN, because a path that names something that will not execute is a box the suite
-// cannot launch on either. `--version` answers without starting a browser, as root too.
+// finds one by (`ChromiumExecutable`, loaded above), reading this machine through the .NET view
+// declared beside the rule, and then RUN, because a path that names something that will not
+// execute is a box the suite cannot launch on either. `--version` answers without starting a
+// browser, as root too.
 let private chromiumProblem () : string option =
-    let machine : Fable.NodeExtras.ChromiumMachine =
-        { Variable = fun name -> match Environment.GetEnvironmentVariable name with null -> None | value -> Some value
-          Entries = fun dir -> Directory.EnumerateFileSystemEntries dir |> Seq.map Path.GetFileName |> List.ofSeq
-          IsDirectory = Directory.Exists
-          Resolve =
-            fun path ->
-                try
-                    match Directory.ResolveLinkTarget (path, true) with
-                    | null -> path
-                    | target -> target.FullName
-                with _ -> path
-          Join = fun a b -> Path.Combine (a, b) }
-    match Fable.NodeExtras.ChromiumExecutable.find machine with
+    let found = Fable.NodeExtras.ChromiumExecutable.find Fable.NodeExtras.ChromiumExecutable.dotnetMachine
+    match found with
     | Error why -> Some why
     | Ok executable ->
         probeFailure 30000 executable [ "--version" ]

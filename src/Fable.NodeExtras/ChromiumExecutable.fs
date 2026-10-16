@@ -2,17 +2,19 @@ namespace Fable.NodeExtras
 
 // Where Chromium is: the rule, written once for both halves of the repository.
 //
-// The launcher beside it (`Chromium.fs`) starts the browser this names, on Node, for the camera
-// and the CDP suite. `tasks.fsx` `#load`s this file, on .NET, for the `Chromium` capability's
-// probe — so a box `check` lets ask for it is a box where the launcher finds the browser,
-// because the probe asked the same rule and not a copy of it. A copy would agree with this
-// until the day Playwright renamed a directory, and then `check` would admit a box the suite
-// cannot launch on, or refuse one it can.
+// Three readers ask it. The launcher beside it (`Chromium.fs`) starts the browser this names,
+// on Node, for the camera and the CDP suite. The browser suite (`tests/Yession.Tests/Browser.fs`)
+// hands the path to Playwright, on the .NET CLR. And `tasks.fsx` `#load`s this file for the
+// `Chromium` capability's probe — so a box `check` lets ask for it is a box where the launcher
+// finds the browser, because the probe asked the same rule and not a copy of it. Copies would
+// agree until the day Playwright renamed a directory, and then `check` would admit a box the
+// suite cannot launch on, or refuse one it can.
 //
 // So it is plain F# with nothing referenced: Fable compiles it with the rest of this project,
-// and `dotnet fsi` compiles it alone. It reads nothing for itself. Each side hands in what it
-// can see of the machine (`ChromiumMachine`) — Node's `fs` there, System.IO here — which is
-// also what lets a cheap test ask it about a tree that does not exist.
+// and `dotnet fsi` compiles it alone. The rule reads nothing for itself: it is handed what can
+// be seen of the machine (`ChromiumMachine`), which is also what lets a cheap test ask it about
+// a tree that does not exist. Node's view is the launcher's (`fs`); the .NET view is here,
+// once, for the two readers on .NET (`dotnetMachine`), and out of Fable's sight.
 //
 // The browser comes from `PLAYWRIGHT_BROWSERS_PATH` — nixpkgs' playwright-driver, pinned by the
 // same lock as the toolchain (devenv.nix) — and its layout is Playwright's, which differs per
@@ -23,10 +25,11 @@ namespace Fable.NodeExtras
 //   aarch64-darwin  chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/…
 //
 // So the executable is found by NAME under the `chromium-<revision>` directory, and nothing
-// here names a revision: it moves with every Playwright bump. There is no fallback to a system
-// Chrome, for the reason the browser suite gives (`tests/Yession.Tests/Browser.fs`, which finds
-// it the same way through Playwright's .NET driver): the revision is pinned so that what is
-// driven is what the lock says, not whatever the host has. `CHROMIUM_PATH` is the override for
+// here names a revision: it moves with every Playwright bump, and a stale one would fail as "no
+// Chromium" long after the browser arrived. There is deliberately no fallback to a system
+// Chrome. The revision is pinned so the browser matches the client driving it; silently
+// launching whatever `/usr/bin/google-chrome` happens to be would make a suite's meaning depend
+// on the host, which is the opposite of what pinning is for. `CHROMIUM_PATH` is the override for
 // someone who means it.
 
 /// What finding Chromium reads of the machine, and nothing more.
@@ -87,3 +90,34 @@ module ChromiumExecutable =
                 | found :: _ -> Ok found
                 | [] ->
                     Error (sprintf "no Chromium under %s (%d chromium-* revision(s)); set CHROMIUM_PATH" root (List.length revisions))
+
+#if !FABLE_COMPILER
+    /// The machine as .NET sees it, for the readers of this rule that are not on Node:
+    /// `tasks.fsx`, whose `Chromium` probe asks it before anything is compiled, and the browser
+    /// suite on the CLR. Behind `FABLE_COMPILER` because none of System.IO exists under Fable,
+    /// and nothing there needs it: on Node the launcher reads the machine through `fs`.
+    ///
+    /// A directory is listed by name and tested with links followed, so a revision directory
+    /// that is a symlink into the store is walked like any other.
+    let dotnetMachine : ChromiumMachine =
+        { Variable =
+            fun name ->
+                match System.Environment.GetEnvironmentVariable name with
+                | null -> None
+                | value -> Some value
+          Entries =
+            fun dir ->
+                System.IO.Directory.EnumerateFileSystemEntries dir
+                |> Seq.map (fun entry -> System.IO.Path.GetFileName entry)
+                |> List.ofSeq
+          IsDirectory = fun path -> System.IO.Directory.Exists path
+          Resolve =
+            fun path ->
+                try
+                    match System.IO.Directory.ResolveLinkTarget (path, true) with
+                    | null -> path
+                    | target -> target.FullName
+                with _ ->
+                    path
+          Join = fun a b -> System.IO.Path.Combine (a, b) }
+#endif
