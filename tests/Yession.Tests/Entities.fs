@@ -36,6 +36,15 @@ let tests =
         testCase "a connection is said by its name" <| fun () ->
             Expect.equal (EntityRef.said (EntityRef.Connection github)) "github" "the name, nothing else"
 
+        // The server is a thing the headline names, so a screen draws it like the sandbox in
+        // "started sandbox dev"; the prose an agent reads is the sentence it always was.
+        testCase "a server's tools arriving name the server, and read as before" <| fun () ->
+            let serial = McpServerName.create "serial" |> expect
+            let noted : Tools.McpServerNoted = { MessageId = MessageId.create "m" |> expect; Name = serial }
+            Expect.equal (Phrase.refs (Tools.McpServerNoted.available noted)) [ EntityRef.McpServer serial ] "the server, once"
+            Expect.equal (Phrase.said (Tools.McpServerNoted.available noted)) "shared serial tools" "arriving"
+            Expect.equal (Phrase.said (Tools.McpServerNoted.unavailable noted)) "withdrew serial tools" "leaving"
+
         // The hardening under the spelling: whatever prose says a repo is, the tool that
         // takes a repo accepts. An agent reads "github:octo/hello" and writes it into
         // `add_repo`; a refusal there would be this repository's own spelling turned

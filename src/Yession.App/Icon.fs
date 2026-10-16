@@ -143,6 +143,10 @@ module Icon =
     /// A sandbox: a box, drawn as the three faces its edges show — a confined place work
     /// runs in. The mark a sandbox wears wherever a sentence points at one.
     let private sandboxPath = "M2.5 5.5 L8 2.5 L13.5 5.5 L13.5 11 L8 14 L2.5 11 Z M2.5 5.5 L8 8.5 L13.5 5.5 M8 8.5 L8 14"
+    /// An MCP server: two rack units stacked, each with its status light as a zero-length
+    /// subpath (the dot trick `morePath` uses). The mark a server wears wherever a sentence
+    /// points at one.
+    let private serverPath = "M2.5 2.5 L13.5 2.5 L13.5 7.5 L2.5 7.5 Z M2.5 8.5 L13.5 8.5 L13.5 13.5 L2.5 13.5 Z M5 5 L5 5 M5 11 L5 11"
     /// A pull request: a branch line with a commit square at each end, and a second line
     /// bending into it — a change asking to join. The mark a PR wears wherever a sentence
     /// points at one.
@@ -259,6 +263,7 @@ module Icon =
     let repoSm = stroked repoPath
     let keySm = stroked keyPath
     let sandboxSm = stroked sandboxPath
+    let serverSm = stroked serverPath
     let prSm = stroked prPath
     let imageSm = stroked imagePath
     let fileSm = stroked filePath
