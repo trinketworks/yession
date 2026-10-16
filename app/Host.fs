@@ -239,8 +239,8 @@ let startFull
             | Some focus -> carets <- Map.add payload.Who focus carets
             | None -> carets <- Map.remove payload.Who carets
 
-        // Every durable fact is advertised: appends go through a log wrapper that
-        // broadcasts the new latest offset to all connected peers (clients page the
+        // Every durable fact is advertised: the Host hears every append to the log (below)
+        // and broadcasts the new latest offset to all connected peers (clients page the
         // actual events in Step 07).
         let broadcastEventsAvailable (offset: EventOffset) =
             connections
@@ -249,7 +249,7 @@ let startFull
 
         // Peer→user attribution, derived from the durable log so it is
         // restart-safe by construction: every `PeerJoined` carrying a Manager-verified
-        // user binds that peer, live joins update it through the append wrapper below,
+        // user binds that peer, live joins update it as the log tells the Host of them,
         // and a departed peer keeps its last-known binding — a still-queued message from
         // a peer that left drains attributed. The fold and the decision rule live in
         // `Yession.Domain.Attribution`, shared with the client (Fable compiles the same
@@ -286,22 +286,18 @@ let startFull
         let log =
             // Durable storage is injected (file-backed in the product); the in-memory
             // log remains the deterministic default.
-            let inner =
-                match baseLog with
-                | Some injected -> injected
-                | None -> InMemoryEventLog.create sessionId clock.Now
-            { inner with
-                Append =
-                    fun actor event ->
-                        async {
-                            recordAttribution event
-                            let! appended = inner.Append actor event
-                            latestOffset <- Some appended.Offset
-                            terminalProjection <- Projection.applyEvent terminalProjection appended.Timestamp event
-                            broadcastEventsAvailable appended.Offset
-                            notifyChanged ()
-                            return appended
-                        } }
+            match baseLog with
+            | Some injected -> injected
+            | None -> InMemoryEventLog.create sessionId clock.Now
+        // Heard from the log itself, so an append by anything holding this log — the Host's
+        // own services or the composition root's — reaches every peer and every fold here.
+        let stopHearingLog =
+            log.OnAppended (fun appended ->
+                recordAttribution appended.Event
+                latestOffset <- Some appended.Offset
+                terminalProjection <- Projection.applyEvent terminalProjection appended.Timestamp appended.Event
+                broadcastEventsAvailable appended.Offset
+                notifyChanged ())
 
         // Seed the scheduler's log-anchored dedup set from the durable log (the
         // restart case): exactly-once is anchored in the log, not the doc.
@@ -1226,6 +1222,9 @@ let startFull
                     async {
                         stopIdleLeaseBeat ()
                         stopAttachmentSweep ()
+                        // A log can outlive this Host (a test reopens a session over the
+                        // same one), and what this Host folds is no longer anybody's.
+                        stopHearingLog ()
                         // Before the connections close, because a pass in flight is still
                         // sending carets down them and `closeConnections` waits for each to
                         // report itself closed — a writer that went on writing into a

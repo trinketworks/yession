@@ -21,12 +21,49 @@ type ReadEvents<'event> = EventOffset option -> int -> Async<EventPage<'event>>
 /// paying for the answer in the currency the plan exists to save.
 type HeadOffset = unit -> Async<EventOffset option>
 
+/// One append, as the log tells whoever is listening: after it is durable and readable.
+type Appended<'event> =
+    { Event     : 'event
+      Offset    : EventOffset
+      Timestamp : DateTimeOffset }
+
+/// Hear every append from now on. The answer stops hearing.
+type OnAppended<'event> = (Appended<'event> -> unit) -> (unit -> unit)
+
 /// The append-only event log, with its storage implementation hidden. Callers depend on
 /// these functions, never on the representation.
+///
+/// `OnAppended` is part of the log, not a wrapper around it, because "every durable fact is
+/// heard" is a rule about the log. The Host used to wrap the log it was given and announce
+/// appends through the wrapper, so the rule held only for callers that remembered to append
+/// through `Host.Log`. The repo service, the PR watcher, the MCP notes and the pane's acts
+/// appended to the file log under it, and a browser saw what they wrote only when some later
+/// event was announced: an added repo stayed off screen until its clone finished.
 type EventLog<'event> =
-    { Append : AppendEvent<'event>
-      Read   : ReadEvents<'event>
-      Head   : HeadOffset }
+    { Append     : AppendEvent<'event>
+      Read       : ReadEvents<'event>
+      Head       : HeadOffset
+      OnAppended : OnAppended<'event> }
+
+/// The listening half of a store: the one rule both stores follow, kept here rather than
+/// copied into each. A store calls `Tell` after an append is readable, and hands out
+/// `OnAppended` as the log's own.
+module AppendListeners =
+
+    type AppendListeners<'event> =
+        { Tell       : Appended<'event> -> unit
+          OnAppended : OnAppended<'event> }
+
+    let create () : AppendListeners<'event> =
+        let mutable listeners : Map<int, Appended<'event> -> unit> = Map.empty
+        let mutable next = 0
+        { Tell = fun appended -> listeners |> Map.iter (fun _ listener -> listener appended)
+          OnAppended =
+            fun listener ->
+                let id = next
+                next <- next + 1
+                listeners <- Map.add id listener listeners
+                fun () -> listeners <- Map.remove id listeners }
 
 /// One page of a log kept in a list where an envelope's OFFSET IS ITS INDEX.
 ///
@@ -104,10 +141,11 @@ module InMemoryEventLog =
 
         let gate = obj ()
         let events = ResizeArray<EventEnvelope<'event>>()
+        let listeners = AppendListeners.create ()
 
         let append (actor: ActorRef) (event: 'event) : Async<AppendResult> =
             async {
-                return
+                let appended =
                     withLock gate (fun () ->
                         // Append-only: the next offset is the current count. Monotonicity
                         // follows directly because events are never removed.
@@ -126,6 +164,9 @@ module InMemoryEventLog =
 
                         events.Add envelope
                         { Offset = offset; Timestamp = envelope.Timestamp })
+                // Outside the gate: a listener is somebody else's code, and may append.
+                listeners.Tell { Event = event; Offset = appended.Offset; Timestamp = appended.Timestamp }
+                return appended
             }
 
         let read (after: EventOffset option) (limit: int) : Async<EventPage<'event>> =
@@ -145,4 +186,5 @@ module InMemoryEventLog =
 
         { Append = append
           Read = read
-          Head = head }
+          Head = head
+          OnAppended = listeners.OnAppended }

@@ -1272,6 +1272,110 @@ let tests =
                     (sprintf "the terminal the press opened, and nothing beside it; the strip holds: %s" (String.Join (", ", strip)))
             })
 
+        // Reported from a live session: Start on the launch card, and the transcript stayed
+        // blank for the whole clone — "added repo" and "on branch" arrived together, six
+        // seconds later. The session had written `RepoAdded` at once; the repo service appended
+        // it through a log that told no browser, so a page heard of it only when the clone's
+        // own event was announced. Only the real session process wires its services to its
+        // log, so only a case that boots one can see this.
+        //
+        // The clone is held open by a git standing in for the session's (`YESSION_BIN_GIT`)
+        // until the case lets it go, and the name the card looks up is answered by a server of
+        // the case's own (`YESSION_GITHUB_API_URL`). Nothing here reaches github.com.
+        Tag.needs "a real session cloning a repo" [ Tag.Browser; Tag.Native ] (fun () ->
+        let dir = Path.GetFullPath (sprintf "tests/browser/.data/held-clone-%d" (Process.GetCurrentProcess().Id))
+        let fixture = Path.Combine (dir, "fixture")
+        let release = Path.Combine (dir, "release")
+        let wrapper = Path.Combine (dir, "git")
+        // Known before the session boots, which is when it reads the variable; bound in the body.
+        let api = sprintf "http://127.0.0.1:%d" (freeLoopbackPort ())
+        sessionCaseOn [ "YESSION_BIN_GIT", wrapper; "YESSION_GITHUB_API_URL", api ] "an added repo is in the transcript while its clone is still running" <|
+            fun page ->
+            async {
+                // From PATH, not /bin or /usr/bin: a Nix devshell has neither git nor sleep there.
+                let onPath name =
+                    Environment.GetEnvironmentVariable("PATH").Split Path.PathSeparator
+                    |> Array.map (fun d -> Path.Combine (d, name))
+                    |> Array.find File.Exists
+                let realGit = onPath "git"
+                let sleep = onPath "sleep"
+                let git (args: string list) =
+                    let psi = ProcessStartInfo realGit
+                    args |> List.iter psi.ArgumentList.Add
+                    psi.WorkingDirectory <- fixture
+                    use p = Process.Start psi
+                    p.WaitForExit ()
+                    if p.ExitCode <> 0 then failwithf "git %s exited %d" (String.Join (" ", args)) p.ExitCode
+                if Directory.Exists dir then Directory.Delete (dir, true)
+                Directory.CreateDirectory fixture |> ignore
+                File.WriteAllText (Path.Combine (fixture, "README"), "fixture\n")
+                git [ "init"; "-q"; "-b"; "main" ]
+                git [ "add"; "README" ]
+                git [ "-c"; "user.name=fixture"; "-c"; "user.email=fixture@example.invalid"; "commit"; "-q"; "-m"; "fixture" ]
+                // Every verb but the clone is the real git. The clone waits for the case, then
+                // clones the fixture into the place it was asked to, with none of the session's
+                // config: that config allows https alone, and the fixture is a local path. A
+                // minute at most, so a case that fails before letting it go strands nothing.
+                File.WriteAllText (
+                    wrapper,
+                    String.concat "\n"
+                        [ "#!/bin/sh"
+                          "case \" $* \" in"
+                          "  *\" clone \"*)"
+                          "    for dest; do :; done"
+                          "    i=0"
+                          sprintf "    while [ ! -e '%s' ] && [ $i -lt 600 ]; do '%s' 0.1; i=$((i+1)); done" release sleep
+                          sprintf "    exec /usr/bin/env -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_ALLOW_PROTOCOL '%s' clone -q --template= '%s' \"$dest\"" realGit fixture
+                          "    ;;"
+                          "esac"
+                          sprintf "exec '%s' \"$@\"" realGit
+                          "" ])
+                File.SetUnixFileMode (wrapper, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute)
+
+                let listener = new HttpListener ()
+                listener.Prefixes.Add (api + "/")
+                listener.Start ()
+                Async.Start (
+                    async {
+                        while listener.IsListening do
+                            match! Async.Catch (listener.GetContextAsync () |> Async.AwaitTask) with
+                            | Choice1Of2 ctx ->
+                                let status, body =
+                                    match ctx.Request.Url.AbsolutePath with
+                                    | "/repos/octo/fixture" -> 200, """{"full_name":"octo/fixture","default_branch":"main","private":false}"""
+                                    | "/repos/octo/fixture/branches" -> 200, """[{"name":"main"}]"""
+                                    | _ -> 404, """{"message":"Not Found"}"""
+                                let bytes = Text.Encoding.UTF8.GetBytes body
+                                ctx.Response.StatusCode <- status
+                                ctx.Response.ContentType <- "application/json"
+                                ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
+                                ctx.Response.Close ()
+                            | Choice2Of2 _ -> ()
+                    })
+                try
+                    do! waitVisible "the launch card's search" page "[data-repo-picker-search]"
+                    // The card searches on a submit, not per keystroke (`LaunchSubmitted`).
+                    do! awaitU (page.FillAsync ("[data-repo-picker-search]", "octo/fixture"))
+                    do! awaitU (page.PressAsync ("[data-repo-picker-search]", "Enter"))
+                    do! waitVisible "the fixture on the launch card" page "[data-repo-candidate='octo/fixture']"
+                    do! awaitU (page.ClickAsync "[data-repo-candidate='octo/fixture']")
+                    do! awaitU (page.ClickAsync "[data-repo-picker-start]")
+                    // The clone cannot have finished: the case has not let it go.
+                    do! waitTextIn
+                            "the added repo, still cloning, in the transcript"
+                            page
+                            (sprintf "[data-act-note][data-act-status='%s']" Yession.App.Dom.Text.running)
+                            "added repo"
+                    File.WriteAllText (release, "")
+                    do! waitTextIn "the clone's outcome on the same item" page "[data-act-note]" "on branch main"
+                    let! items = Read.texts page "[data-act-note]"
+                    let added = items |> List.filter (fun t -> t.Contains "added repo") |> List.length
+                    Expect.equal added 1 "the clone fills the item the add drew, rather than drawing another"
+                finally
+                    File.WriteAllText (release, "")
+                    listener.Stop ()
+            })
+
         // A reload brings a person back to what they had (P0-4): the same terminals in the
         // strip, the one on top, and a column with width. A preview is NOT brought back: it
         // was a glance, and the terminal it was laid over is what comes back on top.

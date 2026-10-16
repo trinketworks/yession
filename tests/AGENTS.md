@@ -176,3 +176,26 @@ A bare `.Contains "swift-heron"` passes on the ROSTER while the element under te
 Scope the assertion to the element, or to the phrase around it. Then regress the behaviour and watch it
 go red. Decoupling from incidental copy helps only while the test still fails for the right reason. A
 test loosened into vacuity is worse than the brittle one it replaced, because it reads as coverage.
+
+### End to end against the real binaries
+
+The browser tier IS the end-to-end harness. `startHost` (`Browser.fs`) runs the real Manager with
+`--auth localhost`, which spawns the real session process. A wiring bug in `SessionMain` shows up
+there and in no cheaper tier. Do not build a second launcher beside it.
+
+Keep a case off the network. Two seams the product already reads do it, passed as the case's `env`:
+
+- `YESSION_GITHUB_API_URL` points the session's GitHub calls at a loopback listener the case runs.
+- `YESSION_BIN_GIT` swaps the session's git for a wrapper. It can hold a clone open, or clone a local
+  fixture. The session sets `GIT_ALLOW_PROTOCOL=https` and auth headers through `GIT_CONFIG_*`.
+  Clear both for the fixture's own clone only. Find helpers like `sleep` on `PATH`: a Nix box has
+  no `/bin/sleep`.
+
+"an added repo is in the transcript while its clone is still running" uses both. Copy it.
+
+The same command runs it in a yession `dev` sandbox and in a Claude Code container (after
+`bash .claude/setup.sh`, prefixed `devenv shell --`):
+
+```
+check Browser Native --only "<part of a test name>"
+```
