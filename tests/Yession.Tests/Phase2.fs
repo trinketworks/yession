@@ -19,6 +19,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.App
+open Yession.Session
 open Yession.Peer
 
 /// A directory nothing else in this run writes to.
@@ -2325,6 +2326,49 @@ let private acceptanceE2eTests =
     ]
 
 // -----------------------------------------------------------------------------
+// What a log tells whoever listens: both stores, one rule.
+// -----------------------------------------------------------------------------
+
+let private appendListenerTests =
+    let sessionId = SessionId.create "listened-session" |> expect
+    let note (id: string) : SessionEvent =
+        SessionEvent.McpServerAvailable
+            { Tools.McpServerNoted.MessageId = MessageId.create id |> expect; Name = McpServerName.create "serial" |> expect }
+    let stores : (string * (unit -> EventLog<SessionEvent>)) list =
+        [ "in memory", fun () -> InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+          "on file",
+          fun () ->
+              EventStore.openLog (sprintf "%s/events.jsonl" (tempDir ())) sessionId (fun () -> DateTimeOffset.UtcNow) ]
+    testList "What a log tells whoever listens" [
+        for name, openStore in stores do
+            testCaseAsync (sprintf "%s: every append is heard once it can be read, and not after the listener stops" name) <|
+                async {
+                    let log = openStore ()
+                    let heard = ResizeArray<Appended<SessionEvent> * bool> ()
+                    let stop =
+                        log.OnAppended (fun appended ->
+                            // Readable by the time it is heard: a peer told of an offset
+                            // reads it next, and must find it there. Both stores answer
+                            // `Head` without awaiting, so this read is done when it returns.
+                            let readable = ref false
+                            Async.StartImmediate (
+                                async {
+                                    let! head = log.Head ()
+                                    readable.Value <- (head = Some appended.Offset)
+                                })
+                            heard.Add (appended, readable.Value))
+                    let! first = log.Append ActorRef.System (note "m1")
+                    let! second = log.Append ActorRef.Agent (note "m2")
+                    stop ()
+                    let! _ = log.Append ActorRef.System (note "m3")
+                    Expect.equal
+                        (heard |> Seq.map (fun (a, readable) -> a.Offset, a.Event, readable) |> List.ofSeq)
+                        [ first.Offset, note "m1", true; second.Offset, note "m2", true ]
+                        "both appends, in order, each readable when heard; nothing after the stop"
+                }
+    ]
+
+// -----------------------------------------------------------------------------
 // Durable event log: history survives a Session restart.
 // -----------------------------------------------------------------------------
 
@@ -2386,6 +2430,26 @@ let private persistenceTests =
 
                 do! b.Channel.Close ()
                 do! m2.Stop ()
+            }
+
+        // The composition root hands the log it opened to the repo service, the PR watcher,
+        // the MCP notes and the pane's acts, none of which go through the Host. An append by
+        // any of them has to reach a connected peer as it happens. When the Host announced
+        // only through a wrapper of its own, an added repo stayed off screen until the
+        // clone's own event, seconds later, was announced through it.
+        testCaseAsync "an append to the log the Host was given reaches a connected peer at once" <|
+            async {
+                let sessionId = SessionId.create "heard-session" |> expect
+                let log = InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                let! host = Host.startWithEnvironment None None (Some log) sessionId 0
+                let! a = connectClient (sprintf "http://127.0.0.1:%d/signal" host.Port) (host.MintPeerToken ()) "ada" "Ada"
+                do! a.Runner.WaitFor (fun model -> not model.EventConsumer.IsCatchingUp)
+                let note : Tools.McpServerNoted =
+                    { MessageId = MessageId.create "heard-1" |> expect; Name = McpServerName.create "serial" |> expect }
+                let! appended = log.Append ActorRef.System (SessionEvent.McpServerAvailable note)
+                do! a.Runner.WaitFor (fun model -> model.EventConsumer.LastProcessedOffset = Some appended.Offset)
+                do! a.Channel.Close ()
+                do! host.Stop ()
             }
     ]
 
@@ -2635,6 +2699,7 @@ let tests =
         commandFoldTests
         acceptanceTests
         agentSpawnerTests
+        appendListenerTests
         // Needs ports: everything that binds ports / spawns hosts over real WebRTC.
         Tag.needs "Manager launch" [ Tag.Ports; Tag.Native ] (fun () -> launchTests)
         Tag.needs "Lazy environment lifecycle" [ Tag.Ports; Tag.Native ] (fun () -> lazyLifecycleTests)

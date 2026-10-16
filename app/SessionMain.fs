@@ -1405,12 +1405,10 @@ Async.StartImmediate (
         // Composed here rather than in the Host, because the artifacts directory is this
         // module's fact (`artifactsDir`, beside `reposDir`) and the Host is given a sandbox
         // registry rather than the layout under it. Everything else it needs is the Host's,
-        // read from what it just handed back — the log among them, which is the one that
-        // tells every peer a share happened (`Host.Log`); the file log under it tells nobody,
-        // so a share recorded there showed up only when some later event was broadcast.
+        // read from what it just handed back.
         artifacts <-
             Artifacts.create
-                host.Log
+                log
                 artifactsDir
                 stagedDir
                 host.Drain

@@ -68,6 +68,7 @@ let openLog (path: string) (sessionId: SessionId) (clock: unit -> System.DateTim
             writeFileSync path valid
 
     let fd = Files.openAppend path
+    let listeners = AppendListeners.create ()
 
     let append (actor: ActorRef) (event: SessionEvent) : Async<AppendResult> =
         async {
@@ -93,6 +94,9 @@ let openLog (path: string) (sessionId: SessionId) (clock: unit -> System.DateTim
             // drain would need an explicit mutex before it could tolerate one.
             writeAndSync fd (Codec.toString Events.sessionEventEnvelope envelope + "\n")
             events.Add envelope
+            // Still without yielding, for the same contract: a listener hears the append
+            // before the appender's next line runs.
+            listeners.Tell { Event = event; Offset = offset; Timestamp = envelope.Timestamp }
             return { Offset = offset; Timestamp = envelope.Timestamp }
         }
 
@@ -108,4 +112,5 @@ let openLog (path: string) (sessionId: SessionId) (clock: unit -> System.DateTim
 
     { Append = append
       Read = read
-      Head = head }
+      Head = head
+      OnAppended = listeners.OnAppended }
