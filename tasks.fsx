@@ -1362,9 +1362,10 @@ let private agentCredentials () =
 // the flag, so `check Srt` refused a root container where srt's strict profile runs, and any
 // other copy goes stale the same way at srt's next release.
 
-/// Whether the run configures srt's WEAKER nesting profile (`enableWeakerNestedSandbox`): the
-/// host's `/proc` stays visible and capabilities are not dropped. Read as `SrtSandbox.toolsFrom`
-/// reads it, so the probe below runs the profile a session on this box would.
+/// Whether the run configures srt's WEAKER nesting profile (`enableWeakerNestedSandbox`), under
+/// which a command sees the host's `/proc` instead of a fresh one; docs/GAPS.md says what else
+/// does and does not change. Read as `SrtSandbox.toolsFrom` reads it, so the probe below runs the
+/// profile a session on this box would.
 let private weakNesting () =
     (match Environment.GetEnvironmentVariable "YESSION_NESTED_SANDBOX" with null -> "" | v -> v.Trim().ToLowerInvariant ()) = "weak"
 
@@ -1489,9 +1490,11 @@ let private srtRefusal () : string option =
         )
     else
         because
-            ("Srt: no working strict confinement (bubblewrap, socat, ripgrep, setsid and a nested user "
-             + "namespace; an unprivileged container cannot host it — run `Sandbox` there under "
-             + "YESSION_NESTED_SANDBOX=weak, and leave the strict probes to CI (pr.yaml) or `vm-check Srt` on a Mac)")
+            ("Srt: this box cannot run srt's strict profile. If srt could not mount /proc, the box covers "
+             + "part of it, as a Docker container does by default: run `Sandbox` there under "
+             + "YESSION_NESTED_SANDBOX=weak, and leave the strict probes to CI (pr.yaml) or `vm-check Srt` "
+             + "on a Mac. For any other refusal, docs/GAPS.md (\"The strict confinement profile mounts a "
+             + "fresh /proc\") says what refuses both profiles and what clears each")
             sandboxProblem
             ()
 
@@ -1541,9 +1544,11 @@ let private capabilities : Capability list =
         Gated = true
         Refusal =
             because
-                ("Sandbox: no working work sandbox (bubblewrap, socat, ripgrep, setsid, and — under the "
-                 + "strict profile — a nested user namespace; an unprivileged container needs "
-                 + "YESSION_NESTED_SANDBOX=weak)")
+                ("Sandbox: this box cannot run a command in srt under the profile the run configures. If "
+                 + "srt could not mount /proc under the strict profile, the box covers part of it, as a "
+                 + "Docker container does by default: set YESSION_NESTED_SANDBOX=weak. For any other "
+                 + "refusal, docs/GAPS.md (\"The strict confinement profile mounts a fresh /proc\") says "
+                 + "what refuses both profiles and what clears each")
                 sandboxProblem }
       { Name = "Srt"
         Needs = "confinement under test, so the STRICT profile only; also grants Sandbox. Probe: as Sandbox, and refused under YESSION_NESTED_SANDBOX=weak."
@@ -2031,11 +2036,11 @@ let verify (args: string list) =
 
 // --- vm-check: run a Node test tier on a Linux target -----------------------------------------
 //
-// The Mac runs srt as Seatbelt and cannot host the STRICT nested-userns profile CI uses; the
-// dev container cannot host it either — a container has no user namespace left to nest in. A
-// Linux box that shares this checkout can, and iterating there is seconds rather than a
-// ~4-minute `verify.yml` round-trip. This compiles the suite on the host (the JS is portable)
-// and runs it on such a target under strict nesting.
+// The Mac runs srt as Seatbelt and cannot host the STRICT bubblewrap profile CI uses. Neither can
+// a Docker container there: by default it covers part of `/proc`, and so refuses the fresh one
+// that profile mounts (docs/GAPS.md). A Linux box that shares this checkout can, and iterating
+// there is seconds rather than a ~4-minute `verify.yml` round-trip. This compiles the suite on
+// the host (the JS is portable) and runs it on such a target under strict nesting.
 //
 // The TARGET is a parameter. Today there is exactly one — the Colima VM on a Mac — but the
 // verb is written against `LinuxTarget`, so a remote SSH box or another VM is a new union case
@@ -2125,9 +2130,10 @@ module private LinuxTarget =
             | _ -> failwithf "vm-check: provisioning %s reported no node/node_modules:\n%s" (describe target) out
         | None -> failwithf "vm-check: could not read the toolchain paths on %s" (describe target)
 
-    /// Best-effort: make strict srt possible. Ubuntu ships
-    /// `kernel.apparmor_restrict_unprivileged_userns=1`, which blocks the nested user namespace
-    /// bwrap needs; CI clears it the same way.
+    /// Best-effort: make srt possible at all, strict profile included. Ubuntu 24.04 ships
+    /// `kernel.apparmor_restrict_unprivileged_userns=1`, which strips the capabilities from a new
+    /// user namespace, and neither of srt's profiles runs without them (docs/GAPS.md); CI clears
+    /// it the same way.
     let enableStrictNesting target : unit =
         match target with
         | Colima ->

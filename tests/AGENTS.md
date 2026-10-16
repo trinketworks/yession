@@ -22,9 +22,12 @@ in `tasks.fsx` probes each one and holds the refusal text. Read those, not a cop
   such suite `Sandbox`. On a box without a sandbox, an untagged one fails at once, quoting srt.
 - `Srt`: confinement is under test (the escape probes). `check Srt` refuses
   `YESSION_NESTED_SANDBOX=weak`, and a granted `Srt` also grants `Sandbox`.
-- An unprivileged container (Docker's default) fails the strict probe. There,
-  `YESSION_NESTED_SANDBOX=weak check Browser Ports Native Sandbox` runs the PR tier without the
-  probes, and strict is CI's job: `pr.yaml` clears `kernel.apparmor_restrict_unprivileged_userns`.
+- A Claude Code container hosts the strict profile, so `check Srt` runs there. A container that
+  covers part of `/proc` (Docker's default does) refuses the fresh `/proc` that only strict mounts.
+  There, `YESSION_NESTED_SANDBOX=weak check Browser Ports Native Sandbox` runs the PR tier without
+  the probes, and the probes are CI's job. Where `Sandbox` is refused under `weak` too, neither
+  profile runs on that box. docs/GAPS.md ("The strict confinement profile mounts a fresh `/proc`")
+  says what refuses both.
 - Weaker confinement in production is the operator's decision. Never use it to get a passing session
   here.
 - On a Mac, `vm-check <caps>` runs under STRICT nesting in the Colima VM, in seconds:

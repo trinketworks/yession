@@ -2036,13 +2036,13 @@ module DockerSandbox =
 
 // --- srt: OS-level confinement -----------------------------------------------------------
 
-/// How strongly a Linux srt sandbox nests. The strict profile mounts a fresh `/proc` and
-/// drops every capability, which costs a NESTED user namespace — and an unprivileged
-/// container (this repo's own dev container, and any deployment that runs a session
-/// inside one) is not allowed to create one. `Weak` is srt's documented answer there:
-/// the host's `/proc` stays visible and caps are not dropped. It is a real reduction in
-/// confinement, so it is a configured choice, never a fallback the runtime picks when
-/// the strict profile fails.
+/// How strongly a Linux srt sandbox nests. Both profiles nest the same user namespaces
+/// and leave a command the same capabilities. Only the strict one mounts a fresh `/proc`
+/// for it, and a container that covers part of `/proc` (Docker's default does) refuses
+/// that mount. `Weak` is srt's documented answer there: the command sees the host's
+/// `/proc` instead. It is a real reduction in confinement, so it is a configured choice,
+/// never a fallback the runtime picks when the strict profile fails. What refuses both
+/// profiles, where `Weak` does not help, is in docs/GAPS.md.
 type SandboxNesting =
     | StrictNesting
     | WeakNesting
@@ -2391,7 +2391,7 @@ module SrtSandbox =
                 | "strict" -> Ok StrictNesting
                 | "weak" -> Ok WeakNesting
                 | other ->
-                    Error (sprintf "unknown sandbox nesting '%s' (expected strict, or weak for an unprivileged container)" other)
+                    Error (sprintf "unknown sandbox nesting '%s' (expected strict, or weak where strict's fresh /proc is refused)" other)
         nesting
         |> Result.bind (fun nesting ->
             match resolveSrt () with
