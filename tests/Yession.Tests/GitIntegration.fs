@@ -297,6 +297,7 @@ let private makeBareFixtureWithSkill (root: string) (name: string) (skillName: s
     TestFiles.ensureDir work
     hostGit [ "init"; "-b"; "main" ] work
     TestFiles.write (sprintf "%s/README.md" work) "fixture\n"
+    TestFiles.ensureDir (sprintf "%s/.agents/skills/%s" work skillName)
     TestFiles.write (sprintf "%s/.agents/skills/%s/SKILL.md" work skillName) (sprintf "---\n%s\n---\n\n# %s\n" frontmatter skillName)
     hostGit [ "add"; "." ] work
     hostGit [ "commit"; "-m"; "seed" ] work
