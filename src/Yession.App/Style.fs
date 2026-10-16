@@ -3350,9 +3350,13 @@ module Style =
               "disabled:text-ink-faint disabled:cursor-default disabled:pointer-events-none" ]
 
     /// While no turn runs and a command does, the leading edge says so: `running` behind
-    /// the live dot every running command wears, pressed to go to that command's chip.
+    /// the live dot every running command wears, pressed to go to that command's chip. The
+    /// dot sits in interrupt's own cell (`trayMark`), so the two states hand off at the same
+    /// width and the dot lands dead centre on the column the transcript's avatars and icons
+    /// stand on, rather than crowding the word off that rail. `gap-3` is `trayInterrupt`'s
+    /// own gutter, so the word lands on the same reading rail whichever state is showing.
     /// Ink at rest, ink under the hand — it moves the reader, it stops nothing.
-    let trayRunning = cls [ trayVerb; "hover:text-ink" ]
+    let trayRunning = cls [ trayVerb; "gap-3 hover:text-ink" ]
     let trayRunningDot = statusDotLive
 
     /// The way back to the latest message, at the strip's trailing edge whatever stands at
@@ -3360,8 +3364,9 @@ module Style =
     let trayJumpSlot = "ml-auto h-full flex"
     let trayJump = cls [ trayVerb; "gap-1.5 justify-end hover:text-ink" ]
 
-    /// Interrupt's glyph, a mark hanging in the gutter left of the rail: the avatar's width,
-    /// centred, so it stands on the column the speakers' avatars and the fold arrows do.
+    /// The leading edge's glyph cell, interrupt's and running's alike: a mark hanging in the
+    /// gutter left of the rail, the avatar's width, centred, so it stands on the column the
+    /// speakers' avatars and the fold arrows do whichever glyph it holds.
     let trayMark = "w-5 shrink-0 inline-flex justify-center"
 
     // --- Queue: editable until drained; the head's green count says so ------------------------

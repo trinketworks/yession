@@ -1540,7 +1540,7 @@ module View =
                 html $"""
                     <button type="button" class="{Style.trayRunning}" aria-label="{Dom.Text.revealRunningLabel (BlockLabel.ofBlock block)}"
                             data-reveal-running="{BlockId.value block.BlockId}"
-                            @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealCommand (terminal, block.BlockId))))}><span class="{Style.trayRunningDot}" aria-hidden="true"></span>running</button>"""
+                            @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealCommand (terminal, block.BlockId))))}><span class="{Style.trayMark}"><span class="{Style.trayRunningDot}" aria-hidden="true"></span></span>running</button>"""
             | Some turn, _ ->
                 // `Interrupting` only ever names THIS turn or none (the event fold clears it the
                 // moment the turn it named ends), so a plain equality is the whole check.
