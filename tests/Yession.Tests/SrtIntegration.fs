@@ -4,9 +4,9 @@ module Yession.Tests.SrtIntegration
 // here asserts DENIAL: a sandbox that runs commands is easy to build and proves nothing —
 // what has to hold is that a command cannot read outside its policy, cannot write outside
 // it, and cannot reach a domain the policy never named. The suite sits under
-// `Tag.needs [Srt]`, and `check` probes for a WORKING bubblewrap (installed is not the
-// same as permitted — user namespaces can be off) before declaring the capability, so a
-// box without one reports a skip instead of a wall of failures.
+// `Tag.needs [Srt]`, and `check` asks srt to run its strict profile (installed is not the
+// same as permitted) before it grants the capability, so a box that cannot host it is
+// refused up front, quoting srt, instead of failing every case here.
 //
 // The one non-denial test is latency: srt was chosen over a container per command because
 // it starts in milliseconds, and a regression there is a regression in the reason.
