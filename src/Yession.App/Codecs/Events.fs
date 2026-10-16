@@ -727,6 +727,16 @@ module Events =
                   RepoAdded.Repo = get.Required.Field "repo" Codec.repoRef.Decode
                   RepoAdded.Actor = get.Required.Field "actor" Codec.actor.Decode }) }
 
+    /// `{name, description}` -- `SkillSummary`'s frontmatter, on the wire the same shape it
+    /// decoded from.
+    let private skillSummary : Codec<SkillSummary> =
+        { Encode =
+            fun (s: SkillSummary) -> Encode.object [ "name", Encode.string s.Name; "description", Encode.string s.Description ]
+          Decode =
+            Decode.object (fun get ->
+                { SkillSummary.Name = get.Required.Field "name" Decode.string
+                  SkillSummary.Description = get.Required.Field "description" Decode.string }) }
+
     let private repoCloned : Codec<RepoCloned> =
         { Encode =
             fun (p: RepoCloned) ->
@@ -735,14 +745,19 @@ module Events =
                       "repo", Codec.repoRef.Encode p.Repo
                       "branch", Encode.string p.Branch
                       "actor", Codec.actor.Encode p.Actor
-                      "agentsMd", Encode.option Encode.string p.AgentsMd ]
+                      "agentsMd", Encode.option Encode.string p.AgentsMd
+                      "skills", Encode.list (p.Skills |> List.map skillSummary.Encode) ]
           Decode =
             Decode.object (fun get ->
                 { RepoCloned.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
                   RepoCloned.Repo = get.Required.Field "repo" Codec.repoRef.Decode
                   RepoCloned.Branch = get.Required.Field "branch" Decode.string
                   RepoCloned.Actor = get.Required.Field "actor" Codec.actor.Decode
-                  RepoCloned.AgentsMd = get.Optional.Field "agentsMd" Decode.string }) }
+                  RepoCloned.AgentsMd = get.Optional.Field "agentsMd" Decode.string
+                  // Absent on a log written before this session read skills at all -- a
+                  // repo added under an older build never declared one, never a decode
+                  // failure for every clone fact this build had not written yet.
+                  RepoCloned.Skills = get.Optional.Field "skills" (Decode.list skillSummary.Decode) |> Option.defaultValue [] }) }
 
     /// A `repoAdded` record is one of two things, told apart by the branch. Before the add
     /// was recorded up front, it was written once the clone had landed and carried what
