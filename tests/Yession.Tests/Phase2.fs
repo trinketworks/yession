@@ -2308,7 +2308,7 @@ let private acceptanceE2eTests =
         // DockerIntegration suite.
         Tag.needs "Docker adapter smoke" [ Tag.Docker ] (fun () ->
             testCaseAsync "real container create/spawn/dispose" (async {
-                let name = SessionId.value (SessionId.mint ())
+                let name = DockerFixture.name ()
                 let spec = { EnvironmentSpec.defaults with Runtime = Container { ContainerSpec.defaults with Image = Some { Name = "alpine"; Tag = Some "3" } } }
                 let createSandbox = Sandboxes.forBackend DockerBackend name spec |> expect
                 match! createSandbox ((Sandboxes.policyFor DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) Map.empty Map.empty None None None [] Set.empty EnvironmentSpec.defaults |> expect)) with
@@ -2320,7 +2320,8 @@ let private acceptanceE2eTests =
                     do! sandbox.Dispose ()
                     let! remaining = Sandboxes.DockerSandbox.countByLabel (sprintf "yession-session=%s" name)
                     Expect.equal remaining 0 "dispose removed the container"
-            }))
+            })
+            |> DockerFixture.owned)
     ]
 
 // -----------------------------------------------------------------------------

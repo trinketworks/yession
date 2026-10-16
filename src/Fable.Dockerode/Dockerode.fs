@@ -229,6 +229,8 @@ type [<AllowNullLiteral>] Container =
 /// A named-volume handle.
 type [<AllowNullLiteral>] Volume =
     abstract remove: options: RemoveOptions -> JS.Promise<Unread>
+    /// Resolves if the volume exists; rejects otherwise.
+    abstract inspect: unit -> JS.Promise<Unread>
 
 /// What an image says about the containers made from it, of it: the environment its
 /// `ENV` lines set. Absent on an image that sets none.
