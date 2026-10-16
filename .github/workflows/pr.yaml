@@ -52,6 +52,9 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Above the suites' own budgets, never below them: verify.yml's `verify` job says why. `bench`
+    # calls a workflow, and a calling job cannot carry one; bench.yml's job does.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
@@ -162,6 +165,7 @@ jobs:
   # can see that. This job is the guard.
   darwin-package:
     runs-on: macos-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30

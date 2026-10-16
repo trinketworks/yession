@@ -72,6 +72,9 @@ concurrency:
 jobs:
   bench:
     runs-on: ubuntu-latest
+    # Above the suites' own budgets, never below them: verify.yml's `verify` job says why. Both
+    # callers' `bench` jobs are calls and cannot carry one, so this is theirs.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
         with:

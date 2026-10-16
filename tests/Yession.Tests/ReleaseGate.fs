@@ -48,12 +48,15 @@ let private repoRoot () : string option =
 /// empty list of jobs, and nothing is lost by writing it as one.
 /// `Serialised` is the job's own `concurrency`, and an `option` for the same reason `Condition`
 /// is: a job with no group and a job with one are different things to say about a release.
+/// `Bound` is its `timeout-minutes` as written, a number or an expression GitHub evaluates per
+/// matrix entry (verify.yml's `verify` is one). `None` is a job GitHub stops at six hours.
 [<RequireQualifiedAccess>]
 type private Job =
     { Needs : string list
       Condition : string option
       Serialised : Concurrency option
-      Calls : string option }
+      Calls : string option
+      Bound : string option }
 
 /// A job's `concurrency`. The shorthand form is a bare group name, which means the default
 /// `cancel-in-progress: false` — so both spellings decode to the same answer and a reader here
@@ -81,7 +84,11 @@ let private job : Decoder<Job> =
         { Job.Needs = get.Optional.Field "needs" needs |> Option.defaultValue []
           Condition = get.Optional.Field "if" Decode.string
           Serialised = get.Optional.Field "concurrency" concurrency
-          Calls = get.Optional.Field "uses" Decode.string })
+          Calls = get.Optional.Field "uses" Decode.string
+          Bound =
+            get.Optional.Field
+                "timeout-minutes"
+                (Decode.oneOf [ Decode.float |> Decode.map string; Decode.string ]) })
 
 /// A workflow's own top-level `concurrency`, which is the one that decides whether a run of it can
 /// be cancelled by the next one.
@@ -96,15 +103,27 @@ let private jobs : Decoder<(string * Job) list> =
 
 /// A file this cannot read is a failure carrying the reason, never an empty list: an empty
 /// list is what a workflow with no jobs looks like, and the two must not read the same.
-let private jobsIn (text: string) : (string * Job) list =
+let private jobsIn (file: string) (text: string) : (string * Job) list =
     match Decode.fromString jobs (Fable.Yaml.Plain.json (Fable.Yaml.parse text)) with
-    | Error reason -> failwithf "release.yml is not a document this file can read: %s" reason
+    | Error reason -> failwithf "%s is not a document this file can read: %s" file reason
     | Ok jobs -> jobs
 
 let private releaseJobs () : (string * Job) list =
     match repoRoot () |> Option.bind (fun root -> try Some (TestFiles.read (root + "/.github/workflows/release.yml")) with _ -> None) with
-    | Some text -> jobsIn text
+    | Some text -> jobsIn "release.yml" text
     | None -> []
+
+/// Every workflow in the repository with its jobs, by file name. Its population is the first
+/// case's: the same root and the same reading, so a root this cannot find is that case's red.
+let private workflowJobs () : (string * (string * Job) list) list =
+    match repoRoot () with
+    | None -> []
+    | Some root ->
+        let dir = root + "/.github/workflows"
+        TestFiles.entries dir
+        |> List.filter (fun name -> name.EndsWith ".yml" || name.EndsWith ".yaml")
+        |> List.sort
+        |> List.map (fun name -> name, jobsIn name (TestFiles.read (dir + "/" + name)))
 
 /// The workflows release.yml CALLS, as `.github/workflows/<name>` paths, derived from the file
 /// rather than listed here — one added tomorrow is one the rule already covers. A `uses:` naming
@@ -255,4 +274,25 @@ let tests =
                 Expect.isTrue
                     (repoRoot () |> Option.map (fun root -> TestFiles.exists (root + "/" + path)) |> Option.defaultValue false)
                     (sprintf "release.yml names %s, which is not a file in this repository" path)
+
+        // A job with no `timeout-minutes` runs until GitHub stops it, six hours in. The suites
+        // carry their own budgets (`runSuite` in tasks.fsx kills an overrunning one and names it),
+        // but nothing else in a job does, so a hang in Nix, devenv, the build or an upload held
+        // a runner until GitHub gave up. Every workflow, not only this one: the bound is per job,
+        // and a pull request's hang holds a runner as surely as a release's does.
+        //
+        // A job that CALLS a workflow is left out. GitHub refuses the key there, and the jobs of
+        // the workflow it calls are read here from their own file. Which number is right is not
+        // this case's to say; verify.yml's `verify` job says how each is measured. This asks only
+        // that there is one.
+        testCase "every workflow job that runs on a runner declares its own timeout" <| fun () ->
+            let unbounded =
+                [ for file, jobs in workflowJobs () do
+                    for id, job in jobs do
+                        if job.Calls.IsNone && job.Bound.IsNone then yield sprintf "%s:%s" file id ]
+            Expect.isEmpty
+                unbounded
+                (sprintf
+                    "these jobs declare no `timeout-minutes`: %s. A hang outside the suites' budgets holds such a runner for GitHub's six hours. Measure the job's slowest recent runs, then add the key above that plus the suite budget those runs left unspent and a cold dev shell. The comment on verify.yml's `verify` job says why the bound sits above the suites' budgets"
+                    (String.concat ", " unbounded))
     ]
