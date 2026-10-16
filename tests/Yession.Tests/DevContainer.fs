@@ -58,12 +58,6 @@ let private createLabelledVolume (client: DK.Docker) (name: string) : Async<unit
     |> Interop.awaitPromise
     |> Async.Ignore
 
-/// The volume's own `remove`, unforced.
-let private removeVolume (client: DK.Docker) (name: string) : Async<unit> =
-    client.getVolume(name).remove (jsOptions<DK.RemoveOptions> ignore)
-    |> Interop.awaitPromise
-    |> Async.Ignore
-
 let private repoRef = RepoRef.create "trinketworks/yession" |> expect
 
 /// A repos directory holding this repo's checkout at the place the session would put it —
@@ -114,7 +108,7 @@ let private declaredDevBare (reposDir: string) : EnvironmentSpec =
 /// selects nothing — the portable cold path).
 let private startDev (granted: ResourceLeaf list) (spec: EnvironmentSpec) : Async<Sandbox> =
     async {
-        let name = SessionId.value (SessionId.mint ())
+        let name = DockerFixture.name ()
         let createSandbox = Sandboxes.forBackend DockerBackend name spec |> expect
         let resolve = fun secret -> async { return Error (sprintf "no secrets here for '%s'" (SecretName.value secret)) }
         // What the session gives a docker sandbox, ASKED rather than written. This was
@@ -231,29 +225,21 @@ let tests =
                 // property under test — so a fixed name would couple runs to each other.
                 // Created HERE, with the sweep's label: the daemon auto-creates an
                 // unlabelled volume at mount time, which `clean-docker` structurally
-                // cannot find — labelled, a run that dies before its own removal still
-                // leaves something the sweep sees.
-                let volume = sprintf "yession-test-%s" (SessionId.value (SessionId.mint ())) |> fun s -> s.ToLowerInvariant ()
+                // cannot find. `DockerFixture` removes it after the case.
+                let volume = DockerFixture.name ()
                 do! createLabelledVolume (DK.create ()) volume
-                let mutable failure = None
-                try
-                    do!
-                        withDev [ Volume (volume, "/nix") ] copiedConfig (fun sandbox -> async {
-                            let! run, out, _ =
-                                runInSandbox sandbox "sh"
-                                    [ "-c"; "grep -c ' /nix ' /proc/mounts && ls /nix/store | wc -l" ] Map.empty None
-                            Expect.equal run (SandboxExited 0) "the probes ran"
-                            match out.Trim().Split '\n' |> Array.toList |> List.map (fun s -> s.Trim ()) with
-                            | [ mounts; paths ] ->
-                                Expect.equal mounts "1" "/nix is a mount, not the image's own directory"
-                                Expect.isTrue (int paths > 0) "and dockerd seeded the empty volume from the image, so nix still runs"
-                            | other -> failwithf "expected two counts, got %A" other
-                        })
-                with e -> failure <- Some e
-                do! removeVolume (DK.create ()) volume
-                match failure with
-                | Some e -> return raise e
-                | None -> return ()
+                do!
+                    withDev [ Volume (volume, "/nix") ] copiedConfig (fun sandbox -> async {
+                        let! run, out, _ =
+                            runInSandbox sandbox "sh"
+                                [ "-c"; "grep -c ' /nix ' /proc/mounts && ls /nix/store | wc -l" ] Map.empty None
+                        Expect.equal run (SandboxExited 0) "the probes ran"
+                        match out.Trim().Split '\n' |> Array.toList |> List.map (fun s -> s.Trim ()) with
+                        | [ mounts; paths ] ->
+                            Expect.equal mounts "1" "/nix is a mount, not the image's own directory"
+                            Expect.isTrue (int paths > 0) "and dockerd seeded the empty volume from the image, so nix still runs"
+                        | other -> failwithf "expected two counts, got %A" other
+                    })
             })
 
             // The shared store's whole reason for a lease (`VolumeLeases`,
@@ -265,7 +251,7 @@ let tests =
             // reason at the top of this list: the fixture is two containers and a sweep, and
             // the three assertions are one invariant seen from both sides.
             testCaseAsync "a sweep keeps what each sandbox pinned of the shared store, and nothing else" (async {
-                let volume = sprintf "yession-test-%s" (SessionId.value (SessionId.mint ())) |> fun s -> s.ToLowerInvariant ()
+                let volume = DockerFixture.name ()
                 do! createLabelledVolume (DK.create ()) volume
                 let withExamples (dir: string) =
                     copiedConfig dir
@@ -327,12 +313,12 @@ let tests =
                         })
                 with e -> failure <- Some e
                 TestFiles.removeTree sweepDir
-                do! removeVolume (DK.create ()) volume
                 match failure with
                 | Some e -> return raise e
                 | None -> return ()
             })
-        ])
+        ]
+        |> DockerFixture.owned)
 
 /// The self-hosting run: this repo's whole suite, inside the very container its file
 /// declares — `nix develop` assembling the devshell from the checkout and `check` running
@@ -392,4 +378,5 @@ let dogfood =
                         (sprintf "check failed inside the container. What failed: %s\ntail of stderr: %s" failed (err.Substring (max 0 (err.Length - 2000))))
                     Expect.isTrue (out.Contains "tests run") "the tally printed, so the suite really ran"
                 }))
-        ])
+        ]
+        |> DockerFixture.owned)

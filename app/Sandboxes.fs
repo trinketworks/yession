@@ -1726,7 +1726,8 @@ module DockerSandbox =
                         // and by accident: docker is the backend that passes no workspace.
                         let workspaceTarget =
                             policy.WorkingDirectory |> Option.defaultValue "/workspace"
-                        let mounts = mountPlan workspaceTarget container.Mounts policy |> List.map (mountFor name)
+                        let plan = mountPlan workspaceTarget container.Mounts policy
+                        let mounts = plan |> List.map (mountFor name)
                         // What lies beneath a template is the image's own `ENV`, which is
                         // only knowable now that the image is here.
                         let! imageEnv =
@@ -1739,15 +1740,19 @@ module DockerSandbox =
                         let env =
                             environment imageEnv policy |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> List.toArray
                         // The named volume persists across container restarts by design;
-                        // the label lets cleanup find it (see the workflow teardown).
-                        do!
-                            client.createVolume (
-                                jsOptions<DK.VolumeCreateOptions> (fun o ->
-                                    o.Name <- name
-                                    o.Labels <- sessionLabels name)
-                            )
-                            |> Interop.awaitPromise
-                            |> Async.Ignore
+                        // the label lets cleanup find it (see the workflow teardown). Made
+                        // only when the plan mounts it: a sandbox whose workspace is another
+                        // mount (a repo's /repos bind) used to get one anyway, which nothing
+                        // mounted and nothing removed, one per sandbox per session.
+                        if plan |> List.exists (fun m -> m.Source = SessionWorkspace) then
+                            do!
+                                client.createVolume (
+                                    jsOptions<DK.VolumeCreateOptions> (fun o ->
+                                        o.Name <- name
+                                        o.Labels <- sessionLabels name)
+                                )
+                                |> Interop.awaitPromise
+                                |> Async.Ignore
                         // Clear a same-named crash leftover so `createContainer` can reuse the name.
                         try do! client.getContainer(name).remove (forced ()) |> Interop.awaitPromise |> Async.Ignore
                         with _ -> ()

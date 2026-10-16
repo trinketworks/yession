@@ -108,6 +108,9 @@
     <Compile Include="Bench.fs" />
     <Compile Include="E2E.fs" />
     <Compile Include="Client.fs" />
+    <!-- What a Docker case leaves on the daemon: nothing. Before the three suites that
+         make docker objects. -->
+    <Compile Include="DockerFixture.fs" />
     <Compile Include="Phase2.fs" />
     <Compile Include="DockerIntegration.fs" />
     <Compile Include="DevContainer.fs" />

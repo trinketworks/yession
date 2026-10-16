@@ -62,7 +62,7 @@ let private envSecrets : SecretName -> Async<Result<string, string>> =
 /// session's would.
 let private start (resolve: SecretName -> Async<Result<string, string>>) (spec: EnvironmentSpec) : Async<Result<string * Sandbox, string>> =
     async {
-        let name = SessionId.value (SessionId.mint ())
+        let name = DockerFixture.name ()
         let createSandbox = Sandboxes.forBackend DockerBackend name spec |> expect
         // Asked, not written: see the note in DevContainer.fs — a docker sandbox's
         // contribution is the product's answer, not this test's copy of it.
@@ -329,7 +329,7 @@ let tests =
                 let spec =
                     alpineSpec
                     |> withContainer (fun c -> { c with Entrypoint = Some [ "/usr/bin/env"; "BEHIND=entrypoint" ] })
-                let name = SessionId.value (SessionId.mint ())
+                let name = DockerFixture.name ()
                 let createSandbox = Sandboxes.forBackend DockerBackend name spec |> expect
                 let layout = Sandboxes.SessionLayout.forSandbox "/session" DockerBackend SandboxRef.defaultRef
                 let! policy =
@@ -444,6 +444,25 @@ let tests =
                     Expect.equal r2 (SandboxExited 0) "read after recreation succeeds"
                     Expect.isTrue (out.Contains "persisted") "the named volume kept the file across recreation"
                     do! second.Dispose ()
+            })
+
+            // The other side of that volume: a sandbox whose workspace is another mount
+            // (a repo's /repos bind, here a host directory) gets no volume. One was made
+            // for every such sandbox, mounted nowhere and never removed.
+            testCaseAsync "a sandbox whose workspace is another mount gets no workspace volume" (async {
+                let dir = mkdtemp ()
+                let spec = alpineSpec |> withContainer (fun c -> { c with Mounts = [ { Source = HostPath dir; Target = "/workspace"; Mode = ReadWrite } ] })
+                let! name, sandbox = startOrFail spec
+                let! found =
+                    async {
+                        try
+                            do! DK.create().getVolume(name).inspect () |> Interop.awaitPromise |> Async.Ignore
+                            return true
+                        with _ -> return false
+                    }
+                do! sandbox.Dispose ()
+                TestFiles.removeTree dir
+                Expect.isFalse found "no volume was made under the sandbox's name"
             })
 
             testCaseAsync "HostPath mounts honour read-write and read-only" (async {
@@ -587,4 +606,5 @@ let tests =
                     gateway.Close () |> Async.StartImmediate
                     upstream.close ignore
             })
-        ])
+        ]
+        |> DockerFixture.owned)
