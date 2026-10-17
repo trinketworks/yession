@@ -122,6 +122,72 @@ let private killedWhy (code: int) : string option =
     | Some _ -> Some (sprintf "signal %d" (code - 128))
     | None -> None
 
+// A STEP'S OWN DEADLINE, for the steps that can hang where nothing smaller bounds them: a suite,
+// `lint`, the Nix build, an npm install. Without one, a hang there is caught only by the CI job's
+// `timeout-minutes`, and GitHub cancels a job where it stands: no line says which step hung, or
+// for how long, and nothing the step would have said is printed. So the step is stopped here
+// instead, before the job's bound, by the one party that knows its name.
+//
+// The bound is put IN FORCE for a step rather than handed to each call it makes, because a step
+// is seldom one process. `lint` is dozens of them: actionlint, the tools' restore through `make`,
+// a build, a restore per fixture, an analyzer run per fixture, several from helpers every verb
+// shares. A deadline passed to each call is one the next call forgets, and `make` would have to
+// carry it through its targets for this alone. In force, it holds for every child the step starts
+// through any helper here, on whichever thread its work runs.
+
+/// A step with a budget of its own, and all that its refusal says when the budget runs out:
+/// a killed step cannot say anything for itself.
+type private Bound =
+    { /// The step as a message names it.
+      Step: string
+      BudgetMs: int
+      /// What the budget rests on, said when it runs out: a number alone sends the reader to
+      /// tasks.fsx to learn whether it was ever meant to hold.
+      Basis: string
+      /// What to do next. The refusal is the last word the step gets.
+      Next: string }
+
+/// A step that outran its `Bound`, after the refusal has been printed. A type rather than a
+/// string, so that a verb with exit codes of its own (`lint`) can answer it with one of them.
+exception Overran of step: string * ranMs: int64 with
+    override this.Message = sprintf "%s timed out after %ds" this.step (this.ranMs / 1000L)
+
+/// The bound in force, with the clock of the step it bounds.
+let private inForce = Threading.AsyncLocal<(Bound * Stopwatch) option> ()
+
+/// Run `body` as the step `bound` describes: every child it starts must exit inside the budget.
+let private bounded (bound: Bound) (body: unit -> 'a) : 'a =
+    let outer = inForce.Value
+    inForce.Value <- Some (bound, Stopwatch.StartNew ())
+    try body () finally inForce.Value <- outer
+
+/// Wait for a child to exit: for as long as it takes, or for as long as the bound in force has
+/// left. Past that, the child and every process it started are killed, and the refusal says which
+/// step, how long it ran, what its budget rests on and what to do next.
+///
+/// The whole tree, because that is where a hang lives: `dotnet run` is a parent of the test host,
+/// which is a parent of the Playwright driver and Chromium; npm of an addon's install script.
+let private awaitExit (p: Process) =
+    match inForce.Value with
+    | None -> p.WaitForExit ()
+    | Some (bound, clock) ->
+        let left = int64 bound.BudgetMs - clock.ElapsedMilliseconds
+        if not (p.WaitForExit (int (max 0L left))) then
+            let ran = clock.ElapsedMilliseconds
+            let command = String.concat " " (p.StartInfo.FileName :: List.ofSeq p.StartInfo.ArgumentList)
+            eprintfn
+                "%s ran for %ds, outrunning its budget of %ds — killing `%s` and every process it started.\n\
+                 The budget is %s.\n\
+                 %s"
+                bound.Step
+                (ran / 1000L)
+                (bound.BudgetMs / 1000)
+                (if command.Length > 200 then command.Substring (0, 200) + " …" else command)
+                bound.Basis
+                bound.Next
+            try p.Kill true with _ -> ()
+            raise (Overran (bound.Step, ran))
+
 // Run a command capturing stdout (fails on non-zero); used where the output is a value.
 //
 // A failure carries what the command PRINTED. `compile` restores the solution through this, and
@@ -135,8 +201,11 @@ let runIn (workingDir: string) (command: string) (arguments: string list) : stri
     psi.WorkingDirectory <- workingDir
     psi.RedirectStandardOutput <- true
     use p = Process.Start (accountsForItself psi)
-    let output = p.StandardOutput.ReadToEnd ()
-    p.WaitForExit ()
+    // Read while it runs, so that the wait for its exit is what decides how long this takes, and
+    // a bound in force can end it.
+    let output = p.StandardOutput.ReadToEndAsync ()
+    awaitExit p
+    let output = output.Result
     if p.ExitCode <> 0 then
         let report =
             sprintf
@@ -158,7 +227,7 @@ let runInherit (workingDir: string) (command: string) (arguments: string list) :
     psi.WorkingDirectory <- workingDir
     psi.UseShellExecute <- false
     use p = Process.Start (accountsForItself psi)
-    p.WaitForExit ()
+    awaitExit p
     p.ExitCode
 
 let exec (command: string) (arguments: string list) : unit =
@@ -1135,8 +1204,32 @@ let package (version: string) =
 /// attempt gets a fresh prefix so a half-populated tree is never what the next one reads.
 /// What the install was worth is still decided by the assertions below it rather than by
 /// this exit code: a package that resolves but carries no addon fails there, retries or no.
+///
+/// A fetch can also STALL rather than fail, and a retry never sees that: the attempt simply does
+/// not end. So the attempts share one deadline, which a stalled one spends.
 let private installed (tgz: string) : string =
     let attempts = 3
+    let pause (n: int) = TimeSpan.FromSeconds (10.0 * float n)
+    // THE ATTEMPTS' BUDGET, made of the retry policy above so that it moves when that does.
+    // Measured on CI from 3 to 17 Oct 2026: release.yml's `install-smoke` step took 13-32s in 260
+    // `package:npm` jobs. The install is most of it: in the slowest, 32s in all, npm said `added
+    // 191 packages in 26s`, and the rest was the boot smoke.
+    //
+    // So each attempt is allowed 65s, two and a half times that install, and the budget is three
+    // of those with both pauses between them: 225s. Three attempts that each fail slowly still
+    // fit, which a budget sized for one would not let them. It sits far under `package:npm`'s
+    // 25 minutes, whose steps before this one took at most 247s.
+    let budget : Bound =
+        { Step = "install-smoke: npm install"
+          BudgetMs = attempts * 65_000 + ([ 1 .. attempts - 1 ] |> List.sumBy (fun n -> int (pause n).TotalMilliseconds))
+          Basis =
+            sprintf
+                "65s for each of %d attempts and the pauses between them, two and a half times the slowest install on CI (`installed` in tasks.fsx has the measurements)"
+                attempts
+          Next =
+            "A stalled install is a fetch that never answered: the registry, or the release assets a native addon's\n\
+             install script downloads. Run `install-smoke` again; each attempt starts on a fresh prefix. If it stalls\n\
+             again, watch which fetch hangs: `npm install --prefix \"$(mktemp -d)\" <the tgz> --loglevel http`." }
     let rec attempt (n: int) : string =
         let prefix = Path.Combine (Path.GetTempPath (), "yession-install-" + Guid.NewGuid().ToString "N")
         Directory.CreateDirectory prefix |> ignore
@@ -1146,13 +1239,13 @@ let private installed (tgz: string) : string =
             try Directory.Delete (prefix, true) with _ -> ()
             if n = attempts then
                 failwithf "install-smoke: npm install failed on all %d attempts (last exit %d)" attempts code
-            let pause = TimeSpan.FromSeconds (10.0 * float n)
+            let pause = pause n
             printfn
                 "install-smoke: npm install failed (exit %d) on attempt %d of %d; again in %.0fs, on a fresh prefix"
                 code n attempts pause.TotalSeconds
             Threading.Thread.Sleep pause
             attempt (n + 1)
-    attempt 1
+    bounded budget (fun () -> attempt 1)
 
 let installSmoke (tgz: string) =
     let tgz = Path.GetFullPath tgz // a bare dist/x.tgz looks like a GitHub owner/repo to npm.
@@ -1742,10 +1835,35 @@ let private buildNixPackage () =
     // native addons out of the store is proven by this build succeeding. It used to be booted
     // again here from the returned store path — a second copy of an invocation the derivation
     // owns, and the reason `--print-out-paths` was asked for.
-    run "nix" [ "build"; "--extra-experimental-features"; "nix-command"
-                "--file"; "nix/worktree.nix"; "nix"
-                "--no-link"; "--print-build-logs" ]
-    |> ignore
+    //
+    // THE BUILD'S BUDGET. Measured on CI from 3 to 17 Oct 2026: this step, the release gate's
+    // `nix` tier (`check NixBuild --runtime none`), took 14-193s across 284 runs, counting the
+    // whole step and not the build alone. The slowest build seen alone was 209s, inside a
+    // dispatched `check Nix` on 24 Sep whose job took 12 minutes in all. The same derivation
+    // through the flake, in release.yml's `package:nix`, took up to 304s on x86_64 and 239s on
+    // aarch64 (260 runs each). A Mac is slower: pr.yaml's `darwin-package` builds it in 389s at
+    // the median and 871s at worst (201 runs, 13 to 17 Oct), and `verify` on a Mac runs this step.
+    //
+    // So the allowance is 20 minutes: about four times the slowest Linux build, and one and a half
+    // times the slowest Mac one. Two and a half times the Linux build would refuse a Mac that is
+    // only building cold; two and a half times the Mac's would be 36 minutes, which cannot sit
+    // under the gate job's 45 (verify.yml) above a cold dev shell. Like `clrBudgetMs`, it is a
+    // hang detector. What it replaces is no deadline at all: a hung build ran to the job's bound
+    // and was cancelled there, with no line saying which step.
+    let budget : Bound =
+        { Step = "check: the Nix build of the working tree"
+          BudgetMs = 1_200_000
+          Basis =
+            "about four times the slowest Linux build of this installable on CI, and one and a half times the slowest Mac one (`buildNixPackage` in tasks.fsx has the measurements)"
+          Next =
+            "`--print-build-logs` put what the build was doing above, each line under its derivation's name, so the\n\
+             last of them is where it hung. Run `check NixBuild --runtime none` again. If it stops in the same\n\
+             derivation, build it by hand to watch it: `nix build --file nix/worktree.nix nix --print-build-logs`." }
+    bounded budget (fun () ->
+        run "nix" [ "build"; "--extra-experimental-features"; "nix-command"
+                    "--file"; "nix/worktree.nix"; "nix"
+                    "--no-link"; "--print-build-logs" ]
+        |> ignore)
 
 // A run is a few minutes of tools that are either silent or so chatty their own progress reads as
 // scrollback, so it looks hung. One line per step, named for the step and not the tool, is enough
@@ -1807,7 +1925,7 @@ let private preparing (caps: Set<string>) (runtime: Runtime option) : Target lis
 
 /// One of the suite's two runs, as `runSuite` starts and bounds it: the Fable bundle on Node, or
 /// the browser suites on the .NET CLR. Everything the kill has to say is here, because a killed
-/// run cannot say anything for itself.
+/// run cannot say anything for itself: `runSuite` makes the run's `Bound` from it.
 type private SuiteRun =
     { /// The run as a message names it.
       Suite: string
@@ -1833,8 +1951,8 @@ type private SuiteRun =
 //
 // The CLR run had no deadline at all. One Playwright call that never answered held a release
 // run's browser tier for 48 minutes, until GitHub lost the runner, and no line said which suite
-// had hung or why. The kill takes the whole tree because that is where the hang lives: `dotnet
-// run` is a parent of the test host, which is a parent of the Playwright driver and Chromium.
+// had hung or why. Its deadline is now the one every step with a budget has (`bounded`), and
+// `awaitExit` says why the kill takes the whole tree.
 let private runSuite (caps: string list) (run: SuiteRun) =
     let psi = ProcessStartInfo run.Command
     run.Arguments |> List.iter psi.ArgumentList.Add
@@ -1846,28 +1964,25 @@ let private runSuite (caps: string list) (run: SuiteRun) =
     // because each run has its own and they differ by minutes.
     psi.Environment.["YESSION_TEST_BUDGET_MS"] <- string run.BudgetMs
     progress (sprintf "running %s (budget %ds)" run.Suite (run.BudgetMs / 1000))
-    use p = Process.Start (accountsForItself psi)
-    if p.WaitForExit run.BudgetMs then
+    let named = if List.isEmpty caps then "none (cheap tier)" else String.concat " " caps
+    let bound : Bound =
+        { Step = sprintf "tests: %s (capabilities: %s)" run.Suite named
+          BudgetMs = run.BudgetMs
+          Basis = run.Basis
+          Next =
+            sprintf
+                "%s, so this is a hang outside them.\n\
+                 Cases run one at a time and each prints its `Yession - …` line when it ENDS, so the case\n\
+                 that hung is the one after the last such line above. Narrow to it with\n\
+                 `check %s--only \"<part of its name>\"`."
+                run.Bounded
+                (if List.isEmpty caps then "" else named + " ") }
+    bounded bound (fun () ->
+        use p = Process.Start (accountsForItself psi)
+        awaitExit p
         if p.ExitCode <> 0 then
             let report = sprintf "tests: %s failed (exit %s)%s" run.Suite (diedOf p.ExitCode) (crashEvidence ())
-            raise (ChildFailed (Path.GetFileName run.Command, p.ExitCode, report))
-    else
-        let named = if List.isEmpty caps then "none (cheap tier)" else String.concat " " caps
-        eprintfn
-            "tests: %s outran this run's budget of %ds (capabilities: %s) — killing it and every process it started.\n\
-             The budget is %s.\n\
-             %s, so this is a hang outside them.\n\
-             Cases run one at a time and each prints its `Yession - …` line when it ENDS, so the case\n\
-             that hung is the one after the last such line above. Narrow to it with\n\
-             `check %s--only \"<part of its name>\"`."
-            run.Suite
-            (run.BudgetMs / 1000)
-            named
-            run.Basis
-            run.Bounded
-            (if List.isEmpty caps then "" else named + " ")
-        p.Kill true
-        failwithf "tests: %s timed out" run.Suite
+            raise (ChildFailed (Path.GetFileName run.Command, p.ExitCode, report)))
 
 /// One `check` run, as everything after the arguments reads it: what it asks the box to host,
 /// which runtime it confines itself to, what it is narrowed to, and so what its budgets buy.
@@ -2649,9 +2764,12 @@ let private runCapturing (command: string) (arguments: string list) : int * stri
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
     use p = Process.Start psi
-    let output = p.StandardOutput.ReadToEnd () + p.StandardError.ReadToEnd ()
-    p.WaitForExit ()
-    p.ExitCode, output
+    // Both pipes read while it runs, so one that fills cannot stall it, and `lint`'s bound can
+    // end the wait.
+    let out = p.StandardOutput.ReadToEndAsync ()
+    let err = p.StandardError.ReadToEndAsync ()
+    awaitExit p
+    p.ExitCode, out.Result + err.Result
 
 /// Every project the solution knows about. Read from Yession.slnx rather than listed here so
 /// that a project added tomorrow is analyzed tomorrow — a hand-kept list would let a new
@@ -3037,6 +3155,27 @@ let private analyzers () =
                     "lint: the YES000 hint fired on %s, whose error lies inside its line. SARIF columns are 1-based; if that changed, change `isPhantomMismatch` in tasks.fsx"
                     name
 
+// THE LINT'S BUDGET IS THE WHOLE VERB'S: actionlint, the tools' restore, the analyzers' build, a
+// restore per fixture, and an analyzer run over the product and then over each fixture. Any of
+// them can hang, and the analyzer runs print nothing until they end.
+//
+// Measured on CI from 13 to 17 Oct 2026: pr.yaml's lint step took 234-593s in 200 green `test`
+// jobs, 375s at the median. It runs first, on a fresh checkout, so it pays every restore cold. A
+// 4-core dev container, alone under a shared build lock, took about 630s.
+// Twenty-five minutes is about two and a half times the slowest, for the reason `nodeBudgetMs`
+// gives: this is a hang detector, not a deadline a slow runner should meet with a minute to
+// spare. The `test` job's steps before it took at most 268s, so a hung lint is refused by about
+// the thirtieth minute of that job's sixty. What this replaces is no deadline at all: a hang ran
+// to the job's bound and was cancelled there, with no line saying which step.
+let private lintBudget : Bound =
+    { Step = "lint"
+      BudgetMs = 1_500_000
+      Basis = "about two and a half times the slowest `lint` on CI (`lintBudget` in tasks.fsx has the measurements)"
+      Next =
+        "A run that did not finish judged nothing, so there is no finding here to fix. Run `lint` again. If it\n\
+         stops in the same command again, that command hangs by itself: run it by hand, from the repository\n\
+         root, to watch where." }
+
 // A workflow file is only validated by GitHub when it RUNS. release.yml runs on master — after a
 // PR has merged — so a syntax error in it is invisible to PR CI and lands already broken: a
 // colon-space in an unquoted step name once stopped the whole file parsing, and every master
@@ -3044,8 +3183,14 @@ let private analyzers () =
 // type-checks its expressions, so the PR gate can catch that class of break before it merges.
 // Run from repoRoot with no arguments, it finds .github/workflows itself.
 let lint () =
-    exec "actionlint" []
-    analyzers ()
+    try
+        bounded lintBudget (fun () ->
+            exec "actionlint" []
+            analyzers ())
+    with Overran _ ->
+        // A run that did not finish, which is what `unfinishedExit` answers. Not a `failwith`:
+        // the refusal above says what to do next, and a stack trace would bury it.
+        exit unfinishedExit
 
 // --- brand -----------------------------------------------------------------------------------
 // The mark, as the product carries it: `src/Yession.App/Brand.fs` is GENERATED from

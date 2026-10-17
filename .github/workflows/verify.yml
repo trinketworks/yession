@@ -125,15 +125,17 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ubuntu-latest
-    # The job's own bound, and it sits ABOVE the suites'. `check` kills a suite that outruns its
-    # budget and says which one hung (`nodeBudgetMs` and `clrBudgetMs` in tasks.fsx), but nothing
-    # bounded the rest of a job — Nix, devenv, the build, an upload — so a hang there ran to
-    # GitHub's six hours. This must never fire first: a job GitHub stops is cancelled where it
-    # stands, and the suite's own refusal, the line that names it, is never printed. So every
-    # job's value in these workflows is its slowest measured run, plus the budget its suites left
-    # unspent in that run, plus a cold dev shell (16m11s against 0m51s warm, pr.yaml's darwin
-    # job). A capability added to a job's `check`, or an allowance raised, raises that floor, and
-    # the number has to move with it.
+    # The job's own bound, and it sits ABOVE its steps' own. `check` kills a suite that outruns its
+    # budget and says which one hung (`nodeBudgetMs` and `clrBudgetMs` in tasks.fsx), and `lint`,
+    # the Nix build and the npm install do the same with budgets of their own (`bounded` in
+    # tasks.fsx). Nothing bounded the rest of a job — installing Nix and devenv, the build, an
+    # upload — so a hang there ran to GitHub's six hours. This must never fire first: a job GitHub
+    # stops is cancelled where it stands, and the step's own refusal, the line that names it, is
+    # never printed. So every job's value in these workflows is its slowest measured run, plus the
+    # most budget one of those steps left unspent in that run (a `check`'s suites count as one; the
+    # first step to hang ends the job), plus a cold dev shell (16m11s against 0m51s warm, pr.yaml's
+    # darwin job). A capability added to a job's `check`, or an allowance or budget raised, raises
+    # that floor, and the number has to move with it.
     #
     # A dispatch names its own capabilities, `Dogfood`'s hour among them, so it is bounded above
     # every allowance at once; the declared tiers get the widest of their own.

@@ -275,10 +275,11 @@ let tests =
                     (repoRoot () |> Option.map (fun root -> TestFiles.exists (root + "/" + path)) |> Option.defaultValue false)
                     (sprintf "release.yml names %s, which is not a file in this repository" path)
 
-        // A job with no `timeout-minutes` runs until GitHub stops it, six hours in. The suites
-        // carry their own budgets (`runSuite` in tasks.fsx kills an overrunning one and names it),
-        // but nothing else in a job does, so a hang in Nix, devenv, the build or an upload held
-        // a runner until GitHub gave up. Every workflow, not only this one: the bound is per job,
+        // A job with no `timeout-minutes` runs until GitHub stops it, six hours in. The suites,
+        // `lint`, the Nix build and the npm install carry their own budgets (`bounded` in tasks.fsx
+        // kills an overrunning one and names it), but nothing else in a job does, so a hang while
+        // installing Nix or devenv, in the build or in an upload held a runner until GitHub gave
+        // up. Every workflow, not only this one: the bound is per job,
         // and a pull request's hang holds a runner as surely as a release's does.
         //
         // A job that CALLS a workflow is left out. GitHub refuses the key there, and the jobs of
@@ -293,6 +294,6 @@ let tests =
             Expect.isEmpty
                 unbounded
                 (sprintf
-                    "these jobs declare no `timeout-minutes`: %s. A hang outside the suites' budgets holds such a runner for GitHub's six hours. Measure the job's slowest recent runs, then add the key above that plus the suite budget those runs left unspent and a cold dev shell. The comment on verify.yml's `verify` job says why the bound sits above the suites' budgets"
+                    "these jobs declare no `timeout-minutes`: %s. A hang outside their steps' own budgets (the suites', `lint`'s, the Nix build's, the npm install's) holds such a runner for GitHub's six hours. Measure the job's slowest recent runs, then add the key above that plus the most budget one of those steps left unspent in them and a cold dev shell. The comment on verify.yml's `verify` job says why the bound sits above the steps' budgets"
                     (String.concat ", " unbounded))
     ]
