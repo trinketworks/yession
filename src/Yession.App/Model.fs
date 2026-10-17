@@ -591,8 +591,9 @@ module TerminalFeed =
 /// Not a tab. These used to be tabs beside the terminals, with a pin to keep the ones worth
 /// keeping, and a reader could not tell which tab was a terminal and which a glance at one
 /// command: a block opened from the chat looked like the terminal it came from, and six chips
-/// tapped left six tabs and no terminal. The strip is terminals now (`ClientModel.Tabs`), and
-/// one of these is shown at a time, OVER the strip's selected terminal, with its own way back.
+/// tapped left six tabs and no terminal. A command or a stretch is shown in its terminal's tab
+/// (`ClientModel.Tabs`), one at a time, with its own way back. A file belongs to no terminal,
+/// so it has a tab of its own (`ClientModel.FileTabs`), and its preview is that tab's panel.
 [<RequireQualifiedAccess>]
 type PreviewSubject =
     /// One block, read-only: the command and what it printed. Opened by tapping its chip.
@@ -1412,10 +1413,9 @@ type ClientModel =
       /// reached through the switcher, because nothing a session DOES puts a tab in somebody's
       /// strip.
       ///
-      /// Terminals and nothing else, by type. A block, a stretch or a file opened from the
-      /// chat is a PREVIEW over the selected terminal (`PaneMode.Previewing`), never a tab,
-      /// and there are no pins: a terminal here is always kept, and a preview never needs to
-      /// be.
+      /// Terminals and nothing else, by type; files have `FileTabs`. A block or a stretch
+      /// opened from the chat is a PREVIEW in its terminal's tab (`PaneMode.Previewing`),
+      /// never a tab of its own, and there are no pins: a terminal here is always kept.
       ///
       /// A LIST rather than a set, held in the order the terminals OPENED (`withTab`), so a
       /// tab has one place in the strip for its whole life. LOCAL to this client, never
@@ -1428,6 +1428,17 @@ type ClientModel =
       /// back somewhere else (F2). A running terminal's tab can be put away too, and the
       /// terminal goes on running: it is in the list, which is where it is stopped.
       Tabs          : TerminalId list
+      /// The files in this client's strip, after its terminals, in the order they were opened.
+      ///
+      /// A file is read in a tab like a terminal is: opening one from the chat, or being
+      /// handed one by `open_tab`/`focus_tab`, puts it here, and its preview is that tab's
+      /// panel (`PreviewSubject.Content`). Kept beside `Tabs` rather than in it because a file
+      /// has none of a terminal's state — no feed, no read, nothing that closes — and the
+      /// terminal a file's preview was laid over stays the pane's terminal for the way back.
+      ///
+      /// What takes one out is the reader putting it away (`DismissFileTabMsg`), or
+      /// `close_tab`. Local, never synced, and kept across a reload (`PaneMemory.Files`).
+      FileTabs      : ContentRef list
       /// How many terminals this client has ASKED for and not yet been shown.
       ///
       /// Pressing "new terminal" is a REQUEST, and the only record of it. `OpenTerminal`
@@ -2226,6 +2237,9 @@ type ClientMsg =
     /// The pane moves on to the tab beside it, or to nothing. Put away, it stays away until
     /// the reader opens that terminal again.
     | DismissTabMsg of TerminalId
+    /// Put a file's tab away: its ×, or Delete on it. Takes its preview down with it, back to
+    /// the terminal it was laid over.
+    | DismissFileTabMsg of ContentRef
     /// Ask the session to cancel the running agent turn (Step 17). The outcome arrives as
     /// events: `AgentTurnInterrupted` on success, or nothing if the turn already finished.
     | InterruptTurnMsg of AgentTurnId
@@ -2478,6 +2492,7 @@ module ClientModel =
           TerminalScreens = Map.empty
           TerminalViewports = Map.empty
           Tabs = []
+          FileTabs = []
           Opening = 0
           KillPending = None
           KillArmed = None
@@ -2667,6 +2682,21 @@ module ClientModel =
                 | Some before -> List.insertAt before terminal tabs
                 | None -> tabs @ [ terminal ]
 
+    /// The file tabs with this file in them, at the end, if it is not already there.
+    let withFileTab (file: ContentRef) (files: ContentRef list) : ContentRef list =
+        if List.contains file files then files else files @ [ file ]
+
+    /// The file tabs a preview opens: a file's preview is its tab's panel, so opening one
+    /// opens its tab. A command's or a stretch's lives in its terminal's tab instead.
+    let private filesFor (subject: PreviewSubject) (files: ContentRef list) : ContentRef list =
+        match subject with
+        | PreviewSubject.Content file -> withFileTab file files
+        | PreviewSubject.Block _ | PreviewSubject.Stretch _ -> files
+
+    /// A file's tab, as its DOM hooks carry it — the file's prose spelling (`ViewRef.said`),
+    /// which is also how a remembered strip writes it down (`PaneMemory`).
+    let fileTabKey (file: ContentRef) : string = ViewRef.said (ViewingFile file)
+
     /// A terminal's tab, as its DOM hooks carry it — the terminal's prose spelling
     /// (`ViewRef.said`), which is also how a remembered strip writes it down (`PaneMemory`).
     let tabKey (terminal: TerminalId) : string = ViewRef.said (ViewingTerminal terminal)
@@ -2774,6 +2804,7 @@ module ClientModel =
     /// remembered: it was a glance, and a reload comes back to the terminal it was over.
     let paneMemory (model: ClientModel) : PaneMemory =
         { PaneMemory.Tabs = model.Tabs
+          PaneMemory.Files = model.FileTabs
           PaneMemory.Selected = model.Pane |> Option.bind PaneMode.subject |> Option.map TerminalMode.terminal
           PaneMemory.Open = model.TerminalsOpen
           PaneMemory.Seen = model.Seen }
@@ -2795,7 +2826,10 @@ module ClientModel =
                 PaneRemembered = true
                 // Applied now rather than held, because it needs nothing checked: a terminal
                 // the session no longer has is simply never asked about.
-                Seen = memory.Seen }
+                Seen = memory.Seen
+                // Applied now too: a shared file is never taken away, so there is nothing for
+                // the log to confirm.
+                FileTabs = memory.Files }
 
     /// Whether this client has read the log through to where the session says it ends — the
     /// moment a remembered strip can be checked against what the session has. Connected,
@@ -4427,8 +4461,7 @@ module ClientModel =
                     // A terminal somebody put in front of the people here (`open_tab`). Not
                     // only the ones I asked for: that rule is about terminals a session starts
                     // on its own business, and this is an act whose entire point is that it is
-                    // for whoever is reading. A FILE opened that way is not a tab — the strip
-                    // holds terminals — and is shown only when it was asked to be (below).
+                    // for whoever is reading. A FILE opened that way gets its tab below.
                     | SessionEvent.TabOpened t ->
                         match t.Ref with
                         | ViewingTerminal terminal -> Some terminal
@@ -4466,6 +4499,22 @@ module ClientModel =
                     || (not (Set.contains (ViewingTerminal terminal) closed)
                         && (model.HeardThrough
                             || Projection.tryFind terminal terminals |> Option.exists (fun view -> view.IsOpen))))
+            // A file put in front of the people here opens its tab, as a terminal does, and
+            // `close_tab` takes it out. Only as news (`HeardThrough`): a page of history would
+            // bring back every file ever handed over, including the ones this reader put away,
+            // and the strip they kept comes back from their memory instead (`remembered`).
+            let fileTabs =
+                if not model.HeardThrough then model.FileTabs
+                else
+                    freshEvents
+                    |> List.fold
+                        (fun files e ->
+                            match e.Event with
+                            | SessionEvent.TabOpened { TabOpened.Ref = ViewingFile file } -> withFileTab file files
+                            | SessionEvent.TabClosed { TabClosed.Ref = ViewingFile file } ->
+                                files |> List.filter (fun f -> f <> file)
+                            | _ -> files)
+                        model.FileTabs
             // Being SHOWN the terminal you pressed for, which is the whole of what the press
             // promised. A tab in the strip is not that: `selectedTerminal` keeps the stored
             // choice while what it names still exists, and the terminal you were on still
@@ -4499,9 +4548,8 @@ module ClientModel =
             // folded nothing yet is the one fact that distinguishes a page of history from a
             // page of news.
             //
-            // A file opened WITHOUT focus opens nothing. It has no tab to land in, and a
-            // preview nobody asked to see is the screen taken by somebody else's act; the list
-            // is where it is in reach.
+            // A file opened WITHOUT focus only gets its tab: a preview nobody asked to see is
+            // the screen taken by somebody else's act.
             let pane =
                 if model.EventConsumer.LastProcessedOffset.IsNone then pane
                 else
@@ -4527,6 +4575,11 @@ module ClientModel =
                     | PreviewSubject.Content _ -> under |> Option.map OnTerminal
                     | PreviewSubject.Block _ | PreviewSubject.Stretch _ -> pane
                 | other -> other
+            // And a file on screen is in its tab, however it got there.
+            let fileTabs =
+                match pane |> Option.bind PaneMode.preview with
+                | Some preview -> filesFor preview.Subject fileTabs
+                | None -> fileTabs
             let latestKnown = EventOffset.maxOption model.EventConsumer.LatestKnownOffset highWater
             { model with
                 Conversation = conversation
@@ -4539,6 +4592,7 @@ module ClientModel =
                 Terminals = terminals
                 Stolen = stolen
                 Tabs = tabs
+                FileTabs = fileTabs
                 Pane = pane
                 Opening = opening
                 // Spent by the close that answers it, in the page that carries it.
@@ -4895,6 +4949,7 @@ module ClientModel =
                     match under with
                     | Some mode -> withTab (openOrder model.Terminals) (TerminalMode.terminal mode) model.Tabs
                     | None -> model.Tabs
+                FileTabs = filesFor preview.Subject model.FileTabs
                 Pane = Some (Previewing (preview, under))
                 Switcher = false
                 TerminalsOpen = true }
@@ -5222,6 +5277,14 @@ module ClientModel =
                 Pane =
                     if selectedTerminal model = Some terminal then next |> Option.map (Reading >> OnTerminal)
                     else model.Pane }
+        | DismissFileTabMsg file ->
+            { model with
+                FileTabs = model.FileTabs |> List.filter (fun tab -> tab <> file)
+                Pane =
+                    match model.Pane with
+                    | Some (Previewing ({ Preview.Subject = PreviewSubject.Content shown }, under)) when shown = file ->
+                        under |> Option.map OnTerminal
+                    | other -> other }
         ))))))))
 
     /// The read loop's decisions: what a message, once folded, asks to be read next — of the
@@ -5505,6 +5568,8 @@ module ClientModel =
                 match dismissLanding model terminal with
                 | Some tab -> [ ClientEffect.Move (DomMove.FocusTab tab) ]
                 | None -> [ ClientEffect.Move DomMove.FocusPivot ]
+            // A file's × leaves with its tab too: onto the item the pane is back on.
+            | DismissFileTabMsg _ when model.FileTabs <> next.FileTabs -> [ ClientEffect.Move DomMove.FocusPivot ]
             | MoveMsg move -> [ ClientEffect.Move move ]
             // The player the hand was in is gone; the toggle that replaces it is where it lands.
             | ReplayCaughtUpMsg _ -> [ ClientEffect.Move DomMove.FocusWatchToggle ]

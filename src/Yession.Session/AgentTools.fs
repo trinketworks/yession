@@ -1048,19 +1048,19 @@ module AgentTools =
 
           tool
               "open_tab"
-              "Put a terminal within reach of the people here: it opens as a tab in their side pane's strip, ready to choose. Takes an address — a terminal as \"terminal:<id>\", or a file as \"file:///artifacts/<name>\" (what share_artifact answers with; name a version to pin one). The strip holds terminals only: a file is never a tab, and the pane already lists every file the session has shared, so opening one this way changes nothing on anyone's screen — to put a file in front of somebody, use focus_tab. It does NOT take anyone's screen: everybody stays on what they were reading, and the tab waits to be chosen — to show somebody something because they asked to see it, use focus_tab. Opening the same address twice is the same one tab. Say in your message what you opened; the tab is how they find it again, not how they learn it exists."
+              "Put a terminal or a file within reach of the people here: it opens as a tab in their side pane's strip, ready to choose — terminals first, then files. Takes an address — a terminal as \"terminal:<id>\", or a file as \"file:///artifacts/<name>\" (what share_artifact answers with; name a version to pin one). It does NOT take anyone's screen: everybody stays on what they were reading, and the tab waits to be chosen — to show somebody something because they asked to see it, use focus_tab. Opening the same address twice is the same one tab. Say in your message what you opened; the tab is how they find it again, not how they learn it exists."
               (ToolArgs.text "address" "what to open, e.g. \"file:///artifacts/chart.png\" or \"terminal:01HQ...\"")
               (fun address -> ok (openTab capabilities address false))
 
           tool
               "focus_tab"
-              "Show the people here something, taking their side pane: a terminal opens as a tab if it is not one already and becomes the tab their pane is showing; a file is laid over their pane as a preview, which they close to get back to the terminal they were on. Either way it REPLACES whatever they were reading. Do this when they have asked to be shown something (\"show me the chart\", \"put it up\"), and not otherwise. If you merely think they will want a terminal next, open_tab puts it in their strip without taking their screen, and that is almost always the right one. Addresses as open_tab takes them."
+              "Show the people here something, taking their side pane: a terminal or a file opens as a tab if it is not one already and becomes the tab their pane is showing. It REPLACES whatever they were reading. Do this when they have asked to be shown something (\"show me the chart\", \"put it up\"), and not otherwise. If you merely think they will want a terminal next, open_tab puts it in their strip without taking their screen, and that is almost always the right one. Addresses as open_tab takes them."
               (ToolArgs.text "address" "what to show, as open_tab names it")
               (fun address -> ok (openTab capabilities address true))
 
           tool
               "close_tab"
-              "Take back an open_tab or a focus_tab: a terminal's tab goes from the side pane's strip, and a file shown with focus_tab is taken down if it is still up. Use it when what you opened has stopped being useful, rather than leaving it there. Asking is all this does — a terminal somebody is looking at stays on their screen until they move off it. Closing something that is not open is not an error. Addresses as open_tab takes them."
+              "Take back an open_tab or a focus_tab: the tab goes from the side pane's strip, a file's taking its preview down with it. Use it when what you opened has stopped being useful, rather than leaving it there. Asking is all this does — a terminal somebody is looking at stays on their screen until they move off it. Closing something that is not open is not an error. Addresses as open_tab takes them."
               (ToolArgs.text "address" "what to close, as open_tab names it")
               (fun address -> ok (closeTab capabilities address))
 
