@@ -1716,6 +1716,10 @@ let private nodeBudgetMs (caps: Set<string>) =
 // deadline at all, which let one hung Playwright call hold a release run for 48 minutes; the
 // release tier's 1110s ends a hang inside 19 minutes, saying which suite and why.
 //
+// An allowance pays for the suites its capability admits, so a run adds up the allowances of the
+// suites it executes, which is not always every capability it asks for (`CheckRun.Allowances`).
+// `bench` asks for `Browser Bench` and executes `Client performance` alone, on `Bench`'s 120s.
+//
 // A run whose cases each spend a full 30s wait failing is not a hang, but enough of them overrun
 // this too. Their failures are printed above the kill, as they ended.
 let private clrBudgetMs (caps: Set<string>) =
@@ -1865,27 +1869,57 @@ let private runSuite (caps: string list) (run: SuiteRun) =
         p.Kill true
         failwithf "tests: %s timed out" run.Suite
 
+/// One `check` run, as everything after the arguments reads it: what it asks the box to host,
+/// which runtime it confines itself to, what it is narrowed to, and so what its budgets buy.
+type private CheckRun =
+    { /// What the box must host, and what the suites are told this run has (`YESSION_TEST_CAPS`).
+      Caps: string list
+      Runtime: Runtime option
+      /// The text a case's full name must contain to run (`YESSION_TEST_ONLY`), or every case.
+      Only: string option
+      /// The capabilities whose suites this run executes: the allowances `nodeBudgetMs` and
+      /// `clrBudgetMs` add up. Not `Caps`, because a run can ask for a capability only to host
+      /// the suite it keeps. `measuring` asks for `Browser` so its one suite has a browser, and
+      /// `Browser`'s allowance pays for the suites its narrowing drops.
+      ///
+      /// Only a run that declares its narrowing in this file can buy less than it asks for.
+      /// `--only` text is matched against case names in the suite, which this script cannot see,
+      /// so it buys nothing back: `check Browser --only "editor"` still runs 210 cases.
+      Allowances: Set<string> }
+
+/// The capabilities a run's budget was added up from, as a kill message names them.
+let private allowanceNames (allowances: Set<string>) =
+    if Set.isEmpty allowances then "none" else String.concat " " allowances
+
 /// The Node run: the Fable bundle `Target.Suite` left at `suiteEntry`.
-let private nodeRun (caps: Set<string>) : SuiteRun =
+let private nodeRun (allowances: Set<string>) : SuiteRun =
     { Suite = "the Node suite"
       Command = "node"
       Arguments = [ suiteEntry ]
-      BudgetMs = nodeBudgetMs caps
-      Basis = "a base for the cheap tier plus an allowance for each capability, generous against measured times (`nodeBudgetMs` in tasks.fsx)"
+      BudgetMs = nodeBudgetMs allowances
+      Basis =
+        sprintf
+            "a base for the cheap tier plus an allowance for each capability whose suites this run executes (%s), generous against measured times (`nodeBudgetMs` in tasks.fsx)"
+            (allowanceNames allowances)
       Bounded = "A single wait fails at 30s and a case's own deadline fails as itself" }
 
 /// The .NET CLR run: the browser suites, which `Target.ClrSuite` built beside the Fable
 /// compiles. Without `--no-build` this would build it again, alone, ahead of the first case.
-let private clrRun (caps: Set<string>) : SuiteRun =
+let private clrRun (allowances: Set<string>) : SuiteRun =
     { Suite = "the browser suite (.NET CLR)"
       Command = "dotnet"
       Arguments = [ "run"; "--project"; "tests/Yession.Tests/Yession.Tests.fsproj"; "--no-build"; "-c"; "Debug" ]
-      BudgetMs = clrBudgetMs caps
-      Basis = "an allowance for each capability, about two and a half times what its browser suites take on CI (`clrBudgetMs` in tasks.fsx has the measurements)"
+      BudgetMs = clrBudgetMs allowances
+      Basis =
+        sprintf
+            "an allowance for each capability whose suites this run executes (%s), about two and a half times what those suites take on CI (`clrBudgetMs` in tasks.fsx has the measurements)"
+            (allowanceNames allowances)
       Bounded = "Every browser wait fails by itself within 30s" }
 
-let private runCheckOnce (requested: string list) (runtime: Runtime option) =
-    let caps = requested
+let private runCheckOnce (run: CheckRun) =
+    let caps = run.Caps
+    let runtime = run.Runtime
+    restore ()
     requireCapabilities caps
     let capSet = Set.ofList caps
     // Naming a runtime that the capabilities give nothing to do is a run that would print green
@@ -1900,6 +1934,7 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
         failwith "check --runtime none: runs no suite, so NixBuild is the only thing it can be asked for"
     | _ -> ()
     Environment.SetEnvironmentVariable ("YESSION_TEST_CAPS", String.concat " " caps)
+    run.Only |> Option.iter (fun text -> Environment.SetEnvironmentVariable ("YESSION_TEST_ONLY", text))
     underOwnProfile ()
     progress (sprintf "capabilities: %s" (if List.isEmpty caps then "none (cheap tier)" else String.concat " " caps))
     runtime
@@ -1911,7 +1946,7 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
 
     make (preparing capSet runtime)
 
-    if runsNode runtime then runSuite caps (nodeRun capSet)
+    if runsNode runtime then runSuite caps (nodeRun run.Allowances)
 
     // The .NET CLR (Playwright) path. No browser install step: Chromium comes from the
     // environment (PLAYWRIGHT_BROWSERS_PATH, set by devenv.nix from nixpkgs' playwright-driver),
@@ -1938,7 +1973,7 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
             |> Array.map (fun dir -> Path.Combine (dir, "node"))
             |> Array.tryFind File.Exists
             |> Option.iter (fun node -> Environment.SetEnvironmentVariable ("PLAYWRIGHT_NODEJS_PATH", node))
-        runSuite caps (clrRun capSet)
+        runSuite caps (clrRun run.Allowances)
 
     // Last, because it is the long pole (a cold NuGet fetch plus the whole compile again,
     // offline, inside the sandbox) and because the suites are the sharper signal. `Nix` asserts
@@ -2043,7 +2078,8 @@ let private takeRuntime (args: string list) : string list * Runtime option =
 
 // check [caps…] [--only <text>] [--runtime node|clr]. Default = cheap tier; each cap adds its
 // suites (Browser, Ports, Native, …). `--only` narrows BOTH runtimes to the cases whose full name
-// contains the text — the build is unchanged, so this buys back the running, not the compiling.
+// contains the text — the build is unchanged, so this buys back the running, not the compiling,
+// and not the budget either (`CheckRun.Allowances` says why).
 // `--runtime` runs one of them, and does buy back the compiling: see `Runtime`.
 // The gate runs once and is deterministic — the native WebRTC suites used to abort intermittently,
 // but that was a real defect (the addon carried its own C++ runtime; see nix/node-datachannel.nix),
@@ -2051,10 +2087,8 @@ let private takeRuntime (args: string list) : string list * Runtime option =
 let check (args: string list) =
     let rest, only = takeOnly args
     let caps, runtime = takeRuntime rest
-    only |> Option.iter (fun text -> Environment.SetEnvironmentVariable ("YESSION_TEST_ONLY", text))
     if needsKeyringWrap caps then exit (rerunUnderKeyring args)
-    restore ()
-    runCheckOnce caps runtime
+    runCheckOnce { Caps = caps; Runtime = runtime; Only = only; Allowances = Set.ofList caps }
 
 /// The release gate: every capability, no exceptions. Takes the same trailing arguments `check`
 /// does — which in practice means `--only`, so a gate run by hand can be narrowed to the case
@@ -2365,14 +2399,28 @@ let private benchBaselines () : Map<string, float> =
         |> List.map (fun (name, pairs) -> name, median (List.map snd pairs))
         |> Map.ofList
 
-/// Run the measurement. Never judges: `bench-guard` does that, and the release deliberately
-/// wants the first without the second.
+/// THE MEASURING RUN, declared whole, because its budget rests on its narrowing and the two must
+/// not be read apart.
 ///
 /// On the .NET CLR alone: every timing suite needs a real browser to time a render (`Verify
 /// tiers` refuses one that does not), so compiling the Node suite for a measuring run cost 84
 /// seconds of Fable and bought a Node process with not one case in it that measures anything.
-let bench (args: string list) =
-    check ([ "Browser"; "Bench"; "--runtime"; "clr"; "--only"; "Client performance" ] @ args)
+///
+/// `Browser` is asked for because that one suite needs it. Its allowance is not bought: those
+/// 600s pay for the suites that need only a browser, the editor's 210 cases among them, and the
+/// narrowing keeps none of them. So the budget is `Bench`'s allowance alone, 120s against the
+/// 37-43s this suite takes on CI. It was the 720s of both, which let a hang hold the bench job
+/// for twelve minutes before it was named, and `bench-guard`'s re-measure for twelve more.
+let private measuring : CheckRun =
+    { Caps = [ "Browser"; "Bench" ]
+      Runtime = Some Runtime.Clr
+      Only = Some "Client performance"
+      Allowances = set [ "Bench" ] }
+
+/// Run the measurement. Never judges: `bench-guard` does that, and the release deliberately
+/// wants the first without the second.
+let bench () =
+    runCheckOnce measuring
     let now = measured ()
     match benchBaselines () with
     | b when Map.isEmpty b ->
@@ -2413,7 +2461,7 @@ let benchGuard () =
         | [] -> printfn "bench-guard: no metric is more than %gx its baseline." regressionFactor
         | first ->
             printfn "bench-guard: %d metric(s) over the line — measuring again before calling it." (List.length first)
-            bench []
+            bench ()
             let again = trips (measured ())
             let confirmed =
                 again |> List.filter (fun (name, _, _, _) -> first |> List.exists (fun (n, _, _, _) -> n = name))
@@ -3382,7 +3430,15 @@ let rec private verbs () : Verb list =
         Summary = "run a Node tier in the Colima VM, under strict Srt. Takes check's args"
         Run = vmCheck Colima }
       { Name = "lint"; Summary = "actionlint, then the F# analyzers"; Run = fun _ -> withBuildSlot "lint" lint }
-      { Name = "bench"; Summary = "measure client performance against the recorded baseline"; Run = fun args -> withBuildSlot "bench" (fun () -> bench args) }
+      { Name = "bench"
+        Summary = "measure client performance against the recorded baseline"
+        // Arguments would change the run `measuring` declares, and its budget fits that run alone.
+        Run =
+            function
+            | [] -> withBuildSlot "bench" bench
+            | _ ->
+                failwith
+                    "bench takes no arguments: its budget fits the one run it declares (`measuring` in tasks.fsx). To run part of the suite, `check Browser Bench --runtime clr --only \"<part of a case name>\"`" }
       { Name = "bench-guard"; Summary = "fail on a large regression against the recorded history"; Run = fun _ -> benchGuard () }
       { Name = "bench-publish"
         Summary = "record this measurement on the bench branch and redraw its chart. [label]"
