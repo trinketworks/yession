@@ -179,6 +179,9 @@ let all =
         // What may publish a release. `release.yml` runs on master alone, so this is the only
         // reader of its gate that runs before a release has already gone out through a hole.
         Tag.needs "Release gate" [] (fun () -> ReleaseGate.tests)
+        // The gate in front of master: whether its merge queue waits longer than the jobs it
+        // requires can run. Its settings live on GitHub, so reading them takes a token.
+        Tag.needs "The merge queue, for real" [ Tag.LiveGitHub ] (fun () -> ReleaseGate.queueTests)
         // That the capabilities `check` probes, `verify` asks for and `help` prints (tasks.fsx)
         // are the cases of `Need` this very list is written in.
         Tag.needs "Tasks capabilities" [] (fun () -> TasksCapabilities.tests)
