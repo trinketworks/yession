@@ -52,8 +52,8 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # Above the suites' own budgets, never below them: verify.yml's `verify` job says why. `bench`
-    # calls a workflow, and a calling job cannot carry one; bench.yml's job does.
+    # Above the suites' own budgets and `lint`'s, never below them: verify.yml's `verify` job says
+    # why. `bench` calls a workflow, and a calling job cannot carry one; bench.yml's job does.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
