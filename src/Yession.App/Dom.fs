@@ -831,9 +831,12 @@ module Dom =
         let composerPlaceholder = "write a message"
         /// What a screen reader hears while an @ is hinted: the whole name, and the key.
         let addressHintSpoken (name: string) = sprintf "%s, Tab to complete" name
-        /// The cold-open wait (Plan 20): what is coming, not just that something is. Same
-        /// direction "catching up" already gives the network wait (`catchingUp` below) — this
-        /// one is the local store instead, so it says which.
+        /// The cold-open wait (Plan 20): what is coming, not just that something is. Shown
+        /// while EITHER the local store has not been read yet OR the event consumer is still
+        /// behind the session's own log (`catchingUp` below covers the same network wait once
+        /// there is something on screen already) — so this one stays up until a message that
+        /// was never on this device has had its round trip, not just until the local read
+        /// resolves.
         let readingHistory = "Catching up on this session's history"
         /// The floating "jump to latest" control's accessible name, since it carries only a down
         /// chevron (`Icon.down`), so this is the whole of what a screen reader says it does.
