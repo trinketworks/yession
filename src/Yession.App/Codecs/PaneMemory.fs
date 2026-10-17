@@ -68,11 +68,17 @@ module CommandTally =
 /// commands this person had looked, so a build that finished while they were away still says
 /// so after a reload. A memory written before it reads as nothing seen in particular, which
 /// counts everything the log replays as already looked at — what a reload did before.
+///
+/// `files` was added the same way, when a file opened from the chat got a tab of its own: the
+/// strip's file tabs, each its `file:///` spelling. A memory without it has none open. Which
+/// file was on screen is not kept, for the reason a preview never was.
 [<RequireQualifiedAccess>]
 type PaneMemory =
     { /// The strip, left to right — what `ClientModel.Tabs` held, closed tabs not yet put
       /// away among them (F2).
       Tabs : TerminalId list
+      /// The strip's files, left to right — what `ClientModel.FileTabs` held.
+      Files : Content.ContentRef list
       /// The terminal the pane was about, if one had been chosen.
       Selected : TerminalId option
       /// Whether the column was on screen.
@@ -86,6 +92,7 @@ module PaneMemory =
     /// freshly loaded client shows, and so what there is no need to write down.
     let untouched : PaneMemory =
         { PaneMemory.Tabs = []
+          PaneMemory.Files = []
           PaneMemory.Selected = None
           PaneMemory.Open = false
           PaneMemory.Seen = Map.empty }
@@ -99,6 +106,14 @@ module PaneMemory =
         | Ok (ViewingTerminal terminal) -> Some terminal
         | Ok (ViewingFile _) | Error _ -> None
 
+    let private fileKey (file: Content.ContentRef) : string = ViewRef.said (ViewingFile file)
+
+    /// A stored key as a file, or `None` for one that is not a file's.
+    let private fileOf (key: string) : Content.ContentRef option =
+        match ViewRef.read key with
+        | Ok (ViewingFile file) -> Some file
+        | Ok (ViewingTerminal _) | Error _ -> None
+
     let private tally : Decoder<CommandTally> =
         Decode.object (fun get ->
             { CommandTally.Finished = get.Required.Field "finished" Decode.int
@@ -109,6 +124,7 @@ module PaneMemory =
             fun (memory: PaneMemory) ->
                 Encode.object
                     [ "tabs", memory.Tabs |> List.map (terminalKey >> Encode.string) |> Encode.list
+                      "files", memory.Files |> List.map (fileKey >> Encode.string) |> Encode.list
                       "selected", memory.Selected |> Option.map (terminalKey >> Encode.string) |> Option.defaultValue Encode.nil
                       "open", Encode.bool memory.Open
                       "seen",
@@ -123,6 +139,11 @@ module PaneMemory =
           Decode =
             Decode.object (fun get ->
                 { PaneMemory.Tabs = get.Required.Field "tabs" (Decode.list Decode.string) |> List.choose terminalOf
+                  // Absent in a memory written before files had tabs: none open.
+                  PaneMemory.Files =
+                      get.Optional.Field "files" (Decode.list Decode.string)
+                      |> Option.defaultValue []
+                      |> List.choose fileOf
                   // Absent and null are both "nothing was chosen", which is a real answer:
                   // the pane then shows its default, exactly as it would have before.
                   PaneMemory.Selected = get.Optional.Field "selected" Decode.string |> Option.bind terminalOf

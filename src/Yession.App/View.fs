@@ -4894,10 +4894,11 @@ module View =
     /// terminal the session has is reached through `all`. A tab's × is its terminal's kill
     /// (P2-2) — there is no way to drop a tab and leave its terminal running — and a closed
     /// one keeps its place, closed, until the reader puts it away with its × (F2).
-    /// What the chat opens is a PREVIEW (P2-1), laid over the terminal it belongs to: one at a
-    /// time, and a layer OF that terminal rather than a tab beside it (F3). The terminal's tab
-    /// stays the selected item — the way back to it — and the preview is named in the line
-    /// under the pivot, beside its own close.
+    /// A command or a stretch the chat opens is a PREVIEW (P2-1), laid over the terminal it
+    /// belongs to: one at a time, and a layer OF that terminal rather than a tab beside it (F3).
+    /// The terminal's tab stays the selected item, and the preview is named in the line under
+    /// the pivot, beside its own close. A file has a tab of its own, after the terminals
+    /// (`FileTabs`), and its preview is that tab's panel.
     let private contentPane (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let tabs = model.Tabs |> List.choose (fun terminal -> Projection.tryFind terminal model.Terminals)
         let selected = ClientModel.selectedTerminal model
@@ -4909,11 +4910,18 @@ module View =
             | PreviewSubject.Block _ -> true
             | PreviewSubject.Stretch _ | PreviewSubject.Content _ -> false
         let onAll = model.Switcher
+        // The file on screen, if one is: its own tab is the selected item.
+        let shownFile =
+            previewing
+            |> Option.bind (fun preview ->
+                match preview.Subject with
+                | PreviewSubject.Content file -> Some file
+                | PreviewSubject.Block _ | PreviewSubject.Stretch _ -> None)
         // Which pivot item is selected — exactly one, or none in a pane with nothing in it:
-        // `all` while it is up, else the terminal the pane is about, preview or not. A preview
-        // is not an item of the pivot (F3): it is laid over its terminal, and the strip holds
-        // only terminals, so a strip with room for three spends none of it on a glance.
-        let onTerminal (terminal: TerminalId) = selected = Some terminal
+        // `all` while it is up, else the file on screen, else the terminal the pane is about.
+        // A command's or a stretch's preview is not an item of the pivot (F3): it is laid over
+        // its terminal, whose tab stays selected.
+        let onTerminal (terminal: TerminalId) = selected = Some terminal && Option.isNone shownFile
         // The empty pane — nothing open, nothing previewed, `all` not up — is where a session
         // with nothing is sent, and it carries its own press to make something. So it is the
         // one state the pivot's `+` stays away from: one door per state.
@@ -4950,10 +4958,15 @@ module View =
                           title="{name} is watching" data-pane-viewer="{ActorRef.token who}"></span>""")
         // The roving stop: the one tab Tab reaches, which is the selected one — and the first
         // when none is, so the strip is never a row Tab cannot enter.
-        let nothingOn = not (tabs |> List.exists (fun view -> onTerminal view.TerminalId))
-        let firstTab = tabs |> List.tryHead |> Option.map (fun view -> view.TerminalId)
-        let stopAt (terminal: TerminalId) (on: bool) =
-            if on || (nothingOn && firstTab = Some terminal) then "0" else "-1"
+        let nothingOn =
+            not (tabs |> List.exists (fun view -> onTerminal view.TerminalId))
+            && not (model.FileTabs |> List.exists (fun file -> shownFile = Some file))
+        let firstTab =
+            (tabs |> List.map (fun view -> ClientModel.tabKey view.TerminalId))
+            @ (model.FileTabs |> List.map ClientModel.fileTabKey)
+            |> List.tryHead
+        let stopAt (key: string) (on: bool) =
+            if on || (nothingOn && firstTab = Some key) then "0" else "-1"
         let terminalItem
             (activate: unit -> unit)
             (activateKey: Browser.Types.Event -> unit)
@@ -5024,14 +5037,14 @@ module View =
                 html $"""
                     <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-tab="{id}"
                          id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
-                         aria-selected="{if on then "true" else "false"}" tabindex="{stopAt view.TerminalId on}" title="{tooltip}"
+                         aria-selected="{if on then "true" else "false"}" tabindex="{stopAt key on}" title="{tooltip}"
                          @keydown={Ev(activateKey)}
                          @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}" data-terminal-tab-name>{name}</span>{mark}{peers}{dismiss}</div>"""
             else
                 html $"""
                     <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-closed-tab="{id}"
                          id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
-                         aria-selected="{if on then "true" else "false"}" tabindex="{stopAt view.TerminalId on}" title="{tooltip}"
+                         aria-selected="{if on then "true" else "false"}" tabindex="{stopAt key on}" title="{tooltip}"
                          @keydown={Ev(activateKey)}
                          @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}" data-terminal-tab-name>{name}</span>{mark}{peers}{dismiss}</div>"""
         // What a preview is CALLED — its name under the pivot, its close's, and so its
@@ -5082,6 +5095,39 @@ module View =
                     pressed.preventDefault ()
                     dispatch (DismissTabMsg terminal)
             terminalItem activate activateKey view
+        // A file's tab: its preview is this tab's panel. Pressed, it shows the file in place;
+        // its ×, or Delete, puts it away and the pane goes back to the terminal under it.
+        let fileItem (file: ContentRef) =
+            let on = shownFile = Some file
+            let key = ClientModel.fileTabKey file
+            let name = ContentName.ofRef file
+            let klass = if not on || onAll then Style.pivotItem else Style.pivotItemOn
+            let activate () = dispatch (ShowPreviewMsg (Preview.ofSubject (PreviewSubject.Content file)))
+            let activateKey (e: Browser.Types.Event) =
+                let pressed = e :?> Browser.Types.KeyboardEvent
+                let onTab = System.Object.ReferenceEquals (e.target, e.currentTarget)
+                if onTab && (pressed.key = "Enter" || pressed.key = " ") then
+                    pressed.preventDefault ()
+                    activate ()
+                elif pressed.key = "Delete" then
+                    pressed.preventDefault ()
+                    dispatch (DismissFileTabMsg file)
+            let dismiss =
+                if not on then Lit.nothing
+                else
+                    let label = Dom.Text.dismissTab name
+                    html $"""
+                        <button type="button" class="{Style.pivotTabClose}" data-pane-tab-dismiss="{key}"
+                                aria-label="{label}" title="{label}"
+                                @click={Ev(fun (e: Browser.Types.Event) ->
+                                              e.stopPropagation ()
+                                              dispatch (DismissFileTabMsg file))}>{Icon.close}</button>"""
+            html $"""
+                <div role="tab" class="{klass}" data-pane-tab="{key}" data-file-tab="{ContentRef.value file}"
+                     id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
+                     aria-selected="{if on then "true" else "false"}" tabindex="{stopAt key on}" title="{name}"
+                     @keydown={Ev(activateKey)}
+                     @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}">{name}</span>{dismiss}</div>"""
         // The door to every terminal and file: a button at the strip's end, beside `+`, that
         // drops the list down as a sheet over whatever the pane is showing. Not a tab: the
         // list is not a place the pane goes to, and the tab under it stays selected. Pressed
@@ -5286,11 +5332,13 @@ module View =
                 let key = PreviewSubject.key preview.Subject
                 // Named by the tab it is laid over and then its own name, which is how the
                 // screen says it: `term 2`, then `$ seq 1 40`.
+                // A file is named by its own tab.
                 let labelledBy =
-                    match selected with
-                    | Some terminal when tabs |> List.exists (fun view -> view.TerminalId = terminal) ->
+                    match shownFile, selected with
+                    | Some file, _ -> Dom.paneTabId (ClientModel.fileTabKey file)
+                    | None, Some terminal when tabs |> List.exists (fun view -> view.TerminalId = terminal) ->
                         Dom.paneTabId (ClientModel.tabKey terminal) + " " + Dom.panePreviewNameId
-                    | Some _ | None -> Dom.panePreviewNameId
+                    | None, (Some _ | None) -> Dom.panePreviewNameId
                 html $"""
                     <div class="{if lifted preview then Style.panePanelLifted else Style.panePanel}" role="tabpanel" tabindex="-1"
                          id="{Dom.panePanelId}" aria-labelledby="{labelledBy}" style="{if lifted preview then Style.liftedName else ""}"
@@ -5365,6 +5413,15 @@ module View =
             | Some preview, _ ->
                 let key = PreviewSubject.key preview.Subject
                 let label, hint = previewLabel preview.Subject
+                // A file's close is its tab's ×; a second one a line below would be one control
+                // twice.
+                let close =
+                    if Option.isSome shownFile then Lit.nothing
+                    else
+                        html $"""
+                            <button type="button" class="{Style.paneStripAct}" data-pane-preview-close
+                                    aria-label="{Dom.Text.closePreview label}" title="{Dom.Text.closePreview label}"
+                                    @click={Ev(fun _ -> closePreview preview)}>{Icon.close}</button>"""
                 html $"""
                     <div class="{if lifted preview then Style.paneToolbarLifted else Style.paneToolbar}">
                       <div class="{Style.panePreviewHead}" data-pane-subtitle="preview">
@@ -5372,9 +5429,7 @@ module View =
                               title="{hint}">{label}</span>
                       </div>
                       {paneActionsView key (previewVerbs preview)}
-                      <button type="button" class="{Style.paneStripAct}" data-pane-preview-close
-                              aria-label="{Dom.Text.closePreview label}" title="{Dom.Text.closePreview label}"
-                              @click={Ev(fun _ -> closePreview preview)}>{Icon.close}</button>
+                      {close}
                     </div>"""
             | None, Some terminal ->
                 // Where it runs, then what it is doing. A terminal whose BLOCKS are the read has
@@ -5427,9 +5482,9 @@ module View =
                               @click={Ev(fun _ -> pressingNew ())}>+</button>
                       {if model.PaneMenu then newMenu Style.paneNewMenu else Lit.nothing}
                     </div>"""
-        // The tabs, each in its own place (F2), and nothing else: a preview is named under
-        // the pivot, not in it (F3).
-        let strip = tabs |> List.map tabItem
+        // The tabs, each in its own place (F2): terminals, then files. A command's preview is
+        // named under the pivot, not in it (F3).
+        let strip = (tabs |> List.map tabItem) @ (model.FileTabs |> List.map fileItem)
         let pivot =
             html $"""
                 <div class="{Style.panePivotRow}">

@@ -844,6 +844,7 @@ let private reloadTests =
                     return terminal, finished, failed })
                 let memory =
                     { PaneMemory.Tabs = tabs
+                      PaneMemory.Files = []
                       PaneMemory.Selected = selected
                       PaneMemory.Open = isOpen
                       PaneMemory.Seen =
@@ -866,8 +867,18 @@ let private reloadTests =
                 """{"tabs":["terminal:term-a","block:term-a:b-1","stretch:term-a@3","content:artifacts/chart.png/0000-ab12cd","terminal:term-b"],"pinned":["terminal:term-a","block:term-a:b-1"],"selected":"block:term-a:b-1","open":true}"""
             Expect.equal
                 (Codec.fromString PaneMemory.codec older)
-                (Ok { PaneMemory.Tabs = [ terminalA; terminalB ]; PaneMemory.Selected = None; PaneMemory.Open = true; PaneMemory.Seen = Map.empty })
+                (Ok { PaneMemory.Tabs = [ terminalA; terminalB ]; PaneMemory.Files = []; PaneMemory.Selected = None; PaneMemory.Open = true; PaneMemory.Seen = Map.empty })
                 "the terminals, in order; the selection was a preview, so there is none"
+
+        testCase "a remembered file tab comes back on reload" <| fun () ->
+            let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            let memory = { remembering [] with PaneMemory.Files = [ chart ] }
+            Expect.equal
+                (Codec.fromString PaneMemory.codec (Codec.toString PaneMemory.codec memory))
+                (Ok memory)
+                "what is written is what is read"
+            let model = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } |> ClientModel.remembered (Some memory)
+            Expect.equal model.FileTabs [ chart ] "in the strip from the first paint"
 
         testCase "a remembered pane comes back open before anything has arrived" <| fun () ->
             let model = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } |> ClientModel.remembered (Some (remembering []))
@@ -984,7 +995,7 @@ let private reloadTests =
             let model = clientOf oneBlock |> Support.step (chip terminalA "1")
             Expect.equal
                 (ClientModel.paneMemory model)
-                { PaneMemory.Tabs = [ terminalA ]; PaneMemory.Selected = Some terminalA; PaneMemory.Open = true; PaneMemory.Seen = Map.empty }
+                { PaneMemory.Tabs = [ terminalA ]; PaneMemory.Files = []; PaneMemory.Selected = Some terminalA; PaneMemory.Open = true; PaneMemory.Seen = Map.empty }
                 "the strip and the terminal the preview was over"
     ]
 
@@ -3774,14 +3785,58 @@ let private tabTests =
                 ([ "terminal:term-a"; "terminal:term-b" ], Some terminalA)
                 "in reach, and I am still reading what I was reading"
 
-        // Replaces "a tab the agent opened is in my strip": a file is not a tab, and a
-        // preview nobody asked to see is the screen taken by somebody else's act.
-        testCase "an agent's unfocused open_tab of a file opens nothing" <| fun () ->
+        // A file has a tab of its own; a preview nobody asked to see is still the screen taken
+        // by somebody else's act, so the tab waits to be chosen.
+        testCase "an agent's unfocused open_tab of a file opens its tab and nothing else" <| fun () ->
             let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
-            let before = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let before = heardOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
             let model =
                 before |> thenFolded [ at 2L 1.0 (SessionEvent.TabOpened { TabOpened.Ref = ViewingFile chart; TabOpened.Focus = false }) ]
-            Expect.equal (model.Pane, stripKeys model) (before.Pane, stripKeys before) "the pane exactly as it was"
+            Expect.equal
+                (model.Pane, stripKeys model, model.FileTabs)
+                (before.Pane, stripKeys before, [ chart ])
+                "the pane exactly as it was, and the file in reach"
+
+        testCase "a file handed over in history does not open its tab" <| fun () ->
+            // A reload replays every open_tab ever made; the strip this reader kept comes back
+            // from their memory instead.
+            let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            let model =
+                clientOf
+                    [ at 1L 0.0 (opened terminalA "build")
+                      at 2L 1.0 (SessionEvent.TabOpened { TabOpened.Ref = ViewingFile chart; TabOpened.Focus = false }) ]
+            Expect.equal model.FileTabs [] "history is not news"
+
+        testCase "a file opened from the chat opens in its own tab" <| fun () ->
+            let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> Support.step (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content chart)))
+                |> Support.step (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content chart)))
+            Expect.equal
+                (model.FileTabs, model.Pane)
+                ([ chart ], Some (Previewing (Preview.ofSubject (PreviewSubject.Content chart), Some (Reading terminalA))))
+                "one tab for the file, showing it"
+
+        testCase "going back from a file keeps its tab" <| fun () ->
+            let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> Support.step (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content chart)))
+                |> Support.step ClosePreviewMsg
+            Expect.equal (model.FileTabs, model.Pane) ([ chart ], Some (OnTerminal (Reading terminalA))) "the tab stays"
+
+        testCase "putting a file's tab away takes its preview down" <| fun () ->
+            let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> Support.step (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content chart)))
+            let next, effects = ClientModel.update (DismissFileTabMsg chart) model
+            Expect.equal (next.FileTabs, next.Pane) ([], Some (OnTerminal (Reading terminalA))) "gone, back on the terminal"
+            Expect.isTrue (List.contains (ClientEffect.Move DomMove.FocusPivot) effects) "the hand goes to the tab the pane is back on"
 
         testCase "an agent's focused open_tab of a file opens a preview over my terminal" <| fun () ->
             // `focus_tab` is somebody saying "show me", not an agent deciding.
@@ -3791,9 +3846,9 @@ let private tabTests =
                 |> Support.step (ShowInPaneMsg (Reading terminalA))
                 |> thenFolded [ at 2L 1.0 (SessionEvent.TabOpened { TabOpened.Ref = ViewingFile chart; TabOpened.Focus = true }) ]
             Expect.equal
-                (model.Pane)
-                (Some (Previewing (Preview.ofSubject (PreviewSubject.Content chart), Some (Reading terminalA))))
-                "the file, laid over the terminal I was on"
+                (model.Pane, model.FileTabs)
+                (Some (Previewing (Preview.ofSubject (PreviewSubject.Content chart), Some (Reading terminalA))), [ chart ])
+                "the file, in its tab, over the terminal I was on"
 
         testCase "a focus that is already history does not move a reader who just arrived" <| fun () ->
             // The log keeps a focus for ever; a reader opening the session an hour later must
@@ -3808,11 +3863,14 @@ let private tabTests =
         testCase "a preview is closed by its subject's TabClosed" <| fun () ->
             let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
             let model =
-                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                heardOf [ at 1L 0.0 (opened terminalA "build") ]
                 |> Support.step (ShowInPaneMsg (Reading terminalA))
                 |> thenFolded [ at 2L 1.0 (SessionEvent.TabOpened { TabOpened.Ref = ViewingFile chart; TabOpened.Focus = true }) ]
                 |> thenFolded [ at 3L 2.0 (SessionEvent.TabClosed { TabClosed.Ref = ViewingFile chart }) ]
-            Expect.equal model.Pane (Some (OnTerminal (Reading terminalA))) "back to the terminal it was over"
+            Expect.equal
+                (model.Pane, model.FileTabs)
+                (Some (OnTerminal (Reading terminalA)), [])
+                "back to the terminal it was over, and its tab gone"
 
         // Replaces "a tab the agent closed goes, unless I kept it": nothing is kept against
         // the agent any more, except what the reader is looking at.
