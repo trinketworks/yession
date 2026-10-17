@@ -3473,24 +3473,41 @@ module View =
                           <span class="{Style.historyGapText}">{Dom.Text.historyMissingLocally}</span>
                         </p>""")
             | Some _, _, _ -> None
+        // Read through, in the body's own sense: the local store has been looked at AND the
+        // event consumer is not behind the session's own log. `HistoryRead` alone says only
+        // that the first of those finished — the second can still be running, with a real
+        // message (never seen on this device) a round trip from landing. Showing the idle
+        // caret the moment the local read resolves told that caller "nothing was ever said
+        // here" while it was, in fact, still arriving.
+        let caughtUp = model.HistoryRead && not model.EventConsumer.IsCatchingUp
         let body =
-            match rows, items, model.HistoryRead with
-            // Nothing here, and this client has not looked yet — which after the local store
-            // (Plan 20) is the ordinary cold open. The idle caret would say "nothing was ever
-            // said here", so it says the opposite of what is known. But this is not the agent
-            // writing, so it does not wear the agent's blue caret either (docs/visual-design.md,
-            // Colour: blue is never a status) — it is `statusWait` with a beating dot, the same
-            // vocabulary "queued" and "catching up" already wear elsewhere. `role="status"`
-            // because it is a state, and the text is visible rather than only `srOnly`: a dot
-            // alone reaches nobody who cannot see it beat.
+            match rows, items, caughtUp with
+            // Nothing here yet, and either this client has not looked at its own store, or it
+            // has and the session is still ahead of it — so a message may still be a round
+            // trip from landing. Shaped like the row it may become: an author line of the
+            // same height as a real one, `invisible` so it reserves the room without drawing
+            // a blank avatar, over the one body line the status itself stands on, both on the
+            // rail. When a real message supersedes this, it lands in the box this was already
+            // holding, rather than pushing it down.
+            //
+            // Not the agent's blue caret either (docs/visual-design.md, Colour: blue is never
+            // a status) — it is `statusWait` with a beating dot, the same vocabulary "queued"
+            // and "catching up" already wear elsewhere. `role="status"` because it is a state,
+            // and the text is visible rather than only `srOnly`: a dot alone reaches nobody
+            // who cannot see it beat.
             | [], [], false ->
-                [ html $"""<div class="{Style.timelineIdle}" role="status" data-history-loading>
-                       <span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{Dom.Text.readingHistory}</span>
-                     </div>""" ]
-            // Looked, and there is genuinely nothing: the caret now only ever means what it
-            // has always said, which is why it can stay wordless and decorative. Unless what
-            // is known is that history is missing — then the timeline is truncated rather
-            // than empty, and the line saying so stands where the caret would have.
+                [ html $"""
+                    <section class="{Style.messageGroup}" role="status" data-history-loading>
+                      <header class="{Style.messageGroupHead} invisible" aria-hidden="true"><span class="{Style.avatar}"></span></header>
+                      <p class="{Style.messageBody}">
+                        <span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{Dom.Text.readingHistory}</span>
+                      </p>
+                    </section>""" ]
+            // Read through, and there is genuinely nothing: the caret now only ever means
+            // what it has always said, which is why it can stay wordless and decorative.
+            // Unless what is known is that history is missing — then the timeline is
+            // truncated rather than empty, and the line saying so stands where the caret
+            // would have.
             | [], [], true ->
                 match missing with
                 | Some line -> [ line ]

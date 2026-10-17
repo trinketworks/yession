@@ -969,19 +969,28 @@ let private uiChecklistTests =
                 (html.Contains (Dom.attr Dom.Hooks.githubSignInRequired "mine"))
                 "and the panel still reports the credential honestly"
 
-        testCase "an empty timeline says whether it has looked, and the caret means one thing again" <| fun () ->
+        testCase "an empty timeline says whether it has caught up, and the caret means one thing again" <| fun () ->
             // Two opposite facts used to wear the same mark. The idle caret says "nothing was
             // ever said here"; it was also what a client showed BEFORE it had read anything,
-            // which after the local store is the ordinary cold open. So the caret was telling
-            // most people the opposite of the truth, and neither state could be told from the
-            // other on screen.
+            // or while it was still behind the session's own log — the ordinary cold open,
+            // and the catch-up that can still follow it (a message never kept on this
+            // device, a round trip from landing). So the caret was telling most people the
+            // opposite of the truth, and neither state could be told from the other on screen.
             let empty =
                 { representativeModel with
                     Conversation = ConversationProjection.empty
                     Timeline = TimelineProjection.empty
                     // Nothing queued either: a command waiting to run is something ON the
                     // screen, and a session with one is not the empty one this is about.
-                    Synced = { representativeModel.Synced with Pending = Map.empty } }
+                    Synced = { representativeModel.Synced with Pending = Map.empty }
+                    // Caught up by default: this fixture is about the LOCAL read and the
+                    // catch-up that can follow it, each pinned on its own below — not about
+                    // `representativeModel.EventConsumer`'s own catch-up, which is deliberately
+                    // mid-catch-up for the header checklist elsewhere.
+                    EventConsumer =
+                        { representativeModel.EventConsumer with
+                            IsCatchingUp = false
+                            LatestKnownOffset = representativeModel.EventConsumer.LastProcessedOffset } }
             let looking = Support.render { empty with HistoryRead = false }
             Expect.isTrue
                 (looking.Contains "data-history-loading")
@@ -992,7 +1001,18 @@ let private uiChecklistTests =
             let looked = Support.render { empty with HistoryRead = true }
             Expect.isFalse
                 (looked.Contains "data-history-loading")
-                "a client that has looked and found nothing is not still reading"
+                "a client that has read through and found nothing is not still reading"
+            // Read locally, but still behind the session's own log: a message never kept on
+            // this device may still be a round trip from landing, so the wait is SUSTAINED
+            // rather than giving way to the caret that says nothing was ever said here.
+            let stillBehind =
+                Support.render
+                    { empty with
+                        HistoryRead = true
+                        EventConsumer = { empty.EventConsumer with IsCatchingUp = true } }
+            Expect.isTrue
+                (stillBehind.Contains "data-history-loading")
+                "read through locally, but still behind the session's own log, is still reading"
             // The other half, and the reason this is worth pinning: a session that HAS messages
             // never shows either, whether or not the client has finished looking.
             let full = Support.render { representativeModel with HistoryRead = false }
