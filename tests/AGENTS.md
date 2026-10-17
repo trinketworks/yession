@@ -199,3 +199,26 @@ The same command runs it in a yession `dev` sandbox and in a Claude Code contain
 ```
 check Browser Native --only "<part of a test name>"
 ```
+
+### Browser cases run three at a time
+
+The .NET CLR run takes three cases at once (`BrowserRunner.fs`). Node still runs one at a time. So a
+browser case:
+
+- Owns what it arranges: its data dir, its ports (`--port 0`, `listenOnLoopback`), its contexts
+  (`withContexts`). A fixed path, or a host kept in a module-level mutable, is shared with whatever
+  runs beside it.
+- Shares only inside `testSequenced`. Where a suite's cases must share something, sequence the suite
+  and say beside it what they share. Its cases then run one at a time, in order, beside other cases.
+- Waits for animations to end before it measures (`Probe.settled`). Three at a time keeps the CPU near
+  90% busy, and a measurement taken mid-animation is of where the element was for one frame.
+
+A case's own lines print together with its verdict. Each case also prints `▶ <name>` when it starts, so
+a case that hung is one with a `▶` line and no verdict.
+
+To run one case at a time, set `YESSION_TEST_WORKERS=1`. Use it to read a run top to bottom, or to tell
+a flake from load:
+
+```
+YESSION_TEST_WORKERS=1 check Browser Native --only "<part of a test name>"
+```

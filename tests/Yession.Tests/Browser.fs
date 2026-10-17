@@ -547,9 +547,9 @@ let private terminalTabKeys (page: IPage) : Async<string list> =
 // a credential connected in one case was still connected in the next, so that case had to
 // disconnect it by hand on behalf of the ones after it.
 //
-// Independence is also what running these in parallel needs, which the runner cannot do yet:
-// Pyxpecto executes its flat tests in a `for` loop and never reads the `sequenced` field its
-// own model carries. When it can, nothing here has to change.
+// Independence is also what lets these run several at once (`BrowserRunner`). A suite whose
+// cases DO share something — a data dir by name, a host in a module-level mutable — is
+// `testSequenced`, and says beside it what its cases share.
 
 /// A Manager + session of one case's own.
 type private Host =
@@ -944,8 +944,44 @@ let waitTests =
                 Expect.stringContains said "srt sandbox failed: kept" "the page still open said it"
             }
 
-        // The refusal belongs to the case it was installed for. Two in force at once would end
-        // one case's waits by another case's page.
+        // The refusal belongs to the case it was installed for, and cases run several at once
+        // (`BrowserRunner`). A page that says its sandbox failed ends the waits of its own case;
+        // a case beside it, whose page says nothing of the kind, waits out its own deadline.
+        testCaseAsync "a refusal ends the waits of its own case, and not of a case running beside it" <|
+            async {
+                // Held in force until the case beside it is waiting, so the two overlap by
+                // arrangement rather than by how quickly two pages happen to open.
+                let besideWaiting = TaskCompletionSource<unit> ()
+                let failing =
+                    withContexts (fun contexts ->
+                        async {
+                            let! page = contexts.Page None
+                            do! awaitU (page.SetContentAsync (environmentSectionOf Yession.App.Dom.Text.envFailed "srt sandbox failed: next door"))
+                            do! awaitU (besideWaiting.Task :> Task)
+                        })
+                let beside =
+                    withContexts (fun contexts ->
+                        async {
+                            let! page = contexts.Page None
+                            do! awaitU (page.SetContentAsync (environmentSectionOf Yession.App.Dom.Text.envStarting ""))
+                            besideWaiting.TrySetResult () |> ignore
+                            let! outcome =
+                                Async.Catch (
+                                    Wait.within 2000.0 "a thing that never comes" (fun () -> Read.count page "[data-never]") (fun n -> n > 0))
+                            match outcome with
+                            | Choice1Of2 () -> return failwith "a wait for a thing that never comes must not resolve"
+                            | Choice2Of2 error -> return error.Message
+                        })
+                let! failed = Async.StartChild failing
+                // However the case beside ends, the failing one is let go: a refusal that is never
+                // released would hold this case until the run's budget kills it.
+                let! said = async { try return! beside finally besideWaiting.TrySetResult () |> ignore }
+                do! failed
+                Expect.stringContains said "timed out after 2000ms" "the case beside the failed one waited out its own deadline"
+            }
+
+        // Within one case, one refusal. Two in force at once would end the case's waits by
+        // whichever of their pages failed first.
         testCaseAsync "a second refusal installed while one is in force is refused" <|
             async {
                 let refusal : Refusal = fun () -> async.Return None
@@ -6973,6 +7009,10 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 let sheet = "#shell #pane-sheet"
                 do! waitVisible "the list's sheet" page sheet
+                // The pane's column animates open. Measured while it travels, the press below
+                // lands where the pane was for one frame and presses nothing; on a busy box (cases
+                // several at once) the sheet is visible before the column has arrived.
+                do! Probe.settled page
                 let! box = await (page.Locator(sheet).BoundingBoxAsync ())
                 let! pane = await (page.Locator("#shell [data-content-panel]").BoundingBoxAsync ())
                 Expect.isTrue (box.Y + box.Height < pane.Y + pane.Height - 20.0f) "pane showing under the sheet, or this proves nothing"
@@ -7708,8 +7748,11 @@ let private offlineReopen (name: string) (make: IPage -> Async<unit>) (check: IP
                 mounted.Stop ()
         }
 
+// One case at a time (`BrowserRunner`): every case boots its deployment in `mountDataDir` and
+// keeps its host in `mountedHost` and `mountSessionPort`, so two at once would boot into one
+// directory and kill, or forward to, each other's host.
 let mountedTests =
-    testList "Path-mounted session (browser)" [
+    testSequenced <| testList "Path-mounted session (browser)" [
         testCaseAsync "a session served under a path boots, signs in, and connects over WebRTC" <|
             async {
                 let mounted = startMounted (fun _ -> false)
@@ -8300,8 +8343,10 @@ let private startFrontedHost (publicOrigin: string) (managerPort: int) : unit =
             (fun line -> line.Contains "management UI at")
     frontedHost <- host.Process
 
+// One case at a time (`BrowserRunner`): a case boots in `frontDataDir` and keeps its host in
+// `frontedHost`, which a second case would share.
 let frontDoorTests =
-    testList "Creating a session behind a front door (browser)" [
+    testSequenced <| testList "Creating a session behind a front door (browser)" [
         testCaseAsync "creating a session lands in that session, never on the front door's miss" <|
             async {
                 if Directory.Exists frontDataDir then Directory.Delete (frontDataDir, true)
@@ -8472,8 +8517,9 @@ let private inProfile (name: string) (body: IPage -> Async<unit>) : Async<unit> 
         do! reporting name page evidence (body page)
     })
 
+// One case at a time (`BrowserRunner`): every case's deployment starts by emptying `keptDataDir`.
 let keptOpenTests =
-    testList "Opening a session this browser keeps (browser)" [
+    testSequenced <| testList "Opening a session this browser keeps (browser)" [
         // The route is held off for the whole case, and the door hands its misses to the
         // Manager, which answers 404, as behind the proxy example's Caddyfile. So the session
         // cannot answer anything: the history on the screen is what this browser kept.
@@ -8605,8 +8651,9 @@ let private deployFronted () : Fronted =
             (fun line -> line.Contains " follows ")
     { Origin = origin; Pieces = [ proxy; manager; map ] }
 
+// One case at a time (`BrowserRunner`): a case's deployment starts by emptying `frontedDataDir`.
 let frontedTests =
-    testList "A fronted deployment, for real (browser)" [
+    testSequenced <| testList "A fronted deployment, for real (browser)" [
         testCaseAsync "pressing Create on the tailnet lands you in that session, as yourself" <|
             async {
                 let deployed = deployFronted ()
@@ -8721,8 +8768,9 @@ let frontedTests =
 
 let private filtersDataDir = "tests/browser/.data-filters"
 
+// One case at a time (`BrowserRunner`): a case's Manager starts by emptying `filtersDataDir`.
 let filterTests =
-    testList "The management page's filters (browser)" [
+    testSequenced <| testList "The management page's filters (browser)" [
         testCaseAsync "a filter click is a history entry: Back undoes it, and the rows follow" <|
             async {
                 if Directory.Exists filtersDataDir then Directory.Delete (filtersDataDir, true)
@@ -8788,8 +8836,10 @@ let private installedDataDir = "tests/browser/.data-installed"
 // so the page is told it is one by answering its own question — the query, by name — and
 // nothing else about `matchMedia` changes. The destination is answered here: the promise is
 // where the browser goes, not what the session does when it gets there.
+//
+// One case at a time (`BrowserRunner`): a case's Manager starts by emptying `installedDataDir`.
 let installedAppTests =
-    testList "Opening a session from an installed Manager (browser)" [
+    testSequenced <| testList "Opening a session from an installed Manager (browser)" [
         testCaseAsync "a row is followed in place, not into a new window" <|
             async {
                 if Directory.Exists installedDataDir then Directory.Delete (installedDataDir, true)
@@ -8937,8 +8987,9 @@ let private withHeldCreate
             manager.Stop ()
     }
 
+// One case at a time (`BrowserRunner`): every case's Manager starts by emptying `pressDataDir`.
 let pressTests =
-    testList "Pressing Create (browser)" [
+    testSequenced <| testList "Pressing Create (browser)" [
         testCaseAsync "a second push before the first lands is refused: one session" <|
             withHeldCreate "double create" LetThrough (fun manager _ page hold -> async {
                 let posted = ResizeArray<string> ()
@@ -9031,8 +9082,9 @@ let private marksShown (page: IPage) : Async<string option * string option> =
         return intro, still
     }
 
+// One case at a time (`BrowserRunner`): every case's Manager starts by emptying `openingDataDir`.
 let openingTests =
-    testList "The opening page (browser)" [
+    testSequenced <| testList "The opening page (browser)" [
         testCaseAsync "it goes once the session answers, and not before the intro has landed" <|
             withOpening "the dwell" (fun page -> async {
                 do! readyAnswers 200 page
