@@ -270,6 +270,8 @@ ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
   # actionlint over .github/workflows — release.yml is otherwise only validated when it runs,
   # which is on master, after a merge.
   scripts.lint.exec = ''exec dotnet fsi tasks.fsx lint'';
+  # lint and check at once, each line marked with its side: pr.yaml's `test` job.
+  scripts."pr-gate".exec = ''exec dotnet fsi tasks.fsx pr-gate "$@"'';
   # Measuring, judging and recording, deliberately three: the release records without judging,
   # a pull request judges without recording, and `bench` alone is what a person runs on a branch.
   scripts.bench.exec = ''exec dotnet fsi tasks.fsx bench "$@"'';

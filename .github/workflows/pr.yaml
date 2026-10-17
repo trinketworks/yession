@@ -103,14 +103,6 @@ jobs:
       # absorbs and why one warm-up covers a whole job.
       - name: Warm the devenv shell
         uses: ./.github/actions/devenv-warm
-      # First, and cheap: source judged without running it. actionlint over .github/workflows —
-      # release.yml only runs on master, so nothing else here would notice it was broken until
-      # after a merge, which is exactly how a colon-space in an unquoted step name once took
-      # every master release down at startup — and then the F# analyzers, which read the typed
-      # tree for what a Lit template hole renders (nothing the compiler will say; see
-      # analyzers/Yession.Analyzers/TemplateHoles.fs).
-      - name: Lint the workflows and analyze the templates
-        run: devenv shell -- lint
       # Ubuntu 24.04 ships `kernel.apparmor_restrict_unprivileged_userns=1`, which strips the
       # capabilities from a new user namespace. Both of srt's profiles run a command in one, so
       # neither runs here without this (docs/GAPS.md). The first run of the sandbox probes here
@@ -121,6 +113,20 @@ jobs:
       # `Srt` and quotes srt.
       - name: Let unprivileged user namespaces keep their capabilities (srt needs them)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # `pr-gate` runs `lint` and `check` at once, each line marked with its side, and fails when
+      # either does, naming it. Neither reads anything the other makes, and one after the other
+      # lint's 9.0 minutes (p50 over 40 green runs) were 9.0 minutes of this job, the one the merge
+      # queue waits for. On a 4-core box like this runner, the pair took 970s at once against
+      # 1578s in turn, and 109s more than `check` alone; tasks.fsx's `pr-gate` has the table and
+      # says how the two share the runner.
+      #
+      # `lint` is source judged without running it. actionlint over .github/workflows —
+      # release.yml only runs on master, so nothing else here would notice it was broken until
+      # after a merge, which is exactly how a colon-space in an unquoted step name once took
+      # every master release down at startup — and then the F# analyzers, which read the typed
+      # tree for what a Lit template hole renders (nothing the compiler will say; see
+      # analyzers/Yession.Analyzers/TemplateHoles.fs).
+      #
       # `check` does everything Yession-specific: restore + link the addon, provision Chromium
       # for the browser E2Es, and run the gate.
       # `Srt` is here rather than only in `verify` because the escape probes are the whole
@@ -141,8 +147,8 @@ jobs:
       # which is the only run the file the README tells an operator to deploy ever gets.
       # `Chromium` costs this box nothing it lacks: the browser is here for `Browser`, and its
       # one suite drives the CDP client the camera speaks against it, on Node, in seconds.
-      - name: Cheap tier + browser + native WebRTC/host E2E + sandbox escape probes + serial + jumpstarter + caddy + chromium
-        run: devenv shell -- check Browser Chromium Ports Native Srt Serial Jumpstarter Caddy
+      - name: Lint, beside the cheap tier + browser + native WebRTC/host E2E + sandbox escape probes + serial + jumpstarter + caddy + chromium
+        run: devenv shell -- pr-gate Browser Chromium Ports Native Srt Serial Jumpstarter Caddy
 
   # What a person waits for, and whether this pull request made it worse. Its own job, parallel
   # to `test`, so it costs nothing on the gate's critical path — and blocking, because a

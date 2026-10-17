@@ -3049,8 +3049,8 @@ let private reportedLines (code: string) (source: string) (findings: Finding lis
 // binding takes, and whether the JavaScript around those substitutions survives being pasted
 // into a caller's scope (each rule's own source says why the compiler cannot). They are run here
 // rather than in `check` because they are the same shape of check as actionlint — source
-// judged without running it — and because the PR gate runs `lint` first, where rules this
-// cheap belong.
+// judged without running it — and because they need nothing `check` makes, so the PR gate runs
+// them beside it rather than after it (`pr-gate`).
 //
 // One run over the product, then one over every fixture, and the fixtures are what keep the
 // product run honest. The product must be clean; each FIXTURE must report exactly the lines it
@@ -3061,10 +3061,11 @@ let private analyzers () =
     restore ()
     exec "dotnet" [ "build"; "analyzers/Yession.Analyzers/Yession.Analyzers.fsproj"; "-c"; "Release" ]
     // Every restore here is load-bearing, and the solution one is easy to think redundant on a
-    // machine that has built before. It is not: `lint` runs FIRST in the PR gate, on a fresh
-    // checkout where nothing has restored anything, and a project whose references have not
-    // resolved compiles only through error recovery — which is the one thing the typed-tree
-    // API cannot be asked about. The fixtures are not in the solution, so each needs its own.
+    // machine that has built before. It is not: in the PR gate `lint` starts on a fresh checkout
+    // at the same moment as `check` (`pr-gate`), so nothing has restored anything yet, and a
+    // project whose references have not resolved compiles only through error recovery — which
+    // is the one thing the typed-tree API cannot be asked about. The fixtures are not in the
+    // solution, so each needs its own.
     exec "dotnet" [ "restore"; "Yession.slnx" ]
 
     for _, name, _ in fixtures do
@@ -3205,18 +3206,23 @@ let private analyzers () =
 // of them can hang, and the analyzer runs print nothing until they end.
 //
 // Measured on CI from 13 to 17 Oct 2026: pr.yaml's lint step took 234-593s in 200 green `test`
-// jobs, 375s at the median. It runs first, on a fresh checkout, so it pays every restore cold. A
-// 4-core dev container, alone under a shared build lock, took 541-673s while each fixture had an
-// analyzer run of its own, and 524-558s with one run over them all.
-// Twenty-five minutes is about two and a half times the slowest, for the reason `nodeBudgetMs`
-// gives: this is a hang detector, not a deadline a slow runner should meet with a minute to
-// spare. The `test` job's steps before it took at most 268s, so a hung lint is refused by about
-// the thirtieth minute of that job's sixty. What this replaces is no deadline at all: a hang ran
-// to the job's bound and was cancelled there, with no line saying which step.
+// jobs, 375s at the median. It ran on its own then, ahead of `check`, on a fresh checkout, so it
+// paid every restore cold. A 4-core dev container, alone under a shared build lock, took 541-673s
+// while each fixture had an analyzer run of its own, and 524-558s with one run over them all. The
+// PR gate now runs it beside `check` (`pr-gate`), still on a fresh checkout, and the two share the
+// runner's cores: on that container lint took 868s beside check against 611s alone, a stretch of
+// about 1.4.
+// Twenty-five minutes is about two and a half times the slowest run alone, and nearly twice that
+// run stretched as much, for the reason `nodeBudgetMs` gives: this is a hang detector, not a
+// deadline a slow runner should meet with a minute to spare. The `test` job's steps before
+// `pr-gate` took at most 268s, so a hung lint is refused by about the thirtieth minute of that
+// job's sixty, while `check` carries on beside it. What this replaces is no deadline at all: a
+// hang ran to the job's bound and was cancelled there, with no line saying which step.
 let private lintBudget : Bound =
     { Step = "lint"
       BudgetMs = 1_500_000
-      Basis = "about two and a half times the slowest `lint` on CI (`lintBudget` in tasks.fsx has the measurements)"
+      Basis =
+        "about two and a half times the slowest `lint` on CI, and nearly twice that beside `check` (`lintBudget` in tasks.fsx has the measurements)"
       Next =
         "A run that did not finish judged nothing, so there is no finding here to fix. Run `lint` again. If it\n\
          stops in the same command again, that command hangs by itself: run it by hand, from the repository\n\
@@ -3237,6 +3243,103 @@ let lint () =
         // A run that did not finish, which is what `unfinishedExit` answers. Not a `failwith`:
         // the refusal above says what to do next, and a stack trace would bury it.
         exit unfinishedExit
+
+// --- pr-gate: lint and check at once ----------------------------------------------------------
+//
+// pr.yaml's `test` job ran `lint` and then `check`, and neither needs anything the other makes:
+// lint judges the source, check builds it and runs it. On CI, over 40 green runs, that was 9.0
+// minutes of lint ahead of 14.6 of check, in the one job the merge queue waits for. Side by side,
+// the job takes `check`'s time and what the two cost each other. Measured on a 4-core dev
+// container, alone under a shared build lock, each run from a clean tree with the box's package
+// caches warm, and with the PR's capabilities (one run each, 17 Oct 2026):
+//
+//                          wall    box memory at peak
+//     lint, then check     1578s    8.8 GB
+//     pr-gate               970s   11.0 GB   (lint 868s, check 963s)
+//     check alone           861s    5.8 GB
+//     lint alone            611s    8.5 GB
+//
+// So the two cost each other 109s of `check`'s time, in place of all of lint's, and need about
+// 11 GB at once, which a 16 GB runner holds.
+//
+// It takes no build slot of its own. Each side is a verb that takes one (`withBuildSlot`), and
+// each side is a build's worth of memory: under one slot, the two would be two builds where the
+// slot count promised one. Where slots are off, as on CI, both start at once; where they are
+// scarce, the second side waits for one, and the gate is as slow as running them in turn.
+//
+// Each side is this script again, in a child process of its own, rather than the verb called
+// here, for two reasons. `lint` answers with an exit code of its own (`unjudgedExit`,
+// `unfinishedExit`) by EXITING, which in this process would end `check` half way. And both send
+// their tools' output straight to the console (`runInherit`), so two of them in one process
+// interleave with nothing to say whose a line is. Through a pipe of its own, every line a side or
+// anything it starts prints arrives here, and goes out marked with the side's name.
+//
+// Both sides restore the solution on their way in (`analyzers`, and check's `Target.Packages`),
+// so on a fresh checkout, which is where CI runs this, two restores of one solution run at once.
+// NuGet takes that: probed three times on a clean tree, each pair finished green, with up to
+// twelve of the solution's projects restored by both at once and the rest by whichever got there
+// first. The two also share `obj/Debug`: the analyzers crack every project in Debug, which writes
+// its generated `AssemblyInfo.fs` and caches there, and check's `Target.ClrSuite` builds into the
+// same directories. Forced to overlap twice on a clean tree, both finished green and the
+// analyzers found nothing; the files they share are generated identically by either.
+
+/// One side of the gate: the verb it runs, and the name its lines are marked with.
+type private Side =
+    { Name: string
+      Verb: string list }
+
+/// Run one side to its end, handing each line it prints to `say`, marked with its name. Answers
+/// its exit code and how long it took.
+let private runSide (say: string -> unit) (mark: string) (side: Side) : int * TimeSpan =
+    let psi = ProcessStartInfo "dotnet"
+    "fsi" :: "tasks.fsx" :: side.Verb |> List.iter psi.ArgumentList.Add
+    psi.WorkingDirectory <- repoRoot
+    psi.UseShellExecute <- false
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    let clock = Stopwatch.StartNew ()
+    use p = new Process (StartInfo = psi)
+    let forward = DataReceivedEventHandler (fun _ line -> if not (isNull line.Data) then say (mark + line.Data))
+    p.OutputDataReceived.AddHandler forward
+    p.ErrorDataReceived.AddHandler forward
+    p.Start () |> ignore
+    p.BeginOutputReadLine ()
+    p.BeginErrorReadLine ()
+    // The overload with no deadline, because it also waits for both pipes to drain: the last
+    // lines a side prints are the ones that say why it failed.
+    p.WaitForExit ()
+    p.ExitCode, clock.Elapsed
+
+let private prGate (checkArgs: string list) =
+    let sides = [ { Name = "lint"; Verb = [ "lint" ] }; { Name = "check"; Verb = "check" :: checkArgs } ]
+    let width = sides |> List.map (fun side -> side.Name.Length) |> List.max
+    // `Console.Out` is synchronised, so a line written by one side is never split by the other's.
+    let say (line: string) = Console.Out.WriteLine line
+    let verdict (side: Side) (code: int) (took: TimeSpan) =
+        if code = 0 then sprintf "pr-gate: %s passed in %.0fs" side.Name took.TotalSeconds
+        else sprintf "pr-gate: %s FAILED (exit %s) after %.0fs" side.Name (diedOf code) took.TotalSeconds
+    let ended =
+        sides
+        |> List.map (fun side ->
+            Threading.Tasks.Task.Run (fun () ->
+                let code, took = runSide say (sprintf "%-*s | " width side.Name) side
+                // Said the moment it ends, so a reader of a live log knows one side is done.
+                say (verdict side code took)
+                side, code, took))
+        |> Array.ofList
+    let results = (Threading.Tasks.Task.WhenAll ended).Result
+    // Again at the end, both together and below everything either side printed, because that is
+    // where a reader looks first.
+    for side, code, took in results do
+        say (verdict side code took)
+    let failed = results |> Array.filter (fun (_, code, _) -> code <> 0)
+    for side, _, _ in failed do
+        eprintfn
+            "pr-gate: %s failed. Its lines above are marked `%s |`, and its last ones say what to do next. `%s` alone prints the same, unmarked."
+            side.Name
+            side.Name
+            (String.concat " " side.Verb)
+    if failed.Length > 0 then exit 1
 
 // --- brand -----------------------------------------------------------------------------------
 // The mark, as the product carries it: `src/Yession.App/Brand.fs` is GENERATED from
@@ -3621,6 +3724,10 @@ let rec private verbs () : Verb list =
         Summary = "run a Node tier in the Colima VM, under strict Srt. Takes check's args"
         Run = vmCheck Colima }
       { Name = "lint"; Summary = "actionlint, then the F# analyzers"; Run = fun _ -> withBuildSlot "lint" lint }
+      { Name = "pr-gate"
+        Summary = "run lint and check at once, each line marked with its side. Takes check's args"
+        // No slot here: each side takes its own (the `pr-gate` section says why).
+        Run = prGate }
       { Name = "bench"
         Summary = "measure client performance against the recorded baseline"
         // Arguments would change the run `measuring` declares, and its budget fits that run alone.
