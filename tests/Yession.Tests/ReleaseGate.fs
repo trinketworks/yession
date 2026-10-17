@@ -17,10 +17,16 @@ module Yession.Tests.ReleaseGate
 //
 // Cheap tier, and a document read rather than a run, for the same reason `DeclaredSetup` is:
 // the expensive proof is a master push, which is the one place it is too late to learn this.
+//
+// The gate in front of master is here too: the merge queue, which decides what reaches master
+// at all. Its settings live on GitHub and not in this repository, so the one question it is
+// asked (does it wait longer than the jobs it waits on?) needs `LiveGitHub` to read them. The
+// arithmetic of that question is the cheap tier's, below, over the jobs read here.
 
 open Fable.Core
 open Fable.Core.JsInterop
 open Fable.Pyxpecto
+open Yession.Host
 #if FABLE_COMPILER
 open Thoth.Json
 #else
@@ -48,15 +54,16 @@ let private repoRoot () : string option =
 /// empty list of jobs, and nothing is lost by writing it as one.
 /// `Serialised` is the job's own `concurrency`, and an `option` for the same reason `Condition`
 /// is: a job with no group and a job with one are different things to say about a release.
-/// `Bound` is its `timeout-minutes` as written, a number or an expression GitHub evaluates per
-/// matrix entry (verify.yml's `verify` is one). `None` is a job GitHub stops at six hours.
+/// `Bound` is its `timeout-minutes`. `None` is a job GitHub stops at six hours.
+/// `Name` is its `name`, which is what its check is called when it sets one.
 [<RequireQualifiedAccess>]
 type private Job =
     { Needs : string list
       Condition : string option
       Serialised : Concurrency option
       Calls : string option
-      Bound : string option }
+      Bound : Bound option
+      Name : string option }
 
 /// A job's `concurrency`. The shorthand form is a bare group name, which means the default
 /// `cancel-in-progress: false` — so both spellings decode to the same answer and a reader here
@@ -64,6 +71,13 @@ type private Job =
 and [<RequireQualifiedAccess>] private Concurrency =
     { Group : string
       CancelInProgress : bool }
+
+/// A job's `timeout-minutes` as written. A number is minutes. A string is an expression GitHub
+/// evaluates per matrix entry (verify.yml's `verify` is one), which no reading of the file can
+/// turn into minutes, so it stays the text it is rather than a number guessed at.
+and [<RequireQualifiedAccess>] private Bound =
+    | Minutes of float
+    | Evaluated of string
 
 /// `needs:` is one job or a list of them, and the file writes it both ways.
 let private needs : Decoder<string list> =
@@ -88,7 +102,10 @@ let private job : Decoder<Job> =
           Bound =
             get.Optional.Field
                 "timeout-minutes"
-                (Decode.oneOf [ Decode.float |> Decode.map string; Decode.string ]) })
+                (Decode.oneOf
+                    [ Decode.float |> Decode.map Bound.Minutes
+                      Decode.string |> Decode.map Bound.Evaluated ])
+          Name = get.Optional.Field "name" Decode.string })
 
 /// A workflow's own top-level `concurrency`, which is the one that decides whether a run of it can
 /// be cancelled by the next one.
@@ -108,10 +125,14 @@ let private jobsIn (file: string) (text: string) : (string * Job) list =
     | Error reason -> failwithf "%s is not a document this file can read: %s" file reason
     | Ok jobs -> jobs
 
-let private releaseJobs () : (string * Job) list =
-    match repoRoot () |> Option.bind (fun root -> try Some (TestFiles.read (root + "/.github/workflows/release.yml")) with _ -> None) with
-    | Some text -> jobsIn "release.yml" text
+/// One workflow's jobs, by its file name. A file this cannot find answers an empty list, and
+/// each reader's population case is what speaks for that.
+let private jobsOf (file: string) : (string * Job) list =
+    match repoRoot () |> Option.bind (fun root -> try Some (TestFiles.read (root + "/.github/workflows/" + file)) with _ -> None) with
+    | Some text -> jobsIn file text
     | None -> []
+
+let private releaseJobs () : (string * Job) list = jobsOf "release.yml"
 
 /// Every workflow in the repository with its jobs, by file name. Its population is the first
 /// case's: the same root and the same reading, so a root this cannot find is that case's red.
@@ -164,6 +185,129 @@ let private demands (channel: string) (condition: string option) =
     | None -> false
     | Some written ->
         written.Replace(" ", "").Replace("\"", "'").Contains (sprintf "needs.%s.result=='success'" channel)
+
+// --- the merge queue ----------------------------------------------------------------------
+// The queue in front of master gives an entry's required checks a fixed time to report
+// (`check_response_timeout_minutes`) and drops the entry when one has not. It drops it
+// SILENTLY: the pull request goes back to open with auto-merge off, and no failure anywhere
+// says why. A job its own `timeout-minutes` stops, or a suite its budget stops, says what hung.
+// So a required job that can run longer than the queue waits is a job whose hang is never
+// named, because the queue gives up on it first. #1411 raised pr.yaml's `test` to 60 minutes
+// while the queue still waited 60, which is how this came to be asked.
+
+/// What master's merge queue waits for, in minutes, and the ruleset that says so.
+[<RequireQualifiedAccess>]
+type private Queue = { Waits : float; Ruleset : int }
+
+/// One of master's active rules, as far as its merge queue is concerned.
+[<RequireQualifiedAccess>]
+type private Rule =
+    | MergeQueue of Queue
+    | RequiredChecks of string list
+    | Other
+
+/// A rule this has an opinion on must carry what the opinion reads, and a merge queue rule
+/// with no timeout is a document this cannot read, never a queue that waits forever.
+let private rule : Decoder<Rule> =
+    Decode.field "type" Decode.string
+    |> Decode.andThen (fun kind ->
+        match kind with
+        | "merge_queue" ->
+            Decode.object (fun get ->
+                Rule.MergeQueue
+                    { Queue.Waits = get.Required.At [ "parameters"; "check_response_timeout_minutes" ] Decode.float
+                      Ruleset = get.Required.Field "ruleset_id" Decode.int })
+        | "required_status_checks" ->
+            Decode.at [ "parameters"; "required_status_checks" ] (Decode.list (Decode.field "context" Decode.string))
+            |> Decode.map Rule.RequiredChecks
+        | _ -> Decode.succeed Rule.Other)
+
+/// How late a required job's own clock can start after the queue's clock could have, in
+/// minutes. The queue's clock starts no earlier than the merge-group commit the queue makes, so
+/// this is measured from that commit (a merge_group run's `head_commit.timestamp`) to its `test`
+/// job's `started_at`: the queue dispatching the run, and a runner taking it up. Over pr.yaml's
+/// 50 merge_group runs up to 2026-10-16 that was 21 seconds at the median and 508 at worst,
+/// where two groups' commits were made minutes before their runs were. This is that worst
+/// rounded up to the next 10 minutes. Measure it again when the queue or the runners change:
+/// each run's `head_commit.timestamp` from
+/// `gh api "repos/trinketworks/yession/actions/runs?event=merge_group&per_page=50"`, against its
+/// `test` job's `started_at` from `gh api repos/trinketworks/yession/actions/runs/<id>/jobs`.
+let private lateStartMinutes = 10.0
+
+/// Where GitHub stops a job that declares no `timeout-minutes`.
+let private sixHours = 360.0
+
+/// The check a job reports as: its `name` when it sets one, its id when it does not.
+let private reportsAs (id: string) (job: Job) : string = job.Name |> Option.defaultValue id
+
+/// Each required check the queue can drop before the job behind it says why, as the message
+/// that says what to raise. Empty when the queue outlasts every one.
+///
+/// A required check that no job in `jobs` reports is one of them, never a pass. How long it can
+/// run is unknown here, and a loop over nothing is how a rule like this one goes quiet.
+let private droppedUnexplained (queue: Queue) (lateStart: float) (jobs: (string * Job) list) (required: string list) : string list =
+    [ for check in required do
+        match jobs |> List.tryFind (fun (id, job) -> reportsAs id job = check) with
+        | None ->
+            yield
+                sprintf
+                    "the merge queue waits for a required check called `%s`, and no pr.yaml job reports one, so how long it can run is unknown here. Name the pr.yaml job it is, or teach this case the workflow that runs it"
+                    check
+        | Some (id, job) ->
+            let runs =
+                match job.Bound with
+                | Some (Bound.Minutes minutes) -> Ok (minutes, "its `timeout-minutes`")
+                | None -> Ok (sixHours, "GitHub's own limit, as it declares no `timeout-minutes`")
+                | Some (Bound.Evaluated expression) -> Error expression
+            match runs with
+            | Error expression ->
+                yield
+                    sprintf
+                        "pr.yaml's `%s` job, a required check, bounds itself with `%s`, which is no number of minutes to hold the merge queue's %g against. Write its `timeout-minutes` as a number"
+                        id
+                        expression
+                        queue.Waits
+            | Ok (minutes, said) when queue.Waits <= minutes + lateStart ->
+                yield
+                    sprintf
+                        "the merge queue drops an entry whose `%s` check has not reported within %g minutes, while pr.yaml's `%s` job may run %g minutes (%s) and start up to %g minutes after the queue formed its group. A hung `%s` therefore leaves the queue silently, with auto-merge off and no failure saying why, before its own timeout can name what hung. Raise the queue's limit above %g minutes: the repository's Settings, Rules, Rulesets, the ruleset holding the merge queue (https://github.com/trinketworks/yession/settings/rules/%d), Merge queue, \"Status check timeout\". It moves whenever the job's timeout does"
+                        check
+                        queue.Waits
+                        id
+                        minutes
+                        said
+                        lateStart
+                        id
+                        (minutes + lateStart)
+                        queue.Ruleset
+            | Ok _ -> () ]
+
+/// The rules GitHub enforces on master, merged from every ruleset that targets it. Read access
+/// is all this endpoint asks, which is all a run's own token has.
+let private rulesUrl = "https://api.github.com/repos/trinketworks/yession/rules/branches/master"
+
+/// Master's active rules, through `Http` like the product's own GitHub reads, so a sandbox's
+/// proxy swaps in its real credential. Bounded, so a GitHub that never answers fails this case
+/// by name rather than spending the whole suite's budget.
+let private masterRules () : Async<Rule list> =
+    async {
+        // The token the run was given: `check` refused `LiveGitHub` without one GitHub accepts.
+        let token = Interop.envOr "GITHUB_TOKEN" ""
+        match! Http.text rulesUrl [ Http.headers (GitHubRepos.sentHeaders token); Http.deadline 10_000.0 ] with
+        | Http.Unreachable reason -> return failwithf "GitHub did not answer %s: %s" rulesUrl reason
+        | Http.Answered (response, body) when response.Status <> 200 ->
+            return failwithf "GitHub answered %s with %d, so this run cannot read master's rules: %s" rulesUrl response.Status body
+        | Http.Answered (_, body) ->
+            match Decode.fromString (Decode.list rule) body with
+            | Error reason -> return failwithf "master's rules are not a document this can read: %s" reason
+            | Ok rules -> return rules
+    }
+
+let private queuesIn (rules: Rule list) : Queue list =
+    rules |> List.choose (function Rule.MergeQueue queue -> Some queue | Rule.RequiredChecks _ | Rule.Other -> None)
+
+let private requiredIn (rules: Rule list) : string list =
+    rules |> List.collect (function Rule.RequiredChecks contexts -> contexts | Rule.MergeQueue _ | Rule.Other -> [])
 
 let tests =
     testList "Release gate" [
@@ -296,4 +440,54 @@ let tests =
                 (sprintf
                     "these jobs declare no `timeout-minutes`: %s. A hang outside their steps' own budgets (the suites', `lint`'s, the Nix build's, the npm install's) holds such a runner for GitHub's six hours. Measure the job's slowest recent runs, then add the key above that plus the most budget one of those steps left unspent in them and a cold dev shell. The comment on verify.yml's `verify` job says why the bound sits above the steps' budgets"
                     (String.concat ", " unbounded))
+
+        // The merge queue's arithmetic, over a pr.yaml written here. `queueTests` below holds the
+        // real pr.yaml against the real queue; the numbers that started this are the red example.
+        testCase "a merge queue that waits no longer than a required job runs drops it before it says why" <| fun () ->
+            let jobs = jobsIn "a pr.yaml" "jobs:\n  test:\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n"
+            Expect.isNonEmpty
+                (droppedUnexplained { Queue.Waits = 60.0; Ruleset = 1 } 10.0 jobs [ "test" ])
+                "a queue waiting 60 minutes in front of a 60-minute job that can start 10 minutes late gives up first"
+
+        testCase "a merge queue that outlasts a required job and its late start waits for it to report" <| fun () ->
+            let jobs = jobsIn "a pr.yaml" "jobs:\n  test:\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n"
+            Expect.isEmpty
+                (droppedUnexplained { Queue.Waits = 90.0; Ruleset = 1 } 10.0 jobs [ "test" ])
+                "a queue waiting 90 minutes outlasts a 60-minute job that starts 10 minutes late"
+
+        // Its own case, because the loop above it is otherwise free to run over nothing: a
+        // required check renamed on one side and not the other compares no job at all.
+        testCase "a required check no pr.yaml job reports is a reason, never a pass" <| fun () ->
+            let jobs = jobsIn "a pr.yaml" "jobs:\n  test:\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n"
+            Expect.isNonEmpty
+                (droppedUnexplained { Queue.Waits = 90.0; Ruleset = 1 } 10.0 jobs [ "build" ])
+                "a queue waiting on `build`, which no job reports, cannot be shown to outlast it"
+    ]
+
+/// The question above, asked of the queue GitHub runs in front of master and of the pr.yaml in
+/// this checkout. `LiveGitHub`, because the queue's settings live on GitHub and nowhere here.
+let queueTests =
+    testList "The merge queue, for real" [
+
+        // The population, first, for the reason the release gate's is: the case after it is
+        // green over a queue this cannot find, and that reads the same as one that obeys.
+        testCaseAsync "master merges through a queue that waits on a required check" <|
+            async {
+                let! rules = masterRules ()
+                Expect.isNonEmpty
+                    (queuesIn rules)
+                    "master's active rules carry no `merge_queue` rule, so the case after this compares nothing. If the queue was turned off on purpose, delete both cases. Otherwise GitHub no longer answers the way this reads it"
+                Expect.isNonEmpty
+                    (requiredIn rules)
+                    "master's active rules require no status check, so its merge queue waits on nothing and the case after this compares nothing"
+            }
+
+        testCaseAsync "the merge queue waits longer than any job it requires can run" <|
+            async {
+                let! rules = masterRules ()
+                let dropped =
+                    queuesIn rules
+                    |> List.collect (fun queue -> droppedUnexplained queue lateStartMinutes (jobsOf "pr.yaml") (requiredIn rules))
+                Expect.isEmpty dropped (String.concat ".\n" dropped)
+            }
     ]
