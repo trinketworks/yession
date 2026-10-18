@@ -4316,55 +4316,6 @@ module View =
               </div>
             </section>"""
 
-    // The three handlers below share one reading of the strip, and it is the only part of the
-    // tabs pattern that needs a browser: which elements the tabs are, and which one focus is
-    // on. Where focus GOES is `TabStrip`, decided on an index and a count.
-
-    /// The strip's tabs, in document order — which is the order the view rendered them in, and
-    /// so the order both of `TabStrip`'s answers index into. Read off the event's own
-    /// `currentTarget` rather than the document, because the handler is bound to the tablist
-    /// and a page may hold more than one.
-    let private stripTabs (e: Browser.Types.Event) : Browser.Types.HTMLElement list =
-        let strip = e.currentTarget :?> Browser.Types.Element
-        let found = strip.querySelectorAll "[role=\"tab\"]"
-        [ for i in 0 .. found.length - 1 -> found.[i] :?> Browser.Types.HTMLElement ]
-
-    /// The focused element's nearest enclosing `selector`, or `None` when focus is elsewhere.
-    /// `closest` rather than an identity test on `activeElement`: what a tab holds is a
-    /// button's worth of markup, and focus landing on something inside one is still focus on
-    /// that tab.
-    let private focusedWithin (selector: string) : Browser.Types.Element option =
-        let active = Browser.Dom.document.activeElement
-        if isNull (box active) then None else active.closest selector
-
-    /// Where focus sits in the strip, or `-1` for "not on a tab" — which is a real state (the
-    /// tablist itself can hold focus) and the one `TabStrip.walk` reads as "start at the
-    /// beginning".
-    let private focusedTab (tabs: Browser.Types.HTMLElement list) : int =
-        match focusedWithin "[role=\"tab\"]" with
-        | None -> -1
-        | Some onTab ->
-            tabs
-            |> List.tryFindIndex (fun tab -> System.Object.ReferenceEquals (tab, onTab))
-            |> Option.defaultValue -1
-
-    /// Arrow-key movement inside the pane's tablist — the half of the ARIA tabs pattern a
-    /// plain row of buttons does not give you. Declaring `role="tablist"` and leaving
-    /// Left/Right dead would be a worse lie than not declaring it.
-    ///
-    /// Moves FOCUS only; selection follows the Enter/Space the button already handles. That
-    /// is ARIA's "manual activation" variant, and it is the right one here: walking the
-    /// strip must not mount and unmount a player under the reader on every keypress.
-    let private moveTabFocus (e: Browser.Types.KeyboardEvent) : unit =
-        let tabs = stripTabs e
-        match TabStrip.walk e.key (focusedTab tabs) tabs.Length with
-        | None -> ()
-        | Some next ->
-            tabs.[next].focus ()
-            // Only for a key the walk CLAIMED. Preventing unconditionally would swallow keys
-            // the strip does not own.
-            e.preventDefault ()
-
     /// One block's read-only view, as a preview opened from its chip shows it: the command,
     /// and everything it printed, from the chunks this client already has.
     ///
@@ -4966,10 +4917,7 @@ module View =
         let nothingOn =
             not (tabs |> List.exists (fun view -> onTerminal view.TerminalId))
             && not (model.FileTabs |> List.exists (fun file -> shownFile = Some file))
-        let firstTab =
-            (tabs |> List.map (fun view -> ClientModel.tabKey view.TerminalId))
-            @ (model.FileTabs |> List.map ClientModel.fileTabKey)
-            |> List.tryHead
+        let firstTab = ClientModel.stripTabs model |> List.tryHead |> Option.map ViewRef.said
         let stopAt (key: string) (on: bool) =
             if on || (nothingOn && firstTab = Some key) then "0" else "-1"
         let terminalItem
@@ -5084,8 +5032,10 @@ module View =
             let activate () = showTerminal terminal
             // An item is a `div role="tab"` rather than a `button`: an item that carries a
             // control of its own (its ×) cannot be a button, and what a real button gave for
-            // free was Enter and Space, so the item says them itself — the pivot's own keydown
-            // handler carries the arrow walk.
+            // free was Enter and Space, so the item says them itself. The arrow walk is the
+            // item's too, because the item knows which tab it is without asking the document:
+            // the key is claimed here, where the event is, and where focus goes is `update`'s
+            // (`ClientModel.tabWalk`).
             //
             // Delete is the ×'s press from the keyboard: it puts the tab away.
             let activateKey (e: Browser.Types.Event) =
@@ -5099,6 +5049,9 @@ module View =
                 elif pressed.key = "Delete" then
                     pressed.preventDefault ()
                     dispatch (DismissTabMsg terminal)
+                elif TabStrip.claims pressed.key then
+                    pressed.preventDefault ()
+                    dispatch (WalkTabsMsg (pressed.key, ViewingTerminal terminal))
             terminalItem activate activateKey view
         // A file's tab: its preview is this tab's panel. Pressed, it shows the file in place;
         // its ×, or Delete, puts it away and the pane goes back to the terminal under it.
@@ -5117,6 +5070,9 @@ module View =
                 elif pressed.key = "Delete" then
                     pressed.preventDefault ()
                     dispatch (DismissFileTabMsg file)
+                elif TabStrip.claims pressed.key then
+                    pressed.preventDefault ()
+                    dispatch (WalkTabsMsg (pressed.key, ViewingFile file))
             let dismiss =
                 if not on then Lit.nothing
                 else
@@ -5488,16 +5444,17 @@ module View =
                       {if model.PaneMenu then newMenu Style.paneNewMenu else Lit.nothing}
                     </div>"""
         // The tabs, each in its own place (F2): terminals, then files. A command's preview is
-        // named under the pivot, not in it (F3).
-        let strip = (tabs |> List.map tabItem) @ (model.FileTabs |> List.map fileItem)
+        // named under the pivot, not in it (F3). In the order `ClientModel.stripTabs` gives,
+        // which is the order the arrow walk moves along (`ClientModel.tabWalk`).
+        let strip =
+            ClientModel.stripTabs model
+            |> List.choose (function
+                | ViewingTerminal terminal -> Projection.tryFind terminal model.Terminals |> Option.map tabItem
+                | ViewingFile file -> Some (fileItem file))
         let pivot =
             html $"""
                 <div class="{Style.panePivotRow}">
-                  <div class="{Style.panePivotList}" role="tablist" aria-label="{Dom.Text.paneItems}" data-pane-pivot
-                       @keydown={Ev(fun (e: Browser.Types.Event) ->
-                                        // The arrow walk, over the tabs. Delete is each
-                                        // tab's own, because it needs the terminal.
-                                        moveTabFocus (e :?> Browser.Types.KeyboardEvent))}>
+                  <div class="{Style.panePivotList}" role="tablist" aria-label="{Dom.Text.paneItems}" data-pane-pivot>
                     <div class="{Style.panePivotScroller}" data-pane-strip>
                       {strip}
                     </div>

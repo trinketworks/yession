@@ -11,8 +11,9 @@ namespace Yession.App
 /// where the cheap tier can ask it, rather than inside the handler that performs it. It used
 /// to be neither: first a JavaScript program in an `[<Emit>]` string, then the same program
 /// in a `.mjs` module beside it, and in both the wrap-around was the whole behaviour and
-/// nothing could put a question to it. What is left at the call site is reading the event and
-/// moving the focus, which only a browser can do.
+/// nothing could put a question to it. Then the handler still decided, over tabs and a focus
+/// it read off the document. Now the model asks it (`ClientModel.tabWalk`), over the strip it
+/// already holds, and the browser is left only the focus move, which only a browser can make.
 ///
 /// Both answers are an `int option` over the same list the caller measured, and `None` means
 /// this key is not part of the pattern — not that nothing happens, because the caller has
@@ -43,6 +44,13 @@ module TabStrip =
             | "ArrowRight" -> Some ((here + 1) % count)
             | "ArrowLeft" -> Some ((here + count - 1) % count)
             | _ -> None
+
+    /// Whether this key is the walk's, asked before anything knows where it goes. A handler
+    /// has to say so at once, in the event (`preventDefault`), while the answer to where is
+    /// the model's and arrives after it (`ClientModel.tabWalk`). Read off `walk` itself, on
+    /// the smallest strip there is, so the two cannot disagree about which keys are claimed:
+    /// a key `walk` answers on one tab it answers on any.
+    let claims (key: string) : bool = Option.isSome (walk key 0 1)
 
     /// The tab focus should move to before the focused one is released, or `None` when there
     /// is no such move to make — focus is not on a tab, or releasing this one empties the

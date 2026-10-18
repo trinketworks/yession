@@ -1739,6 +1739,8 @@ type DomMove =
     | FocusPivot
     /// Onto this terminal's tab in the strip — where a kill pressed on the strip lands.
     | FocusTab of TerminalId
+    /// Onto this file's tab in the strip — where the arrow walk lands on a file.
+    | FocusFileTab of ContentRef
     /// The same move, made only while focus is in the pane or nowhere at all.
     ///
     /// For a move that follows an EVENT rather than a press: a terminal a press asked for, a
@@ -2063,6 +2065,9 @@ type ClientMsg =
     /// a drag across the output, which only the document can say, and only now. What the
     /// press means is the model's (`ClientModel.typesInto`).
     | ScreenPressedMsg of TerminalId * selected: bool
+    /// A key pressed on one of the strip's tabs, by that tab's identity: the arrow walk's
+    /// question, which `update` answers with where focus goes (`ClientModel.tabWalk`).
+    | WalkTabsMsg of key: string * from: ViewRef
     /// Put `text` on the clipboard and, if the platform lets it, say so on the box whose hook is
     /// `box` (`CopiedMsg`). How long it says so is the model's (`ClientModel.timers`).
     | CopyMsg of box: string * text: string
@@ -2726,6 +2731,28 @@ module ClientModel =
     /// A terminal's tab, as its DOM hooks carry it — the terminal's prose spelling
     /// (`ViewRef.said`), which is also how a remembered strip writes it down (`PaneMemory`).
     let tabKey (terminal: TerminalId) : string = ViewRef.said (ViewingTerminal terminal)
+
+    /// The strip's tabs, in the order the pivot draws them: the terminals of `Tabs` this
+    /// client has a view of, then the files (`FileTabs`). One list, so the walk over it and
+    /// the row on screen are the same row.
+    let stripTabs (model: ClientModel) : ViewRef list =
+        (model.Tabs
+         |> List.filter (fun terminal -> Option.isSome (Projection.tryFind terminal model.Terminals))
+         |> List.map ViewingTerminal)
+        @ (model.FileTabs |> List.map ViewingFile)
+
+    /// Where the arrow walk sends focus from the tab `from`, or `None` when `key` is not the
+    /// walk's (`TabStrip.walk`). A tab that has left the strip since the key was pressed is
+    /// `walk`'s "not on a tab", so the walk starts again at the beginning rather than going
+    /// nowhere.
+    let tabWalk (key: string) (from: ViewRef) (model: ClientModel) : DomMove option =
+        let tabs = stripTabs model
+        let here = tabs |> List.tryFindIndex ((=) from) |> Option.defaultValue -1
+        TabStrip.walk key here tabs.Length
+        |> Option.map (fun next ->
+            match tabs.[next] with
+            | ViewingTerminal terminal -> DomMove.FocusTab terminal
+            | ViewingFile file -> DomMove.FocusFileTab file)
 
     /// Which terminal the pane is about: the stored choice while it is still in the strip,
     /// else the first OPEN terminal in the strip. Resolved rather than stored, for the same
@@ -5039,6 +5066,7 @@ module ClientModel =
             | None -> model
         | MoveMsg _
         | ScreenPressedMsg _
+        | WalkTabsMsg _
         | CopyMsg _
         | RetryNowMsg -> model
         | RewindTerminalMsg terminal ->
@@ -5636,6 +5664,7 @@ module ClientModel =
             // only where the field is drawn, which is the holder's screen and nobody else's.
             | ScreenPressedMsg (terminal, selected) when not selected && typesInto terminal next ->
                 [ ClientEffect.Move (DomMove.FocusTerminalKeys terminal) ]
+            | WalkTabsMsg (key, from) -> tabWalk key from model |> Option.map ClientEffect.Move |> Option.toList
             // The player the hand was in is gone; the toggle that replaces it is where it lands.
             | ReplayCaughtUpMsg _ -> [ ClientEffect.Move DomMove.FocusWatchToggle ]
             // A deliberate send settles the view on what was just sent, whether or not the

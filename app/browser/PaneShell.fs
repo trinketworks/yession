@@ -143,6 +143,12 @@ let private toTab (terminal: Yession.Domain.TerminalId) : unit =
     |> Option.orElseWith (fun () -> find "[data-pane-panel]")
     |> focusOn
 
+/// Onto one file's tab — `toTab`'s move, for the strip's other kind of tab.
+let private toFileTab (file: Yession.Domain.Content.ContentRef) : unit =
+    find (sprintf "[data-pane-tab=\"%s\"]" (Yession.App.ClientModel.fileTabKey file))
+    |> Option.orElseWith (fun () -> find "[data-pane-panel]")
+    |> focusOn
+
 /// Whether something painted over this element's centre is not the element — on a phone, the
 /// pane laid over the whole chat column. Measured rather than assumed from a breakpoint,
 /// because what decides it is the layout, and the layout is the one thing that knows. An
@@ -521,6 +527,7 @@ and private place (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.FocusSwitcher -> toSwitcher ()
     | Yession.App.DomMove.FocusPivot -> toPivot ()
     | Yession.App.DomMove.FocusTab terminal -> toTab terminal
+    | Yession.App.DomMove.FocusFileTab file -> toFileTab file
     // A frame on, after the render the arrival caused — which is the render that took the
     // pressed control away, so a hand still on it reads as stranded by then.
     | Yession.App.DomMove.OnArrival inner -> if stranded [ "[data-content-panel]" ] then place inner
