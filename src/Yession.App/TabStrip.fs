@@ -136,3 +136,10 @@ module TabStrip =
         | "ArrowUp" -> walk "ArrowLeft" here count
         | "Home" | "End" -> walk key here count
         | _ -> None
+
+    /// Whether `key`, pressed on a row, is the walk's — so the row's handler can refuse the
+    /// key's own default (a scroll) at once, while where it goes is still being decided by
+    /// the model. Asked of `walkRows` itself, from a row in a list of one: a row was pressed,
+    /// so the list is never empty, and every key the walk answers from there it answers from
+    /// anywhere.
+    let claimsRow (key: string) : bool = walkRows key 0 1 |> Option.isSome
