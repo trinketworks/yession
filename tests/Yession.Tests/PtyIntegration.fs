@@ -233,10 +233,10 @@ let private withLendingTerminal (shell: TerminalShell) (lent: BlockEnv ref) (nam
     withShellTerminal shell loans (fun _ -> async { return () }) name body
 
 /// A lender that lends `lent` and records every ask and every return — what the lease cases
-/// read, since a lease's loan is asked for no block and returned when the lease ends.
+/// read, since a take must ask for nothing and return what is not the holder's.
 type private RecordedLoans =
     { Loans : SessionTerminals.BlockLoans
-      Asked : ResizeArray<BlockId option * Authority>
+      Asked : ResizeArray<BlockId * Authority>
       Retired : ResizeArray<TerminalId> }
 
 let private recordedLoans (lent: BlockEnv) : RecordedLoans =
@@ -1123,210 +1123,90 @@ let private lentTests =
                     }))
     ]
 
-/// What a lease is lent. The holder's keystrokes are no block, so the loan is the lease's
-/// own: asked for no block, typed in where the transcript cannot see it, returned when the
-/// lease ends — and not lent at all over a program the shell is running.
+/// What a lease is lent: nothing. A take types nothing into the shell, and returns every loan
+/// out on the terminal but the holder's own, so what the holder types never spends somebody
+/// else's credential.
 let private leaseLoanTests =
     let ada = Principal.Peer (PeerId.create "ada" |> expect)
+    let bob = Principal.Peer (PeerId.create "bob" |> expect)
     let adasLoan =
         { BlockEnv.GitConfig = Some ("http.http://gw:1/.extraheader", "X-Yession-Loan: s3cret-loan")
           BlockEnv.Vars = [ "GIT_AUTHOR_NAME", Some "Ada Lovelace" ] }
-    let printed (records: ResizeArray<TranscriptRecord>) =
-        records
-        |> Seq.filter (fun r -> r.Kind = TranscriptOutput)
-        |> Seq.map (fun r -> r.Data)
-        |> String.concat ""
-    /// Ada, holding the lease, unhooks bash's start mark: from here the shell's lines draw no
-    /// `C`. Answers once the shell is back at its prompt, which is the barrier the lost-marks
-    /// case above needs too. The prompt AFTER the unhooking's output, because Take typed ada's
-    /// loan line just before, and the prompt answering THAT line can land after `typed` as
-    /// well. Taken as the barrier, it let the next holder's line in while the unhooking was
-    /// still running, and the unhooking's own `C` opened the gate on that holder's secret.
-    let unhookStartMark (terminals: SessionTerminals.SessionTerminals) (id: TerminalId) (raw: System.Text.StringBuilder) =
+    /// Ada's block, running `sleep 1`, with its loan asked for; `finished` is the block's end.
+    let adasBlockRunning (terminals: SessionTerminals.SessionTerminals) (id: TerminalId) (recorded: RecordedLoans) =
         async {
-            let typed = raw.Length
-            // `un''hooked` prints what its echo does not, so the word is the command having
-            // RUN, not the shell repeating what it was typed.
-            Expect.isTrue (terminals.Input id (Principal.toActor ada) "trap - DEBUG; echo un''hooked\r") "the start mark is unhooked"
-            do! untilPrinted raw typed "the shell's prompt after the unhooking" (fun said ->
-                match said.IndexOf "unhooked" with
-                | -1 -> false
-                | at -> (said.Substring at).Contains promptMark)
+            let running = terminals.RunBlock id (queueEntry id ada "1") "sleep 1; echo done" ignore
+            let! finished = Async.StartChild (running, 10000)
+            let! lent = until 5000 (fun () -> recorded.Asked.Count = 1)
+            if not lent then failwith "ada's block was never lent its loan"
+            return finished
         }
     testList "What a lease is lent, on a real pty" [
-        for shell, label in [ TerminalShell.bash, "bash"; TerminalShell.zsh, "zsh"; TerminalShell.posix, "sh" ] do
-            testCaseAsync (sprintf "%s: a lease holder's keystrokes carry their own loan, and the transcript never sees it go in" label) <|
-                (let recorded = recordedLoans adasLoan
-                 withLoansTerminal shell recorded.Loans (label + "-lease-loan") (fun terminals id records _ _ _ ->
-                    async {
-                        match! terminals.Take id (Principal.toActor ada) with
-                        | Error e -> failwith e
-                        | Ok () ->
-                            Expect.equal
-                                (List.ofSeq recorded.Asked)
-                                [ None, Authority.ofAuthor ada ]
-                                "asked once, for no block, on the holder's own authority"
-                            Expect.isTrue (terminals.Input id (Principal.toActor ada) "echo \"author=$GIT_AUTHOR_NAME\"\r") "the holder types"
-                            let! seen = printedOutput records "author=Ada Lovelace"
-                            Expect.isTrue seen (sprintf "what they typed ran with the loan's identity; transcript: %s" (printed records))
-                            let everything =
-                                records |> Seq.map (fun r -> sprintf "[%A] %s" r.Kind r.Data) |> String.concat "\n"
-                            Expect.isFalse ((printed records).Contains "s3cret-loan") (sprintf "the loan's secret is nowhere in the transcript:\n%s" everything)
-                            Expect.isFalse ((printed records).Contains "__y_env") (sprintf "nor the line that carried it:\n%s" everything)
-                    }))
-
-        testCaseAsync "the loan is in the shell before the lease is the holder's" <|
-            // The holder can type the moment the lease exists, so a loan lent after it
-            // races their first keystroke. Observed from outside: while the lender is still
-            // deciding, no lease has been taken.
-            (let mutable lend : (unit -> unit) option = None
-             let asked = ResizeArray<BlockId option> ()
-             let loans : SessionTerminals.BlockLoans =
-                { Lend =
-                    fun _ _ block _ ->
-                        asked.Add block
-                        Async.FromContinuations (fun (cont, _, _) -> lend <- Some (fun () -> cont adasLoan))
-                  Retire = ignore }
-             withLoansTerminal TerminalShell.bash loans "lease-loan-first" (fun terminals id _ log _ _ ->
+        testCaseAsync "taking a terminal lends nothing" <|
+            (let recorded = recordedLoans adasLoan
+             withLoansTerminal TerminalShell.bash recorded.Loans "lease-lends-nothing" (fun terminals id _ _ _ _ ->
                 async {
-                    let leaseTaken () =
-                        async {
-                            let! page = log.Read None 1000
-                            return
-                                page.Events
-                                |> List.exists (fun e ->
-                                    match e.Event with
-                                    | SessionEvent.TerminalLeaseTaken t -> t.TerminalId = id
-                                    | _ -> false)
-                        }
-                    let! taking = Async.StartChild (terminals.Take id (Principal.toActor ada), 10000)
-                    let! askedForLoan = until 5000 (fun () -> asked.Count = 1)
-                    Expect.isTrue askedForLoan "the lender was asked"
-                    let! before = leaseTaken ()
-                    Expect.isFalse before "and no lease exists while the loan is still being decided"
-                    lend.Value ()
-                    match! taking with
+                    match! terminals.Take id (Principal.toActor ada) with
                     | Error e -> failwith e
-                    | Ok () ->
-                        let! after = leaseTaken ()
-                        Expect.isTrue after "the lease follows the loan"
+                    | Ok () -> Expect.isEmpty recorded.Asked "nothing was asked for the lease"
                 }))
 
-        testCaseAsync "taking a terminal one already holds types nothing into it" <|
-            // A typed line begins with a line-kill, and the holder may be halfway through a
-            // command of their own: a second take by the same holder must leave it alone.
-            (let recorded = recordedLoans adasLoan
-             withLoansTerminal TerminalShell.bash recorded.Loans "lease-retaken" (fun terminals id records _ _ _ ->
+        testCaseAsync "taking a terminal types nothing into it" <|
+            // A typed line begins with a line-kill, and whoever held the keyboard last may be
+            // halfway through a command: a take must leave it alone.
+            (withLoansTerminal TerminalShell.bash (recordedLoans adasLoan).Loans "lease-types-nothing" (fun terminals id records _ _ _ ->
                 async {
                     match! terminals.Take id (Principal.toActor ada) with
                     | Error e -> failwith e
                     | Ok () ->
                         Expect.isTrue (terminals.Input id (Principal.toActor ada) "echo par") "half a command"
-                        match! terminals.Take id (Principal.toActor ada) with
+                        match! terminals.Take id (Principal.toActor bob) with
                         | Error e -> failwith e
                         | Ok () ->
-                            Expect.equal recorded.Asked.Count 1 "nothing more was lent"
-                            Expect.isTrue (terminals.Input id (Principal.toActor ada) "tial\r") "and the other half"
+                            Expect.isTrue (terminals.Input id (Principal.toActor bob) "tial\r") "and the other half"
                             let! seen = printedOutput records "partial"
-                            Expect.isTrue seen (sprintf "the half-typed command survived the second take; transcript: %s" (printed records))
+                            Expect.isTrue seen "the half-typed command survived the take"
                 }))
 
-        testCaseAsync "a shell that never marks the lease's line has its output recorded again after the window" <|
-            // The line is typed behind the same gate a block's is, and a gate that only a
-            // `C` can open is a gate that a shell which has stopped marking shuts for good.
-            // Here the holder unhooks the start mark before handing over; the next holder's
-            // line then produces none, and their output would be swallowed until somebody
-            // ran a block.
+        testCaseAsync "a lease taken over somebody else's running block returns its loan" <|
             (let recorded = recordedLoans adasLoan
-             let raw = System.Text.StringBuilder ()
-             withTappedShellTerminal TerminalShell.bash recorded.Loans (fun _ -> async { return () }) raw "lease-gate-bounded" (fun terminals id records _ _ advance ->
+             withLoansTerminal TerminalShell.bash recorded.Loans "lease-over-theirs" (fun terminals id _ _ _ _ ->
                 async {
-                    let bob = Principal.Peer (PeerId.create "bob" |> expect)
-                    match! terminals.Take id (Principal.toActor ada) with
-                    | Error e -> failwith e
-                    | Ok () ->
-                        do! unhookStartMark terminals id raw
-                        let lent = raw.Length
-                        match! terminals.Take id (Principal.toActor bob) with
-                        | Error e -> failwith e
-                        | Ok () ->
-                            Expect.equal recorded.Asked.Count 2 "bob was lent his own"
-                            // And let it take bob's loan line, behind the gate, before the
-                            // clock gives up on the gate: the prompt that answers the line is
-                            // the shell saying it has.
-                            do! untilPrinted raw lent "the shell's prompt after the loan's line" (fun said -> said.Contains promptMark)
-                            advance (System.TimeSpan.FromSeconds 3.0)
-                            Expect.isTrue (terminals.Input id (Principal.toActor bob) "echo after-the-window\r") "bob types"
-                            let! seen = printedOutput records "after-the-window"
-                            Expect.isTrue seen (sprintf "and is heard, the gate having been given up on; transcript: %s" (printed records))
-                            Expect.isFalse ((printed records).Contains "s3cret-loan") "the line that went in unmarked is still not in the transcript"
-                }))
-
-        testCaseAsync "a lease taken over a program the shell never marked lends nothing" <|
-            // A shell that has stopped marking never says it started what it was handed, so
-            // the prompt it printed last is no account of it: Enter left that prompt. Here ada
-            // leaves `cat` reading the terminal. A loan line typed now would be cat's input,
-            // echoed onto the screen, and recorded once the window gave up on its `C`.
-            (let recorded = recordedLoans adasLoan
-             let raw = System.Text.StringBuilder ()
-             withTappedShellTerminal TerminalShell.bash recorded.Loans (fun _ -> async { return () }) raw "lease-over-unmarked" (fun terminals id _ _ _ _ ->
-                async {
-                    let bob = Principal.Peer (PeerId.create "bob" |> expect)
-                    match! terminals.Take id (Principal.toActor ada) with
-                    | Error e -> failwith e
-                    | Ok () ->
-                        do! unhookStartMark terminals id raw
-                        Expect.isTrue (terminals.Input id (Principal.toActor ada) "cat\r") "a program that reads the terminal"
-                        match! terminals.Take id (Principal.toActor bob) with
-                        | Error e -> failwith e
-                        | Ok () -> Expect.equal recorded.Asked.Count 1 "bob was lent nothing over it"
-                }))
-
-        testCaseAsync "ending the lease returns the holder's loan" <|
-            (let recorded = recordedLoans adasLoan
-             withLoansTerminal TerminalShell.bash recorded.Loans "lease-returned" (fun terminals id _ _ _ _ ->
-                async {
-                    match! terminals.Take id (Principal.toActor ada) with
-                    | Error e -> failwith e
-                    | Ok () ->
-                        let before = recorded.Retired.Count
-                        match! terminals.Release id (Principal.toActor ada) with
-                        | Error e -> failwith e
-                        | Ok () -> Expect.equal (List.ofSeq recorded.Retired |> List.skip before) [ id ] "returned on the release, once"
-                }))
-
-        testCaseAsync "a lease taken over a running block lends nothing" <|
-            (let recorded = recordedLoans adasLoan
-             withLoansTerminal TerminalShell.bash recorded.Loans "lease-mid-block" (fun terminals id records _ _ _ ->
-                async {
-                    let bob = Principal.Peer (PeerId.create "bob" |> expect)
-                    // Ada's block holds the shell; Bob takes the keyboard while it runs.
-                    let running = terminals.RunBlock id (queueEntry id ada "1") "sleep 1; echo done" ignore
-                    Async.StartImmediate running
-                    let! started = until 5000 (fun () -> recorded.Asked.Count = 1)
-                    Expect.isTrue started "the block was lent"
+                    let! finished = adasBlockRunning terminals id recorded
                     match! terminals.Take id (Principal.toActor bob) with
                     | Error e -> failwith e
                     | Ok () ->
-                        Expect.equal
-                            (recorded.Asked |> Seq.map fst |> List.ofSeq)
-                            [ Some (BlockId.create "b-1" |> expect) ]
-                            "nothing was asked for the lease: the shell is inside a program"
-                        let! finished = printedOutput records "done"
-                        Expect.isTrue finished (sprintf "and the block was left to finish; transcript: %s" (printed records))
+                        Expect.equal (List.ofSeq recorded.Retired) [ id ] "ada's loan was returned on bob's take"
+                        do! finished
+                }))
+
+        testCaseAsync "a lease taken over one's own running block keeps its loan" <|
+            // The program the holder is about to drive is their own act.
+            (let recorded = recordedLoans adasLoan
+             withLoansTerminal TerminalShell.bash recorded.Loans "lease-over-own" (fun terminals id _ _ _ _ ->
+                async {
+                    let! finished = adasBlockRunning terminals id recorded
+                    match! terminals.Take id (Principal.toActor ada) with
+                    | Error e -> failwith e
+                    | Ok () ->
+                        Expect.isEmpty recorded.Retired "ada's own loan stays out"
+                        do! finished
+                }))
+
+        testCaseAsync "a lease taken at an idle prompt returns what the last block was lent" <|
+            // The shell keeps the last block's loan exported, so a take returns it even to the
+            // block's own author: what they type now is no block.
+            (let recorded = recordedLoans adasLoan
+             withLoansTerminal TerminalShell.bash recorded.Loans "lease-at-idle" (fun terminals id _ _ _ _ ->
+                async {
+                    let! finished = adasBlockRunning terminals id recorded
+                    do! finished
+                    match! terminals.Take id (Principal.toActor ada) with
+                    | Error e -> failwith e
+                    | Ok () -> Expect.equal (List.ofSeq recorded.Retired) [ id ] "the last block's loan was returned"
                 }))
     ]
 
-/// A pty's MASTER is the keyboard of the shell on its far end: whatever writes it is typed
-/// there. node-pty left every master it opened inheritable, so every program this process
-/// started afterwards held the master of every terminal open at the time — a command in one
-/// terminal wrote `echo INJECTED` into another's, and it ran. node-pty now makes them
-/// close-on-exec (nix/node-pty-cloexec.patch), and these ask it with no other guard in the
-/// way: the host backend confines nothing, so nothing between this process and the child
-/// closes what the child inherited. (`SrtIntegration` asks the same of what srt confines,
-/// where a second guard stands.)
-///
-/// Linux only: the probe reads `/proc`.
 let private keyboardTests =
     testList "No child holds a terminal's keyboard" [
         if Node.Api.``process``.platform = Node.Base.Platform.Darwin then

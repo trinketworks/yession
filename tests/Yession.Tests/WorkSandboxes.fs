@@ -1348,7 +1348,7 @@ let private lentTests =
                 let log = newLog ()
                 let! sandboxes, _ = registry log [ githubCredential "route" ]
                 let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [ "github" ])
-                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:test") terminal (Some block) (Authority.agentFor bob)
+                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:test") terminal block (Authority.agentFor bob)
                 Expect.equal
                     lent.Vars
                     [ "LENT_TO", Some (Principal.token bob) ]
@@ -1360,7 +1360,7 @@ let private lentTests =
                 let log = newLog ()
                 let! sandboxes, _ = registry log [ githubCredential "route" ]
                 let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") SandboxRequest.defaults
-                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:test") terminal (Some block) (Authority.agentFor bob)
+                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:test") terminal block (Authority.agentFor bob)
                 Expect.equal lent BlockEnv.none "a source the sandbox does not forward is not asked"
             }
 
@@ -1368,7 +1368,7 @@ let private lentTests =
             async {
                 let log = newLog ()
                 let! sandboxes, _ = registry log [ githubCredential "route" ]
-                let! lent = sandboxes.Loans.Lend (sandbox "nope") terminal (Some block) (Authority.agentFor bob)
+                let! lent = sandboxes.Loans.Lend (sandbox "nope") terminal block (Authority.agentFor bob)
                 Expect.equal lent BlockEnv.none "its environment refuses the spawn; the loan has nothing to add"
             }
 
@@ -1383,7 +1383,7 @@ let private lentTests =
                         log
                         [ githubCredential "route" ]
                         [ SandboxRef.name SandboxRef.defaultRef, forwarding [ "github" ] ]
-                let! lent = sandboxes.Loans.Lend SandboxRef.defaultRef terminal (Some block) (Authority.agentFor bob)
+                let! lent = sandboxes.Loans.Lend SandboxRef.defaultRef terminal block (Authority.agentFor bob)
                 Expect.equal
                     lent.Vars
                     [ "LENT_TO", Some (Principal.token bob) ]
@@ -1576,7 +1576,7 @@ let private lentTokenTests =
             async {
                 let! sandboxes, _ = registry (newLog ()) [ githubCredential "route" ]
                 let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") (lending [ "github" ] [ "GH_TOKEN" ])
-                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:dev") terminal (Some block) (Authority.agentFor bob)
+                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:dev") terminal block (Authority.agentFor bob)
                 Expect.isTrue (List.contains ("LENT_INTO", Some "GH_TOKEN") lent.Vars) "the source was asked to lend into it"
             }
 
@@ -1788,7 +1788,7 @@ let private boundTests =
                         Bound = Map.ofList [ "GH_TOKEN", Lent github ] }
                 let! sandboxes, _ = registryGranting grant [ githubCredential "route" ] WorkSandboxes.ProxyProvider.none
                 let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") SandboxRequest.defaults
-                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:dev") terminal (Some block) (Authority.agentFor bob)
+                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:dev") terminal block (Authority.agentFor bob)
                 Expect.isTrue (List.contains ("LENT_INTO", Some "GH_TOKEN") lent.Vars) "the source was asked to lend into it"
             }
 
@@ -1894,7 +1894,7 @@ let private routeTests =
             async {
                 let! sandboxes = registryRouting [ ConnectionRoute.Git ] [ routedSource ConnectionRoute.all ]
                 let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") (forwarding [ "github" ])
-                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:dev") terminal (Some block) (Authority.agentFor bob)
+                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:dev") terminal block (Authority.agentFor bob)
                 Expect.equal lent.Vars [ "LENT_BY", Some "git" ] "git, and not api"
             }
 
