@@ -141,6 +141,17 @@ module Style =
     let focusRingInset =
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue focus-visible:-outline-offset-2"
 
+    /// The same ring worn by a `<label>` for the file input inside it (`pickerInput`). The
+    /// input keeps the keyboard, because Tab reaches a real file input and Enter or Space on
+    /// it opens the browser's chooser with no script at all; but the input has no box anyone
+    /// sees, so the label it sits in draws the ring for it while it has focus.
+    let focusRingHeld =
+        "has-focus-visible:outline has-focus-visible:outline-2 has-focus-visible:outline-blue has-focus-visible:outline-offset-2"
+
+    /// `focusRingHeld`, drawn just inside the label's edge, as `focusRingInset` is.
+    let focusRingHeldInset =
+        "has-focus-visible:outline has-focus-visible:outline-2 has-focus-visible:outline-blue has-focus-visible:-outline-offset-2"
+
     /// The same ring held further off — for type with no box of its own, where a ring on the
     /// glyphs' own edge reads as an underline.
     let private focusRingFar =
@@ -2702,6 +2713,14 @@ module Style =
     /// same thing to the people who cannot.
     let srOnly = "sr-only"
 
+    /// A file input inside the `<label>` that is its face (`focusRingHeld`): out of sight, but
+    /// still in the focus order and the accessibility tree, which `hidden` takes it out of.
+    /// It used to be `hidden`, with a button beside it reaching into the DOM to click it. The
+    /// bare face (`border-0`) is the one every field without a face of its own declares, and
+    /// it takes a phone's field size (`touchType`) as any focusable field does, though nobody
+    /// sees its type: a phone zooms in on a focused field by its size, not by whether it shows.
+    let pickerInput = cls [ "sr-only border-0"; touchType ]
+
     /// Terminal work in the chat (Plan 14, stage 1): one line, subtler than a message, and a
     /// real `<button>` — so it is keyboard-operable and focus-ringed by construction rather
     /// than by a handler bolted onto a div.
@@ -3668,10 +3687,11 @@ module Style =
     let draftLead = "shrink-0 flex items-center gap-4 pl-4 wide:order-first"
     /// The composer's way to attach a file, beside the model picker on `draftLead`: the
     /// picker's own voice (`modelSelectFace`) and height (`modelSelectWrap`), so the row reads
-    /// as one set of controls rather than a label beside a word of the message.
+    /// as one set of controls rather than a label beside a word of the message. It is the
+    /// `<label>` of the file input it holds, so it wears that input's ring (`focusRingHeld`).
     let draftAttach =
         cls [ "shrink-0 h-10 inline-flex items-center bg-transparent border-0 cursor-pointer p-0"
-              caps; "text-ink-dim hover:text-ink transition-colors"; focusRing ]
+              caps; "text-ink-dim hover:text-ink transition-colors"; focusRingHeld ]
 
     /// The files on the open draft, under its words: one line of them that wraps, in the
     /// input's own gutter.
@@ -4055,9 +4075,13 @@ module Style =
     ///
     /// An act in the toolbar: its mark and its word in the caps voice, the face the agent's
     /// interrupt wears — a verb about the whole thing on screen, not a word in a sentence.
-    let paneToolbarAct =
+    let private paneToolbarFace =
         cls [ "h-touch px-1.5 shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer no-underline"
-              caps; "whitespace-nowrap text-ink-dim hover:text-ink transition-colors motion-reduce:transition-none"; focusRingInset ]
+              caps; "whitespace-nowrap text-ink-dim hover:text-ink transition-colors motion-reduce:transition-none" ]
+    let paneToolbarAct = cls [ paneToolbarFace; focusRingInset ]
+    /// The same act as the `<label>` of a file input it holds, wearing that input's ring
+    /// (`focusRingHeldInset`): the face of a chooser the browser opens itself.
+    let paneToolbarPick = cls [ paneToolbarFace; focusRingHeldInset ]
     /// The one act a surface is FOR — the empty pane's way to make a terminal: blue, which is
     /// what interactive means here, and nothing louder than that.
     let paneActPrimary = cls [ paneActBase; "text-pivot leading-6 text-blue hover:text-blue-up-1" ]
