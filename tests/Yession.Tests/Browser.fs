@@ -3797,6 +3797,10 @@ let editorTests =
                 let mutable reached = 0
                 for key in "Home" :: List.replicate (items - 1) "ArrowRight" do
                     do! awaitU (page.Keyboard.PressAsync key)
+                    // Where the walk goes is `update`'s, and its focus move is a `DomMove`,
+                    // made a frame on. Read before that frame, the scroll and the box below
+                    // are two reads either side of it, and disagree.
+                    do! twoFrames page
                     match! placed () with
                     | "outside" -> ()
                     | "" -> reached <- reached + 1

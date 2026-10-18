@@ -3860,6 +3860,27 @@ let private tabTests =
             Expect.equal (next.FileTabs, next.Pane) ([], Some (OnTerminal (Reading terminalA))) "gone, back on the terminal"
             Expect.isTrue (List.contains (ClientEffect.Move DomMove.FocusPivot) effects) "the hand goes to the tab the pane is back on"
 
+        // The arrow walk is the model's: a key pressed on a tab, by that tab's identity, and
+        // the move is over the strip the pivot draws — terminals, then files — with the wrap.
+        testCase "the arrow walk moves focus along the strip, files included" <| fun () ->
+            let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> Support.step (ShowInPaneMsg (Reading terminalB))
+                |> Support.step (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content chart)))
+            let walked key from =
+                ClientModel.update (WalkTabsMsg (key, from)) model
+                |> snd
+                |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
+            Expect.equal (walked "ArrowRight" (ViewingTerminal terminalB)) [ ClientEffect.Move (DomMove.FocusFileTab chart) ] "onto the file"
+            Expect.equal (walked "ArrowRight" (ViewingFile chart)) [ ClientEffect.Move (DomMove.FocusTab terminalA) ] "off the end"
+            Expect.equal (walked "ArrowLeft" (ViewingTerminal terminalA)) [ ClientEffect.Move (DomMove.FocusFileTab chart) ] "off the start"
+            Expect.equal (walked "Home" (ViewingFile chart)) [ ClientEffect.Move (DomMove.FocusTab terminalA) ] "Home"
+            Expect.equal (walked "Tab" (ViewingTerminal terminalA)) [] "not the walk's key"
+            Expect.isFalse (TabStrip.claims "Tab") "and the handler leaves it alone"
+            Expect.isTrue (TabStrip.claims "ArrowLeft") "while it claims the walk's"
+
         testCase "an agent's focused open_tab of a file opens a preview over my terminal" <| fun () ->
             // `focus_tab` is somebody saying "show me", not an agent deciding.
             let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
