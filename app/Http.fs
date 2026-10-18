@@ -30,9 +30,18 @@ open Fable.Core
 /// The message where the rejection has one — a `TypeError` from the socket, an
 /// `AbortError` from a deadline — and the value's own string form where it does not, which
 /// is what `String((err && err.message) || err)` said in every copy of this.
-let reasonOf (error: exn) : string =
+///
+/// Then what caused it, where the rejection carries a cause. Node's `fetch` rejects every
+/// request that met no reply with the same `fetch failed` and keeps the account that tells
+/// them apart one level down: the address that refused, the name that did not resolve, the
+/// proxy's status. A request sent to a proxy that had gone once said only `fetch failed`, the
+/// same words as one sent to a host that never existed.
+let rec reasonOf (error: exn) : string =
     let message = error.Message
-    if String.IsNullOrEmpty message then string error else message
+    let said = if String.IsNullOrEmpty message then string error else message
+    match Fable.FetchExtras.causeOf error with
+    | Some cause -> sprintf "%s: %s" (said.TrimEnd '.') (reasonOf cause)
+    | None -> said
 
 /// How one request settled.
 ///
@@ -74,6 +83,14 @@ let headerOf (name: string) (response: Fetch.Types.Response) : string =
 /// A value on its way into a query string.
 let urlPart (value: string) : string = JS.encodeURIComponent value
 
+/// The variables Node's proxy support reads: a proxy for each scheme and the hosts that skip
+/// it, in both spellings, because Node reads both.
+let private proxyVariables = [ "https_proxy"; "HTTPS_PROXY"; "http_proxy"; "HTTP_PROXY"; "no_proxy"; "NO_PROXY" ]
+
+/// What requests follow now: the proxy variables as they stood when it was set up, and how to
+/// put back the dispatcher it replaced.
+let mutable private followed : (string option list * (unit -> unit)) option = None
+
 /// Send what follows through the proxy the environment names, as it names it NOW.
 ///
 /// Node's `fetch` ignores `HTTPS_PROXY` unless asked, while every child this host runs (git,
@@ -82,13 +99,21 @@ let urlPart (value: string) : string = JS.encodeURIComponent value
 /// real credential, arriving with a placeholder GitHub rejects as a dead sign-in. Loopback
 /// stays direct either way, so the Manager and its sessions still reach each other.
 ///
-/// Process-wide, because Node's dispatcher is: whoever calls this reconfigures every request
-/// the process makes after it. `attempt` calls it once, before its first request, which is
-/// why no bin has to; it is public so a caller that has just changed the environment can
-/// have it read again.
-let followEnvironmentProxy () : unit = Fable.NodeExtras.Proxies.setGlobalProxyFromEnv () |> ignore
-
-let private proxyFollowed = lazy (followEnvironmentProxy ())
+/// Process-wide, because Node's dispatcher is, and asked before EVERY request rather than
+/// once: the environment is the only input, so changing it is all it takes to change where
+/// requests go, and putting it back is all it takes to put them back. That holds only
+/// because the dispatcher a follow replaced is put back before the next follow. Following an
+/// environment that names no proxy changes nothing (`setGlobalProxyFromEnv` answers a
+/// no-op), so reading the environment again never undid a proxy followed earlier. That is
+/// how a test's proxy, closed when the test ended, outlived it: where the environment names
+/// none, as on CI's runners, every later request to the internet went to the closed port.
+let private followEnvironmentProxy () : unit =
+    let named = proxyVariables |> List.map Fable.NodeExtras.ProcessEnv.get
+    match followed with
+    | Some (already, _) when already = named -> ()
+    | previous ->
+        previous |> Option.iter (fun (_, putBack) -> putBack ())
+        followed <- Some (named, Fable.NodeExtras.Proxies.setGlobalProxyFromEnv ())
 
 /// One request, with its body read by `read`.
 ///
@@ -101,7 +126,7 @@ let attempt
     (init: Fetch.Types.RequestProperties list)
     : Async<Attempt<'body>> =
     async {
-        proxyFollowed.Force ()
+        followEnvironmentProxy ()
         try
             let! response = Fetch.fetchUnsafe url init |> Interop.awaitPromise
             let! body = read response |> Interop.awaitPromise
