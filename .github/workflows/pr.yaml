@@ -54,7 +54,20 @@ jobs:
     runs-on: ubuntu-latest
     # Above the suites' own budgets and `lint`'s, never below them: verify.yml's `verify` job says
     # why. `bench` calls a workflow, and a calling job cannot carry one; bench.yml's job does.
-    timeout-minutes: 60
+    #
+    # By that rule, in minutes: the slowest green run since `lint` ran beside `check` and the
+    # browser suite three cases at a time (15.5, of two), plus the most one step left unspent in it
+    # (`lint`'s 27-minute budget less its 10.7; `check`'s suites left 15.4), plus a cold dev shell
+    # (15.3): 47.1, rounded up.
+    #
+    # And BELOW the merge queue's own limit, by more than a job's late start. This is the check the
+    # queue waits for, and it waits 60 minutes (the "Status check timeout" in master's merge queue
+    # rule), counted from the group's commit rather than from this job's start, which has come up
+    # to 508s after it. An entry whose check has not reported by then leaves the queue in silence:
+    # its pull request goes back to open with auto-merge off, and nothing says that this job, or
+    # which of its steps, was still running. So this plus 10 minutes stays under 60, and a change
+    # that raises it past 49 raises the queue's limit with it.
+    timeout-minutes: 48
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
