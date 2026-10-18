@@ -1261,15 +1261,11 @@ module View =
         field.value <- ""
         Keystroke.ofInsertedText text |> Option.iter send
 
-    /// A press on the holder's live screen puts the keyboard in its field — which on a phone is
-    /// what raises the soft keyboard, since a platform shows one only for a focused text field.
-    /// Not after a press that ended a selection: that reader is copying output, and focusing a
-    /// text field would take their selection away.
-    let private keysOnPress (e: Browser.Types.Event) : unit =
-        if Browser.Dom.window.getSelection().toString () = "" then
-            match (e.currentTarget :?> Browser.Types.HTMLElement).querySelector (sprintf "[%s]" Dom.Hooks.terminalKeys) with
-            | null -> ()
-            | field -> (field :?> Browser.Types.HTMLElement).focus ()
+    /// A press on the holder's live screen, said with the one fact only the document has, and
+    /// only now: whether the press left text selected. Where the keyboard goes after it is the
+    /// model's (`ScreenPressedMsg`).
+    let private keysOnPress (dispatch: ClientMsg -> unit) (terminal: TerminalId) (_: Browser.Types.Event) : unit =
+        dispatch (ScreenPressedMsg (terminal, Browser.Dom.window.getSelection().toString () <> ""))
 
     /// One collaborator's title caret+selection marker: a selection highlight span and a caret
     /// bar with a name label. The browser positions all three by measurement after render (from
@@ -3953,8 +3949,7 @@ module View =
     /// The holder's copy takes keystrokes. Everyone else's is the identical screen, live and
     /// read-only, which is the whole point of a shared terminal: watching is not a lesser
     /// mode, it is the ordinary one.
-    let private terminalScreenView (actions: ViewActions) (model: ClientModel) (terminal: TerminalId) (holder: ActorRef option) : TemplateResult =
-        let mine = ClientModel.me model
+    let private terminalScreenView (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) (terminal: TerminalId) (holder: ActorRef option) : TemplateResult =
         let id = TerminalId.value terminal
         let tail = TailSurface.key (TailSurface.Screen terminal)
         let body =
@@ -3973,7 +3968,7 @@ module View =
                      role="region" aria-live="off" aria-label="Live terminal, nobody is typing">{body}</div>"""
         | Some holder ->
 
-        if holder = mine then
+        if ClientModel.typesInto terminal model then
             // The keys go into a TEXT FIELD inside the screen, on every device (P3-3). It was a
             // `tabindex="0"` div with a keydown handler, which a desktop types into and a phone
             // cannot: a platform raises its soft keyboard only for a focused text field, and a
@@ -3994,7 +3989,7 @@ module View =
             html $"""
                 <div class="{Style.terminalScreen}" data-terminal-screen="{id}" data-tail="{tail}"
                      role="region" aria-live="off" aria-label="Live terminal, you are typing here"
-                     @click={Ev keysOnPress}>{body}<textarea class="{Style.terminalKeys}" data-terminal-keys="{id}"
+                     @click={Ev(keysOnPress dispatch terminal)}>{body}<textarea class="{Style.terminalKeys}" data-terminal-keys="{id}"
                        aria-label="Type into the terminal" rows="1" wrap="off" inputmode="text" enterkeyhint="enter"
                        autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"
                        @keydown={Ev(fun (e: Browser.Types.Event) ->
@@ -5261,7 +5256,7 @@ module View =
                     html $"""
                         {truncated}
                         <div class="{Style.terminalTailRegion}">
-                          {terminalScreenView actions model view.TerminalId view.Lease}
+                          {terminalScreenView actions dispatch model view.TerminalId view.Lease}
                           {jumpToLatest (TailSurface.Screen view.TerminalId)}
                         </div>"""
                 | TerminalRead.Blocks ->
