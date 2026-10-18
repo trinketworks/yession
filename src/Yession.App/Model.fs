@@ -1695,6 +1695,28 @@ type ListRow =
     | Terminal of TerminalId
     | File of ContentRef
 
+/// The `all` page, section by section, in the order it draws them: the terminals above the
+/// fold, the fold over the closed ones, then the files and those on their way in. The model
+/// decides the order once (`ClientModel.listSections`); the view draws these sections as
+/// they come, and the arrow walk goes down the same rows flattened (`ClientModel.listOrder`),
+/// so the order walked is the order on screen.
+type ListSections =
+    { /// Every open terminal and every one the sheet holds, in the order they were opened.
+      OpenRows   : TerminalView list
+      /// The closed rest, under one fold: `None` when there is nothing to fold.
+      ClosedFold : ListFold option
+      /// The shared files, latest version first shared first.
+      FileRows   : ArtifactShared list
+      /// Files on their way in. A status with verbs and no name to press, so not walked.
+      UploadRows : Upload list }
+
+/// The fold over the closed terminals: how many it holds, and its rows while it is unfolded
+/// (`None` while folded). One value, so "unfolded" and "its rows are drawn and walked" are
+/// the same fact.
+and ListFold =
+    { Folded       : int
+      UnfoldedRows : TerminalView list option }
+
 /// A move only the document can make: focus, and scrolling something into view. The model says
 /// what is on screen; where the cursor is and how far the reader has scrolled are the
 /// document's, so these leave the reducer as effects (`ClientEffect.Move`) and are carried
@@ -3528,10 +3550,34 @@ module ClientModel =
         |> List.partition (fun view ->
             view.IsOpen || Set.contains view.TerminalId model.ListHeld || current = Some view.TerminalId)
 
-    /// The rows the sheet shows: those above its fold, then — unfolded — those under it.
-    let listedRows (model: ClientModel) : TerminalView list =
+    /// Every artifact the session holds, latest version first shared first — what the switcher
+    /// offers beneath the terminals, and the only way to reach one whose chip has scrolled
+    /// out of the conversation.
+    ///
+    /// Read straight off the conversation projection (`ConversationProjection.artifacts`), so
+    /// the panel and the timeline cannot disagree about what exists: both are the same fold.
+    let artifactRows (model: ClientModel) : ArtifactShared list =
+        ConversationProjection.artifacts model.Conversation
+
+    /// The `all` page's sections, in the order it draws them (`ListSections`): the terminals
+    /// above the fold (`terminalRows`), the fold over the rest — its rows only while it is
+    /// unfolded — then the shared files (`artifactRows`) and the uploads into them.
+    let listSections (model: ClientModel) : ListSections =
         let above, folded = terminalRows model
-        if model.ClosedShown then above @ folded else above
+        { OpenRows = above
+          ClosedFold =
+            match folded with
+            | [] -> None
+            | rows -> Some { Folded = List.length rows; UnfoldedRows = if model.ClosedShown then Some rows else None }
+          FileRows = artifactRows model
+          UploadRows = model.Uploads |> List.filter (fun upload -> upload.Into = UploadInto.Artifacts) }
+
+    let private shownTerminals (sections: ListSections) : TerminalView list =
+        sections.OpenRows @ (sections.ClosedFold |> Option.bind (fun fold -> fold.UnfoldedRows) |> Option.defaultValue [])
+
+    /// The terminal rows the sheet shows: those above its fold, then — unfolded — those under
+    /// it.
+    let listedRows (model: ClientModel) : TerminalView list = shownTerminals (listSections model)
 
     /// Keep the list's rows still, after every message (`ListHeld`'s rule): while the sheet
     /// is down, every terminal that is open is held, and nothing a terminal does lets go of
@@ -3599,22 +3645,13 @@ module ClientModel =
             else Some (ArmKillMsg (Some terminal))
         | Some _ | None -> None
 
-    /// Every artifact the session holds, latest version first shared first — what the switcher
-    /// offers beneath the terminals, and the only way to reach one whose chip has scrolled
-    /// out of the conversation.
-    ///
-    /// Read straight off the conversation projection (`ConversationProjection.artifacts`), so
-    /// the panel and the timeline cannot disagree about what exists: both are the same fold.
-    let artifactRows (model: ClientModel) : ArtifactShared list =
-        ConversationProjection.artifacts model.Conversation
-
-    /// The rows the arrow walk goes down, in the order the `all` page draws them: the
-    /// terminals it lists (`listedRows`, so the closed ones only while unfolded), then the
-    /// shared files (`artifactRows`). The view draws its sections from those same two, and
-    /// the walk asks this, so the order walked is the order on screen.
+    /// The rows the arrow walk goes down: `listSections` flattened — the terminals it lists
+    /// (`listedRows`, so the closed ones only while unfolded), then the shared files. The view
+    /// draws those same sections, so the order walked is the order on screen.
     let listOrder (model: ClientModel) : ListRow list =
-        (listedRows model |> List.map (fun view -> ListRow.Terminal view.TerminalId))
-        @ (artifactRows model |> List.map (fun a -> ListRow.File (ArtifactRef.content a.Ref)))
+        let sections = listSections model
+        (shownTerminals sections |> List.map (fun view -> ListRow.Terminal view.TerminalId))
+        @ (sections.FileRows |> List.map (fun a -> ListRow.File (ArtifactRef.content a.Ref)))
 
     /// Where the arrow walk goes from `from` on `key` (`TabStrip.walkRows`), as the focus move
     /// that takes it there, or `None` when the key is not the walk's. A row that has left the

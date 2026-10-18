@@ -5995,6 +5995,39 @@ let private uploadTests =
                 (walked "End" (ListRow.Terminal terminalA))
                 [ ClientEffect.Move (DomMove.FocusSwitcherFile file) ]
                 "the last row is the file's, not the upload's"
+
+        // The page draws the sections `listSections` gives and the walk goes down
+        // `listOrder`, so the two are one order: read off the rendered page, the rows are
+        // the walk's, row for row — the open terminal, the closed one under its fold, then
+        // the file, and no upload.
+        testCase "the rows the all page draws are the rows the walk goes down, in its order" <| fun () ->
+            let model =
+                clientOf
+                    [ at 1L 0.0 (opened terminalA "build")
+                      at 2L 1.0 (opened terminalB "logs")
+                      at 3L 2.0 (sharedArtifact "a" (chart 0)) ]
+                |> thenFolded [ at 4L 3.0 (closedNow terminalA) ]
+                |> Support.step ToggleSwitcherMsg
+                |> Support.step ToggleClosedMsg
+                |> Support.step (UploadPickedMsg ("u1", "sending.md", 4_000L, UploadInto.Artifacts))
+            let drawn =
+                System.Text.RegularExpressions.Regex.Matches (
+                    Support.render model,
+                    sprintf "(%s|%s)=\"([^\"]*)\"" Dom.Hooks.terminalListRow Dom.Hooks.artifactListRow)
+                |> Seq.map (fun found -> found.Groups.[1].Value, found.Groups.[2].Value)
+                |> List.ofSeq
+            let walked =
+                ClientModel.listOrder model
+                |> List.map (function
+                    | ListRow.Terminal terminal -> Dom.Hooks.terminalListRow, TerminalId.value terminal
+                    | ListRow.File content -> Dom.Hooks.artifactListRow, ContentRef.value content)
+            Expect.equal
+                walked
+                [ Dom.Hooks.terminalListRow, "term-b"
+                  Dom.Hooks.terminalListRow, "term-a"
+                  Dom.Hooks.artifactListRow, ContentRef.value (ArtifactRef.content (chart 0)) ]
+                "open, then closed, then the file"
+            Expect.equal drawn walked "the page draws the walk's order"
     ]
 
 // --- A file, attached to a message ------------------------------------------------------------

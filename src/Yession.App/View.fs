@@ -4566,7 +4566,7 @@ module View =
     /// row's `+` and nothing here. Choosing from it is choosing a tab.
     ///
     /// The terminals are in the order they were opened, the open ones first and the closed
-    /// ones folded under one row that unfolds in place (`ClientModel.terminalRows`). A
+    /// ones folded under one row that unfolds in place (`ClientModel.listSections`). A
     /// session's closed terminals are its record, and forty of them listed among the live
     /// ones made a list a reader had to read all of to find the one that wanted them. The
     /// rows above the fold are held while the sheet is down (`ListHeld`), so a row does not
@@ -4744,9 +4744,7 @@ module View =
                   </span>
                   <span class="{Style.terminalListVerbs}">{verbs |> List.map verb}</span>
                 </div>"""
-        let above, folded = ClientModel.terminalRows model
-        let artifacts, uploads =
-            ClientModel.artifactRows model, model.Uploads |> List.filter (fun u -> u.Into = UploadInto.Artifacts)
+        let sections = ClientModel.listSections model
         // Files arrive however a person has them: chosen, pasted while the page has the
         // keyboard, or dropped on it. All three are one action.
         let take (files: Browser.Types.File array) =
@@ -4776,14 +4774,15 @@ module View =
         // The closed terminals, folded under one row that says how many — and unfolded in
         // place under it, never somewhere else. No fold over nothing.
         let closed =
-            match folded with
-            | [] -> Lit.nothing
-            | rows ->
-                let count = List.length rows
-                let shown = model.ClosedShown
+            match sections.ClosedFold with
+            | None -> Lit.nothing
+            | Some fold ->
+                let count = fold.Folded
+                let shown = Option.isSome fold.UnfoldedRows
                 let unfolded =
-                    if shown then html $"""<div role="list" aria-label="{Dom.Text.closedHeading}">{rows |> List.map row}</div>"""
-                    else Lit.nothing
+                    match fold.UnfoldedRows with
+                    | Some rows -> html $"""<div role="list" aria-label="{Dom.Text.closedHeading}">{rows |> List.map row}</div>"""
+                    | None -> Lit.nothing
                 html $"""
                     <button type="button" class="{Style.listClosedFold}" data-list-closed-fold
                             aria-expanded="{if shown then "true" else "false"}"
@@ -4798,7 +4797,7 @@ module View =
         // from.
         let files =
             let count =
-                match List.length artifacts + List.length uploads with
+                match List.length sections.FileRows + List.length sections.UploadRows with
                 | 0 -> Lit.nothing
                 | n -> html $"""<span class="{Style.listCount}">{string n}</span>"""
             html $"""
@@ -4808,15 +4807,16 @@ module View =
                   {uploadControl}
                 </div>
                 <div role="list" aria-label="{Dom.Text.filesHeading}">
-                  {(artifacts |> List.map artifactRow) @ (uploads |> List.map uploadRow)}
+                  {(sections.FileRows |> List.map artifactRow) @ (sections.UploadRows |> List.map uploadRow)}
                 </div>"""
         let empty =
-            if List.isEmpty above && List.isEmpty folded && List.isEmpty artifacts && List.isEmpty uploads then
+            if List.isEmpty sections.OpenRows && Option.isNone sections.ClosedFold
+               && List.isEmpty sections.FileRows && List.isEmpty sections.UploadRows then
                 html $"""<span class="{Style.contentListEmptyWord}">{Dom.Text.nothingOpenedYet}</span>"""
             else Lit.nothing
         let opened =
-            if List.isEmpty above then Lit.nothing
-            else html $"""<div role="list" aria-label="{Dom.Text.terminalsHeading}">{above |> List.map row}</div>"""
+            if List.isEmpty sections.OpenRows then Lit.nothing
+            else html $"""<div role="list" aria-label="{Dom.Text.terminalsHeading}">{sections.OpenRows |> List.map row}</div>"""
         // Under the sheet, the pane goes on showing, dimmed: the sheet is a layer over it, not
         // a place. Pressed, the scrim puts the sheet away — a duplicate of the list button and
         // of Escape, so out of the tree and the Tab order, as the phone's grab edge is.
