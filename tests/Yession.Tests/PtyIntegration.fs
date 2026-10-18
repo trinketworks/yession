@@ -1229,10 +1229,19 @@ let private leaseLoanTests =
                     | Error e -> failwith e
                     | Ok () ->
                         let typed = raw.Length
-                        Expect.isTrue (terminals.Input id (Principal.toActor ada) "trap - DEBUG\r") "the start mark is unhooked"
+                        // `un''hooked` prints what its echo does not, so the word is the
+                        // command having RUN, not the shell repeating what it was typed.
+                        Expect.isTrue (terminals.Input id (Principal.toActor ada) "trap - DEBUG; echo un''hooked\r") "the start mark is unhooked"
                         // Let the shell reach its prompt again before the next holder's line
-                        // goes in — the same barrier the lost-marks case above needs.
-                        do! untilPrinted raw typed "the shell's prompt after the unhooking" (fun said -> said.Contains promptMark)
+                        // goes in — the same barrier the lost-marks case above needs. The
+                        // prompt AFTER the unhooking's output: Take typed ada's loan line, and
+                        // the prompt answering that one can land after `typed` too. Taken as the
+                        // barrier, it let bob's line in while the unhooking was still running,
+                        // and the unhooking's own `C` opened the gate on bob's secret.
+                        do! untilPrinted raw typed "the shell's prompt after the unhooking" (fun said ->
+                            match said.IndexOf "unhooked" with
+                            | -1 -> false
+                            | at -> (said.Substring at).Contains promptMark)
                         let lent = raw.Length
                         match! terminals.Take id (Principal.toActor bob) with
                         | Error e -> failwith e
