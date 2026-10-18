@@ -420,6 +420,13 @@ let private clientOf (events: EventEnvelope<SessionEvent> list) : ClientModel =
         (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
         (ClientModel.init { PeerId = ada; DisplayName = "swift-heron" })
 
+/// A terminal's blocks, the surface the tail cases read from its end.
+let private blocksA = TailSurface.Blocks terminalA
+
+/// What `Tail` saw happen under the reader of `blocksA`, told to the model.
+let private moved (move: ReaderMove) (model: ClientModel) : ClientModel =
+    Support.step (ReaderMovedMsg (blocksA, move)) model
+
 /// What a message asked for, less the strip bringing its selected tab into view
 /// (`ClientModel.pivotReveal`): that rides along with every change of selection, scrolls the
 /// strip and places no focus, which is what the cases reading this are about. Its own cases
@@ -4136,15 +4143,95 @@ let private tabTests =
                 [ PaneSplit.side; PaneSplit.natural; PaneSplit.chatReadable - 2 * 32 ]
                 "the sidebar, the pane's floor and the reading measure"
 
-        // Where a reader is is the document's to see; what that puts on screen is the model's
-        // (`Away`), drawn from what `Tail` reports.
-        testCase "a reader away from a surface's end is offered the way back, and one who returns is not" <| fun () ->
-            let away = clientOf [] |> Support.step (ReaderMovedMsg (TailSurface.Blocks terminalA, true))
-            let back = away |> Support.step (ReaderMovedMsg (TailSurface.Blocks terminalA, false))
-            Expect.equal
-                (Set.toList away.Away, Set.toList back.Away)
-                ([ TailSurface.Blocks terminalA ], [])
-                "away, then following again"
+        // Where a reader is is the document's to see (`Tail`); whether they are FOLLOWING the
+        // end, and what that puts on screen, is the model's (`Readers`), decided from the facts
+        // `Tail` reports. Each case below is one transition of that intent.
+        testCase "a reader arrives following a surface's end" <| fun () ->
+            Expect.isTrue (ClientModel.following blocksA (clientOf [])) "a surface nobody has left is followed"
+
+        testCase "a reader who scrolls up and away from the end stops following it" <| fun () ->
+            let left = clientOf [] |> moved (ReaderMove.Scrolled (true, TailPlace.Near))
+            Expect.isFalse (ClientModel.following blocksA left) "scrolled up, and no longer followed"
+
+        testCase "a reader still following is not moved off the end by a scroll down that stops short" <| fun () ->
+            let gliding = clientOf [] |> moved (ReaderMove.Scrolled (false, TailPlace.Far))
+            Expect.isTrue (ClientModel.following blocksA gliding) "a scroll down is never leaving"
+
+        testCase "a reader who left the end follows it again on scrolling back to it" <| fun () ->
+            let back =
+                clientOf []
+                |> moved (ReaderMove.Scrolled (true, TailPlace.Far))
+                |> moved (ReaderMove.Scrolled (false, TailPlace.AtEnd))
+            Expect.isTrue (ClientModel.following blocksA back) "back at the end, and followed"
+
+        testCase "a reader who left the end and scrolls down short of it still is not following" <| fun () ->
+            let nearer =
+                clientOf []
+                |> moved (ReaderMove.Scrolled (true, TailPlace.Far))
+                |> moved (ReaderMove.Scrolled (false, TailPlace.Near))
+            Expect.isFalse (ClientModel.following blocksA nearer) "on the way back is not back"
+
+        testCase "a render that grows a surface does not stop its reader following it" <| fun () ->
+            let grown = clientOf [] |> moved (ReaderMove.Measured TailPlace.Far)
+            Expect.isTrue (ClientModel.following blocksA grown) "only the reader moves their intent"
+
+        testCase "a render that puts the end back in reach does not make a reader who left follow it" <| fun () ->
+            let shrunk =
+                clientOf []
+                |> moved (ReaderMove.Scrolled (true, TailPlace.Far))
+                |> moved (ReaderMove.Measured TailPlace.AtEnd)
+            Expect.isFalse (ClientModel.following blocksA shrunk) "the end moved to them; they did not move"
+
+        testCase "a fold opened under a reader at the end leaves them following" <| fun () ->
+            let opened = clientOf [] |> moved (ReaderMove.Opened TailPlace.AtEnd)
+            Expect.isTrue (ClientModel.following blocksA opened) "the end is still where they are"
+
+        testCase "a fold opened under a reader that pushes the end away stops them following" <| fun () ->
+            let opened = clientOf [] |> moved (ReaderMove.Opened TailPlace.Near)
+            Expect.isFalse (ClientModel.following blocksA opened) "they are reading what they opened"
+
+        testCase "a fold shut under a reader who left, landing them at the end, makes them follow it" <| fun () ->
+            let shut =
+                clientOf []
+                |> moved (ReaderMove.Scrolled (true, TailPlace.Far))
+                |> moved (ReaderMove.Opened TailPlace.AtEnd)
+            Expect.isTrue (ClientModel.following blocksA shut) "at the end after their own fold"
+
+        testCase "a surface coming back onto the page opens following its end" <| fun () ->
+            let returned =
+                clientOf []
+                |> moved (ReaderMove.Scrolled (true, TailPlace.Far))
+                |> moved ReaderMove.Arrived
+            Expect.isTrue (ClientModel.following blocksA returned) "the newest thing, not where they last were"
+
+        testCase "pressing the way back makes the reader follow the surface's end" <| fun () ->
+            let jumped =
+                clientOf []
+                |> moved (ReaderMove.Scrolled (true, TailPlace.Far))
+                |> Support.step (MoveMsg (DomMove.JumpToLatest blocksA))
+            Expect.isTrue (ClientModel.following blocksA jumped) "taken back, and followed from there"
+
+        testCase "sending a message makes its sender follow the conversation's end" <| fun () ->
+            let sent =
+                clientOf []
+                |> Support.step (ReaderMovedMsg (TailSurface.Conversation, ReaderMove.Scrolled (true, TailPlace.Far)))
+                |> Support.step (SendDraftMsg ada)
+            Expect.isTrue (ClientModel.following TailSurface.Conversation sent) "the view settles on what was sent"
+
+        testCase "a reader far back from a surface's end is offered the way back" <| fun () ->
+            let far = clientOf [] |> moved (ReaderMove.Scrolled (true, TailPlace.Far))
+            Expect.isTrue (ClientModel.offersLatest blocksA far) "a screen and more back"
+
+        testCase "a reader who left the end but can still see it is not offered the way back" <| fun () ->
+            let near = clientOf [] |> moved (ReaderMove.Scrolled (true, TailPlace.Near))
+            Expect.isFalse (ClientModel.offersLatest blocksA near) "not followed, and nothing offered"
+
+        testCase "a reader far back who scrolls within reach of the end is no longer offered the way back" <| fun () ->
+            let within =
+                clientOf []
+                |> moved (ReaderMove.Scrolled (true, TailPlace.Far))
+                |> moved (ReaderMove.Scrolled (false, TailPlace.Near))
+            Expect.isFalse (ClientModel.offersLatest blocksA within) "the end in sight again"
 
         // A reader who can still see the end is not offered a way to it.
         testCase "a reader less than a screen from a surface's end is not offered the way back" <| fun () ->

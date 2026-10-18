@@ -1002,10 +1002,11 @@ module BlockGroup =
 
 /// A surface read from its END: what is newest is at the bottom, and a reader who is there
 /// stays there as more arrives — while one who has scrolled away is left where they are and
-/// offered the way back. The rule is the browser's (`Tail`, `app/browser`), because it is a
-/// fact about one scroll position; what is here is the NAME, which the surface and its "jump
-/// to latest" control both carry (`Dom.Hooks.tail`) so a control can say which surface it
-/// brings back, and a surface that changes what it is (blocks to a live screen) is a new one.
+/// offered the way back. Where a reader stands is the browser's to measure (`Tail`,
+/// `app/browser`); whether they are following is decided here (`TailReader`). This is the
+/// NAME, which the surface and its "jump to latest" control both carry (`Dom.Hooks.tail`) so
+/// a control can say which surface it brings back, and a surface that changes what it is
+/// (blocks to a live screen) is a new one.
 [<RequireQualifiedAccess>]
 type TailSurface =
     /// The conversation.
@@ -1049,6 +1050,69 @@ module TailSurface =
     /// reaches it. Measured in the surface's OWN box so a phone and a desktop each get their
     /// own screen, and a short terminal pane its own.
     let farBehind (behind: float) (box: float) : bool = behind > box
+
+/// Where a reader stands against a surface's end, as the browser measured it: at the end, or
+/// short of it by less than a screen, or by more (`TailSurface.farBehind`).
+[<RequireQualifiedAccess>]
+type TailPlace =
+    | AtEnd
+    | Near
+    | Far
+
+/// A reader who has stopped following a surface's end, and how far back they now stand. A
+/// reader who is following has no entry at all (`ClientModel.Readers`), so there is one way
+/// to be following and it is the way every reader arrives.
+[<RequireQualifiedAccess>]
+type Behind =
+    /// Not following, but with the end in sight: nothing is offered.
+    | Near
+    /// Not following, and a screen and more back: offered the way to the latest.
+    | Far
+
+/// What the browser saw happen to a surface under its reader — the facts the model decides
+/// whether the reader is following its end from (`TailReader.next`). A fact, never a verdict:
+/// `Tail` measures, and what a measurement MEANS for the reader's intent is decided here.
+[<RequireQualifiedAccess>]
+type ReaderMove =
+    /// The reader scrolled — `up`, which is the one way of leaving the end, or not — and
+    /// stopped where `TailPlace` says.
+    | Scrolled of up: bool * TailPlace
+    /// Something opened or shut under the reader with no scroll of theirs: a fold inside the
+    /// surface toggled, or a keyboard press held the control it was made on in place while
+    /// what it opened appeared below it.
+    | Opened of TailPlace
+    /// The surface came onto the page, and was opened at its end.
+    | Arrived
+    /// The end moved and the reader did not: a render drew more, or less.
+    | Measured of TailPlace
+
+/// How a reader's intent moves. Intent is the READER's: only something they did moves it —
+/// a scroll, a fold, a press, a jump (`ClientModel.update`). A render growing the surface
+/// under them changes only how far back a reader who already left is.
+module TailReader =
+
+    let private behind (place: TailPlace) : Behind =
+        match place with
+        | TailPlace.Far -> Behind.Far
+        | TailPlace.AtEnd
+        | TailPlace.Near -> Behind.Near
+
+    /// Where a reader stands after `move`, from where they stood (`None` is following).
+    ///
+    /// Arriving at the end follows it, by any route. Leaving is only ever UP: a scroll down
+    /// that stops short is a reader on their way back, and keeps what they had. A fold, or a
+    /// press held in place, leaves a reader following only if the end is still where they are.
+    let next (move: ReaderMove) (now: Behind option) : Behind option =
+        match move, now with
+        | ReaderMove.Arrived, _
+        | ReaderMove.Scrolled (_, TailPlace.AtEnd), _
+        | ReaderMove.Opened TailPlace.AtEnd, _ -> None
+        | ReaderMove.Scrolled (true, place), _
+        | ReaderMove.Opened place, _ -> Some (behind place)
+        | ReaderMove.Scrolled (false, _), None
+        | ReaderMove.Measured _, None -> None
+        | ReaderMove.Scrolled (false, place), Some _
+        | ReaderMove.Measured place, Some _ -> Some (behind place)
 
 /// Which of its two faces the sidebar column shows.
 [<RequireQualifiedAccess>]
@@ -1551,12 +1615,13 @@ type ClientModel =
       /// itself is `ClientModel.paneSplit`, and there is none until the browser has measured
       /// the window, which a server rendering the shell never does.
       PaneRoom : PaneRoom
-      /// The surfaces read from their end whose reader has left it AND gone far enough back to
-      /// be offered the way to it (`TailSurface.farBehind`) — what puts each one's "jump to
-      /// latest" on screen. A surface not here is being followed, or nearly, which is where
-      /// every reader arrives. WHETHER a reader moved is the document's to see (`Tail`, in the
-      /// browser); what that means for what is drawn is this.
-      Away : Set<TailSurface>
+      /// The surfaces read from their end whose reader has stopped following it, and how far
+      /// back each stands (`Behind`). A surface not here is being followed, which is where
+      /// every reader arrives. This is the reader's INTENT, decided here from what the
+      /// document saw them do (`ReaderMovedMsg`, `TailReader.next`) and from a jump back
+      /// (`update`): it says where the browser keeps each surface after a render (`Tail`),
+      /// and which surfaces offer the way to the latest (`ClientModel.offersLatest`).
+      Readers : Map<TailSurface, Behind>
       /// Which timeline item has its actions menu open, if any. View state for the same
       /// reason the column above is: a menu one person opened is not a thing anybody else
       /// is looking at.
@@ -1803,11 +1868,10 @@ type DomMove =
     /// Scroll the pane's strip the least distance that shows its selected tab whole
     /// (`ClientModel.pivotReveal`).
     | RevealPivot
-    /// Scroll a surface to its own tail and follow it from there — what a sent message
-    /// does to the conversation. Focus stays where it was: the sender is still typing.
-    | ScrollToLatest of TailSurface
-    /// The same, from the surface's own "jump to latest" control — which is not on screen at
-    /// the tail, so the press takes it away and focus goes to the surface it brought back.
+    /// The surface's own "jump to latest" pressed. The reader follows its end from here
+    /// (`ClientModel.update`), which is what takes them there; the move is the focus, because
+    /// the control is not on screen at the end, so the press takes it away and the keyboard
+    /// goes to the surface it brought back.
     | JumpToLatest of TailSurface
     /// Onto the message composer's field — or the session's title, where there is no
     /// composer to offer. Where a notice in the conversation column hands the keyboard when
@@ -2144,9 +2208,10 @@ type ClientMsg =
     /// The width this browser kept from an earlier visit, put back at boot. The reader's own
     /// choice, so it holds like one — but not a new one, so it is not written back.
     | PaneKeptMsg of width: float
-    /// The reader of a surface read from its end went far enough back from it to be offered
-    /// the way to it (`TailSurface.farBehind`), or came back within reach.
-    | ReaderMovedMsg of TailSurface * away: bool
+    /// Something happened under the reader of a surface read from its end (`ReaderMove`),
+    /// which may move whether they are following it (`TailReader.next`). Told only when it
+    /// does, because each message is a render.
+    | ReaderMovedMsg of TailSurface * ReaderMove
     /// Close the content column, and never open it: the shell's half of "on a phone, two
     /// sheets never cover the chat at once". The nav drawer and the pane are both overlays
     /// there, and opening the drawer over an open pane opened it UNDER the pane (both z-40,
@@ -2558,7 +2623,7 @@ module ClientModel =
           Seen = Map.empty
           Column = Column.initial
           PaneRoom = PaneRoom.unmeasured
-          Away = Set.empty
+          Readers = Map.empty
           ItemMenu = None
           PaneMenu = false
           Switcher = false
@@ -2866,6 +2931,24 @@ module ClientModel =
     /// The order terminals OPENED in, which is the strip's order (`withTab`).
     let private openOrder (terminals: Projection) : TerminalId list =
         terminals.Terminals |> List.map (fun view -> view.TerminalId)
+
+    /// Whether the reader of a surface read from its end is following it (`Readers`).
+    let following (surface: TailSurface) (model: ClientModel) : bool =
+        not (Map.containsKey surface model.Readers)
+
+    /// Whether a surface offers its reader the way back to the latest: they stopped following
+    /// it AND went far enough back (`Behind.Far`). Following decides where the scroll is kept;
+    /// this decides only whether a control is shown, so a reader a line short of the end is
+    /// no longer followed and is still not offered anything.
+    let offersLatest (surface: TailSurface) (model: ClientModel) : bool =
+        Map.tryFind surface model.Readers = Some Behind.Far
+
+    /// The reader of `surface` now stands at `stands` (`None` is following).
+    let private reading (surface: TailSurface) (stands: Behind option) (model: ClientModel) : ClientModel =
+        match stands with
+        | Some behind -> { model with Readers = Map.add surface behind model.Readers }
+        | None when Map.containsKey surface model.Readers -> { model with Readers = Map.remove surface model.Readers }
+        | None -> model
 
     /// The split between the chat and the pane this browser lays out (`PaneSplit.resolve`);
     /// `None` until the window has been measured.
@@ -4815,18 +4898,25 @@ module ClientModel =
             // concurrently write the same key, so the replicas merge to one entry instead of
             // queueing the message twice. The body fragment's content is carried over
             // imperatively (`Client.connect`'s SendDraft), not in the model.
-            match Map.tryFind peerId model.Synced.Drafts with
-            | Some draft when not (Map.containsKey draft.QueueId model.Synced.Queue) ->
-                let entry =
-                    { QueueId = draft.QueueId
-                      Author = draft.Author
-                      Order = QueueOrder.next model.Synced.Queue }
-                model
-                |> withSynced
-                    { model.Synced with
-                        Drafts = Map.remove peerId model.Synced.Drafts
-                        Queue = Map.add draft.QueueId entry model.Synced.Queue }
-            | _ -> model
+            //
+            // And a deliberate send settles the view on what was just sent, whether or not
+            // the sender had scrolled away while composing: they follow the conversation's
+            // end from here. Not the tail rule, which only keeps a reader who was ALREADY
+            // following (`TailReader.next`) — a different question.
+            let sent =
+                match Map.tryFind peerId model.Synced.Drafts with
+                | Some draft when not (Map.containsKey draft.QueueId model.Synced.Queue) ->
+                    let entry =
+                        { QueueId = draft.QueueId
+                          Author = draft.Author
+                          Order = QueueOrder.next model.Synced.Queue }
+                    model
+                    |> withSynced
+                        { model.Synced with
+                            Drafts = Map.remove peerId model.Synced.Drafts
+                            Queue = Map.add draft.QueueId entry model.Synced.Queue }
+                | _ -> model
+            reading TailSurface.Conversation None sent
         | DiscardDraftMsg peerId ->
             model |> withSynced { model.Synced with Drafts = Map.remove peerId model.Synced.Drafts }
         | ExpandDraftMsg peerId ->
@@ -5101,6 +5191,9 @@ module ClientModel =
             match TimelineProjection.blockTurn block model.Timeline with
             | Some turn -> { model with OpenFolds = Set.add (FoldKey.Task turn) model.OpenFolds }
             | None -> model
+        // The way back pressed: the reader follows the surface's end from here, which is
+        // what takes them to it (`Tail` puts a follower at the end after the render).
+        | MoveMsg (DomMove.JumpToLatest surface) -> reading surface None model
         | MoveMsg _
         | ScreenPressedMsg _
         | WalkTabsMsg _
@@ -5157,8 +5250,7 @@ module ClientModel =
         | RevealSettingsMsg -> columnOn { model with Column = { model.Column with Face = ColumnFace.Settings } }
         | ViewportMsg wide -> { model with Column = { model.Column with Wide = wide } }
         | PaneSplitMsg wanted -> choosing wanted model
-        | ReaderMovedMsg (surface, away) ->
-            { model with Away = (if away then Set.add surface model.Away else Set.remove surface model.Away) }
+        | ReaderMovedMsg (surface, move) -> reading surface (TailReader.next move (Map.tryFind surface model.Readers)) model
         | PaneNudgedMsg by ->
             match paneSplit model with
             | Some split -> choosing (float split.Width + by) model
@@ -5704,11 +5796,6 @@ module ClientModel =
             | WalkTabsMsg (key, from) -> tabWalk key from model |> Option.map ClientEffect.Move |> Option.toList
             // The player the hand was in is gone; the toggle that replaces it is where it lands.
             | ReplayCaughtUpMsg _ -> [ ClientEffect.Move DomMove.FocusWatchToggle ]
-            // A deliberate send settles the view on what was just sent, whether or not the
-            // sender had scrolled away while composing — the tail rule (`Tail`, in the
-            // browser) only keeps a reader who was ALREADY following, which is a different
-            // question. The jump-to-latest control's own scroll, without its focus move.
-            | SendDraftMsg _ -> [ ClientEffect.Move (DomMove.ScrollToLatest TailSurface.Conversation) ]
             | CopyMsg (box, text) -> [ ClientEffect.Copy (box, text) ]
             | RetryNowMsg -> [ ClientEffect.RetryNow ]
             | GitHubPollDueMsg round ->

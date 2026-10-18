@@ -1516,14 +1516,15 @@ module View =
     /// stands at the far end of the strip from Send rather than above it.
     ///
     /// The jump's hook keeps naming the conversation (`TailSurface.key`), the surface it
-    /// brings back; `Tail` decides when it shows by moving `ClientModel.Away`.
+    /// brings back; it shows while the model says the reader is far back from the end
+    /// (`ClientModel.offersLatest`).
     ///
     /// With no turn to stop, the leading edge says a command is running, if one is, and goes
     /// to its chip when pressed (`DomMove.RevealCommand`) — the way a chapter goes to its
     /// message. One spot, one thing at a time: during a turn the agent's own commands are
     /// that turn's work, and interrupt is the verb that matters.
     let private composerTray (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
-        let away = Set.contains TailSurface.Conversation model.Away
+        let away = ClientModel.offersLatest TailSurface.Conversation model
         // The first open terminal running a command, in the order they were opened — the
         // order the strip and the list show them in.
         let running =
@@ -5108,11 +5109,11 @@ module View =
             | PreviewSubject.Content ref -> paneContentView ref
         // The way back to a terminal's newest output, for a reader who scrolled up through
         // it: the chat's float, over the scroller it brings back. On screen while that reader
-        // is away from the end (`ClientModel.Away`, which `Tail` reports to).
+        // is far back from the end (`ClientModel.offersLatest`).
         let jumpToLatest (surface: TailSurface) =
             html $"""
                 <div class="{Style.terminalJumpToLatestSlot}" data-jump-to-latest="{TailSurface.key surface}"
-                     ?hidden={not (Set.contains surface model.Away)}>
+                     ?hidden={not (ClientModel.offersLatest surface model)}>
                   <button type="button" class="{Style.terminalJumpToLatest}" aria-label="{Dom.Text.jumpToLatestOutput}"
                           title="{Dom.Text.jumpToLatestOutput}"
                           @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.JumpToLatest surface)))}>{Icon.down}</button>

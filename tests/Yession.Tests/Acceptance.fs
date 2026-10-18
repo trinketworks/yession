@@ -229,7 +229,7 @@ let private representativeModel : ClientModel =
       Seen = Map.empty
       Column = Column.initial
       PaneRoom = PaneRoom.unmeasured
-      Away = Set.empty
+      Readers = Map.empty
       ItemMenu = None
       PaneMenu = false
       Switcher = false
@@ -1042,10 +1042,10 @@ let private uiChecklistTests =
 
         testCase "the way back to the latest message is rendered, named, and the chat's" <| fun () ->
             // Whether it is OFFERED is the reader's scroll, which `Tail` in the browser reports
-            // as `Away`; given that, what markup owns is the rest, and it is the half that
+            // and the model holds (`Readers`); given that, what markup owns is the rest, and it is the half that
             // breaks silently: a control whose word is not its whole name, and one naming the
             // wrong surface would bring back the wrong column.
-            let html = Support.render { representativeModel with Away = Set.singleton TailSurface.Conversation }
+            let html = Support.render { representativeModel with Readers = Map.ofList [ TailSurface.Conversation, Behind.Far ] }
             Expect.isTrue
                 (html.Contains Dom.Text.jumpToLatest)
                 "carrying a name, since the word on it says less than the whole act"
@@ -1054,7 +1054,7 @@ let private uiChecklistTests =
 
         testCase "the way back to the latest message is not offered to a reader already there" <| fun () ->
             // Availability from the other side: a reader at the end has nowhere to jump to.
-            let html = Support.render { representativeModel with Away = Set.empty }
+            let html = Support.render { representativeModel with Readers = Map.empty }
             Expect.isFalse (html.Contains Dom.Text.jumpToLatest) "no jump while the reader is at the end"
 
         testCase "a client that cannot keep history says so; one that can says nothing" <| fun () ->

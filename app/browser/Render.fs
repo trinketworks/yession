@@ -41,13 +41,13 @@ open Yession.App.Codecs
 // How many times the whole view has been rendered since this document loaded.
 //
 // A render is the unit of cost on this page. Each one re-renders the entire view and reads
-// the scroll positions back out of layout (`Tail.before`) — so the question "is reopening a
+// the scroll positions back out of layout (`Tail.Before`) — so the question "is reopening a
 // session expensive?" is really "how many renders does it take?", and that is a COUNT: the
 // same number on a laptop and on a phone, unlike every millisecond a test could measure
 // instead.
 //
 // Published rather than inferred. A test can already see the cost indirectly — hook
-// `document.querySelectorAll`, watch `Tail.before` go past, count the calls — and that
+// `document.querySelectorAll`, watch `Tail.Before` go past, count the calls — and that
 // reads a private detail of the render below, so it goes quietly VACUOUS the day the scroll
 // is preserved some other way: no calls, count zero, budget met, nothing to see. This is the
 // render saying what it did, and it is wrong only if it is removed.
@@ -590,6 +590,9 @@ let create (deps: Deps) : Renderer =
     /// snapshot for, folded forward from the records the model already holds — and the
     /// size of each terminal's box, measured into the model (which decides what reaches a pty).
     let screens = Screens.create dispatch (fun () -> latest)
+    // The tail rule's document half (`Tail`): it reads the reader's intent off the model each
+    // render hands it, and tells the model what the reader did.
+    let tail = Tail.create dispatch (fun () -> latest)
 
     // The publication rule, one subscription per open terminal. Started when a terminal
     // appears and stopped when it goes, so a closed terminal's rule cannot republish a
@@ -833,7 +836,7 @@ let create (deps: Deps) : Renderer =
         // Where each reader of a surface read from its end stands, before anything moves
         // them; put back at the END of this render (`Tail`), after every sync below has
         // finished changing heights.
-        let tails = Tail.before ()
+        let tails = tail.Before ()
         Lit.render deps.Root (View.view deps.Actions model dispatch)
         // Mount/dispose the rich editors on their body hosts (bound to live fragments), then
         // overlay collaborators' cursors: remote carets in each body editor, and title carets
@@ -873,14 +876,14 @@ let create (deps: Deps) : Renderer =
         // the pane opened beside the chat, a screen folded forward. A reader put back at the
         // end before those ran was put back at an end that had moved by the time anybody
         // looked.
-        Tail.restore tails
+        tail.Restore tails model
 
     { SetState = setState
       SyncTerminalInputs = syncTerminalInputs
       Screens = screens
       Attach =
         fun () ->
-            Tail.attach dispatch (fun () -> latest |> Option.map (fun model -> model.Away) |> Option.defaultValue Set.empty)
+            tail.Attach ()
             PaneShell.installPaneResize dispatch
             PaneShell.installStrip ()
       Caret = fun () -> latest |> Option.bind (fun model -> model.Caret) }

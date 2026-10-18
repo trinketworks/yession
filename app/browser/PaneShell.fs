@@ -244,7 +244,7 @@ let private toTerminalScreen (terminal: Yession.Domain.TerminalId) : unit =
 /// the moment a record arrived.
 ///
 /// It runs a frame late for the reason everything else here does (the element has to exist),
-/// and that frame is also what puts it after `Tail.restore`, which returns a freshly rendered
+/// and that frame is also what puts it after `Tail.Restore`, which returns a freshly rendered
 /// scrollback to its end. Landing after it is the whole trick: the reveal wins once — a scroll
 /// UP, which `Tail` reads as the reader leaving the end — and every render afterwards puts
 /// back the position the reader was left at, so the two never fight.
@@ -390,14 +390,15 @@ let revealCommand (terminalId: string) (blockId: string) : unit =
             chip.classList.add [| "animate-reveal-line" |]
             chip.focus ()))
 
-/// The "jump to latest" press: the surface followed from its end (`Tail.follow`), and the
-/// keyboard put where the reader now is. The press takes its own control away — a surface at
-/// its end has no way back to offer — so focus has to land somewhere or it lands on `body`:
-/// on the surface itself when it can hold focus (the chat, a screen whose keyboard this peer
-/// has), else on the nearest box around it that can (the pane's panel, around a terminal's
-/// blocks). Never a Tab stop of its own making — every one of those is `tabindex` already.
+/// The "jump to latest" press: the keyboard put where the reader now is. Taking them there
+/// is the model's (the press makes them follow the surface's end, and `Tail` puts a follower
+/// at it). The press takes its own control away — a surface at its end has no way back to
+/// offer — so focus has to land somewhere or it lands on `body`: on the surface itself when
+/// it can hold focus (the chat, a screen whose keyboard this peer has), else on the nearest
+/// box around it that can (the pane's panel, around a terminal's blocks). Never a Tab stop of
+/// its own making — every one of those is `tabindex` already.
 let jumpToLatest (surface: Yession.App.TailSurface) : unit =
-    Tail.follow surface
+    find (sprintf "[%s=\"%s\"]" Yession.App.Dom.Hooks.tail (Yession.App.TailSurface.key surface))
     |> Option.bind (fun el ->
         match el.closest "[tabindex]" with
         | Some holder -> Some (holder :?> HTMLElement)
@@ -504,7 +505,6 @@ let rec move (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.RevealMessage messageId -> revealMessage (Yession.Domain.MessageId.value messageId)
     | Yession.App.DomMove.RevealCommand (terminalId, blockId) ->
         revealCommand (Yession.Domain.TerminalId.value terminalId) (Yession.Domain.BlockId.value blockId)
-    | Yession.App.DomMove.ScrollToLatest surface -> Tail.follow surface |> ignore
     | Yession.App.DomMove.JumpToLatest surface -> jumpToLatest surface
     // A frame on, for the render that drew the selection; not a placement, so not guarded.
     | Yession.App.DomMove.RevealPivot -> nextFrame Strip.revealSelected
@@ -547,7 +547,6 @@ and private place (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.RevealBlock _
     | Yession.App.DomMove.RevealMessage _
     | Yession.App.DomMove.RevealCommand _
-    | Yession.App.DomMove.ScrollToLatest _
     | Yession.App.DomMove.JumpToLatest _ -> move asked
     | Yession.App.DomMove.RevealPivot -> Strip.revealSelected ()
     | Yession.App.DomMove.FocusTerminalScreen terminal -> toTerminalScreen terminal
