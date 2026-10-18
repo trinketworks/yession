@@ -353,10 +353,10 @@ let private sessionTests =
             Expect.stringContains said "open_terminal" "but the agent can work elsewhere"
         }
 
-        test "the three waits read as three different answers" {
+        test "the four waits read as four different answers" {
             let says wait = AgentTools.renderOutcome { elided None with Status = TerminalCommandAwaitingTerminal wait; Output = "" }
-            let answers = [ BehindBlock; BehindQueue; HeldByPerson ] |> List.map says
-            Expect.equal (List.distinct answers |> List.length) 3 "none collapses into another"
+            let answers = [ BehindBlock; BehindQueue; HeldByPerson; HeldByProgram ] |> List.map says
+            Expect.equal (List.distinct answers |> List.length) 4 "none collapses into another"
         }
 
         // Refused because its terminal cannot run commands, the command itself is fine: the agent is

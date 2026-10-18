@@ -103,15 +103,19 @@ let private allOpen (_: TerminalId) = true
 /// No lane cap in play. These cases are about the drain's other holds; the cap has its own.
 let private noLaneCap (_: TerminalId) = false
 let private planWith consumed busy isOpen entries =
-    TerminalQueueDrain.plan consumed Set.empty busy Set.empty Set.empty isOpen (queueOf entries)
+    TerminalQueueDrain.plan consumed Set.empty busy Set.empty Set.empty Set.empty isOpen (queueOf entries)
 
 /// The same plan with a lease in play (Plan 13, stage 2e).
 let private planLeased consumed busy leased isOpen entries =
-    TerminalQueueDrain.plan consumed Set.empty busy leased Set.empty isOpen (queueOf entries)
+    TerminalQueueDrain.plan consumed Set.empty busy leased Set.empty Set.empty isOpen (queueOf entries)
 
 /// ...and with the shell's marks gone (Plan 13, stage 2f).
 let private planLost consumed lost isOpen entries =
-    TerminalQueueDrain.plan consumed Set.empty Set.empty Set.empty lost isOpen (queueOf entries)
+    TerminalQueueDrain.plan consumed Set.empty Set.empty Set.empty lost Set.empty isOpen (queueOf entries)
+
+/// ...and with shells that are not at their prompt.
+let private planAway awayFromPrompt entries =
+    TerminalQueueDrain.plan Set.empty Set.empty Set.empty Set.empty Set.empty awayFromPrompt allOpen (queueOf entries)
 
 let private drainTests =
     testList "Terminal drain plan" [
@@ -172,6 +176,7 @@ let private drainTests =
                     (Set.singleton (TerminalId.value terminalA))
                     Set.empty
                     Set.empty
+                    Set.empty
                     allOpen
                     (queueOf [ entry "a1" terminalA byAda 1.0 ])
             Expect.isEmpty plan.Removals "it is still queued, as far as anybody waiting on it can tell"
@@ -181,6 +186,7 @@ let private drainTests =
                 TerminalQueueDrain.plan
                     Set.empty
                     (Set.singleton "q-a1")
+                    Set.empty
                     Set.empty
                     Set.empty
                     Set.empty
@@ -1374,7 +1380,7 @@ let private integrationTests =
             let entries = [ entry "a1" terminalA byAda 1.0 ]
             let busyLost = Set.singleton (TerminalId.value terminalA)
             Expect.equal
-                ((TerminalQueueDrain.plan Set.empty Set.empty busyLost Set.empty busyLost allOpen (queueOf entries)).CannotRun
+                ((TerminalQueueDrain.plan Set.empty Set.empty busyLost Set.empty busyLost Set.empty allOpen (queueOf entries)).CannotRun
                  |> List.map (fun (_, e) -> QueueId.value e.QueueId))
                 [ "q-a1" ]
                 "refused while busy"
@@ -1540,7 +1546,7 @@ let private leaseGateTests =
             let plan = planLeased Set.empty Set.empty leased allOpen entries
             Expect.isEmpty plan.Ready "the queue waits for the terminal"
             Expect.equal
-                (TerminalQueueDrain.holdOf Set.empty Set.empty leased Set.empty allOpen (queueOf entries) terminalA)
+                (TerminalQueueDrain.holdOf Set.empty Set.empty leased Set.empty Set.empty allOpen (queueOf entries) terminalA)
                 (Some TerminalQueueDrain.AwaitingTerminal)
                 "and the hold names the terminal, not an approval"
 
@@ -1549,14 +1555,37 @@ let private leaseGateTests =
             let plan = planLeased Set.empty Set.empty Set.empty allOpen entries
             Expect.equal (plan.Ready |> List.map (fun (_, e) -> QueueId.value e.QueueId)) [ "q-a1" ] "it runs on release"
             Expect.equal
-                (TerminalQueueDrain.holdOf Set.empty Set.empty Set.empty Set.empty allOpen (queueOf entries) terminalA)
+                (TerminalQueueDrain.holdOf Set.empty Set.empty Set.empty Set.empty Set.empty allOpen (queueOf entries) terminalA)
                 None
                 "nothing is holding it"
+
+        testCase "a shell away from its prompt is not handed the queue's head" <| fun () ->
+            // After a take, the holder may have left a program running that reads the
+            // terminal: no block, and no lease any more. A line typed now would be its input.
+            let away = Set.singleton (TerminalId.value terminalA)
+            Expect.isEmpty (planAway away [ entry "a1" terminalA byAda 1.0 ]).Ready "the queue waits for the prompt"
+
+        testCase "the hold on a shell away from its prompt names the prompt" <| fun () ->
+            let entries = [ entry "a1" terminalA byAda 1.0 ]
+            let away = Set.singleton (TerminalId.value terminalA)
+            Expect.equal
+                (TerminalQueueDrain.holdOf Set.empty Set.empty Set.empty Set.empty away allOpen (queueOf entries) terminalA)
+                (Some TerminalQueueDrain.AwaitingPrompt)
+                "not a person, not a block"
+
+        testCase "a person typing outranks the prompt they took the shell from" <| fun () ->
+            // Their own Enter left the prompt, and what holds the queue is still them.
+            let entries = [ entry "a1" terminalA byAda 1.0 ]
+            let both = Set.singleton (TerminalId.value terminalA)
+            Expect.equal
+                (TerminalQueueDrain.holdOf Set.empty Set.empty both Set.empty both allOpen (queueOf entries) terminalA)
+                (Some TerminalQueueDrain.AwaitingTerminal)
+                "the hold names the person"
 
         testCase "the holds are told apart" <| fun () ->
             let entries = [ entry "a1" terminalA agentForAda 1.0 ]
             let hold busy leased =
-                TerminalQueueDrain.holdOf Set.empty busy leased Set.empty allOpen (queueOf entries) terminalA
+                TerminalQueueDrain.holdOf Set.empty busy leased Set.empty Set.empty allOpen (queueOf entries) terminalA
             let busyA = Set.singleton (TerminalId.value terminalA)
             Expect.equal (hold busyA Set.empty) (Some TerminalQueueDrain.AwaitingBlock) "a block is running"
             Expect.equal (hold Set.empty busyA) (Some TerminalQueueDrain.AwaitingTerminal) "a peer is typing"
@@ -1588,6 +1617,13 @@ let private observing (status: BlockStatus) (interactive: bool) : TerminalComman
 
 let private waitTests =
     testList "The command wait" [
+        testCase "a shell away from its prompt returns at once, naming the program" <| fun () ->
+            // Whoever typed the program ends it, and the agent cannot hurry them.
+            Expect.equal
+                (TerminalCommandWait.step false (waitingOn (Some TerminalQueueDrain.AwaitingPrompt)))
+                (TerminalCommandWait.Return (TerminalCommandAwaitingTerminal HeldByProgram))
+                "no waiting at all"
+
         testCase "a held terminal returns at once rather than burning a deadline" <| fun () ->
             // A peer with a terminal open is mid-task and will not be done soon.
             Expect.equal
@@ -1692,6 +1728,7 @@ let private waitTests =
                   TerminalCommandAwaitingTerminal BehindBlock
                   TerminalCommandAwaitingTerminal BehindQueue
                   TerminalCommandAwaitingTerminal HeldByPerson
+                  TerminalCommandAwaitingTerminal HeldByProgram
                   TerminalCommandRefused (PeerRef bob, None) ]
             Expect.equal (List.distinct statuses |> List.length) (List.length statuses) "no two are the same value"
 
