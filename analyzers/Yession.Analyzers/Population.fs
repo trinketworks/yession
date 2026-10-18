@@ -13,7 +13,7 @@ open FSharp.Compiler.Text
 /// than a copy each: `of'` gives the declarations and `reportsHere` names the one file that
 /// reports the verdict. The walk is not cheap — it reads every referenced assembly — and the
 /// answer is the same for every file in a project, so it is done once per project and kept for
-/// as long as that project is the one being analyzed (`Kept`, which says why the lifetime is
+/// as long as the CLI holds that project's check results (`Kept`, which says why the lifetime is
 /// the point).
 
 /// Where a declaration's name can be brought into scope. Not where it is USED: where a file
@@ -175,7 +175,7 @@ let of' (ctx: CliContext) =
     match repositoryOf (Path.GetDirectoryName project) with
     | None -> []
     | Some root ->
-        kept.For (project, fun () -> walk (Path.GetFileNameWithoutExtension project) root ctx.CheckProjectResults)
+        kept.For (ctx.CheckProjectResults, fun () -> walk (Path.GetFileNameWithoutExtension project) root ctx.CheckProjectResults)
 
 /// Where a project's one verdict is reported: its last hand-written source file. A
 /// whole-population answer is the same for every file in the project, so emitting it from each
@@ -209,13 +209,13 @@ let private reached = Kept.Answer<string list> ()
 /// the product. A rule about where something may be declared (`EmitHome`, `BindingOnly`) asks
 /// this, and it is asked here so that two rules never hold two definitions of the line.
 ///
-/// One answer per project, so it is computed once and kept while that project is the one being
-/// analyzed — it holds names, not symbols, but `Kept` is the shape the rules share.
+/// One answer per project, so it is computed once and kept while the CLI holds that project's
+/// check results — it holds names, not symbols, but `Kept` is the shape the rules share.
 let reach (ctx: CliContext) : string list =
     let project = ctx.ProjectOptions.ProjectFileName
 
     reached.For (
-        project,
+        ctx.CheckProjectResults,
         fun () ->
             let own = Path.GetFileNameWithoutExtension project
 
