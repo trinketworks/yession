@@ -2958,12 +2958,19 @@ let private pressRunBy (press: IPage -> string -> Async<unit>) (page: IPage) (ru
 /// A pointer's press on whatever is painted at the middle of `selector`, where it stands — not
 /// the locator's click, which first scrolls its target to wherever it judges clear of a sticky
 /// line, and so moves the very place a case is measuring.
+///
+/// Refused when the target is not what is painted at its middle, which is the one check of the
+/// locator's that this keeps: a middle below the screen, or under something else, is a press
+/// that lands nowhere and reads as a press the page ignored (the sheet's case, "pressing the
+/// pane under the list's sheet", says how a point measured from a box came to be off screen).
 let private clickWhereItIs (page: IPage) (selector: string) : Async<unit> =
     async {
-        match! Probe.boxes page [ selector ] with
-        | [ Some r ] ->
+        match! Probe.seen page selector with
+        | seen :: _ when seen.Painted ->
+            let r = seen.Box
             do! awaitU (page.Mouse.ClickAsync (float32 (r.Left + Yession.App.Probes.Box.width r / 2.0), float32 (r.Top + Yession.App.Probes.Box.height r / 2.0)))
-        | _ -> return failwithf "nothing at %s to press" selector
+        | seen :: _ -> return failwithf "%s is not what is painted at its middle (%A), so a press there would land on something else" selector seen.Box
+        | [] -> return failwithf "nothing at %s to press" selector
     }
 
 /// A fold pressed with a pointer, where it is on screen.
@@ -4964,16 +4971,27 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
-                do! waitTextIn "the screen to say vim ~/notes" page "#shell [data-terminal-screen='term-live']" "vim ~/notes"
+                let screen = "#shell [data-terminal-screen='term-live']"
+                do! waitTextIn "the screen to say vim ~/notes" page screen "vim ~/notes"
                 // Where the words are, so the drag runs across them rather than across padding.
-                let! words = Probe.textAt page "#shell [data-terminal-screen='term-live']" "vim ~/notes"
-                let span =
-                    match words with
-                    | Some r -> [| r.Left + 1.0; r.Right - 1.0; (r.Top + r.Bottom) / 2.0 |]
-                    | None -> failwith "the screen stopped saying vim ~/notes"
-                do! awaitU (page.Mouse.MoveAsync (float32 span.[0], float32 span.[2]))
+                let words () =
+                    async {
+                        match! Probe.textAt page screen "vim ~/notes" with
+                        | Some r -> return r
+                        | None -> return failwith "the screen stopped saying vim ~/notes"
+                    }
+                let! r = words ()
+                let! box = await (page.Locator(screen).BoundingBoxAsync ())
+                // The drag starts at a place IN the screen, reached through its locator: Playwright
+                // brings it onto the page's screen, waits for it to stand still, and refuses when
+                // something else would take the press. A point worked out from the boxes alone can
+                // be below the screen (the sheet's case, "pressing the pane under the list's
+                // sheet", says how). Where it ends is measured again, after any scroll the hover made.
+                let start = Position (X = float32 (r.Left + 1.0) - box.X, Y = float32 ((r.Top + r.Bottom) / 2.0) - box.Y)
+                do! awaitU (page.Locator(screen).HoverAsync (LocatorHoverOptions (Position = start)))
+                let! r = words ()
                 do! awaitU (page.Mouse.DownAsync ())
-                do! awaitU (page.Mouse.MoveAsync (float32 span.[1], float32 span.[2], MouseMoveOptions (Steps = 5)))
+                do! awaitU (page.Mouse.MoveAsync (float32 (r.Right - 1.0), float32 ((r.Top + r.Bottom) / 2.0), MouseMoveOptions (Steps = 5)))
                 do! awaitU (page.Mouse.UpAsync ())
                 let! selected = Probe.selection page
                 Expect.stringContains selected "notes" "what was dragged across is still selected"
@@ -7008,15 +7026,21 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 let sheet = "#shell #pane-sheet"
+                let panel = "#shell [data-content-panel]"
                 do! waitVisible "the list's sheet" page sheet
-                // The pane's column animates open. Measured while it travels, the press below
-                // lands where the pane was for one frame and presses nothing; on a busy box (cases
-                // several at once) the sheet is visible before the column has arrived.
-                do! Probe.settled page
                 let! box = await (page.Locator(sheet).BoundingBoxAsync ())
-                let! pane = await (page.Locator("#shell [data-content-panel]").BoundingBoxAsync ())
+                let! pane = await (page.Locator(panel).BoundingBoxAsync ())
                 Expect.isTrue (box.Y + box.Height < pane.Y + pane.Height - 20.0f) "pane showing under the sheet, or this proves nothing"
-                do! awaitU (page.Mouse.ClickAsync (pane.X + pane.Width / 2.0f, pane.Y + pane.Height - 10.0f))
+                // Pressed through the pane's locator, at a place IN the pane, never at a point
+                // worked out from where the pane was drawn. The harness keeps other fixtures
+                // above the shell, so the foot of the pane is on the screen only once the window
+                // has scrolled down to the shell, and how far the clicks above scrolled it is
+                // Playwright's choice: each retry of a click whose target is still moving scrolls
+                // with the next of four alignments (none, end, center, start). A point taken from
+                // the box was below the screen in three of the four, and pressed nothing. The
+                // locator brings the place onto the screen, waits for the pane to stand still,
+                // and refuses when something outside the pane would take the press.
+                do! awaitU (page.Locator(panel).ClickAsync (LocatorClickOptions (Position = Position (X = pane.Width / 2.0f, Y = pane.Height - 10.0f))))
                 do! waitVisible "the switcher, shut" page "#shell [data-pane-switcher][aria-expanded='false']"
                 return ()
             }
@@ -7105,6 +7129,13 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 let kill = "#shell [data-content-list] [data-terminal-close='term-harness']"
+                // The press has to be at a point the case knows, because that point is what is
+                // asked about afterwards — so it cannot be the locator's own click. The point is
+                // measured only once Playwright has brought the kill onto the screen and found it
+                // standing still and pressable (a trial click, which presses nothing): measured
+                // before then, it is wherever the column's opening and the window's scroll had
+                // left the kill, which a press can miss (see the sheet's case above).
+                do! awaitU (page.Locator(kill).ClickAsync (LocatorClickOptions (Trial = true)))
                 let! rect = await (page.Locator(kill).BoundingBoxAsync ())
                 let x, y = rect.X + rect.Width / 2.0f, rect.Y + rect.Height / 2.0f
                 do! awaitU (page.Mouse.ClickAsync (x, y))
@@ -8908,8 +8939,14 @@ type private Hold =
     { Held: Async<unit>
       LetGo: unit -> unit }
 
+/// Where a finger pushing Create lands. The pushes are the pointer's own (a second one at the
+/// same place, under a held Create, is what these cases are about), so the point is measured —
+/// but only once Playwright has brought Create onto the screen and found it standing still and
+/// pressable (a trial click, which presses nothing). Measured before then, a point can be one
+/// a press misses (the sheet's case, "pressing the pane under the list's sheet", says how).
 let private whereCreateIs (page: IPage) : Async<float32 * float32> =
     async {
+        do! awaitU (page.Locator(createButton).ClickAsync (LocatorClickOptions (Trial = true)))
         let! box = await (page.Locator(createButton).BoundingBoxAsync ())
         return box.X + box.Width / 2.0f, box.Y + box.Height / 2.0f
     }

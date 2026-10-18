@@ -210,8 +210,14 @@ browser case:
   runs beside it.
 - Shares only inside `testSequenced`. Where a suite's cases must share something, sequence the suite
   and say beside it what they share. Its cases then run one at a time, in order, beside other cases.
-- Waits for animations to end before it measures (`Probe.settled`). Three at a time keeps the CPU near
-  90% busy, and a measurement taken mid-animation is of where the element was for one frame.
+- Presses through a locator, never at a point worked out from a box. `Locator.ClickAsync` with a
+  `Position` (a place IN the element) brings it onto the screen, waits for it to stand still, and
+  refuses when something else would take the press. The harness keeps fixtures above the shell, and
+  each retry of a click on a moving target scrolls the window with the next of four alignments, so
+  where a click leaves the window depends on load. The foot of the pane, measured from its box, was
+  below the screen at three of those four. Where a case must know the point (a press it hit-tests
+  afterwards), a trial click (`Trial = true`) settles the element first and the point is measured
+  after it. A drag starts with a hover through the locator, at a `Position`.
 
 A case's own lines print together with its verdict. Each case also prints `▶ <name>` when it starts, so
 a case that hung is one with a `▶` line and no verdict.
