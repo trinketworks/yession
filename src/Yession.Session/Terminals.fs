@@ -139,6 +139,11 @@ module TerminalQueueDrain =
         | AwaitingTerminal
         /// A block is already running here. One at a time, per terminal.
         | AwaitingBlock
+        /// The shell is not at its prompt, and no block of ours is running there: something
+        /// typed straight into it is (a take is how), or a line it was handed is unfinished.
+        /// A block's line typed now would be keystrokes for that program. Resolves when the
+        /// shell prints its prompt again; whoever typed the program can end it sooner.
+        | AwaitingPrompt
         /// The shell stopped emitting marks (Plan 13, stage 2f). Why is not known — another
         /// program may read this pty now, or a venv's `activate` may have overwritten the
         /// prompt hook. Nothing waits on it — the drain refuses what is queued here
@@ -183,12 +188,14 @@ module TerminalQueueDrain =
     /// The gate for ONE terminal, shared by `plan` and `holdOf` so what runs and what the
     /// queue says about why it is not running cannot drift apart.
     ///
-    /// The order is the design: one block at a time; then the lease; then the marks.
+    /// The order is the design: one block at a time; then the lease; then the marks; then
+    /// the prompt.
     let private gate
         (alreadyConsumed: PendingAct -> bool)
         (busy: Set<string>)
         (leased: Set<string>)
         (lost: Set<string>)
+        (awayFromPrompt: Set<string>)
         (isOpen: TerminalId -> bool)
         (queue: Map<QueueId, PendingAct>)
         (terminal: TerminalId)
@@ -208,6 +215,11 @@ module TerminalQueueDrain =
             // know when it started or finished. Holding is the honest answer — draining into
             // an unmarked shell would produce blocks that never close.
             elif Set.contains (TerminalId.value terminal) lost then Choice2Of2 CannotRunHere
+            // A shell is handed a command line only while it waits for one, which is the rule
+            // Warp builds its input on. After a take, the holder may have left a program
+            // running that reads the terminal, and nothing above says so: it is no block, and
+            // the lease is over.
+            elif Set.contains (TerminalId.value terminal) awayFromPrompt then Choice2Of2 AwaitingPrompt
             else Choice1Of2 (terminal, entry)
 
     /// Why a terminal's head is not running — `None` when it IS about to run. Pure, and asked
@@ -217,26 +229,29 @@ module TerminalQueueDrain =
         (busy: Set<string>)
         (leased: Set<string>)
         (lost: Set<string>)
+        (awayFromPrompt: Set<string>)
         (isOpen: TerminalId -> bool)
         (queue: Map<QueueId, PendingAct>)
         (terminal: TerminalId)
         : TerminalHold option =
         let alreadyConsumed (entry: PendingAct) = Set.contains (QueueId.value entry.QueueId) consumed
-        match gate alreadyConsumed busy leased lost isOpen queue terminal with
+        match gate alreadyConsumed busy leased lost awayFromPrompt isOpen queue terminal with
         | Choice1Of2 _ -> None
         | Choice2Of2 hold -> Some hold
 
     /// `consumed` is the log-anchored exactly-once set; `claimed` the entries a drain has
     /// taken and not yet put on the record — never run again, never repaired away; `busy`
     /// names terminals with a block already running; `leased` those a peer is typing into;
-    /// `isOpen` answers for the terminal an entry names. Nothing here reads the clock or the
-    /// doc — it is given a snapshot and returns a decision.
+    /// `awayFromPrompt` those whose shell is not waiting for a command line; `isOpen` answers
+    /// for the terminal an entry names. Nothing here reads the clock or the doc — it is
+    /// given a snapshot and returns a decision.
     let plan
         (consumed: Set<string>)
         (claimed: Set<string>)
         (busy: Set<string>)
         (leased: Set<string>)
         (lost: Set<string>)
+        (awayFromPrompt: Set<string>)
         (isOpen: TerminalId -> bool)
         (queue: Map<QueueId, PendingAct>)
         : TerminalDrainPlan =
@@ -254,7 +269,7 @@ module TerminalQueueDrain =
         let ready =
             terminals
             |> List.choose (fun terminal ->
-                match gate alreadyTaken busy leased lost isOpen queue terminal with
+                match gate alreadyTaken busy leased lost awayFromPrompt isOpen queue terminal with
                 | Choice1Of2 resolved -> Some resolved
                 | Choice2Of2 _ -> None)
 
@@ -375,6 +390,9 @@ module TerminalCommandWait =
             // A peer holding the terminal is mid-task and will not be done soon — an
             // unbounded wait, so it returns at once rather than burning a deadline.
             | Some TerminalQueueDrain.AwaitingTerminal -> Return (TerminalCommandAwaitingTerminal HeldByPerson)
+            // A program somebody typed is running there, and it ends when they end it: as
+            // unbounded as a person's hold, and returned at once for the same reason.
+            | Some TerminalQueueDrain.AwaitingPrompt -> Return (TerminalCommandAwaitingTerminal HeldByProgram)
             // Another block is running here: a wait on a PROCESS, so it gets the process
             // deadline — a quick command ahead of ours still chains. Said apart from a
             // person's hold, because the way out is different: a block can be ended by whoever
@@ -876,6 +894,11 @@ module SessionTerminals =
           /// `lost` set, which holds the queue rather than draining into a shell that cannot
           /// bound what it runs.
           Lost : unit -> Set<string>
+          /// Terminals whose shell is not at its prompt — the drain's `awayFromPrompt` set,
+          /// which holds the queue rather than typing a block into whatever the shell runs.
+          /// Only shells the session instruments: a terminal with no prompt to wait for has
+          /// none to be away from.
+          AwayFromPrompt : unit -> Set<string>
           /// Whether DETECTION holds this terminal (Plan 20, stage 6): the alt-screen flip
           /// gave it to the author of whatever is running there, so a block that will not
           /// finish on its own is waiting on that author's keystrokes. Read by the command
@@ -959,6 +982,7 @@ module SessionTerminals =
           Busy = fun () -> Set.empty
           Leased = fun () -> Set.empty
           Lost = fun () -> Set.empty
+          AwayFromPrompt = fun () -> Set.empty
           Interactive = fun _ -> false
           Activity = fun _ _ -> None
           SetProfile = fun _ _ _ -> async { return Error "this session has no terminals" }
@@ -1104,8 +1128,14 @@ module SessionTerminals =
         /// or by the integration detector giving up, so a shell that never marks the start
         /// cannot have its output swallowed for good.
         let awaitingStart = Collections.Generic.HashSet<string> ()
-        /// Terminals whose shell is idle at a prompt: the last mark seen was `A` with no `C`
-        /// after it.
+        /// Terminals whose shell is idle at a prompt: the last mark seen was `A`, with no `C`
+        /// after it and no line handed to it since. What the drain waits for
+        /// (`AwayFromPrompt`): a shell is handed a block's line only while it waits for one.
+        ///
+        /// Read off the output, so it can be early in one case: a holder who types a line
+        /// AHEAD of the shell (while an earlier one still runs) can see the prompt answering
+        /// the earlier line arrive after their Enter, and the shell reads as idle while it
+        /// runs the later one. Nothing written to a pty says which line a prompt answers.
         let atPrompt = Collections.Generic.HashSet<string> ()
         /// Which block's line each terminal's shell was last handed, and when — what the
         /// integration detector and a late start mark both need to say how late is late.
@@ -1571,9 +1601,12 @@ module SessionTerminals =
                                             | _ -> ()
                                 | Marked MarkPromptStart ->
                                     ready.Value <- true
-                                    atPrompt.Add key |> ignore
+                                    let arrived = atPrompt.Add key
                                     prompted true
                                     onReady.Value ()
+                                    // What a queue held for the prompt was waiting for. A
+                                    // block's own end drains on its own, once it is not busy.
+                                    if arrived && not (Set.contains key busy) then reDrain ()
                                 // Mid-command: the shell read a line that did not finish one.
                                 // Counted, because it answers a line, and never anything more —
                                 // a shell here is waiting for the rest, so the block's line has
@@ -2493,6 +2526,10 @@ module SessionTerminals =
                 // Stamped BEFORE the write, so the idle timeout measures from the last
                 // keystroke rather than from when the lease was taken.
                 leases <- TerminalLeases.touch id by (clock.Now ()) leases
+                // A line handed to the shell is a prompt it has left: until its next `A` it
+                // may be running what it was handed, and a shell that has stopped marking
+                // never says it started. The queue waits for that `A` (`AwayFromPrompt`).
+                if data.Contains "\r" || data.Contains "\n" then atPrompt.Remove (TerminalId.value id) |> ignore
                 pty.Write data
                 true
             | None -> false
@@ -3019,6 +3056,12 @@ module SessionTerminals =
           Busy = fun () -> busy
           Leased = fun () -> TerminalLeases.held leases
           Lost = fun () -> lost
+          AwayFromPrompt =
+            fun () ->
+                live
+                |> Seq.choose (fun (KeyValue (key, terminal)) ->
+                    if terminal.Shell.IsSome && canInstrument key && not (atPrompt.Contains key) then Some key else None)
+                |> Set.ofSeq
           Interactive = fun id -> TerminalLeases.autoHeld id leases
           Activity =
             fun id fromSeq ->
@@ -3127,6 +3170,7 @@ module TerminalScheduler =
                         (terminals.Busy ())
                         (terminals.Leased ())
                         (terminals.Lost ())
+                        (terminals.AwayFromPrompt ())
                         terminals.IsOpen
                         synced.Pending
                 // Leftovers first: a crash between the start append and the doc removal
@@ -3187,6 +3231,7 @@ module TerminalScheduler =
                     (terminals.Busy ())
                     (terminals.Leased ())
                     (terminals.Lost ())
+                    (terminals.AwayFromPrompt ())
                     terminals.IsOpen
                     synced.Pending
                     terminal
@@ -3323,6 +3368,7 @@ module TerminalCommands =
                     (terminals.Busy ())
                     (terminals.Leased ())
                     (terminals.Lost ())
+                    (terminals.AwayFromPrompt ())
                     terminals.IsOpen
                     synced.Pending
                     terminal

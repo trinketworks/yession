@@ -199,6 +199,9 @@ type TerminalHeldBy =
     | BehindQueue
     /// A person holds its stdin. Ends when they finish; not the caller's to hurry.
     | HeldByPerson
+    /// Something typed straight into its shell is still running, so the shell is not at its
+    /// prompt. Ends when that program does; whoever typed it ends it, not the caller.
+    | HeldByProgram
 
 type TerminalCommandStatus =
     /// It ran to an outcome. The ordinary answer.

@@ -198,6 +198,10 @@ module AgentTools =
             sprintf
                 "WAITING FOR %s — somebody is typing there; it has NOT run, and runs when they finish, which is theirs to decide. check_pending '%s' later, or open_terminal to run it elsewhere now."
                 where handle
+        | TerminalCommandAwaitingTerminal HeldByProgram ->
+            sprintf
+                "WAITING FOR %s — something typed straight into that terminal is still running, so its shell is not at its prompt; it has NOT run, and runs once the shell is back at its prompt. check_pending '%s' later, or open_terminal to run it elsewhere now."
+                where handle
         // Refused by the SESSION: that terminal cannot run commands, so nothing can run
         // there (`TerminalQueueDrain.cannotRunReason`). Unlike a classifier's refusal, the way
         // on is to run it elsewhere — the command is fine, the terminal is not.

@@ -1207,6 +1207,106 @@ let private leaseLoanTests =
                 }))
     ]
 
+/// What the queue waits for: a shell at its prompt. A take lets a person start a program at
+/// the shell, and once the lease is over nothing else says the shell is busy, so the queue
+/// reads it off the prompt itself.
+let private promptGateTests =
+    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+    /// Under ada's lease, every prompt the bootstrap still owes delivered: a line whose own
+    /// output is not its echo (`ba''rrier` prints `barrier`, and its echo does not), then the
+    /// prompt after that output. Prompts come back in the order their lines went in, so
+    /// none is left to arrive later and look like the answer to what is typed next.
+    let settled (terminals: SessionTerminals.SessionTerminals) (id: TerminalId) (raw: System.Text.StringBuilder) =
+        async {
+            match! terminals.Take id (Principal.toActor ada) with
+            | Error e -> failwith e
+            | Ok () ->
+                let typed = raw.Length
+                Expect.isTrue (terminals.Input id (Principal.toActor ada) "echo ba''rrier\r") "the barrier line"
+                do! untilPrinted raw typed "the prompt after the barrier" (fun said ->
+                    match said.IndexOf "barrier" with
+                    | -1 -> false
+                    | at -> (said.Substring at).Contains promptMark)
+        }
+    /// Ada starts `cat` and waits for its start mark: the shell has given the terminal back
+    /// to its line discipline, so a ^D typed from here is the end of cat's input rather than
+    /// a byte readline was still reading.
+    let catRunning (terminals: SessionTerminals.SessionTerminals) (id: TerminalId) (raw: System.Text.StringBuilder) =
+        async {
+            let typed = raw.Length
+            Expect.isTrue (terminals.Input id (Principal.toActor ada) "cat\r") "a program that reads the terminal"
+            do! untilPrinted raw typed "cat's start mark" (fun said -> said.Contains startMark)
+        }
+    /// Ada leaves `cat` reading the terminal and gives the keyboard back; a block is queued.
+    let catLeftRunning terminals id raw (doc: Yjs.Y.Doc) =
+        async {
+            do! settled terminals id raw
+            do! catRunning terminals id raw
+            match! terminals.Release id (Principal.toActor ada) with
+            | Error e -> failwith e
+            | Ok () ->
+                Yession.App.Collab.SyncedStateSync.enqueueTerminalCommand
+                    doc (QueueId.create "q-1" |> expect) id (Authority.ofAuthor ada) 1.0 "echo queued-ran" false false None None
+        }
+    let started (log: EventLog<SessionEvent>) =
+        async {
+            let! page = log.Read None 1000
+            return page.Events |> List.exists (fun e -> match e.Event with SessionEvent.TerminalBlockStarted _ -> true | _ -> false)
+        }
+    testList "What the queue waits for, on a real pty" [
+        testCaseAsync "a block queued behind a program typed into the shell is not typed into it" <|
+            (let raw = System.Text.StringBuilder ()
+             withTappedShellTerminal TerminalShell.bash SessionTerminals.BlockLoans.none (fun _ -> async { return () }) raw "queue-behind-cat" (fun terminals id _ log _ _ ->
+                async {
+                    let doc = Yjs.Y.Doc.Create ()
+                    let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
+                    do! catLeftRunning terminals id raw doc
+                    scheduler.Drain ()
+                    // An absence: given the time a block takes to start here, none did.
+                    do! quietFor 500
+                    let! ran = started log
+                    Expect.isFalse ran "the queued block waited for the prompt"
+                }))
+
+        testCaseAsync "a block queued behind a program typed into the shell runs once it ends" <|
+            (let raw = System.Text.StringBuilder ()
+             withTappedShellTerminal TerminalShell.bash SessionTerminals.BlockLoans.none (fun _ -> async { return () }) raw "queue-after-cat" (fun terminals id _ log _ _ ->
+                async {
+                    let doc = Yjs.Y.Doc.Create ()
+                    let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
+                    do! catLeftRunning terminals id raw doc
+                    scheduler.Drain ()
+                    match! terminals.Take id (Principal.toActor ada) with
+                    | Error e -> failwith e
+                    | Ok () ->
+                        Expect.isTrue (terminals.Input id (Principal.toActor ada) "\u0004") "cat is told its input ended"
+                        match! terminals.Release id (Principal.toActor ada) with
+                        | Error e -> failwith e
+                        | Ok () ->
+                            do! waitUntil "the shell's prompt after cat" (fun () -> not (Set.contains (TerminalId.value id) (terminals.AwayFromPrompt ())))
+                            // What the manager's re-drain asks of the scheduler in production.
+                            scheduler.Drain ()
+                            let! ran = settledWithinAsync 5000 (fun () -> started log)
+                            Expect.isTrue ran "the queued block ran at the prompt"
+                }))
+
+        testCaseAsync "the prompt a shell returns to re-arms the drain" <|
+            // A queue held for the prompt has nothing else to wake it: no block ends, and the
+            // lease was over long before.
+            (let raw = System.Text.StringBuilder ()
+             withTappedShellTerminal TerminalShell.bash SessionTerminals.BlockLoans.none (fun _ -> async { return () }) raw "prompt-re-drains" (fun terminals id _ _ reDrains _ ->
+                async {
+                    do! settled terminals id raw
+                    do! catRunning terminals id raw
+                    let before = reDrains ()
+                    let typed = raw.Length
+                    Expect.isTrue (terminals.Input id (Principal.toActor ada) "\u0004") "cat is told its input ended"
+                    let! armed = settledWithin 5000 (fun () -> reDrains () > before)
+                    let said = ((string raw).Substring typed).Replace("\u001b", "\\e").Replace("\r", "\\r").Replace("\n", "\\n")
+                    Expect.isTrue armed (sprintf "the prompt asked the queue to look again; the shell printed: %s" said)
+                }))
+    ]
+
 let private keyboardTests =
     testList "No child holds a terminal's keyboard" [
         if Node.Api.``process``.platform = Node.Base.Platform.Darwin then
@@ -1253,6 +1353,7 @@ let tests =
         dialectTests
         lentTests
         leaseLoanTests
+        promptGateTests
 
         testCaseAsync "the host backend offers a pty at all" <|
             async {
