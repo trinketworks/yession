@@ -115,7 +115,7 @@ type CredentialSource =
       /// `lentInto` is the variables the sandbox's declaration lends this connection's token
       /// in (`${<connection>.token}`), which the source puts a stand-in in beside whatever it
       /// lends of its own accord.
-      Lend : Authority -> SandboxRef -> TerminalId -> BlockId option -> ConnectionRoute list -> string list -> Async<BlockEnv>
+      Lend : Authority -> SandboxRef -> TerminalId -> BlockId -> ConnectionRoute list -> string list -> Async<BlockEnv>
       /// Whatever a terminal's last block was lent is returned (`BlockLoans.Retire`).
       Retire : TerminalId -> unit }
 
@@ -814,7 +814,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
         /// the act's credential, merged. Nothing for a sandbox that forwards nothing, and
         /// nothing for a name this session does not have — its environment refuses the
         /// spawn anyway, with the reason.
-        let lend (name: SandboxRef) (terminal: TerminalId) (block: BlockId option) (authority: Authority) : Async<BlockEnv> =
+        let lend (name: SandboxRef) (terminal: TerminalId) (block: BlockId) (authority: Authority) : Async<BlockEnv> =
             async {
                 match resolve name with
                 | None -> return BlockEnv.none

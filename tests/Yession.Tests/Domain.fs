@@ -449,7 +449,8 @@ let private frameSerializationTests =
                       Owner = CredentialFor.Deployment
                       Repo = RepoRef.create "octo/hello" |> expect
                       Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect) }
-                  // Typed under a lease: no block, the holder's own.
+                  // Written while a lease was lent a loan of its own: no block. Old logs
+                  // still hold these.
                   GitCredentialSpent
                     { MessageId = messageId
                       Sandbox = SandboxRef.parse "octo/hello:dev" |> expect

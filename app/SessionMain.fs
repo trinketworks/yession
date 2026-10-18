@@ -1365,7 +1365,7 @@ Async.StartImmediate (
                                                                                 |> Result.defaultWith failwith
                                                                               Sandbox = sandbox
                                                                               Terminal = terminal
-                                                                              Block = block
+                                                                              Block = Some block
                                                                               Owner = owner
                                                                               Repo = repo
                                                                               Actor = Authority.author authority })

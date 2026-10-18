@@ -1205,10 +1205,10 @@ to whatever still reproduces once the fixes have landed.
     live credential only until the terminal's next block returns it, and only from inside that
     sandbox. But the person it names is in the transcript for good.
 
-    A lease taken at an idle prompt lends its holder their own loan. The loan is typed in where the
-    transcript cannot see it, and is returned when the lease ends. A lease taken over somebody
-    else's running block, or inside a program, lends nothing. A push typed there is refused in
-    words.
+    A lease lends nothing, and a take types nothing into the shell. A take returns every loan out
+    on the terminal except the holder's own running block's, so what a holder types spends their
+    own credential or none. A push typed there otherwise is refused in words. A person's acts with
+    a credential are blocks, sent from the command line, like everyone's.
 
     Only `github` is forwardable so far. The gateway admits only git's three smart-HTTP requests
     to a repository path, so a cap is not a token for the rest of github.com.
