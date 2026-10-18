@@ -3091,6 +3091,28 @@ let private listTests =
                 ([ "term-b" ], [ "term-b"; "term-a" ])
                 "folded, then under the fold"
 
+        // The arrow walk is the model's: a row says which it is, and `update` answers with the
+        // row the key goes to, over the order the sheet draws. Nothing about it reads the page.
+        testCase "an arrow on a row walks to the next one, round the ends" <| fun () ->
+            let down = twoOpen |> Support.step ToggleSwitcherMsg
+            let walked key from = ClientModel.update (WalkListMsg (key, ListRow.Terminal from)) down |> snd
+            Expect.equal (walked "ArrowDown" terminalA) [ ClientEffect.Move (DomMove.FocusSwitcherRow terminalB) ] "down"
+            Expect.equal (walked "ArrowDown" terminalB) [ ClientEffect.Move (DomMove.FocusSwitcherRow terminalA) ] "off the end"
+            Expect.equal (walked "ArrowUp" terminalA) [ ClientEffect.Move (DomMove.FocusSwitcherRow terminalB) ] "off the start"
+            Expect.equal (walked "Home" terminalB) [ ClientEffect.Move (DomMove.FocusSwitcherRow terminalA) ] "Home"
+            Expect.equal (walked "Tab" terminalA) [] "Tab is not the walk's, so it reaches the verbs"
+            Expect.isTrue (TabStrip.claimsRow "ArrowDown" && TabStrip.claimsRow "End") "the walk's keys are claimed"
+            Expect.isFalse (TabStrip.claimsRow "Tab") "and no other"
+
+        testCase "the walk goes through the closed terminals only once they are unfolded" <| fun () ->
+            let closed = twoOpen |> thenFolded [ at 3L 2.0 (closedNow terminalA) ] |> Support.step ToggleSwitcherMsg
+            let walked model = ClientModel.update (WalkListMsg ("ArrowDown", ListRow.Terminal terminalB)) model |> snd
+            Expect.equal
+                (walked closed, walked (closed |> Support.step ToggleClosedMsg))
+                ([ ClientEffect.Move (DomMove.FocusSwitcherRow terminalB) ],
+                 [ ClientEffect.Move (DomMove.FocusSwitcherRow terminalA) ])
+                "folded, round to itself; unfolded, onto the closed row"
+
         // The sheet's current row is the one it says the pane is on; folded away, the sheet
         // would say the pane is on nothing.
         testCase "the terminal the pane is on is never folded" <| fun () ->
@@ -5933,6 +5955,25 @@ let private uploadTests =
             Expect.stringContains html "the session could not be reached" "saying why"
             Expect.stringContains html (Dom.attr Dom.Hooks.uploadRetry "u2") "with another try on offer"
             Expect.isFalse (html.Contains (Dom.attr Dom.Hooks.uploadRetry "u1")) "which one still sending does not offer"
+
+        // A file on its way in is a status with verbs, and no name to press: the walk goes from
+        // the terminals onto the shared files and passes it by.
+        testCase "the arrow walk goes on from the terminals to the files, and not to an upload" <| fun () ->
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (sharedArtifact "a" (chart 0)) ]
+                |> Support.step ToggleSwitcherMsg
+                |> Support.step (UploadPickedMsg ("u1", "sending.md", 4_000L, UploadInto.Artifacts))
+            let file = ArtifactRef.content (chart 0)
+            let walked key from = ClientModel.update (WalkListMsg (key, from)) model |> snd
+            Expect.equal (ClientModel.listOrder model) [ ListRow.Terminal terminalA; ListRow.File file ] "no upload in it"
+            Expect.equal
+                (walked "ArrowDown" (ListRow.Terminal terminalA))
+                [ ClientEffect.Move (DomMove.FocusSwitcherFile file) ]
+                "onto the file's row"
+            Expect.equal
+                (walked "End" (ListRow.Terminal terminalA))
+                [ ClientEffect.Move (DomMove.FocusSwitcherFile file) ]
+                "the last row is the file's, not the upload's"
     ]
 
 // --- A file, attached to a message ------------------------------------------------------------

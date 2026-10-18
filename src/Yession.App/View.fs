@@ -4642,9 +4642,18 @@ module View =
     ///
     /// Lists of rows rather than a `listbox`: a row carries its verbs, and a listbox's options
     /// may hold no controls. The name is the row's own button; the arrows walk the names
-    /// (`TabStrip.walkRows`), Tab reaches the verbs.
+    /// (`ClientModel.walkList`), Tab reaches the verbs.
     let private allPage (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let selected = ClientModel.selectedTerminal model
+        // The arrow walk down the names, pressed on one: the row says which it is, and the
+        // model says where that goes (`ClientModel.walkList`). Its default is refused here,
+        // because that cannot wait for the model, and only for a key the walk claims, so Tab
+        // still reaches the verbs.
+        let walk (from: ListRow) (e: Browser.Types.Event) =
+            let pressed = e :?> Browser.Types.KeyboardEvent
+            if TabStrip.claimsRow pressed.key then
+                pressed.preventDefault ()
+                dispatch (WalkListMsg (pressed.key, from))
         let row (view: TerminalView) =
             let id = TerminalId.value view.TerminalId
             let name = TerminalName.display model.Terminals view
@@ -4714,6 +4723,7 @@ module View =
                   <button type="button" class="{nameClass}" data-terminal-list-row="{id}"
                           aria-current="{if selected = Some view.TerminalId then "true" else "false"}"
                           aria-labelledby="{nameId}" aria-describedby="{subtitleId}"
+                          @keydown={Ev(walk (ListRow.Terminal view.TerminalId))}
                           @click={Ev(fun _ -> dispatch (OpenInPaneMsg mode))}>
                     <span class="{Style.terminalListNameLine}">
                       <span class="{Style.terminalListNameText}" id="{nameId}" data-terminal-list-name>{name}</span>
@@ -4742,6 +4752,7 @@ module View =
                   <button type="button" class="{Style.terminalListName}"
                           data-artifact-list-row="{ContentRef.value content}"
                           aria-labelledby="{nameId}" aria-describedby="{sizeId}"
+                          @keydown={Ev(walk (ListRow.File content))}
                           @click={Ev(fun _ ->
                                         dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content content))))}>
                     <span class="{Style.terminalListNameLine}">
@@ -4855,24 +4866,6 @@ module View =
                 <div role="list" aria-label="{Dom.Text.filesHeading}">
                   {(artifacts |> List.map artifactRow) @ (uploads |> List.map uploadRow)}
                 </div>"""
-        // The arrow walk down the names — the rows' own buttons — and only for a key the walk
-        // claims, so Tab still reaches the verbs.
-        let walk (e: Browser.Types.Event) =
-            let pressed = e :?> Browser.Types.KeyboardEvent
-            let page = e.currentTarget :?> Browser.Types.Element
-            let found =
-                page.querySelectorAll (sprintf "[%s], [%s]" Dom.Hooks.terminalListRow Dom.Hooks.artifactListRow)
-            let names = [ for i in 0 .. found.length - 1 -> found.[i] :?> Browser.Types.HTMLElement ]
-            let active = Browser.Dom.document.activeElement
-            let here =
-                names
-                |> List.tryFindIndex (fun name -> System.Object.ReferenceEquals (name, active))
-                |> Option.defaultValue -1
-            match TabStrip.walkRows pressed.key here names.Length with
-            | Some next ->
-                names.[next].focus ()
-                pressed.preventDefault ()
-            | None -> ()
         let empty =
             if List.isEmpty above && List.isEmpty folded && List.isEmpty artifacts && List.isEmpty uploads then
                 html $"""<span class="{Style.contentListEmptyWord}">{Dom.Text.nothingOpenedYet}</span>"""
@@ -4890,7 +4883,7 @@ module View =
             <div class="{Style.allSheet}" role="region" tabindex="-1" aria-label="{Dom.Text.terminalsAndFiles}"
                  id="{Dom.paneSheetId}" data-pane-panel="{allKey}">
               <div class="{Style.allPage}" data-content-list aria-label="{Dom.Text.terminalsAndFiles}"
-                   @keydown={Ev(walk)} @paste={Ev(pasted)} @dragover={Ev(dragged)} @drop={Ev(dropped)}>
+                   @paste={Ev(pasted)} @dragover={Ev(dragged)} @drop={Ev(dropped)}>
                 {opened}
                 {closed}
                 {empty}

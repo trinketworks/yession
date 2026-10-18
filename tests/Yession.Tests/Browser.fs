@@ -6917,6 +6917,30 @@ let editorTests =
                 return ()
             }
 
+        // The arrow walk down the rows is decided by the model (`ClientModel.walkList`), and
+        // the focus it lands is the document's (`DomMove.FocusSwitcherRow`). Only a browser
+        // has a focused element to ask whether the two met on the row the key names.
+        editorCase "the arrows walk the switcher's rows" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                do! waitVisible "the all page" page "#shell [data-content-list]"
+                let rows = "#shell [data-content-list] [data-terminal-list-row]"
+                let! ids = Read.attrs page rows "data-terminal-list-row"
+                let ids = ids |> List.choose id
+                Expect.isTrue (List.length ids >= 2) (sprintf "two rows to walk between: %A" ids)
+                let row (id: string) = "#shell [data-content-list] " + Sel.hookIs "data-terminal-list-row" id
+                let first, second, last = List.head ids, List.item 1 ids, List.last ids
+
+                do! awaitU (page.FocusAsync (row first))
+                do! awaitU (page.Keyboard.PressAsync "ArrowDown")
+                do! Wait.until (sprintf "focus on the row after %s" first) (fun () -> Read.focused page (row second)) id
+                do! awaitU (page.Keyboard.PressAsync "ArrowUp")
+                do! Wait.until (sprintf "focus back on %s" first) (fun () -> Read.focused page (row first)) id
+                do! awaitU (page.Keyboard.PressAsync "End")
+                do! Wait.until (sprintf "focus on the last row, %s" last) (fun () -> Read.focused page (row last)) id
+            }
+
         // The sidebar's environment lists what is running, and an entry is a way INTO it: the
         // same `OpenInPaneMsg` the `all` page's row sends. A hook that stopped matching, or a
         // message that stopped opening anything, leaves a list of names that quietly do

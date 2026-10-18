@@ -28,6 +28,7 @@ open Browser.Dom
 open Browser.Types
 open Browser.WebStorage
 open Fable.BrowserExtras
+open Yession.Domain.Content
 
 /// A frame later, which is when the render that has to have happened, has. Every act in this
 /// module is "the model already changed, now do the part the DOM owns", and every one of them
@@ -100,6 +101,12 @@ let private toPaneEmpty () : unit =
 /// Onto one terminal's row on the `all` page, or the page's pivot item when it has gone since.
 let private toSwitcherRow (terminal: Yession.Domain.TerminalId) : unit =
     find (sprintf "[data-content-list] [data-terminal-list-row=\"%s\"]" (Yession.Domain.TerminalId.value terminal))
+    |> Option.orElseWith (fun () -> find "[data-pane-switcher]")
+    |> focusOn
+
+/// Onto one file's row on the `all` page, or the page's pivot item when it has gone since.
+let private toSwitcherFile (content: ContentRef) : unit =
+    find (sprintf "[data-content-list] [data-artifact-list-row=\"%s\"]" (ContentRef.value content))
     |> Option.orElseWith (fun () -> find "[data-pane-switcher]")
     |> focusOn
 
@@ -510,6 +517,7 @@ and private place (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.FocusPaneReopen -> toPaneReopen ()
     | Yession.App.DomMove.FocusPaneEmpty -> toPaneEmpty ()
     | Yession.App.DomMove.FocusSwitcherRow terminal -> toSwitcherRow terminal
+    | Yession.App.DomMove.FocusSwitcherFile content -> toSwitcherFile content
     | Yession.App.DomMove.FocusSwitcher -> toSwitcher ()
     | Yession.App.DomMove.FocusPivot -> toPivot ()
     | Yession.App.DomMove.FocusTab terminal -> toTab terminal

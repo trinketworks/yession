@@ -1685,6 +1685,16 @@ type ClientModel =
       /// from: what the launch surface asks to know whether the session has one.
       Repos         : Repos.ReposProjection }
 
+/// One row of the `all` page that the arrow walk goes through: a terminal's, or a shared
+/// file's. Each row's control knows which it is from the data it was drawn from, so the walk
+/// is asked with that identity (`WalkListMsg`) rather than with whatever the document has
+/// focused. A file on its way in has no row here: until the store records it, its row is a
+/// status with verbs and no name to press, so the walk passes it by.
+[<RequireQualifiedAccess>]
+type ListRow =
+    | Terminal of TerminalId
+    | File of ContentRef
+
 /// A move only the document can make: focus, and scrolling something into view. The model says
 /// what is on screen; where the cursor is and how far the reader has scrolled are the
 /// document's, so these leave the reducer as effects (`ClientEffect.Move`) and are carried
@@ -1717,6 +1727,8 @@ type DomMove =
     | FocusPaneEmpty
     /// Onto this terminal's row in the switcher.
     | FocusSwitcherRow of TerminalId
+    /// Onto this file's row in the switcher — where the arrow walk lands on one.
+    | FocusSwitcherFile of ContentRef
     /// Into the switcher, once it has opened: onto the row of the terminal the pane is about,
     /// else its first row — the place a reader who opened it to change terminals starts from.
     | FocusSwitcher
@@ -2166,6 +2178,9 @@ type ClientMsg =
     | CloseSwitcherMsg
     /// Unfold the list's closed terminals, or fold them away again (`ClosedShown`).
     | ToggleClosedMsg
+    /// An arrow, Home or End pressed on one of the list's rows: walk to the row it names
+    /// (`ClientModel.walkList`). Changes nothing in the model; the answer is a focus move.
+    | WalkListMsg of key: string * from: ListRow
     /// The clock says what time it is (`Now`).
     | ClockMsg of System.DateTimeOffset
     /// Something was copied to the clipboard (`Some` the hook of the box it came from), or
@@ -3565,6 +3580,26 @@ module ClientModel =
     /// the panel and the timeline cannot disagree about what exists: both are the same fold.
     let artifactRows (model: ClientModel) : ArtifactShared list =
         ConversationProjection.artifacts model.Conversation
+
+    /// The rows the arrow walk goes down, in the order the `all` page draws them: the
+    /// terminals it lists (`listedRows`, so the closed ones only while unfolded), then the
+    /// shared files (`artifactRows`). The view draws its sections from those same two, and
+    /// the walk asks this, so the order walked is the order on screen.
+    let listOrder (model: ClientModel) : ListRow list =
+        (listedRows model |> List.map (fun view -> ListRow.Terminal view.TerminalId))
+        @ (artifactRows model |> List.map (fun a -> ListRow.File (ArtifactRef.content a.Ref)))
+
+    /// Where the arrow walk goes from `from` on `key` (`TabStrip.walkRows`), as the focus move
+    /// that takes it there, or `None` when the key is not the walk's. A row that has left the
+    /// list since it was pressed walks as if from nowhere, onto the first.
+    let walkList (key: string) (from: ListRow) (model: ClientModel) : DomMove option =
+        let rows = listOrder model
+        let here = rows |> List.tryFindIndex ((=) from) |> Option.defaultValue -1
+        TabStrip.walkRows key here (List.length rows)
+        |> Option.map (fun next ->
+            match List.item next rows with
+            | ListRow.Terminal terminal -> DomMove.FocusSwitcherRow terminal
+            | ListRow.File content -> DomMove.FocusSwitcherFile content)
 
     /// Everywhere this session can open a terminal, in the order the chooser offers them:
     /// `default` first, because every session has it, then the ones a repo declared and this
@@ -5104,6 +5139,7 @@ module ClientModel =
         | OpenAllMsg -> drawerShut { model with Switcher = true; PaneMenu = false; TerminalsOpen = true }
         | CloseSwitcherMsg -> { model with Switcher = false }
         | ToggleClosedMsg -> { model with ClosedShown = not model.ClosedShown }
+        | WalkListMsg _ -> model
         | ClockMsg at -> { model with Now = Some at }
         | EnsureTerminalDraftMsg (terminal, author, queueId) ->
             // Typing changes nothing about the strip: a terminal being typed in is on screen
@@ -5578,6 +5614,9 @@ module ClientModel =
                 else [ ClientEffect.Move DomMove.FocusPivot ]
             | OpenAllMsg -> [ ClientEffect.Move DomMove.FocusSwitcher ]
             | CloseSwitcherMsg when model.Switcher -> [ ClientEffect.Move DomMove.FocusPivot ]
+            // Down the list's rows, by the order it draws them: the walk is the model's, and only
+            // the focus it lands is the document's.
+            | WalkListMsg (key, from) -> walkList key from model |> Option.map ClientEffect.Move |> Option.toList
             // The × that was pressed leaves with its tab: onto the tab that took its place, or
             // the pane's empty press when there is none.
             // Except put away from the `all` page: the row stays, as the closed terminal's row,
