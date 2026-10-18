@@ -9,7 +9,8 @@ fix its finding. Each diagnostic also names the remedy. The shared readers (`Pop
 Every rule has a fixture at `analyzers/fixtures/<Rule>Fixture`. Its `// YES00n` markers say which
 lines the rule must report. On every run `lint` compares the markers with that rule's own diagnostics
 in both directions. It counts only that rule's diagnostics, because the two emit rules read the same
-macros and have opinions on each other's cases.
+macros and have opinions on each other's cases. It refuses a fixture that does not compile, except
+`UnjudgedFixture`, because a rule's silence over code the compiler dropped proves nothing.
 
 - A new rule needs its `Code`, a fixture project, and an entry in `fixtures` in `tasks.fsx`. Copy an
   existing fixture project.

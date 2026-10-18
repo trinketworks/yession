@@ -130,10 +130,10 @@ let private killedWhy (code: int) : string option =
 //
 // The bound is put IN FORCE for a step rather than handed to each call it makes, because a step
 // is seldom one process. `lint` is dozens of them: actionlint, the tools' restore through `make`,
-// a build, a restore per fixture, an analyzer run per fixture, several from helpers every verb
-// shares. A deadline passed to each call is one the next call forgets, and `make` would have to
-// carry it through its targets for this alone. In force, it holds for every child the step starts
-// through any helper here, on whichever thread its work runs.
+// a build, a restore per fixture, the analyzer runs, several from helpers every verb shares. A
+// deadline passed to each call is one the next call forgets, and `make` would have to carry it
+// through its targets for this alone. In force, it holds for every child the step starts through
+// any helper here, on whichever thread its work runs.
 
 /// A step with a budget of its own, and all that its refusal says when the budget runs out:
 /// a killed step cannot say anything for itself.
@@ -3015,6 +3015,14 @@ let private analyze (projects: string list) : Verdict * string =
         with _ ->
             ()
 
+/// Whether a finding was reported in one fixture's project. Every fixture is analyzed in ONE run,
+/// so the report holds all of their findings, and this is what hands each fixture its own. By
+/// the fixture's directory, because a file name alone is not unique across fixtures:
+/// `EnvWriteFixture` and `EnvReaderFixture` each have an `Access.fs` and an `Elsewhere.fs`, with
+/// cases for different rules on different lines.
+let private inFixture (fixture: string) (finding: Finding) : bool =
+    finding.File.Replace('\\', '/').Contains ($"/analyzers/fixtures/%s{fixture}/")
+
 /// The lines ONE rule reported on in one fixture, whatever else it said. Enough to compare
 /// against that fixture's markers and nothing more: pinning the message text would make every
 /// reword of it a failure of the rule.
@@ -3027,8 +3035,8 @@ let private analyze (projects: string list) : Verdict * string =
 let private reportedLines (code: string) (source: string) (findings: Finding list) =
     // `source` is the fixture file's NAME, and the report spells a path relative to
     // `--code-root`; matching on the tail is what makes the comparison independent of which
-    // prefix the CLI chose. One fixture project is analyzed at a time, so a name is unambiguous
-    // within the findings it is asked about.
+    // prefix the CLI chose. It is asked about one fixture's findings at a time (`inFixture`), so
+    // a name is unambiguous within them.
     findings
     |> List.filter (fun f -> f.Rule = code && f.File.Replace('\\', '/').EndsWith ("/" + source))
     |> List.map (fun f -> f.Line)
@@ -3044,10 +3052,10 @@ let private reportedLines (code: string) (source: string) (findings: Finding lis
 // judged without running it — and because the PR gate runs `lint` first, where rules this
 // cheap belong.
 //
-// One run over the product, then one per fixture, and the fixtures are what keep the product
-// run honest. The product must be clean; each FIXTURE must report exactly the lines it marks
-// with its rule's code. Without them a rule that had stopped seeing anything — a loader that
-// no longer matches the assembly name, a typed-tree shape moved by a compiler upgrade, a
+// One run over the product, then one over every fixture, and the fixtures are what keep the
+// product run honest. The product must be clean; each FIXTURE must report exactly the lines it
+// marks with its rule's code. Without them a rule that had stopped seeing anything — a loader
+// that no longer matches the assembly name, a typed-tree shape moved by a compiler upgrade, a
 // project that failed to restore — would report a clean product and pass.
 let private analyzers () =
     restore ()
@@ -3108,16 +3116,53 @@ let private analyzers () =
         exit rejectedExit
     | Judged _ -> ()
 
+    // ONE run over every fixture, not one each. A fixture took nine and a half seconds on its
+    // own, and five of them went before any rule read a line: starting the CLI, loading FCS and
+    // the analyzers, cracking the project through MSBuild, and type-checking it against
+    // FSharp.Core and the framework. One run pays for those once, and the 25 fixtures went from
+    // about 240s to about 100s with byte-identical findings. Each fixture is still judged on its
+    // own findings (`inFixture`), and a project the CLI cannot load ends the run without a
+    // report, which `analyze` answers as `Unfinished` rather than as a fixture that saw nothing.
+    //
+    // The same three answers, and the middle one matters most here: a fixture exists to catch a
+    // rule that has gone blind, so a run that died must not be read as one that saw nothing.
+    // That was silently possible while this discarded the exit code. One death stops every
+    // fixture's verdict, and only the exception the CLI printed says which project it was reading.
+    let fixtureProjects = fixtures |> List.map (fun (_, name, _) -> fixtureProject name) |> List.distinct
+
+    let fixtureFindings, fixtureOutput =
+        match analyze fixtureProjects with
+        | Judged findings, output -> findings, output
+        | Unfinished why, output ->
+            printfn "%s" output
+            failwithf "lint: the fixtures could not be judged: %s. Run `lint` again." why
+
     for code, name, files in fixtures do
-        // The same three answers, and the middle one matters most here: a fixture exists to
-        // catch a rule that has gone blind, so a run that died must not be read as one that
-        // saw nothing. That was silently possible while this discarded the exit code.
-        let fixtureFindings, fixtureOutput =
-            match analyze [ fixtureProject name ] with
-            | Judged findings, output -> findings, output
-            | Unfinished why, output ->
-                printfn "%s" output
-                failwithf "lint: the %s fixture could not be judged: %s. Run `lint` again." name why
+        let own = fixtureFindings |> List.filter (inFixture name)
+
+        // What the CLI printed about this fixture alone. The run printed every fixture's
+        // findings, and a reader chasing one rule needs the lines for this one.
+        let printOwn () =
+            fixtureOutput.Split '\n'
+            |> Array.filter (fun line -> line.Replace('\\', '/').Contains ($"/analyzers/fixtures/%s{name}/"))
+            |> Array.iter (printfn "%s")
+
+        // A fixture that does not compile was read only as far as the compiler got, so what its
+        // rule did not report there is no evidence that the rule can see. That matters most for
+        // a fixture whose rule must stay SILENT: a binding fixture whose emits the compiler
+        // dropped is silent for the wrong reason, and reads exactly like one that passed. The
+        // unjudged fixture is the one that must not compile, and its markers say where.
+        if code <> unjudged then
+            match own |> List.tryFind (fun f -> f.Rule = unjudged) with
+            | Some f ->
+                printOwn ()
+                failwithf
+                    "lint: the %s fixture does not compile (%s:%d, above), so what %s did not report in it proves nothing. Fix the fixture, then run `lint` again."
+                    name
+                    (Path.GetRelativePath (repoRoot, findingPath f))
+                    f.Line
+                    code
+            | None -> ()
 
         for file in files do
             let expected =
@@ -3127,10 +3172,10 @@ let private analyzers () =
                 |> Array.map (fun (i, _) -> i + 1)
                 |> List.ofArray
 
-            let actual = reportedLines code file fixtureFindings
+            let actual = reportedLines code file own
 
             if actual <> expected then
-                printfn "%s" fixtureOutput
+                printOwn ()
                 failwithf
                     "lint: %s is not seeing what it should. %s marks lines %A; the analyzer reported %A"
                     code
@@ -3143,25 +3188,26 @@ let private analyzers () =
         // marks is a real error inside its line: `sourceLine` must read that line, and
         // `isPhantomMismatch` must not take it for the phantom.
         if code = unjudged then
-            for f in fixtureFindings |> List.filter (fun f -> f.Rule = unjudged) do
+            for f in own |> List.filter (fun f -> f.Rule = unjudged) do
                 if Option.isNone (sourceLine f) then
                     failwithf
                         "lint: the YES000 hint cannot read %s:%d, so it could never fire. The CLI spells report paths relative to the parent of --code-root; if that changed, change `sourceLine` in tasks.fsx"
                         f.File
                         f.Line
 
-            if Option.isSome (phantomHint fixtureFindings) then
+            if Option.isSome (phantomHint own) then
                 failwithf
                     "lint: the YES000 hint fired on %s, whose error lies inside its line. SARIF columns are 1-based; if that changed, change `isPhantomMismatch` in tasks.fsx"
                     name
 
 // THE LINT'S BUDGET IS THE WHOLE VERB'S: actionlint, the tools' restore, the analyzers' build, a
-// restore per fixture, and an analyzer run over the product and then over each fixture. Any of
-// them can hang, and the analyzer runs print nothing until they end.
+// restore per fixture, and an analyzer run over the product and then one over the fixtures. Any
+// of them can hang, and the analyzer runs print nothing until they end.
 //
 // Measured on CI from 13 to 17 Oct 2026: pr.yaml's lint step took 234-593s in 200 green `test`
 // jobs, 375s at the median. It runs first, on a fresh checkout, so it pays every restore cold. A
-// 4-core dev container, alone under a shared build lock, took about 630s.
+// 4-core dev container, alone under a shared build lock, took 541-673s while each fixture had an
+// analyzer run of its own, and 524-558s with one run over them all.
 // Twenty-five minutes is about two and a half times the slowest, for the reason `nodeBudgetMs`
 // gives: this is a hang detector, not a deadline a slow runner should meet with a minute to
 // spare. The `test` job's steps before it took at most 268s, so a hung lint is refused by about
