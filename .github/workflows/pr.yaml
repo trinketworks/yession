@@ -66,7 +66,8 @@ jobs:
     # to 508s after it. An entry whose check has not reported by then leaves the queue in silence:
     # its pull request goes back to open with auto-merge off, and nothing says that this job, or
     # which of its steps, was still running. So this plus 10 minutes stays under 60, and a change
-    # that raises it past 49 raises the queue's limit with it.
+    # that raises it past 49 raises the queue's limit with it ("The merge queue, for real" in
+    # ReleaseGate.fs holds the two together).
     timeout-minutes: 48
     steps:
       - uses: actions/checkout@v4
