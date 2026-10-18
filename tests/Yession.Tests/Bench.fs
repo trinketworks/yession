@@ -267,7 +267,7 @@ let tests =
 
                 let body =
                     reporting "Client performance" page evidence <| async {
-                        let! _ = await (page.GotoAsync (server.At "/"))
+                        let! _ = await (page.GotoAsync (server.At HarnessOn.Fixtures.Path))
                         do! waitVisible "the co-editor's editor" page "#peer-b .ProseMirror"
 
                         let collected = ResizeArray<Series> ()
@@ -335,7 +335,7 @@ let tests =
                                         ViewportSize = ViewportSize (Width = fst phone, Height = snd phone),
                                         HasTouch = true)))
                         let! phonePage = await (phoneContext.NewPageAsync ())
-                        let! _ = await (phonePage.GotoAsync (server.At "/"))
+                        let! _ = await (phonePage.GotoAsync (server.At HarnessOn.Shell.Path))
                         do! waitVisible "the phone's conversation" phonePage "#shell [data-conversation]"
 
                         // The open, first and unthrottled: what it records is mostly counts

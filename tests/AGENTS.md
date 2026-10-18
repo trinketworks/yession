@@ -212,12 +212,15 @@ browser case:
   and say beside it what they share. Its cases then run one at a time, in order, beside other cases.
 - Presses through a locator, never at a point worked out from a box. `Locator.ClickAsync` with a
   `Position` (a place IN the element) brings it onto the screen, waits for it to stand still, and
-  refuses when something else would take the press. The harness keeps fixtures above the shell, and
-  each retry of a click on a moving target scrolls the window with the next of four alignments, so
-  where a click leaves the window depends on load. The foot of the pane, measured from its box, was
-  below the screen at three of those four. Where a case must know the point (a press it hit-tests
-  afterwards), a trial click (`Trial = true`) settles the element first and the point is measured
-  after it. A drag starts with a hover through the locator, at a `Position`.
+  refuses when something else would take the press. Where a case must know the point (a press it
+  hit-tests afterwards), a trial click (`Trial = true`) settles the element first and the point is
+  measured after it. A drag starts with a hover through the locator, at a `Position`.
+- Is served the harness page it is about. `editorCase` gets the shell's page, where the shell is the
+  whole document and nothing can scroll it, so its boxes stand where they are measured whatever ran
+  first. `fixtureCase` gets the fixtures' page: the editor, the players and the two peers in the
+  page's flow, above the shell. `tests/browser/editor-harness.html` says why the page is two: with
+  the fixtures above the shell on every page, where the shell stood was wherever Playwright's
+  retries had scrolled the window, and every case that measured near its foot flaked.
 - Never decides a press on a read taken just before it (`Read.count`, then a click if it found one).
   The page can change between the two: a render owed to the end of a frame takes the control away,
   and the click waits its whole timeout for nothing. Scope every selector to the case's subject, wait

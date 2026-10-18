@@ -363,9 +363,6 @@ module Probes =
         /// Each conversation item that, scrolled to the middle, is not what a press in its
         /// middle lands on.
         | ItemsClearOfCard
-        /// An arrangement, answering nothing: the editor host and the player above the shell
-        /// taken out of the layout, so the shell starts at the top of the page.
-        | HideFixturesAboveShell
         /// An arrangement: every focus from here on recorded as `pane` or `elsewhere`
         /// (`focusStops`), and focus put on the last shell control before the pane. Its verdict
         /// is empty when there was such a control to start from.
@@ -445,7 +442,6 @@ module Probes =
             | Measure.PastShell -> "past-shell"
             | Measure.AskCardColumn -> "ask-card-column"
             | Measure.ItemsClearOfCard -> "items-clear-of-card"
-            | Measure.HideFixturesAboveShell -> "hide-fixtures-above-shell"
             | Measure.FocusBeforePane -> "focus-before-pane"
             | Measure.Burst -> "burst"
             | Measure.LoneRecordInQuietFrame -> "lone-record-in-quiet-frame"
@@ -480,7 +476,6 @@ module Probes =
               Measure.PastShell
               Measure.AskCardColumn
               Measure.ItemsClearOfCard
-              Measure.HideFixturesAboveShell
               Measure.FocusBeforePane
               Measure.Burst
               Measure.LoneRecordInQuietFrame

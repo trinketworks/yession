@@ -2200,6 +2200,21 @@ let internal serveStatic (root: string) : Serving =
     Async.Start (loop ())
     served
 
+/// Which of the harness's two pages a case is served (`tests/browser/editor-harness.html` says
+/// why it is two). A case's geometry is the page's, and not whatever ran before it.
+[<RequireQualifiedAccess>]
+type internal HarnessOn =
+    /// The shell alone: a viewport tall, at the top of a document that cannot scroll, so a box
+    /// the shell draws is where it is measured whatever a click, a focus or a retry did first.
+    | Shell
+    /// The editor, the players and the two peers in the page's flow, above the shell.
+    | Fixtures
+    /// The page's address on the harness's origin.
+    member this.Path =
+        match this with
+        | HarnessOn.Shell -> "/"
+        | HarnessOn.Fixtures -> "/?fixtures"
+
 /// One editor case: a served harness, a context, a page that is being LISTENED to, and the
 /// teardown — so a case is its body and nothing else.
 ///
@@ -2217,6 +2232,7 @@ let internal serveStatic (root: string) : Serving =
 /// listener left bound by a failing case used to take the NEXT case with it — one failure,
 /// two red cases, and the second one a lie.
 let private editorCaseOn
+    (on: HarnessOn)
     (context: BrowserNewContextOptions option)
     (name: string)
     (body: IPage -> Async<unit>)
@@ -2229,7 +2245,7 @@ let private editorCaseOn
                     let! page = contexts.Page context
                     page.SetDefaultTimeout 15000.0f
                     let evidence = watching page
-                    let! _ = await (page.GotoAsync (server.At "/"))
+                    let! _ = await (page.GotoAsync (server.At on.Path))
                     do! reporting name page evidence (body page)
                 })
             server.Stop ()
@@ -2238,8 +2254,11 @@ let private editorCaseOn
             | Choice2Of2 e -> raise e
         }
 
-/// A case at the browser's own window size.
-let private editorCase = editorCaseOn None
+/// A case at the browser's own window size, on the shell's page.
+let private editorCase = editorCaseOn HarnessOn.Shell None
+
+/// A case about one of the fixtures — the editor, a player, the two peers — on their page.
+let private fixtureCase = editorCaseOn HarnessOn.Fixtures None
 
 /// Wait for the focus move a chip's click asks for. Opening from the chat hands focus to the
 /// pane (`DomMove.FocusPane`), a frame AFTER the render — so a case that goes on to put focus
@@ -2355,18 +2374,20 @@ let private selectedTabInsideStrip (page: IPage) : Async<bool> =
 /// Chromium to fit the layout to a device window, which measured here lands at 648px rather
 /// than 390 — the very lie the ui-exploration skill warns about, arriving through another door.
 let private editorCaseIn (width: int) (height: int) =
-    editorCaseOn (Some (BrowserNewContextOptions (ViewportSize = ViewportSize (Width = width, Height = height))))
+    editorCaseOn HarnessOn.Shell (Some (BrowserNewContextOptions (ViewportSize = ViewportSize (Width = width, Height = height))))
 
-/// A case on a TOUCH screen: the same honest viewport, and `HasTouch`, which is what takes
-/// hover away — Chromium answers `(hover: none)` for a touch device, as a phone does. Without
-/// it this browser is a phone-sized window with a mouse over it, and a rule written for a
-/// device that cannot hover is a rule no case here ever sees applied.
-let private editorCaseOnTouch (width: int) (height: int) =
-    editorCaseOn (
-        Some (
-            BrowserNewContextOptions (
-                ViewportSize = ViewportSize (Width = width, Height = height),
-                HasTouch = true)))
+/// A TOUCH screen: the same honest viewport, and `HasTouch`, which is what takes hover away —
+/// Chromium answers `(hover: none)` for a touch device, as a phone does. Without it this
+/// browser is a phone-sized window with a mouse over it, and a rule written for a device that
+/// cannot hover is a rule no case here ever sees applied.
+let private touchScreen (width: int) (height: int) : BrowserNewContextOptions option =
+    Some (BrowserNewContextOptions (ViewportSize = ViewportSize (Width = width, Height = height), HasTouch = true))
+
+/// A case on a touch screen, on the shell's page.
+let private editorCaseOnTouch (width: int) (height: int) = editorCaseOn HarnessOn.Shell (touchScreen width height)
+
+/// A case about a fixture, on a touch screen.
+let private fixtureCaseOnTouch (width: int) (height: int) = editorCaseOn HarnessOn.Fixtures (touchScreen width height)
 
 /// Reading why a credential stopped working leaves the button that fixes it where it was.
 /// The prompt used to be one wrapping row, so its button sat under a closed reason and beside
@@ -3100,7 +3121,7 @@ let private windowWidth (page: IPage) : Async<int> =
 
 let editorTests =
     testList "Editor rendering (browser)" [
-        editorCase "Markdown typed in the rich editor renders formatted and round-trips to Markdown" <| fun page ->
+        fixtureCase "Markdown typed in the rich editor renders formatted and round-trips to Markdown" <| fun page ->
             async {
                 do! waitVisible "the editor" page ".ProseMirror"
 
@@ -3128,7 +3149,7 @@ let editorTests =
 
         // Addressing somebody is reachable from the keyboard alone: an @ greys in the rest of a
         // name, and Tab takes it.
-        editorCase "Tab completes the hinted address" <| fun page ->
+        fixtureCase "Tab completes the hinted address" <| fun page ->
             async {
                 do! waitVisible "the editor" page ".ProseMirror"
                 do! awaitU (page.ClickAsync ".ProseMirror")
@@ -3139,7 +3160,7 @@ let editorTests =
                 Expect.equal (md.TrimEnd ()) "thanks @swift-heron" "the hinted name was taken"
             }
 
-        editorCase "each Tab moves to the next name on offer" <| fun page ->
+        fixtureCase "each Tab moves to the next name on offer" <| fun page ->
             async {
                 do! waitVisible "the editor" page ".ProseMirror"
                 do! awaitU (page.ClickAsync ".ProseMirror")
@@ -3152,7 +3173,7 @@ let editorTests =
             }
 
         // For a keyboard where Tab is spoken for: the right arrow takes the hint too.
-        editorCase "the right arrow completes the hinted address" <| fun page ->
+        fixtureCase "the right arrow completes the hinted address" <| fun page ->
             async {
                 do! waitVisible "the editor" page ".ProseMirror"
                 do! awaitU (page.ClickAsync ".ProseMirror")
@@ -3165,7 +3186,7 @@ let editorTests =
 
         // Tab is taken only while there is something to complete: a composer that kept it
         // would be a keyboard trap.
-        editorCase "Tab leaves the composer when nothing is hinted" <| fun page ->
+        fixtureCase "Tab leaves the composer when nothing is hinted" <| fun page ->
             async {
                 do! waitVisible "the editor" page ".ProseMirror"
                 do! awaitU (page.ClickAsync ".ProseMirror")
@@ -3174,7 +3195,7 @@ let editorTests =
                 do! Wait.until "focus to have left the editor" (fun () -> Read.focused page "#host, #host *") not
             }
 
-        editorCase "Ctrl+Enter sends, Shift+Enter breaks the line, Enter opens a paragraph" <| fun page ->
+        fixtureCase "Ctrl+Enter sends, Shift+Enter breaks the line, Enter opens a paragraph" <| fun page ->
             async {
                 do! waitVisible "the editor" page ".ProseMirror"
 
@@ -3219,7 +3240,7 @@ let editorTests =
         // paragraph that the stylesheet paints from, so it is never text anyone can select,
         // copy or send. The harness host is not a `[data-rich-body]`, so nothing paints here;
         // what is read is the hook the stylesheet reads.
-        editorCase "an empty composer offers its prompt without it becoming content" <| fun page ->
+        fixtureCase "an empty composer offers its prompt without it becoming content" <| fun page ->
             async {
                 do! waitVisible "the empty composer's prompt" page "#host .ProseMirror [data-placeholder]"
                 let! prompt = Read.attr page "#host .ProseMirror [data-placeholder]" "data-placeholder"
@@ -3228,7 +3249,7 @@ let editorTests =
                 Expect.equal text (Some "") "and the prompt is not in the document"
             }
 
-        editorCase "a composer written in stops offering its prompt" <| fun page ->
+        fixtureCase "a composer written in stops offering its prompt" <| fun page ->
             async {
                 do! waitVisible "the empty composer's prompt" page "#host .ProseMirror [data-placeholder]"
                 do! awaitU (page.ClickAsync ".ProseMirror")
@@ -3237,7 +3258,7 @@ let editorTests =
                 return ()
             }
 
-        editorCase "a remote peer's selection renders as a caret widget, label, and highlight" <| fun page ->
+        fixtureCase "a remote peer's selection renders as a caret widget, label, and highlight" <| fun page ->
             async {
                 do! waitVisible "the editor" page ".ProseMirror"
 
@@ -3273,7 +3294,7 @@ let editorTests =
         // runs `ySyncPlugin`'s `view.update` on every state update regardless, and that hook
         // reconciles the WHOLE document back into Yjs. Do it while content is still arriving
         // and the push races the words it is drawing over.
-        editorCase "a caret drawn on every frame never costs the mirror its content" <| fun page ->
+        fixtureCase "a caret drawn on every frame never costs the mirror its content" <| fun page ->
             async {
                 do! waitPresent "both peers to mount" page "#peer-a .ProseMirror"
                 do! waitPresent "both peers to mount" page "#peer-b .ProseMirror"
@@ -3344,7 +3365,7 @@ let editorTests =
         // Counted from OUR side rather than by patching the library: Yjs updates on the
         // co-editor's doc whose origin is `ySyncPluginKey`, which is what that write-back tags
         // its transaction with. Real doc updates, not a hook we hoped was called.
-        editorCase "drawing a remote caret writes nothing to the shared document" <| fun page ->
+        fixtureCase "drawing a remote caret writes nothing to the shared document" <| fun page ->
             async {
                 do! waitPresent "both peers to mount" page "#peer-a .ProseMirror"
                 do! waitPresent "both peers to mount" page "#peer-b .ProseMirror"
@@ -3386,7 +3407,7 @@ let editorTests =
         // this: whether `asciinema-player`'s named export resolves through the bundle and
         // actually plays what was recorded. An import that silently failed would leave every
         // other test green and the feature dead in the browser.
-        editorCase "a recorded terminal replays in a real player, and prints what it printed" <| fun page ->
+        fixtureCase "a recorded terminal replays in a real player, and prints what it printed" <| fun page ->
             async {
                 // The player took the mount and built its own DOM there.
                 do! waitVisible "the player to take its mount" page "#replay .ap-player"
@@ -3420,7 +3441,7 @@ let editorTests =
         // page's proportional face, with none of the sheet's borders — and every recording it
         // played came out a ninth wider than its host, its right-hand columns clipped away.
         // `#replay` is that first mount here, as the first rewind of a session is in the app.
-        editorCase "the first replay on a page is measured under its own stylesheet, and fits its host" <| fun page ->
+        fixtureCase "the first replay on a page is measured under its own stylesheet, and fits its host" <| fun page ->
             async {
                 do! waitVisible "the player to take its mount" page "#replay .ap-player"
                 do! replayFitsWithin "the page's first replay to fit inside its host" page "#replay"
@@ -3434,7 +3455,7 @@ let editorTests =
         // The arrangement is shared by the two cases below and lives in the harness
         // (`#replay-gappy`): thirty seconds of nothing between two commands, a chapter on each,
         // and a start position naming the far one. What each case asserts is its own.
-        editorCase "a chapter past a long idle gap still reaches the chapter list" <| fun page ->
+        fixtureCase "a chapter past a long idle gap still reaches the chapter list" <| fun page ->
             async {
                 do! waitVisible "the player to take the gappy recording's mount" page "#replay-gappy .ap-player"
                 do! waitVisible "the gappy recording's start button" page "#replay-gappy .ap-overlay-start"
@@ -3451,7 +3472,7 @@ let editorTests =
                 return ()
             }
 
-        editorCase "a watch that starts past a long idle gap lands there, not before it" <| fun page ->
+        fixtureCase "a watch that starts past a long idle gap lands there, not before it" <| fun page ->
             async {
                 do! waitVisible "the gappy recording's start button" page "#replay-gappy .ap-overlay-start"
                 do! awaitU (page.ClickAsync "#replay-gappy .ap-overlay-start")
@@ -3469,7 +3490,7 @@ let editorTests =
         // A block's command is recorded as its input record — the shell's echo is not kept —
         // and the player draws only output. Handed over as recorded, a replay ran one command's
         // output into the next with nothing between them to say which was which.
-        editorCase "a replay draws the command a block ran on the screen" <| fun page ->
+        fixtureCase "a replay draws the command a block ran on the screen" <| fun page ->
             async {
                 do! waitVisible "the player's start button" page "#replay .ap-overlay-start"
                 do! awaitU (page.ClickAsync "#replay .ap-overlay-start")
@@ -3483,7 +3504,7 @@ let editorTests =
         // Each command's chapter is a mark on the bar, labelled with the command. The player draws
         // a label on one line centred on its mark, however long the command, so a `for` loop's
         // ran off both sides of a phone and named nothing that was left on it.
-        editorCaseOnTouch 390 844 "every chapter's label names its command and stays on a phone's screen" <| fun page ->
+        fixtureCaseOnTouch 390 844 "every chapter's label names its command and stays on a phone's screen" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.chapters
                 do! waitCount "the three chapters on the bar" page "#replay-chapters .ap-marker-container" 3
@@ -3504,7 +3525,7 @@ let editorTests =
                     "each label names its command, none of them off the screen or cut off"
             }
 
-        editorCaseOnTouch 390 844 "pressing a chapter's mark moves the replay to that command" <| fun page ->
+        fixtureCaseOnTouch 390 844 "pressing a chapter's mark moves the replay to that command" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.chapters
                 do! waitCount "the three chapters on the bar" page "#replay-chapters .ap-marker-container" 3
@@ -3523,7 +3544,7 @@ let editorTests =
                 do! Wait.until "the replay to move to the last command" (fun () -> Read.text page "#replay-chapters .ap-term-text") (Option.exists (fun t -> t.Contains "step 3"))
             }
 
-        editorCase "the keyboard moves a replay from chapter to chapter" <| fun page ->
+        fixtureCase "the keyboard moves a replay from chapter to chapter" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.chapters
                 do! waitCount "the three chapters on the bar" page "#replay-chapters .ap-marker-container" 3
@@ -4460,6 +4481,7 @@ let editorTests =
         // entrance itself is a flourish, not a promise, and is left to the eye (`frames`).
         let launchCardHoldsHeightCase width height =
             editorCaseOn
+                HarnessOn.Shell
                 (Some (BrowserNewContextOptions (
                         ViewportSize = ViewportSize (Width = width, Height = height),
                         ReducedMotion = ReducedMotion.Reduce)))
@@ -4680,12 +4702,6 @@ let editorTests =
                 // Playwright reports as hidden, so waiting for the panel to be visible before
                 // opening it waits for something that only happens afterwards.
                 do! waitVisible "the control that shows the pane" page "#shell [data-content-toggle='show']"
-                // This page carries two other fixtures ABOVE the shell — the editor host and
-                // the player — so the shell starts a viewport and a half down. Every control
-                // in it is reachable by scroll, which is fine for a person and a trap for a
-                // test: the assertions here are about a WIDTH, and a click that has to scroll
-                // first is one more thing that can be the reason a width did not change.
-                let! _ = Probe.verdict page Yession.App.Probes.Measure.HideFixturesAboveShell
                 do! awaitU (page.Locator("#shell [data-content-toggle=\"show\"]").First.DispatchEventAsync "click")
                 // Read on `aria-valuenow`, not on the rendered width.
                 //
@@ -5844,14 +5860,8 @@ let editorTests =
                     do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
                     do! toTheEnd page "chat"
                     do! toTheStart page "chat"
-                    // The harness keeps other fixtures above the shell, so where the page
-                    // itself is scrolled to is incidental: a tray already up at rest (a
-                    // command running) put the way back under the harness's fold. The
-                    // app's shell IS the page, so the control is brought into the window
-                    // first and then asked whether it is painted.
                     let jump = "#shell [data-jump-to-latest='chat'] button"
                     do! waitVisible "the way to the latest message" page jump
-                    do! awaitU (page.Locator(jump).ScrollIntoViewIfNeededAsync ())
                     do! Wait.until "the way to the latest message to be on screen" (fun () -> jumpOffered page "chat") id
                     do! awaitU (page.FocusAsync jump)
                     do! awaitU (page.Keyboard.PressAsync "Enter")
@@ -6123,14 +6133,19 @@ let editorTests =
                 let! drafted = where ()
                 Expect.equal drafted empty "the draft line, the picker and the composer's edge stand where they stood"
             }
-        // The other half of Send coming and going: with nothing to send there is no Send to
-        // press. It is present for the focus order, but a finger on the place it will stand
-        // reaches whatever is under it, never the control.
-        editorCaseIn 390 844 "on a phone an empty composer offers no Send to press" <| fun page ->
+        // With nothing to send, Send still stands where a thumb reaches it: the one verb the
+        // composer is for, at the weight of a thing with nothing to do (`btnComposerSendWaiting`).
+        // It used to leave with an empty draft, and on a phone arrived only once there was
+        // already something to send.
+        //
+        // This case said the opposite — no Send to press — for as long as the harness kept its
+        // fixtures above the shell: at 390x844 the composer stood below the screen, so Send was
+        // never painted there, and the old promise held whatever the composer did.
+        editorCaseIn 390 844 "on a phone an empty composer's Send stands where a press reaches it" <| fun page ->
             async {
                 do! waitVisible "Send, with nothing to send" page """#shell [data-send-draft][data-send-ready="no"]"""
                 let! send = Probe.seen page "#shell [data-send-draft]"
-                Expect.isFalse (send |> List.exists (fun s -> s.Painted)) "a press where Send will stand does not reach it"
+                Expect.isTrue (send |> List.exists (fun s -> s.Painted)) "a press where Send stands reaches it"
             }
         // THE bug, and the reason the row above follows the draft rather than the composer's
         // focus. `focus-within` is false the moment focus leaves the composer, and pressing a
@@ -7052,14 +7067,12 @@ let editorTests =
                 let! pane = await (page.Locator(panel).BoundingBoxAsync ())
                 Expect.isTrue (box.Y + box.Height < pane.Y + pane.Height - 20.0f) "pane showing under the sheet, or this proves nothing"
                 // Pressed through the pane's locator, at a place IN the pane, never at a point
-                // worked out from where the pane was drawn. The harness keeps other fixtures
-                // above the shell, so the foot of the pane is on the screen only once the window
-                // has scrolled down to the shell, and how far the clicks above scrolled it is
-                // Playwright's choice: each retry of a click whose target is still moving scrolls
-                // with the next of four alignments (none, end, center, start). A point taken from
-                // the box was below the screen in three of the four, and pressed nothing. The
-                // locator brings the place onto the screen, waits for the pane to stand still,
-                // and refuses when something outside the pane would take the press.
+                // worked out from where the pane was drawn: the locator waits for the pane to
+                // stand still, brings the place onto the screen, and refuses when something
+                // outside the pane would take the press. A point taken from the box was below the
+                // screen whenever the window had been scrolled off the shell — which the harness
+                // allowed until the shell had a page of its own (`editor-harness.html` says how
+                // the clicks above used to scroll it), and pressed nothing.
                 do! awaitU (page.Locator(panel).ClickAsync (LocatorClickOptions (Position = Position (X = pane.Width / 2.0f, Y = pane.Height - 10.0f))))
                 do! waitVisible "the switcher, shut" page "#shell [data-pane-switcher][aria-expanded='false']"
                 return ()

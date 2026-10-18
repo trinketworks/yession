@@ -35,6 +35,14 @@ open Yession.App
 open Yession.App.Codecs
 open Thoth.Json
 
+/// The fixtures — the editor, the players, the two peers — out of the page on the shell's page
+/// (`/`) and in its flow, above the shell, on theirs (`/?fixtures`). The page says why it is two
+/// (`tests/browser/editor-harness.html`). Put back before anything mounts into them, so a
+/// fixture is laid out from the start where its case will press it.
+let private fixtures : Browser.Types.HTMLElement = Browser.Dom.document.getElementById "fixtures"
+
+do if Browser.Dom.window.location.search = "?fixtures" then fixtures.removeAttribute "style"
+
 let private host : Browser.Types.HTMLElement = Browser.Dom.document.getElementById "host"
 
 /// The replay mount (Plan 13, stage 3e). It shares this page rather than getting one of its
@@ -141,8 +149,8 @@ do
     // and one command long enough that its label is wider than a phone. Resting at its start,
     // so its chapters are on the bar before anybody presses play.
     //
-    // Mounted on demand (`__chapters`) and at the END of the page, because a host in the flow
-    // above the shell moves every case that hit-tests the shell where the viewport ends.
+    // Mounted on demand (`__chapters`), last among the fixtures: out of the page but on the
+    // fixtures' own (`fixtures`).
     let loop = "for i in 1 2 3; do echo \"step $i\"; sleep 1; done"
     let chaptered =
         TranscriptReplay.castWithMarkers
@@ -163,7 +171,7 @@ do
         let chaptersHost = Browser.Dom.document.createElement "div"
         chaptersHost.id <- "replay-chapters"
         chaptersHost.setAttribute ("style", "height: 14rem")
-        Browser.Dom.document.body.appendChild chaptersHost |> ignore
+        fixtures.appendChild chaptersHost |> ignore
         Replay.mount
             chaptersHost
             { Cast = chaptered
@@ -2187,9 +2195,6 @@ do
         JS.Constructors.Promise.Create (fun resolve reject ->
             let peer : PeerState = { PeerId = PeerId.create "ada" |> expect; DisplayName = "swift-heron" }
             model <- ClientModel.init peer
-            // The shell on screen, as the app's is: the harness page keeps other fixtures
-            // above it, and a conversation below the fold has nothing under the eye.
-            shellHost.scrollIntoView ()
             let rendersBefore = Render.renders ()
             let started = now ()
             let mutable paints = 0
