@@ -2,9 +2,6 @@ module Yession.Tests.Main
 
 open Fable.Pyxpecto
 
-#if !FABLE_COMPILER_JAVASCRIPT && !FABLE_COMPILER_TYPESCRIPT
-let inline (!!) (any: 'a) = any
-#endif
 #if FABLE_COMPILER_JAVASCRIPT || FABLE_COMPILER_TYPESCRIPT
 open Fable.Core.JsInterop
 #endif
@@ -225,5 +222,14 @@ let all =
         Tag.needs "Live connections" [ Tag.Native ] (fun () -> LiveConnections.tests)
     ]
 
+/// Node runs the suite through Pyxpecto, one case at a time. The .NET CLR runs only the browser
+/// suites, and runs them several at once (`BrowserRunner`): one at a time, they spend much of
+/// their time waiting on processes and pages, with the box less than half busy.
 [<EntryPoint>]
-let main argv = !! Pyxpecto.runTests [||] (Tag.narrowed all |> RunEnd.guarded)
+let main argv =
+    let suite = Tag.narrowed all |> RunEnd.guarded
+#if FABLE_COMPILER
+    !! Pyxpecto.runTests [||] suite
+#else
+    BrowserRunner.run suite
+#endif

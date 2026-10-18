@@ -1802,12 +1802,22 @@ let private nodeBudgetMs (caps: Set<string>) =
 // about 5s of it. A 4-core dev container, alone under a shared build lock, ran `Browser Native
 // Caddy` in 414s: 268s, 138s and 6s, with no `Srt` to admit the cases that need a sandbox.
 //
-// Each allowance is about two and a half times its share, for the reason `nodeBudgetMs` gives:
-// this is a hang detector, and the sharp instruments are elsewhere (`Wait.timeoutMs`). It is not
-// a deadline the slow runner should meet with a minute to spare. `Caddy`'s is one case, whose
-// share is mostly the noise of starting it, so it gets a round 30s. What this replaces is no
-// deadline at all, which let one hung Playwright call hold a release run for 48 minutes; the
-// release tier's 1110s ends a hang inside 19 minutes, saying which suite and why.
+// Every one of those numbers is the suite run ONE CASE AT A TIME, and the allowances below were
+// sized on them. The run now takes three cases at once (`BrowserRunner`): on a 4-core dev
+// container, alone under the build lock, `Browser Native Srt Caddy` ran in 216-233s over six
+// runs, against 469-500s one at a time on the same box. The allowances are left where they were,
+// so they are now about five times what the tier takes rather than two and a half — a duller hang
+// detector, never a short one. They come down once CI has timed the parallel run, sized on those
+// numbers and not on these. A case that hangs holds only its own worker; the run still waits for
+// it until this kills it, and its `▶` line, with no verdict after it, says which one it was.
+//
+// Each allowance is about two and a half times its sequential share, for the reason
+// `nodeBudgetMs` gives: this is a hang detector, and the sharp instruments are elsewhere
+// (`Wait.timeoutMs`). It is not a deadline the slow runner should meet with a minute to spare.
+// `Caddy`'s is one case, whose share is mostly the noise of starting it, so it gets a round 30s.
+// What this replaces is no deadline at all, which let one hung Playwright call hold a release run
+// for 48 minutes; the release tier's 1110s ends a hang inside 19 minutes, saying which suite and
+// why.
 //
 // An allowance pays for the suites its capability admits, so a run adds up the allowances of the
 // suites it executes, which is not always every capability it asks for (`CheckRun.Allowances`).
@@ -1936,7 +1946,9 @@ type private SuiteRun =
       /// tasks.fsx to learn whether it was ever meant to hold.
       Basis: string
       /// What already fails on its own inside this run, and so cannot be what hung.
-      Bounded: string }
+      Bounded: string
+      /// How this run's log shows which case hung: what it prints of a case, and when.
+      Hung: string }
 
 // Run a suite with a hard deadline, so a hung WebRTC connection, a Playwright call with no
 // deadline of its own, or any other hang can never hold the run. Inherits stdio (output streams;
@@ -1947,7 +1959,7 @@ type private SuiteRun =
 // with its own deadline fails as itself (`Support.settledWithin`), each naming the case. A kill
 // here means something hung outside them — so the message says what the budget was and what
 // bought it, because the one thing this failure cannot say is which test it was. It can say where
-// to look: Pyxpecto runs one case at a time, in order, and prints a case's line when it ENDS.
+// to look, which differs by run (`SuiteRun.Hung`).
 //
 // The CLR run had no deadline at all. One Playwright call that never answered held a release
 // run's browser tier for 48 minutes, until GitHub lost the runner, and no line said which suite
@@ -1972,10 +1984,10 @@ let private runSuite (caps: string list) (run: SuiteRun) =
           Next =
             sprintf
                 "%s, so this is a hang outside them.\n\
-                 Cases run one at a time and each prints its `Yession - …` line when it ENDS, so the case\n\
-                 that hung is the one after the last such line above. Narrow to it with\n\
+                 %s Narrow to it with\n\
                  `check %s--only \"<part of its name>\"`."
                 run.Bounded
+                run.Hung
                 (if List.isEmpty caps then "" else named + " ") }
     bounded bound (fun () ->
         use p = Process.Start (accountsForItself psi)
@@ -2016,7 +2028,10 @@ let private nodeRun (allowances: Set<string>) : SuiteRun =
         sprintf
             "a base for the cheap tier plus an allowance for each capability whose suites this run executes (%s), generous against measured times (`nodeBudgetMs` in tasks.fsx)"
             (allowanceNames allowances)
-      Bounded = "A single wait fails at 30s and a case's own deadline fails as itself" }
+      Bounded = "A single wait fails at 30s and a case's own deadline fails as itself"
+      Hung =
+        "Cases run one at a time and each prints its `Yession - …` line when it ENDS, so the case\n\
+         that hung is the one after the last such line above." }
 
 /// The .NET CLR run: the browser suites, which `Target.ClrSuite` built beside the Fable
 /// compiles. Without `--no-build` this would build it again, alone, ahead of the first case.
@@ -2029,7 +2044,10 @@ let private clrRun (allowances: Set<string>) : SuiteRun =
         sprintf
             "an allowance for each capability whose suites this run executes (%s), about two and a half times what those suites take on CI (`clrBudgetMs` in tasks.fsx has the measurements)"
             (allowanceNames allowances)
-      Bounded = "Every browser wait fails by itself within 30s" }
+      Bounded = "Every browser wait fails by itself within 30s"
+      Hung =
+        "Cases run several at once (`BrowserRunner`): each prints `▶ Yession - …` when it STARTS and\n\
+         its verdict when it ends, so a case that hung is one with a `▶` line above and no verdict." }
 
 let private runCheckOnce (run: CheckRun) =
     let caps = run.Caps

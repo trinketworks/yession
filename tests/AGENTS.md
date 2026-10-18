@@ -199,3 +199,36 @@ The same command runs it in a yession `dev` sandbox and in a Claude Code contain
 ```
 check Browser Native --only "<part of a test name>"
 ```
+
+### Browser cases run three at a time
+
+The .NET CLR run takes three cases at once (`BrowserRunner.fs`). Node still runs one at a time. So a
+browser case:
+
+- Owns what it arranges: its data dir, its ports (`--port 0`, `listenOnLoopback`), its contexts
+  (`withContexts`). A fixed path, or a host kept in a module-level mutable, is shared with whatever
+  runs beside it.
+- Shares only inside `testSequenced`. Where a suite's cases must share something, sequence the suite
+  and say beside it what they share. Its cases then run one at a time, in order, beside other cases.
+- Presses through a locator, never at a point worked out from a box. `Locator.ClickAsync` with a
+  `Position` (a place IN the element) brings it onto the screen, waits for it to stand still, and
+  refuses when something else would take the press. The harness keeps fixtures above the shell, and
+  each retry of a click on a moving target scrolls the window with the next of four alignments, so
+  where a click leaves the window depends on load. The foot of the pane, measured from its box, was
+  below the screen at three of those four. Where a case must know the point (a press it hit-tests
+  afterwards), a trial click (`Trial = true`) settles the element first and the point is measured
+  after it. A drag starts with a hover through the locator, at a `Position`.
+- Never decides a press on a read taken just before it (`Read.count`, then a click if it found one).
+  The page can change between the two: a render owed to the end of a frame takes the control away,
+  and the click waits its whole timeout for nothing. Scope every selector to the case's subject, wait
+  for the end state, and let a press that may find its control gone check the end it was for.
+
+A case's own lines print together with its verdict. Each case also prints `▶ <name>` when it starts, so
+a case that hung is one with a `▶` line and no verdict.
+
+To run one case at a time, set `YESSION_TEST_WORKERS=1`. Use it to read a run top to bottom, or to tell
+a flake from load:
+
+```
+YESSION_TEST_WORKERS=1 check Browser Native --only "<part of a test name>"
+```

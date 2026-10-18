@@ -547,9 +547,9 @@ let private terminalTabKeys (page: IPage) : Async<string list> =
 // a credential connected in one case was still connected in the next, so that case had to
 // disconnect it by hand on behalf of the ones after it.
 //
-// Independence is also what running these in parallel needs, which the runner cannot do yet:
-// Pyxpecto executes its flat tests in a `for` loop and never reads the `sequenced` field its
-// own model carries. When it can, nothing here has to change.
+// Independence is also what lets these run several at once (`BrowserRunner`). A suite whose
+// cases DO share something — a data dir by name, a host in a module-level mutable — is
+// `testSequenced`, and says beside it what its cases share.
 
 /// A Manager + session of one case's own.
 type private Host =
@@ -944,8 +944,44 @@ let waitTests =
                 Expect.stringContains said "srt sandbox failed: kept" "the page still open said it"
             }
 
-        // The refusal belongs to the case it was installed for. Two in force at once would end
-        // one case's waits by another case's page.
+        // The refusal belongs to the case it was installed for, and cases run several at once
+        // (`BrowserRunner`). A page that says its sandbox failed ends the waits of its own case;
+        // a case beside it, whose page says nothing of the kind, waits out its own deadline.
+        testCaseAsync "a refusal ends the waits of its own case, and not of a case running beside it" <|
+            async {
+                // Held in force until the case beside it is waiting, so the two overlap by
+                // arrangement rather than by how quickly two pages happen to open.
+                let besideWaiting = TaskCompletionSource<unit> ()
+                let failing =
+                    withContexts (fun contexts ->
+                        async {
+                            let! page = contexts.Page None
+                            do! awaitU (page.SetContentAsync (environmentSectionOf Yession.App.Dom.Text.envFailed "srt sandbox failed: next door"))
+                            do! awaitU (besideWaiting.Task :> Task)
+                        })
+                let beside =
+                    withContexts (fun contexts ->
+                        async {
+                            let! page = contexts.Page None
+                            do! awaitU (page.SetContentAsync (environmentSectionOf Yession.App.Dom.Text.envStarting ""))
+                            besideWaiting.TrySetResult () |> ignore
+                            let! outcome =
+                                Async.Catch (
+                                    Wait.within 2000.0 "a thing that never comes" (fun () -> Read.count page "[data-never]") (fun n -> n > 0))
+                            match outcome with
+                            | Choice1Of2 () -> return failwith "a wait for a thing that never comes must not resolve"
+                            | Choice2Of2 error -> return error.Message
+                        })
+                let! failed = Async.StartChild failing
+                // However the case beside ends, the failing one is let go: a refusal that is never
+                // released would hold this case until the run's budget kills it.
+                let! said = async { try return! beside finally besideWaiting.TrySetResult () |> ignore }
+                do! failed
+                Expect.stringContains said "timed out after 2000ms" "the case beside the failed one waited out its own deadline"
+            }
+
+        // Within one case, one refusal. Two in force at once would end the case's waits by
+        // whichever of their pages failed first.
         testCaseAsync "a second refusal installed while one is in force is refused" <|
             async {
                 let refusal : Refusal = fun () -> async.Return None
@@ -1509,12 +1545,14 @@ let tests =
                 // command having run. The KEYSTROKES stay real — the input's binding is what
                 // writes the CRDT, and typing is the only thing that exercises it.
                 //
-                // A reload shuts the column, and a shut column is `inert` — its composer cannot
-                // take focus at all, by keyboard or by script — so the column is shown first.
+                // The column is open at every seed, and nothing here presses for it. The first
+                // follows the show below; a reload brings the column back as this browser left
+                // it (`PaneMemory`), or, with nothing remembered, it opens itself onto the
+                // terminal the session has (`openOfItself`). It used to count the show toggle
+                // and press it when found, and the column opening itself between the count and
+                // the press took the toggle away from under it.
                 let seed (first: int) (last: int) =
                     async {
-                        let! shut = Read.count page "[data-content-toggle='show']"
-                        if shut > 0 then do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                         do! waitVisible "the terminal's command line" page composerInput
                         do! awaitU (page.FocusAsync composerInput)
                         do!
@@ -1735,8 +1773,13 @@ let tests =
                 let one, two = tabs.[0], tabs.[1]
                 // Settle first: opening is an event, and the pane follows the newest terminal
                 // when it lands. Until that has happened there is no telling which terminal a
-                // click is acting on.
-                do! showTerminal page two
+                // click is acting on — so the settling is WAITED for, not pressed for. Pressing
+                // `two` read it unselected, and the pane could follow it between the read and the
+                // press, which then landed on a selected tab and pinned it (`showTerminal`).
+                do! Wait.until
+                        (sprintf "the pane to follow %s, the newest terminal" two)
+                        (fun () -> Read.attr page (sprintf "[data-terminal-tab='%s']" two) "aria-selected")
+                        ((=) (Some "true"))
 
                 // One command, half-written, in the first terminal.
                 do! showTerminal page one
@@ -2922,12 +2965,19 @@ let private pressRunBy (press: IPage -> string -> Async<unit>) (page: IPage) (ru
 /// A pointer's press on whatever is painted at the middle of `selector`, where it stands — not
 /// the locator's click, which first scrolls its target to wherever it judges clear of a sticky
 /// line, and so moves the very place a case is measuring.
+///
+/// Refused when the target is not what is painted at its middle, which is the one check of the
+/// locator's that this keeps: a middle below the screen, or under something else, is a press
+/// that lands nowhere and reads as a press the page ignored (the sheet's case, "pressing the
+/// pane under the list's sheet", says how a point measured from a box came to be off screen).
 let private clickWhereItIs (page: IPage) (selector: string) : Async<unit> =
     async {
-        match! Probe.boxes page [ selector ] with
-        | [ Some r ] ->
+        match! Probe.seen page selector with
+        | seen :: _ when seen.Painted ->
+            let r = seen.Box
             do! awaitU (page.Mouse.ClickAsync (float32 (r.Left + Yession.App.Probes.Box.width r / 2.0), float32 (r.Top + Yession.App.Probes.Box.height r / 2.0)))
-        | _ -> return failwithf "nothing at %s to press" selector
+        | seen :: _ -> return failwithf "%s is not what is painted at its middle (%A), so a press there would land on something else" selector seen.Box
+        | [] -> return failwithf "nothing at %s to press" selector
     }
 
 /// A fold pressed with a pointer, where it is on screen.
@@ -4928,16 +4978,27 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
-                do! waitTextIn "the screen to say vim ~/notes" page "#shell [data-terminal-screen='term-live']" "vim ~/notes"
+                let screen = "#shell [data-terminal-screen='term-live']"
+                do! waitTextIn "the screen to say vim ~/notes" page screen "vim ~/notes"
                 // Where the words are, so the drag runs across them rather than across padding.
-                let! words = Probe.textAt page "#shell [data-terminal-screen='term-live']" "vim ~/notes"
-                let span =
-                    match words with
-                    | Some r -> [| r.Left + 1.0; r.Right - 1.0; (r.Top + r.Bottom) / 2.0 |]
-                    | None -> failwith "the screen stopped saying vim ~/notes"
-                do! awaitU (page.Mouse.MoveAsync (float32 span.[0], float32 span.[2]))
+                let words () =
+                    async {
+                        match! Probe.textAt page screen "vim ~/notes" with
+                        | Some r -> return r
+                        | None -> return failwith "the screen stopped saying vim ~/notes"
+                    }
+                let! r = words ()
+                let! box = await (page.Locator(screen).BoundingBoxAsync ())
+                // The drag starts at a place IN the screen, reached through its locator: Playwright
+                // brings it onto the page's screen, waits for it to stand still, and refuses when
+                // something else would take the press. A point worked out from the boxes alone can
+                // be below the screen (the sheet's case, "pressing the pane under the list's
+                // sheet", says how). Where it ends is measured again, after any scroll the hover made.
+                let start = Position (X = float32 (r.Left + 1.0) - box.X, Y = float32 ((r.Top + r.Bottom) / 2.0) - box.Y)
+                do! awaitU (page.Locator(screen).HoverAsync (LocatorHoverOptions (Position = start)))
+                let! r = words ()
                 do! awaitU (page.Mouse.DownAsync ())
-                do! awaitU (page.Mouse.MoveAsync (float32 span.[1], float32 span.[2], MouseMoveOptions (Steps = 5)))
+                do! awaitU (page.Mouse.MoveAsync (float32 (r.Right - 1.0), float32 ((r.Top + r.Bottom) / 2.0), MouseMoveOptions (Steps = 5)))
                 do! awaitU (page.Mouse.UpAsync ())
                 let! selected = Probe.selection page
                 Expect.stringContains selected "notes" "what was dragged across is still selected"
@@ -6945,22 +7006,35 @@ let editorTests =
         editorCase "a closed row on the all page leads to its replay" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                match! Read.count page "#shell [data-pane-switcher][aria-expanded='false']" with
-                | 0 -> ()
-                | _ -> do! awaitU (page.ClickAsync "#shell [data-pane-switcher][aria-expanded='false']")
+                // The pane opens on the terminal it was on, with its list shut, so one press
+                // opens the list. Pressed, not first asked whether to: a read taken before the
+                // press it decides is one the page can change under (as below).
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 do! awaitU (page.ClickAsync "#shell [data-list-closed-fold][aria-expanded='false']")
                 do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-row='term-done']")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                // Opened, it is either playing already or one press from it.
-                do!
-                    waitVisible
-                        "the closed terminal's replay, or the way to watch it"
-                        page
-                        "#shell [data-pane-replay='terminal:term-done'], #shell [data-terminal-watch='watch']"
-                match! Read.count page "#shell [data-terminal-watch='watch']" with
-                | 0 -> ()
-                | _ -> do! awaitU (page.ClickAsync "#shell [data-terminal-watch='watch']")
-                do! waitVisible "the closed terminal's replay" page "#shell [data-pane-replay='terminal:term-done']"
+                // Opened, it is either playing already — a closed terminal whose recording is its
+                // only read plays by itself and offers no watch (`ReplayIsTheRead`) — or one press
+                // of its OWN watch from it. Both ends are asked of term-done's own hooks. The
+                // toolbar of the terminal the list was laid over stays in the document under the
+                // list, watch and all, until the pane draws the Enter, and a render owed inside a
+                // frame waits for the frame's end (`Render.fs`). A watch asked of the pane at large
+                // was that terminal's: the wait ended on it, the count found it, and the render
+                // took it away before the click could, which then waited 15s for nothing.
+                let replay = "#shell [data-pane-replay='terminal:term-done']"
+                let watch = "#shell [data-pane-actions='terminal:term-done'] [data-terminal-watch='watch']"
+                do! waitVisible "the closed terminal's replay, or its own way to watch it" page (replay + ", " + watch)
+                let! playing = Read.visible page replay
+                if not playing then
+                    // A press that is fine with either end: a recording found to be the only
+                    // read while the press waits plays by itself and takes its watch away, and
+                    // that is the replay this case is after, not a press that failed.
+                    match! Async.Catch (awaitU (page.Locator(watch).ClickAsync ())) with
+                    | Choice1Of2 () -> ()
+                    | Choice2Of2 refused ->
+                        let! nowPlaying = Read.visible page replay
+                        if not nowPlaying then raise refused
+                do! waitVisible "the closed terminal's replay" page replay
                 return ()
             }
 
@@ -6972,11 +7046,21 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 let sheet = "#shell #pane-sheet"
+                let panel = "#shell [data-content-panel]"
                 do! waitVisible "the list's sheet" page sheet
                 let! box = await (page.Locator(sheet).BoundingBoxAsync ())
-                let! pane = await (page.Locator("#shell [data-content-panel]").BoundingBoxAsync ())
+                let! pane = await (page.Locator(panel).BoundingBoxAsync ())
                 Expect.isTrue (box.Y + box.Height < pane.Y + pane.Height - 20.0f) "pane showing under the sheet, or this proves nothing"
-                do! awaitU (page.Mouse.ClickAsync (pane.X + pane.Width / 2.0f, pane.Y + pane.Height - 10.0f))
+                // Pressed through the pane's locator, at a place IN the pane, never at a point
+                // worked out from where the pane was drawn. The harness keeps other fixtures
+                // above the shell, so the foot of the pane is on the screen only once the window
+                // has scrolled down to the shell, and how far the clicks above scrolled it is
+                // Playwright's choice: each retry of a click whose target is still moving scrolls
+                // with the next of four alignments (none, end, center, start). A point taken from
+                // the box was below the screen in three of the four, and pressed nothing. The
+                // locator brings the place onto the screen, waits for the pane to stand still,
+                // and refuses when something outside the pane would take the press.
+                do! awaitU (page.Locator(panel).ClickAsync (LocatorClickOptions (Position = Position (X = pane.Width / 2.0f, Y = pane.Height - 10.0f))))
                 do! waitVisible "the switcher, shut" page "#shell [data-pane-switcher][aria-expanded='false']"
                 return ()
             }
@@ -7065,6 +7149,13 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 let kill = "#shell [data-content-list] [data-terminal-close='term-harness']"
+                // The press has to be at a point the case knows, because that point is what is
+                // asked about afterwards — so it cannot be the locator's own click. The point is
+                // measured only once Playwright has brought the kill onto the screen and found it
+                // standing still and pressable (a trial click, which presses nothing): measured
+                // before then, it is wherever the column's opening and the window's scroll had
+                // left the kill, which a press can miss (see the sheet's case above).
+                do! awaitU (page.Locator(kill).ClickAsync (LocatorClickOptions (Trial = true)))
                 let! rect = await (page.Locator(kill).BoundingBoxAsync ())
                 let x, y = rect.X + rect.Width / 2.0f, rect.Y + rect.Height / 2.0f
                 do! awaitU (page.Mouse.ClickAsync (x, y))
@@ -7708,8 +7799,11 @@ let private offlineReopen (name: string) (make: IPage -> Async<unit>) (check: IP
                 mounted.Stop ()
         }
 
+// One case at a time (`BrowserRunner`): every case boots its deployment in `mountDataDir` and
+// keeps its host in `mountedHost` and `mountSessionPort`, so two at once would boot into one
+// directory and kill, or forward to, each other's host.
 let mountedTests =
-    testList "Path-mounted session (browser)" [
+    testSequenced <| testList "Path-mounted session (browser)" [
         testCaseAsync "a session served under a path boots, signs in, and connects over WebRTC" <|
             async {
                 let mounted = startMounted (fun _ -> false)
@@ -8300,8 +8394,10 @@ let private startFrontedHost (publicOrigin: string) (managerPort: int) : unit =
             (fun line -> line.Contains "management UI at")
     frontedHost <- host.Process
 
+// One case at a time (`BrowserRunner`): a case boots in `frontDataDir` and keeps its host in
+// `frontedHost`, which a second case would share.
 let frontDoorTests =
-    testList "Creating a session behind a front door (browser)" [
+    testSequenced <| testList "Creating a session behind a front door (browser)" [
         testCaseAsync "creating a session lands in that session, never on the front door's miss" <|
             async {
                 if Directory.Exists frontDataDir then Directory.Delete (frontDataDir, true)
@@ -8472,8 +8568,9 @@ let private inProfile (name: string) (body: IPage -> Async<unit>) : Async<unit> 
         do! reporting name page evidence (body page)
     })
 
+// One case at a time (`BrowserRunner`): every case's deployment starts by emptying `keptDataDir`.
 let keptOpenTests =
-    testList "Opening a session this browser keeps (browser)" [
+    testSequenced <| testList "Opening a session this browser keeps (browser)" [
         // The route is held off for the whole case, and the door hands its misses to the
         // Manager, which answers 404, as behind the proxy example's Caddyfile. So the session
         // cannot answer anything: the history on the screen is what this browser kept.
@@ -8605,8 +8702,9 @@ let private deployFronted () : Fronted =
             (fun line -> line.Contains " follows ")
     { Origin = origin; Pieces = [ proxy; manager; map ] }
 
+// One case at a time (`BrowserRunner`): a case's deployment starts by emptying `frontedDataDir`.
 let frontedTests =
-    testList "A fronted deployment, for real (browser)" [
+    testSequenced <| testList "A fronted deployment, for real (browser)" [
         testCaseAsync "pressing Create on the tailnet lands you in that session, as yourself" <|
             async {
                 let deployed = deployFronted ()
@@ -8721,8 +8819,9 @@ let frontedTests =
 
 let private filtersDataDir = "tests/browser/.data-filters"
 
+// One case at a time (`BrowserRunner`): a case's Manager starts by emptying `filtersDataDir`.
 let filterTests =
-    testList "The management page's filters (browser)" [
+    testSequenced <| testList "The management page's filters (browser)" [
         testCaseAsync "a filter click is a history entry: Back undoes it, and the rows follow" <|
             async {
                 if Directory.Exists filtersDataDir then Directory.Delete (filtersDataDir, true)
@@ -8788,8 +8887,10 @@ let private installedDataDir = "tests/browser/.data-installed"
 // so the page is told it is one by answering its own question — the query, by name — and
 // nothing else about `matchMedia` changes. The destination is answered here: the promise is
 // where the browser goes, not what the session does when it gets there.
+//
+// One case at a time (`BrowserRunner`): a case's Manager starts by emptying `installedDataDir`.
 let installedAppTests =
-    testList "Opening a session from an installed Manager (browser)" [
+    testSequenced <| testList "Opening a session from an installed Manager (browser)" [
         testCaseAsync "a row is followed in place, not into a new window" <|
             async {
                 if Directory.Exists installedDataDir then Directory.Delete (installedDataDir, true)
@@ -8858,8 +8959,14 @@ type private Hold =
     { Held: Async<unit>
       LetGo: unit -> unit }
 
+/// Where a finger pushing Create lands. The pushes are the pointer's own (a second one at the
+/// same place, under a held Create, is what these cases are about), so the point is measured —
+/// but only once Playwright has brought Create onto the screen and found it standing still and
+/// pressable (a trial click, which presses nothing). Measured before then, a point can be one
+/// a press misses (the sheet's case, "pressing the pane under the list's sheet", says how).
 let private whereCreateIs (page: IPage) : Async<float32 * float32> =
     async {
+        do! awaitU (page.Locator(createButton).ClickAsync (LocatorClickOptions (Trial = true)))
         let! box = await (page.Locator(createButton).BoundingBoxAsync ())
         return box.X + box.Width / 2.0f, box.Y + box.Height / 2.0f
     }
@@ -8937,8 +9044,9 @@ let private withHeldCreate
             manager.Stop ()
     }
 
+// One case at a time (`BrowserRunner`): every case's Manager starts by emptying `pressDataDir`.
 let pressTests =
-    testList "Pressing Create (browser)" [
+    testSequenced <| testList "Pressing Create (browser)" [
         testCaseAsync "a second push before the first lands is refused: one session" <|
             withHeldCreate "double create" LetThrough (fun manager _ page hold -> async {
                 let posted = ResizeArray<string> ()
@@ -9031,8 +9139,9 @@ let private marksShown (page: IPage) : Async<string option * string option> =
         return intro, still
     }
 
+// One case at a time (`BrowserRunner`): every case's Manager starts by emptying `openingDataDir`.
 let openingTests =
-    testList "The opening page (browser)" [
+    testSequenced <| testList "The opening page (browser)" [
         testCaseAsync "it goes once the session answers, and not before the intro has landed" <|
             withOpening "the dwell" (fun page -> async {
                 do! readyAnswers 200 page

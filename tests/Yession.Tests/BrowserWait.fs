@@ -205,28 +205,43 @@ module Wait =
 
     /// The refusal of the case that is running, installed by `refusing`. A wait here is
     /// `Wait.until what read holds` with no page in hand — 160-odd call sites, each closing over
-    /// its own — so the case's world has to reach it some other way. Cases run one at a time
-    /// (Pyxpecto does not run them in parallel), and a second installation while one is in force
-    /// is refused, so a runner that starts to overlap them says so, rather than one case's
-    /// waits being ended by another case's page.
-    let mutable private inForce : Refusal option = None
-    let private gate = obj ()
+    /// its own — so the case's world has to reach it some other way.
+    ///
+    /// The way is the case's own flow of control, not the process: cases run several at once
+    /// (`BrowserRunner`), and a refusal held by the process would end one case's waits by
+    /// another case's page. An `AsyncLocal` is seen by everything `body` goes on to do, the
+    /// tasks it starts among them, and by nothing outside it.
+    let private inForce = AsyncLocal<Refusal option> ()
 
     /// Run `body` with `refusal` consulted by every `within` and `until` in it, and not after.
+    ///
+    /// `body` runs as a task of its own, started with the refusal in place and the refusal
+    /// taken away again at once on this side. That is what scopes it: an F# async does not
+    /// restore what it set in an `AsyncLocal` when it returns, so a value set and then awaited
+    /// past would still be in force for whatever this case did next. A task's continuation runs
+    /// in the context it was awaited from, so nothing of the body's comes back out with it.
+    ///
+    /// What the body raises comes out as itself. `Async.AwaitTask` hands back a faulted task's
+    /// `AggregateException`, and a case that said no (`AssertException`) would read as one that
+    /// could not say anything.
     let refusing (refusal: Refusal) (body: Async<'a>) : Async<'a> =
         async {
-            lock gate (fun () ->
-                match inForce with
-                | Some _ ->
-                    failwith
-                        "a wait refusal is already in force: two cases are running at once, and a wait \
-                         here would be ended by whichever case's page failed first. Give `Wait.within` \
-                         the page it waits on, in place of `refusing`."
-                | None -> inForce <- Some refusal)
+            match inForce.Value with
+            | Some _ ->
+                failwith
+                    "a wait refusal is already in force in this case: its waits would be ended by \
+                     whichever of the two failed first. Give `Wait.within` the page it waits on, in \
+                     place of a second `refusing`."
+            | None -> ()
+            let! cancelled = Async.CancellationToken
+            let started =
+                inForce.Value <- Some refusal
+                try Async.StartAsTask (body, cancellationToken = cancelled)
+                finally inForce.Value <- None
             try
-                return! body
-            finally
-                lock gate (fun () -> inForce <- None)
+                return! Async.AwaitTask started
+            with :? AggregateException as faulted when faulted.InnerExceptions.Count = 1 ->
+                return raise faulted.InnerException
         }
 
     /// Read until `holds` accepts what was read, or fail saying what the wait was for and what
@@ -322,7 +337,7 @@ module Wait =
         async {
             // Asked when the wait RUNS, not when it is written down: a wait built before the case
             // began and awaited inside it is the case's.
-            let refusal = lock gate (fun () -> inForce) |> Option.defaultValue (fun () -> async.Return None)
+            let refusal = inForce.Value |> Option.defaultValue (fun () -> async.Return None)
             return! withRefusal refusal limitMs what read holds
         }
 
