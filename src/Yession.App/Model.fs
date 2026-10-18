@@ -1748,6 +1748,13 @@ type DomMove =
     /// and only from a hand that is nowhere, or in that terminal's own command line, where
     /// the keys no longer belong (`PaneShell.toTerminalScreen`).
     | FocusTerminalScreen of TerminalId
+    /// Into a terminal's live screen's keys field, at once and unguarded: a press on that
+    /// screen, which is the reader saying where the keyboard goes (`ClientModel.typesInto`).
+    /// At once because a phone raises its keyboard only for a focus made inside the press
+    /// itself, and a frame later the press is over; and unguarded because the press has
+    /// already put focus on the pane's panel, which `FocusTerminalScreen`'s guard rightly
+    /// reads as somewhere the hand chose to be.
+    | FocusTerminalKeys of TerminalId
     /// Onto the pane's watch toggle, when the replay the hand was in has left the document.
     | FocusWatchToggle
     /// Scroll a terminal's history to one of its commands and mark it.
@@ -2040,6 +2047,10 @@ type ClientMsg =
     /// A move only the document can make, asked for by a control that changes nothing in the
     /// model (`DomMove`).
     | MoveMsg of DomMove
+    /// A press on a terminal's live screen, and whether it left text `selected` — the end of
+    /// a drag across the output, which only the document can say, and only now. What the
+    /// press means is the model's (`ClientModel.typesInto`).
+    | ScreenPressedMsg of TerminalId * selected: bool
     /// Put `text` on the clipboard and, if the platform lets it, say so on the box whose hook is
     /// `box` (`CopiedMsg`). How long it says so is the model's (`ClientModel.timers`).
     | CopyMsg of box: string * text: string
@@ -3707,6 +3718,14 @@ module ClientModel =
         Projection.tryFind terminal model.Terminals
         |> Option.exists (fun view -> view.IsOpen && view.Lease = Some (me model))
 
+    /// Whether this peer types into a terminal's live screen: it holds the keyboard, and the
+    /// pane reads the terminal live rather than playing its recording. The one rule for where
+    /// the screen's keys field is drawn, so the view that draws it and the press that focuses
+    /// it cannot disagree about whether it is there.
+    let typesInto (terminal: TerminalId) (model: ClientModel) : bool =
+        not (terminalPlays terminal model)
+        && (Projection.tryFind terminal model.Terminals |> Option.exists (fun view -> view.Lease = Some (me model)))
+
     /// Where the keyboard goes when the terminal on screen changes what it offers one — `None`
     /// when it does not. `before` and `after` are a message's fold, either side of it.
     ///
@@ -4984,6 +5003,7 @@ module ClientModel =
             | Some turn -> { model with OpenFolds = Set.add (FoldKey.Task turn) model.OpenFolds }
             | None -> model
         | MoveMsg _
+        | ScreenPressedMsg _
         | CopyMsg _
         | RetryNowMsg -> model
         | RewindTerminalMsg terminal ->
@@ -5571,6 +5591,12 @@ module ClientModel =
             // A file's × leaves with its tab too: onto the item the pane is back on.
             | DismissFileTabMsg _ when model.FileTabs <> next.FileTabs -> [ ClientEffect.Move DomMove.FocusPivot ]
             | MoveMsg move -> [ ClientEffect.Move move ]
+            // A press on the screen puts the keyboard in its field — which on a phone is what
+            // raises the soft keyboard. Not after a press that ended a selection: that reader is
+            // copying output, and focusing a text field would take their selection away. And
+            // only where the field is drawn, which is the holder's screen and nobody else's.
+            | ScreenPressedMsg (terminal, selected) when not selected && typesInto terminal next ->
+                [ ClientEffect.Move (DomMove.FocusTerminalKeys terminal) ]
             // The player the hand was in is gone; the toggle that replaces it is where it lands.
             | ReplayCaughtUpMsg _ -> [ ClientEffect.Move DomMove.FocusWatchToggle ]
             // A deliberate send settles the view on what was just sent, whether or not the

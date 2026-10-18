@@ -191,6 +191,11 @@ let private toChatItem (subject: Yession.App.PreviewSubject) : unit =
 let private toWatchToggle () : unit =
     if stranded [ "[data-pane-replay]" ] then focusOn (find "[data-terminal-watch]")
 
+/// Onto a terminal's live screen's keys field (`data-terminal-keys`), wherever focus is: a
+/// press on that screen asked for it (`DomMove.FocusTerminalKeys`).
+let private toTerminalKeys (terminal: Yession.Domain.TerminalId) : unit =
+    focusOn (find (sprintf "[data-terminal-keys=\"%s\"]" (Yession.Domain.TerminalId.value terminal)))
+
 /// Hand focus to the live screen when this peer has just become the one typing into it.
 ///
 /// Taking the keyboard is the whole of what live mode IS, and until this the keyboard did not
@@ -216,8 +221,7 @@ let private toWatchToggle () : unit =
 let private toTerminalScreen (terminal: Yession.Domain.TerminalId) : unit =
     let ownLine =
         sprintf "[data-terminal-input^=\"%s\"]" (Yession.Domain.Collab.BodyKey.terminalDraftsIn terminal)
-    if stranded [ ownLine ] then
-        focusOn (find (sprintf "[data-terminal-keys=\"%s\"]" (Yession.Domain.TerminalId.value terminal)))
+    if stranded [ ownLine ] then toTerminalKeys terminal
 
 /// Scroll a terminal's history to one of its commands, and say which one (Plan 25, stage 3).
 ///
@@ -491,6 +495,10 @@ let rec move (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.JumpToLatest surface -> jumpToLatest surface
     // A frame on, for the render that drew the selection; not a placement, so not guarded.
     | Yession.App.DomMove.RevealPivot -> nextFrame Strip.revealSelected
+    // NOW, inside the press that asked for it, and not a frame on: a phone raises its keyboard
+    // only for a focus made while the press is still being handled. Nothing to wait for — the
+    // field is in the screen that was pressed.
+    | Yession.App.DomMove.FocusTerminalKeys terminal -> toTerminalKeys terminal
     | placing -> nextFrame (fun () -> place placing)
 
 /// A placing move, made NOW — `move` has already waited the frame. Every guard here is read in
@@ -528,6 +536,7 @@ and private place (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.JumpToLatest _ -> move asked
     | Yession.App.DomMove.RevealPivot -> Strip.revealSelected ()
     | Yession.App.DomMove.FocusTerminalScreen terminal -> toTerminalScreen terminal
+    | Yession.App.DomMove.FocusTerminalKeys terminal -> toTerminalKeys terminal
     | Yession.App.DomMove.FocusWatchToggle -> toWatchToggle ()
     | Yession.App.DomMove.FocusNavToggle shown -> toNavToggle shown
     | Yession.App.DomMove.FocusSettingsToggle opened -> toSettingsToggle opened

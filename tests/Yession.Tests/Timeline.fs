@@ -4313,6 +4313,31 @@ let private tabTests =
                     reading
             Expect.equal effects [] "the hand stays where it is"
 
+        // A press on the live screen is the reader saying where the keyboard goes: into the
+        // screen's field, which on a phone is what raises its keyboard. Not a press that ended
+        // a selection, which is somebody copying output; and not a screen with no field, which
+        // is every screen but the holder's.
+        testCase "a press on my live screen puts the keyboard in its field" <| fun () ->
+            let live =
+                heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (took terminalA (PeerRef ada) 0) ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let _, effects = ClientModel.update (ScreenPressedMsg (terminalA, false)) live
+            Expect.equal effects [ ClientEffect.Move (DomMove.FocusTerminalKeys terminalA) ] "into the field"
+
+        testCase "a press that ended a selection on my live screen moves nothing" <| fun () ->
+            let live =
+                heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (took terminalA (PeerRef ada) 0) ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let _, effects = ClientModel.update (ScreenPressedMsg (terminalA, true)) live
+            Expect.equal effects [] "the selection stays the reader's"
+
+        testCase "a press on a screen somebody else holds moves nothing" <| fun () ->
+            let watching =
+                heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (took terminalA (PeerRef bob) 0) ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let _, effects = ClientModel.update (ScreenPressedMsg (terminalA, false)) watching
+            Expect.equal effects [] "their screen has no field to type into"
+
         testCase "a terminal changing under a preview moves nothing" <| fun () ->
             // The preview covers it; nothing under the hand went.
             let previewing = heardOf oneBlock |> Support.step (chip terminalA "1")
