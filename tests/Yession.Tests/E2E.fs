@@ -67,6 +67,25 @@ let private offering (name: string) : Async<Fable.NodeDataChannel.PeerConnection
         return pc, dc, (pc.localDescription ()).sdp
     }
 
+/// An answered connection with its channel open at both ends: the client's peer connection,
+/// the client's end read as frames, and the session's end as `onChannel` handed it over.
+let private answered (bounds: WebRtc.Answering.Bounds) (peers: WebRtc.Answering.Peers) (name: string) =
+    async {
+        let opened, isOpen = latch ()
+        let channels = ResizeArray<FrameChannel<string>> ()
+        let! client, dc, offer = offering name
+        dc.onOpen (fun () -> opened ())
+        match! WebRtc.Answering.answer bounds peers channels.Add offer with
+        | Ok answer ->
+            match Sdp.parse answer with
+            | Some { Kind = SdpKind.Answer; Sdp = sdp } -> client.setRemoteDescription (sdp, SdpKind.wire SdpKind.Answer)
+            | other -> failwithf "the session answered with %A" other
+        | Error why -> failwithf "the session did not answer: %s" why
+        do! isOpen
+        do! waitUntil "the session to have the channel" (fun () -> channels.Count = 1)
+        return client, WebRtc.frameChannel dc, channels.[0]
+    }
+
 let private answeringTests =
     testList "The session's answered connections" [
         // A browser that gives up on a handshake closes its end and tries again with a new
@@ -104,6 +123,36 @@ let private answeringTests =
                 let! last = channels.[0].Receive ()
                 Expect.isNone last "the channel ended"
                 do! waitUntil "the session's end of it to be closed" (fun () -> WebRtc.Answering.count peers = 0)
+            }
+
+        // The session rejects a peer by sending why and closing. Its channel reports closed
+        // while that frame is still in SCTP's hands, and closing the connection then aborted
+        // it before it left: the peer saw a dropped connection instead of the reason.
+        testCaseAsync "a connection whose channel the session closed is held while what it sent last can arrive" <|
+            async {
+                let peers = WebRtc.Answering.create ()
+                let bounds = { WebRtc.Answering.shipped with Linger = TimeSpan.FromSeconds 2.0 }
+                let! client, _, session = answered bounds peers "e2e-closed-by-session"
+                do! session.Send (Control (PeerRejected "invalid peer token"))
+                do! session.Close ()
+                match! session.Receive () with
+                | None -> ()
+                | Some frame -> failwithf "the session's end was still open, with %A" frame
+                // A close begun at once is over in milliseconds; the linger is two seconds.
+                do! quietFor 300
+                Expect.equal (WebRtc.Answering.count peers) 1 "the connection is still held"
+                do! WebRtc.closePeerConnection client
+                do! WebRtc.Answering.closeAll peers
+            }
+
+        testCaseAsync "a connection whose channel the session closed is closed once it has lingered" <|
+            async {
+                let peers = WebRtc.Answering.create ()
+                let bounds = { WebRtc.Answering.shipped with Linger = TimeSpan.FromMilliseconds 100.0 }
+                let! client, _, session = answered bounds peers "e2e-lingered"
+                do! session.Close ()
+                do! waitUntil "the lingering connection to be closed" (fun () -> WebRtc.Answering.count peers = 0)
+                do! WebRtc.closePeerConnection client
             }
     ]
 
