@@ -138,8 +138,12 @@ jobs:
     # that floor, and the number has to move with it.
     #
     # A dispatch names its own capabilities, `Dogfood`'s hour among them, so it is bounded above
-    # every allowance at once; the declared tiers get the widest of their own.
-    timeout-minutes: ${{ matrix.tier == 'dispatch' && 150 || 45 }}
+    # every allowance at once; the declared tiers get the widest of their own. In minutes, over
+    # release runs from 13 to 18 Oct 2026, slowest job plus most left unspent plus cold shell:
+    # `node` 10.3 + 13.9 (Node suite) + 15.3 = 39.5, of 87; `nix` 5.1 + 17.1 (the Nix build) +
+    # 15.3 = 37.5, of 100; `browser` 8.6 + 9.4 (browser suite) + 15.3 = 33.4, of the one run since
+    # it took three cases at a time. So 40, which `node` sets.
+    timeout-minutes: ${{ matrix.tier == 'dispatch' && 150 || 40 }}
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30

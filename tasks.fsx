@@ -1793,31 +1793,27 @@ let private nodeBudgetMs (caps: Set<string>) =
 // THE BROWSER SUITES' BUDGET, the .NET CLR run's, built the way `nodeBudgetMs` is: what each
 // capability's suites cost, and generous against it.
 //
-// Measured on CI, 12 green runs on 15 Oct 2026: six release `verify / browser` jobs (`Browser
-// Native Srt Caddy --runtime clr`) ran this suite in 390-453s, six pull-request `test` jobs
-// (which ask for Ports Serial Jumpstarter beside those, none of them a browser suite's) in
-// 351-447s. Of the slowest, 453s: the suites that need only `Browser` (the editor's 210 cases,
-// the 11 browser waits) took 251s, the `Native` ones 195s, the one `Caddy` case 5s. `bench`'s
-// `Client performance` (`Browser Bench`, narrowed to that suite) took 37-43s. Starting the run is
-// about 5s of it. A 4-core dev container, alone under a shared build lock, ran `Browser Native
-// Caddy` in 414s: 268s, 138s and 6s, with no `Srt` to admit the cases that need a sandbox.
+// The run takes three cases at once (`BrowserRunner`). Measured on CI in every green run that did,
+// from the first on 18 Oct 2026, three in all: the release `verify / browser` job (`Browser Native
+// Srt Caddy --runtime clr`) ran this suite in 244s, and two pr.yaml `test` jobs in 243s and 301s.
+// Those ask for Chromium Ports Serial Jumpstarter as well, none of them a browser suite's, so they
+// ran the same 271 cases, with `lint` beside them for their first two minutes or so (`pr-gate`).
+// The slowest, 301s, splits by what each allowance's cases took of it: 164s for the suites that
+// need only `Browser` (the editor's cases and the browser waits, 222 in all), 135s for the 48
+// `Native` ones, 2.5s for the one `Caddy` case. `bench`'s `Client performance` (`Browser Bench`,
+// narrowed to that suite) took 37-43s. One case at a time, the release tier took 390-453s on CI
+// (six runs, 15 Oct), and a 4-core dev container, alone under a shared build lock, ran it in
+// 469-500s, against 216-233s three at a time.
 //
-// Every one of those numbers is the suite run ONE CASE AT A TIME, and the allowances below were
-// sized on them. The run now takes three cases at once (`BrowserRunner`): on a 4-core dev
-// container, alone under the build lock, `Browser Native Srt Caddy` ran in 216-233s over six
-// runs, against 469-500s one at a time on the same box. The allowances are left where they were,
-// so they are now about five times what the tier takes rather than two and a half — a duller hang
-// detector, never a short one. They come down once CI has timed the parallel run, sized on those
-// numbers and not on these. A case that hangs holds only its own worker; the run still waits for
-// it until this kills it, and its `▶` line, with no verdict after it, says which one it was.
-//
-// Each allowance is about two and a half times its sequential share, for the reason
+// Each allowance is about two and a half times its share of the slowest run, for the reason
 // `nodeBudgetMs` gives: this is a hang detector, and the sharp instruments are elsewhere
 // (`Wait.timeoutMs`). It is not a deadline the slow runner should meet with a minute to spare.
+// Three runs are few, so each is rounded up to the next half minute rather than to the nearest.
 // `Caddy`'s is one case, whose share is mostly the noise of starting it, so it gets a round 30s.
-// What this replaces is no deadline at all, which let one hung Playwright call hold a release run
-// for 48 minutes; the release tier's 1110s ends a hang inside 19 minutes, saying which suite and
-// why.
+// A case that hangs holds only its own worker; the run still waits for it until this kills it,
+// and its `▶` line, with no verdict after it, says which one it was. What this replaces is no
+// deadline at all, which let one hung Playwright call hold a release run for 48 minutes; the
+// release tier's 810s ends a hang inside 14 minutes, saying which suite and why.
 //
 // An allowance pays for the suites its capability admits, so a run adds up the allowances of the
 // suites it executes, which is not always every capability it asks for (`CheckRun.Allowances`).
@@ -1827,8 +1823,8 @@ let private nodeBudgetMs (caps: Set<string>) =
 // this too. Their failures are printed above the kill, as they ended.
 let private clrBudgetMs (caps: Set<string>) =
     let allowing (name: string) (ms: int) = if caps.Contains name then ms else 0
-    allowing "Browser" 600_000
-    + allowing "Native" 480_000
+    allowing "Browser" 420_000
+    + allowing "Native" 360_000
     + allowing "Caddy" 30_000
     + allowing "Bench" 120_000
 
@@ -1857,7 +1853,7 @@ let private buildNixPackage () =
     // So the allowance is 20 minutes: about four times the slowest Linux build, and one and a half
     // times the slowest Mac one. Two and a half times the Linux build would refuse a Mac that is
     // only building cold; two and a half times the Mac's would be 36 minutes, which cannot sit
-    // under the gate job's 45 (verify.yml) above a cold dev shell. Like `clrBudgetMs`, it is a
+    // under the gate job's 40 (verify.yml) above a cold dev shell. Like `clrBudgetMs`, it is a
     // hang detector. What it replaces is no deadline at all: a hung build ran to the job's bound
     // and was cancelled there, with no line saying which step.
     let budget : Bound =
@@ -2540,7 +2536,7 @@ let private benchBaselines () : Map<string, float> =
 /// seconds of Fable and bought a Node process with not one case in it that measures anything.
 ///
 /// `Browser` is asked for because that one suite needs it. Its allowance is not bought: those
-/// 600s pay for the suites that need only a browser, the editor's 210 cases among them, and the
+/// 420s pay for the suites that need only a browser, the editor's 210 cases among them, and the
 /// narrowing keeps none of them. So the budget is `Bench`'s allowance alone, 120s against the
 /// 37-43s this suite takes on CI. It was the 720s of both, which let a hang hold the bench job
 /// for twelve minutes before it was named, and `bench-guard`'s re-measure for twelve more.
@@ -3224,23 +3220,23 @@ let private analyzers () =
 // of them can hang, and the analyzer runs print nothing until they end.
 //
 // Measured on CI from 13 to 17 Oct 2026: pr.yaml's lint step took 234-593s in 200 green `test`
-// jobs, 375s at the median. It ran on its own then, ahead of `check`, on a fresh checkout, so it
-// paid every restore cold. A 4-core dev container, alone under a shared build lock, took 541-673s
-// while each fixture had an analyzer run of its own, and 524-558s with one run over them all. The
-// PR gate now runs it beside `check` (`pr-gate`), still on a fresh checkout, and the two share the
-// runner's cores: on that container lint took 868s beside check against 611s alone, a stretch of
-// about 1.4.
-// Twenty-five minutes is about two and a half times the slowest run alone, and nearly twice that
-// run stretched as much, for the reason `nodeBudgetMs` gives: this is a hang detector, not a
-// deadline a slow runner should meet with a minute to spare. The `test` job's steps before
-// `pr-gate` took at most 268s, so a hung lint is refused by about the thirtieth minute of that
-// job's sixty, while `check` carries on beside it. What this replaces is no deadline at all: a
-// hang ran to the job's bound and was cancelled there, with no line saying which step.
+// jobs, 375s at the median. It ran on its own then, ahead of `check`. The PR gate now runs it
+// beside `check` (`pr-gate`), on a fresh checkout that pays every restore cold, and the two share
+// the runner's cores. Every green `test` job since, four on 18 Oct 2026, timed it there in
+// 520-643s, with one analyzer run over all the fixtures. A 4-core dev container, alone under a
+// shared build lock, took 868s beside check against 611s alone.
+// Twenty-seven minutes is about two and a half times the slowest of those four, for the reason
+// `nodeBudgetMs` gives: this is a hang detector, not a deadline a slow runner should meet with a
+// minute to spare. Four runs are few, so it is rounded up to the next minute rather than to the
+// nearest. The `test` job's steps before `pr-gate` took at most 268s, so a hung lint is refused
+// by about the thirty-second minute of that job's forty-eight, while `check` carries on beside
+// it. What this replaces is no deadline at all: a hang ran to the job's bound and was cancelled
+// there, with no line saying which step.
 let private lintBudget : Bound =
     { Step = "lint"
-      BudgetMs = 1_500_000
+      BudgetMs = 1_620_000
       Basis =
-        "about two and a half times the slowest `lint` on CI, and nearly twice that beside `check` (`lintBudget` in tasks.fsx has the measurements)"
+        "about two and a half times the slowest `lint` on CI beside `check` (`lintBudget` in tasks.fsx has the measurements)"
       Next =
         "A run that did not finish judged nothing, so there is no finding here to fix. Run `lint` again. If it\n\
          stops in the same command again, that command hangs by itself: run it by hand, from the repository\n\
