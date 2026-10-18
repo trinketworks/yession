@@ -618,9 +618,9 @@ module Dom =
         /// which is why the section exists at all — and why the hook is on the row's control
         /// rather than on a wrapper: it is a button, operable from the keyboard by construction.
         let artifactListRow = "data-artifact-list-row"
-        /// The `all` page's way to send a file into the artifacts: a button, standing in for
-        /// the file input beside it (`artifactUploadInput`), which is what the browser's own
-        /// chooser is opened from.
+        /// The `all` page's way to send a file into the artifacts: the `<label>` that is the
+        /// face of the file input inside it (`artifactUploadInput`), which is what the browser's
+        /// own chooser is opened from.
         let artifactUpload = "data-artifact-upload"
         let artifactUploadInput = "data-artifact-upload-input"
         /// A file on its way into the artifacts, carrying the name it will have, with
@@ -630,8 +630,8 @@ module Dom =
         /// Send a failed upload again, and put one away.
         let uploadRetry = "data-upload-retry"
         let uploadDismiss = "data-upload-dismiss"
-        /// The composer's way to attach a file to the open draft, standing in for the file
-        /// input beside it (`draftAttachInput`) as `artifactUpload` does on the `all` page.
+        /// The composer's way to attach a file to the open draft: the `<label>` of the file
+        /// input inside it (`draftAttachInput`), as `artifactUpload` is on the `all` page.
         let draftAttach = "data-draft-attach"
         let draftAttachInput = "data-draft-attach-input"
         /// A file on the open draft, carrying its name, with `data-upload-state` saying where

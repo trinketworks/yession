@@ -6147,6 +6147,28 @@ let editorTests =
                 let! send = Probe.seen page "#shell [data-send-draft]"
                 Expect.isTrue (send |> List.exists (fun s -> s.Painted)) "a press where Send stands reaches it"
             }
+        // Attaching a file is open to the keyboard: Tab reaches the way to attach, and Enter
+        // opens the browser's chooser for it. The chooser used to be opened by a button that
+        // reached into the DOM for a `hidden` input and clicked it; the input is now the
+        // control, inside the label that is its face. An input out of the focus order
+        // (`hidden`, `display: none`) is one Tab steps over, and no markup test can see that.
+        editorCaseIn 1440 900 "the keyboard reaches the way to attach a file and opens its chooser" <| fun page ->
+            async {
+                let attach = "#shell " + Sel.hook Yession.App.Dom.Hooks.draftAttachInput
+                // Waited for from the start. Asking for the chooser is what tells Chromium to
+                // hand it to Playwright rather than open its own, and that request travels on
+                // its own: asked for in the same breath as Enter, under a loaded runner the
+                // press landed first and the chooser never reached the case.
+                let chooser = page.WaitForFileChooserAsync ()
+                do! waitVisible "the model picker, just before the way to attach" page "#shell [data-model-select]"
+                do! awaitU (page.FocusAsync "#shell [data-model-select]")
+                do! awaitU (page.Keyboard.PressAsync "Tab")
+                do! Wait.until "Tab to reach the way to attach a file" (fun () -> Read.focused page attach) id
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                let! chooser = Async.AwaitTask chooser
+                let! opener = Async.AwaitTask (chooser.Element.GetAttributeAsync Yession.App.Dom.Hooks.draftAttachInput)
+                Expect.isNotNull opener "Enter opened the chooser of the way to attach a file"
+            }
         // THE bug, and the reason the row above follows the draft rather than the composer's
         // focus. `focus-within` is false the moment focus leaves the composer, and pressing a
         // button is how focus leaves: where a button takes no focus from a tap — iOS Safari,

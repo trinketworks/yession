@@ -1637,7 +1637,8 @@ module View =
                 if target = myPeer then Lit.nothing
                 else html $"""<span class="{Style.draftAuthor}">{ClientModel.nameOf target model}'s message</span>"""
             // Files arrive however a person has them: chosen, pasted into the draft, or dropped
-            // on it. All three are one action, as on the `all` page.
+            // on it. All three are one action, as on the `all` page, and choosing is the file
+            // input itself in the `<label>` that is its face, as it is there.
             let take (files: Browser.Types.File array) =
                 if Array.isEmpty files then false
                 else
@@ -1651,11 +1652,6 @@ module View =
             let pasted (e: Browser.Types.Event) = if take (CarriedFiles.ofPaste e) then e.preventDefault ()
             let dragged (e: Browser.Types.Event) = if CarriedFiles.inDrag e then e.preventDefault ()
             let dropped (e: Browser.Types.Event) = if take (CarriedFiles.ofDrop e) then e.preventDefault ()
-            let choose (e: Browser.Types.Event) =
-                let button = e.currentTarget :?> Browser.Types.Element
-                match button.parentElement.querySelector (sprintf "[%s]" Dom.Hooks.draftAttachInput) with
-                | null -> ()
-                | input -> (input :?> Browser.Types.HTMLElement).click ()
             // Each file on the draft: its name, then what it weighs — or, while this browser is
             // sending it, how far it has got, beating in `ink-dim`; or the one red word, with
             // what can be done about it. Remove is always there: a file on a message is
@@ -1707,11 +1703,9 @@ module View =
                   <div class="{Style.draftActionsRow}">
                     <div class="{Style.draftLead}">
                       {modelControl dispatch model}
-                      <span class="contents">
-                        <input type="file" class="border-0" multiple hidden data-draft-attach-input @change={Ev(picked)}>
-                        <button type="button" class="{Style.draftAttach}" data-draft-attach
-                                aria-label="{Dom.Text.attachNamed}" @click={Ev(choose)}>{Dom.Text.attach}</button>
-                      </span>
+                      <label class="{Style.draftAttach}" data-draft-attach>
+                        <input type="file" class="{Style.pickerInput}" multiple data-draft-attach-input
+                               aria-label="{Dom.Text.attachNamed}" @change={Ev(picked)}>{Dom.Text.attach}</label>
                     </div>
                     <div class="{Style.draftCommit}">
                       <span class="{Style.draftEditors}">{editors target}</span>
@@ -4817,17 +4811,16 @@ module View =
         let pasted (e: Browser.Types.Event) = if take (CarriedFiles.ofPaste e) then e.preventDefault ()
         let dragged (e: Browser.Types.Event) = if CarriedFiles.inDrag e then e.preventDefault ()
         let dropped (e: Browser.Types.Event) = if take (CarriedFiles.ofDrop e) then e.preventDefault ()
-        let choose (e: Browser.Types.Event) =
-            let button = e.currentTarget :?> Browser.Types.Element
-            match button.parentElement.querySelector (sprintf "[%s]" Dom.Hooks.artifactUploadInput) with
-            | null -> ()
-            | input -> (input :?> Browser.Types.HTMLElement).click ()
+        // The way to choose is the file input itself, in a `<label>` that is its face: a press
+        // on the label is a press on the input, and Tab, Enter and Space reach the input as
+        // they reach any control, so the browser opens its chooser with no script of ours. A
+        // `hidden` input with a button beside it had to be found in the DOM and clicked.
         let uploadControl =
             html $"""
                 <div class="{Style.uploadCell}">
-                  <input type="file" class="border-0" multiple hidden data-artifact-upload-input @change={Ev(picked)}>
-                  <button type="button" class="{Style.paneToolbarAct}" data-artifact-upload
-                          aria-label="{Dom.Text.uploadNamed}" @click={Ev(choose)}>{Icon.up}{Dom.Text.upload}</button>
+                  <label class="{Style.paneToolbarPick}" data-artifact-upload>
+                    <input type="file" class="{Style.pickerInput}" multiple data-artifact-upload-input
+                           aria-label="{Dom.Text.uploadNamed}" @change={Ev(picked)}>{Icon.up}{Dom.Text.upload}</label>
                 </div>"""
         // The closed terminals, folded under one row that says how many — and unfolded in
         // place under it, never somewhere else. No fold over nothing.
