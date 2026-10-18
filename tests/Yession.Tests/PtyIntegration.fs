@@ -1136,6 +1136,23 @@ let private leaseLoanTests =
         |> Seq.filter (fun r -> r.Kind = TranscriptOutput)
         |> Seq.map (fun r -> r.Data)
         |> String.concat ""
+    /// Ada, holding the lease, unhooks bash's start mark: from here the shell's lines draw no
+    /// `C`. Answers once the shell is back at its prompt, which is the barrier the lost-marks
+    /// case above needs too. The prompt AFTER the unhooking's output, because Take typed ada's
+    /// loan line just before, and the prompt answering THAT line can land after `typed` as
+    /// well. Taken as the barrier, it let the next holder's line in while the unhooking was
+    /// still running, and the unhooking's own `C` opened the gate on that holder's secret.
+    let unhookStartMark (terminals: SessionTerminals.SessionTerminals) (id: TerminalId) (raw: System.Text.StringBuilder) =
+        async {
+            let typed = raw.Length
+            // `un''hooked` prints what its echo does not, so the word is the command having
+            // RUN, not the shell repeating what it was typed.
+            Expect.isTrue (terminals.Input id (Principal.toActor ada) "trap - DEBUG; echo un''hooked\r") "the start mark is unhooked"
+            do! untilPrinted raw typed "the shell's prompt after the unhooking" (fun said ->
+                match said.IndexOf "unhooked" with
+                | -1 -> false
+                | at -> (said.Substring at).Contains promptMark)
+        }
     testList "What a lease is lent, on a real pty" [
         for shell, label in [ TerminalShell.bash, "bash"; TerminalShell.zsh, "zsh"; TerminalShell.posix, "sh" ] do
             testCaseAsync (sprintf "%s: a lease holder's keystrokes carry their own loan, and the transcript never sees it go in" label) <|
@@ -1228,20 +1245,7 @@ let private leaseLoanTests =
                     match! terminals.Take id (Principal.toActor ada) with
                     | Error e -> failwith e
                     | Ok () ->
-                        let typed = raw.Length
-                        // `un''hooked` prints what its echo does not, so the word is the
-                        // command having RUN, not the shell repeating what it was typed.
-                        Expect.isTrue (terminals.Input id (Principal.toActor ada) "trap - DEBUG; echo un''hooked\r") "the start mark is unhooked"
-                        // Let the shell reach its prompt again before the next holder's line
-                        // goes in — the same barrier the lost-marks case above needs. The
-                        // prompt AFTER the unhooking's output: Take typed ada's loan line, and
-                        // the prompt answering that one can land after `typed` too. Taken as the
-                        // barrier, it let bob's line in while the unhooking was still running,
-                        // and the unhooking's own `C` opened the gate on bob's secret.
-                        do! untilPrinted raw typed "the shell's prompt after the unhooking" (fun said ->
-                            match said.IndexOf "unhooked" with
-                            | -1 -> false
-                            | at -> (said.Substring at).Contains promptMark)
+                        do! unhookStartMark terminals id raw
                         let lent = raw.Length
                         match! terminals.Take id (Principal.toActor bob) with
                         | Error e -> failwith e
@@ -1256,6 +1260,26 @@ let private leaseLoanTests =
                             let! seen = printedOutput records "after-the-window"
                             Expect.isTrue seen (sprintf "and is heard, the gate having been given up on; transcript: %s" (printed records))
                             Expect.isFalse ((printed records).Contains "s3cret-loan") "the line that went in unmarked is still not in the transcript"
+                }))
+
+        testCaseAsync "a lease taken over a program the shell never marked lends nothing" <|
+            // A shell that has stopped marking never says it started what it was handed, so
+            // the prompt it printed last is no account of it: Enter left that prompt. Here ada
+            // leaves `cat` reading the terminal. A loan line typed now would be cat's input,
+            // echoed onto the screen, and recorded once the window gave up on its `C`.
+            (let recorded = recordedLoans adasLoan
+             let raw = System.Text.StringBuilder ()
+             withTappedShellTerminal TerminalShell.bash recorded.Loans (fun _ -> async { return () }) raw "lease-over-unmarked" (fun terminals id _ _ _ _ ->
+                async {
+                    let bob = Principal.Peer (PeerId.create "bob" |> expect)
+                    match! terminals.Take id (Principal.toActor ada) with
+                    | Error e -> failwith e
+                    | Ok () ->
+                        do! unhookStartMark terminals id raw
+                        Expect.isTrue (terminals.Input id (Principal.toActor ada) "cat\r") "a program that reads the terminal"
+                        match! terminals.Take id (Principal.toActor bob) with
+                        | Error e -> failwith e
+                        | Ok () -> Expect.equal recorded.Asked.Count 1 "bob was lent nothing over it"
                 }))
 
         testCaseAsync "ending the lease returns the holder's loan" <|

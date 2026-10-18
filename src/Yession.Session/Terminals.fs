@@ -2557,6 +2557,12 @@ module SessionTerminals =
                 // Stamped BEFORE the write, so the idle timeout measures from the last
                 // keystroke rather than from when the lease was taken.
                 leases <- TerminalLeases.touch id by (clock.Now ()) leases
+                // A line handed to the shell is a prompt it has left: until its next `A`, it
+                // may be running what it was handed, and a shell that has stopped marking never
+                // says it started. The next lease's loan line would go to that program rather
+                // than to the shell, and the `C` that closes its unrecorded window might be the
+                // one this line draws, opening it on the loan's secret.
+                if data.Contains "\r" || data.Contains "\n" then atPrompt.Remove (TerminalId.value id) |> ignore
                 pty.Write data
                 true
             | None -> false
