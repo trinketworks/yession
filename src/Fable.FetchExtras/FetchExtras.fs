@@ -56,3 +56,14 @@ let timeoutSignal (afterMs: float) : Fetch.Types.AbortSignal = jsNative
 /// — and it names `$0` once, so the headers are evaluated once however the caller spelled them.
 [<Emit("$0.getSetCookie?.()")>]
 let setCookies (headers: Fetch.Types.Headers) : string array option = jsNative
+
+/// What a rejected `fetch` says happened underneath it: the rejection's `cause`, or nothing.
+///
+/// Node's `fetch` rejects every request that met no reply with one `TypeError: fetch failed`
+/// and puts the socket's own account in `cause` (an `Error` property since ES2022): `connect
+/// ECONNREFUSED 127.0.0.1:1`, `getaddrinfo ENOTFOUND`, a proxy's refusal of the tunnel. A
+/// cause can carry a cause of its own. `Fable.Fetch` hands the rejection on as an `exn`,
+/// which has no such member, so the one fact that tells one failure from another is out of
+/// its reach. A browser's rejection carries none, which is what `None` reads.
+[<Emit("$0?.cause")>]
+let causeOf (error: exn) : exn option = jsNative

@@ -319,36 +319,77 @@ let tests =
 
 // --- through the proxy the environment names ----------------------------------------------
 
-/// A stand-in proxy: it counts the connections it is asked to carry and refuses each one, so
-/// nothing leaves this machine. The host it is asked for is `.invalid`, which no resolver
-/// answers — a request that went direct instead fails at DNS and is never counted.
+/// What every request below asks for: a `.invalid` host, which no resolver answers, so a
+/// request that went direct fails at DNS and never reaches a proxy.
+let private probe () : Async<Http.Attempt<string>> =
+    Http.text "https://proxy-probe.invalid/" [ Http.deadline 5000.0 ]
+
+/// An environment that names `proxy` for https and exempts nothing from it.
+let private proxiedThrough (proxy: string) : (string * string option) list =
+    [ "HTTPS_PROXY", Some proxy; "https_proxy", Some proxy; "NO_PROXY", None; "no_proxy", None ]
+
+/// An environment that names no proxy at all, as a CI runner's does.
+let private unproxied : (string * string option) list =
+    [ for name in [ "HTTPS_PROXY"; "https_proxy"; "HTTP_PROXY"; "http_proxy"; "NO_PROXY"; "no_proxy" ] -> name, None ]
+
+/// A stand-in proxy, listening: it counts the connections it is asked to carry and refuses
+/// each one, so nothing leaves this machine. Answers its address, the count, and the server
+/// for the case to close.
+let private countingProxy () : Async<string * int ref * Fable.NodeExtras.NetServer> =
+    async {
+        let carried = ref 0
+        let proxy =
+            Fable.NodeExtras.NetServers.createNetServerAnswering (fun connection ->
+                carried.Value <- carried.Value + 1
+                connection.close "HTTP/1.1 502 Bad Gateway\r\n\r\n")
+        do! Async.FromContinuations (fun (listening, _, _) -> proxy.listen (0, "127.0.0.1", listening))
+        return sprintf "http://127.0.0.1:%d" (Fable.NodeExtras.NetServers.boundPort proxy), carried, proxy
+    }
+
 let private proxyTests =
     testList "a request through the environment's proxy" [
 
         testCaseAsync "goes through the proxy HTTPS_PROXY names" <|
             async {
-                let carried = ref 0
-                let proxy =
-                    Fable.NodeExtras.NetServers.createNetServerAnswering (fun connection ->
-                        carried.Value <- carried.Value + 1
-                        connection.close "HTTP/1.1 502 Bad Gateway\r\n\r\n")
-                do! Async.FromContinuations (fun (listening, _, _) -> proxy.listen (0, "127.0.0.1", listening))
-                let at = sprintf "http://127.0.0.1:%d" (Fable.NodeExtras.NetServers.boundPort proxy)
+                let! at, carried, proxy = countingProxy ()
                 try
-                    let! _ =
-                        Support.withEnv
-                            [ "HTTPS_PROXY", Some at; "https_proxy", Some at; "NO_PROXY", None; "no_proxy", None ]
-                            (fun () ->
-                                async {
-                                    Http.followEnvironmentProxy ()
-                                    return! Http.text "https://proxy-probe.invalid/" [ Http.deadline 5000.0 ]
-                                })
+                    let! _ = Support.withEnv (proxiedThrough at) probe
                     ()
                 finally
-                    // The environment is back as it was by now; so is what requests follow.
-                    Http.followEnvironmentProxy ()
                     proxy.close ()
                 Expect.equal carried.Value 1 "the request was carried by the proxy, not sent direct"
+            }
+
+        // Every case runs in one process, under one dispatcher. Where the environment names no
+        // proxy, as on CI's runners, a proxy a case followed went on carrying every request
+        // after the case had put the environment back and closed it. The next case to reach
+        // the internet reached the closed port: release run 39099760483 lost both cases of
+        // "The merge queue, for real" to "fetch failed" that way.
+        testCaseAsync "goes direct again once the environment names no proxy" <|
+            async {
+                let! at, carried, proxy = countingProxy ()
+                try
+                    do!
+                        Support.withEnv unproxied (fun () ->
+                            async {
+                                let! _ = Support.withEnv (proxiedThrough at) probe
+                                let! _ = probe ()
+                                ()
+                            })
+                finally
+                    proxy.close ()
+                Expect.equal carried.Value 1 "only the request made while HTTPS_PROXY named the proxy was carried by it"
+            }
+
+        // Nothing listens on port 1: a proxy the environment names after it has gone. That
+        // request failed with "fetch failed" and nothing else, the same words a host that does
+        // not exist fails with.
+        testCaseAsync "names the address that refused it when the proxy is gone" <|
+            async {
+                match! Support.withEnv (proxiedThrough "http://127.0.0.1:1") probe with
+                | Http.Unreachable reason ->
+                    Expect.stringContains reason "127.0.0.1:1" "the reason says where the request was refused"
+                | Http.Answered (response, _) -> failwithf "nothing listens on port 1, yet it answered %d" response.Status
             }
     ]
 
