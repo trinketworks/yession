@@ -1545,12 +1545,14 @@ let tests =
                 // command having run. The KEYSTROKES stay real — the input's binding is what
                 // writes the CRDT, and typing is the only thing that exercises it.
                 //
-                // A reload shuts the column, and a shut column is `inert` — its composer cannot
-                // take focus at all, by keyboard or by script — so the column is shown first.
+                // The column is open at every seed, and nothing here presses for it. The first
+                // follows the show below; a reload brings the column back as this browser left
+                // it (`PaneMemory`), or, with nothing remembered, it opens itself onto the
+                // terminal the session has (`openOfItself`). It used to count the show toggle
+                // and press it when found, and the column opening itself between the count and
+                // the press took the toggle away from under it.
                 let seed (first: int) (last: int) =
                     async {
-                        let! shut = Read.count page "[data-content-toggle='show']"
-                        if shut > 0 then do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                         do! waitVisible "the terminal's command line" page composerInput
                         do! awaitU (page.FocusAsync composerInput)
                         do!
@@ -1771,8 +1773,13 @@ let tests =
                 let one, two = tabs.[0], tabs.[1]
                 // Settle first: opening is an event, and the pane follows the newest terminal
                 // when it lands. Until that has happened there is no telling which terminal a
-                // click is acting on.
-                do! showTerminal page two
+                // click is acting on — so the settling is WAITED for, not pressed for. Pressing
+                // `two` read it unselected, and the pane could follow it between the read and the
+                // press, which then landed on a selected tab and pinned it (`showTerminal`).
+                do! Wait.until
+                        (sprintf "the pane to follow %s, the newest terminal" two)
+                        (fun () -> Read.attr page (sprintf "[data-terminal-tab='%s']" two) "aria-selected")
+                        ((=) (Some "true"))
 
                 // One command, half-written, in the first terminal.
                 do! showTerminal page one
@@ -6999,22 +7006,35 @@ let editorTests =
         editorCase "a closed row on the all page leads to its replay" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                match! Read.count page "#shell [data-pane-switcher][aria-expanded='false']" with
-                | 0 -> ()
-                | _ -> do! awaitU (page.ClickAsync "#shell [data-pane-switcher][aria-expanded='false']")
+                // The pane opens on the terminal it was on, with its list shut, so one press
+                // opens the list. Pressed, not first asked whether to: a read taken before the
+                // press it decides is one the page can change under (as below).
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 do! awaitU (page.ClickAsync "#shell [data-list-closed-fold][aria-expanded='false']")
                 do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-row='term-done']")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                // Opened, it is either playing already or one press from it.
-                do!
-                    waitVisible
-                        "the closed terminal's replay, or the way to watch it"
-                        page
-                        "#shell [data-pane-replay='terminal:term-done'], #shell [data-terminal-watch='watch']"
-                match! Read.count page "#shell [data-terminal-watch='watch']" with
-                | 0 -> ()
-                | _ -> do! awaitU (page.ClickAsync "#shell [data-terminal-watch='watch']")
-                do! waitVisible "the closed terminal's replay" page "#shell [data-pane-replay='terminal:term-done']"
+                // Opened, it is either playing already — a closed terminal whose recording is its
+                // only read plays by itself and offers no watch (`ReplayIsTheRead`) — or one press
+                // of its OWN watch from it. Both ends are asked of term-done's own hooks. The
+                // toolbar of the terminal the list was laid over stays in the document under the
+                // list, watch and all, until the pane draws the Enter, and a render owed inside a
+                // frame waits for the frame's end (`Render.fs`). A watch asked of the pane at large
+                // was that terminal's: the wait ended on it, the count found it, and the render
+                // took it away before the click could, which then waited 15s for nothing.
+                let replay = "#shell [data-pane-replay='terminal:term-done']"
+                let watch = "#shell [data-pane-actions='terminal:term-done'] [data-terminal-watch='watch']"
+                do! waitVisible "the closed terminal's replay, or its own way to watch it" page (replay + ", " + watch)
+                let! playing = Read.visible page replay
+                if not playing then
+                    // A press that is fine with either end: a recording found to be the only
+                    // read while the press waits plays by itself and takes its watch away, and
+                    // that is the replay this case is after, not a press that failed.
+                    match! Async.Catch (awaitU (page.Locator(watch).ClickAsync ())) with
+                    | Choice1Of2 () -> ()
+                    | Choice2Of2 refused ->
+                        let! nowPlaying = Read.visible page replay
+                        if not nowPlaying then raise refused
+                do! waitVisible "the closed terminal's replay" page replay
                 return ()
             }
 

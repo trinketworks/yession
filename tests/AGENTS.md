@@ -218,6 +218,10 @@ browser case:
   below the screen at three of those four. Where a case must know the point (a press it hit-tests
   afterwards), a trial click (`Trial = true`) settles the element first and the point is measured
   after it. A drag starts with a hover through the locator, at a `Position`.
+- Never decides a press on a read taken just before it (`Read.count`, then a click if it found one).
+  The page can change between the two: a render owed to the end of a frame takes the control away,
+  and the click waits its whole timeout for nothing. Scope every selector to the case's subject, wait
+  for the end state, and let a press that may find its control gone check the end it was for.
 
 A case's own lines print together with its verdict. Each case also prints `▶ <name>` when it starts, so
 a case that hung is one with a `▶` line and no verdict.
