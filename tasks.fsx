@@ -3274,11 +3274,14 @@ let lint () =
 // interleave with nothing to say whose a line is. Through a pipe of its own, every line a side or
 // anything it starts prints arrives here, and goes out marked with the side's name.
 //
-// Both sides restore the solution on their way in (`analyzers`, and check's `Target.Packages`),
-// so on a fresh checkout, which is where CI runs this, two restores of one solution run at once.
-// NuGet takes that: probed three times on a clean tree, each pair finished green, with up to
-// twelve of the solution's projects restored by both at once and the rest by whichever got there
-// first. The two also share `obj/Debug`: the analyzers crack every project in Debug, which writes
+// Both sides restore the tools and the solution on their way in (`analyzers`, and check's
+// `Target.Tools` and `Target.Packages`). Two solution restores at once NuGet takes: probed three
+// times on a clean tree, each pair finished green. Two TOOL restores at once it does not, on a
+// runner whose package folder is empty: the first `dotnet tool restore` extracts each tool's
+// package, and the second fails on the same file ("being used by another process"), which is
+// how this gate's first CI run ended. A dev box never shows it, because its tools are already
+// in place. So the gate makes both targets once, before either side starts, and each side's own
+// restore then finds them there. The two also share `obj/Debug`: the analyzers crack every project in Debug, which writes
 // its generated `AssemblyInfo.fs` and caches there, and check's `Target.ClrSuite` builds into the
 // same directories. Forced to overlap twice on a clean tree, both finished green and the
 // analyzers found nothing; the files they share are generated identically by either.
@@ -3311,6 +3314,7 @@ let private runSide (say: string -> unit) (mark: string) (side: Side) : int * Ti
     p.ExitCode, clock.Elapsed
 
 let private prGate (checkArgs: string list) =
+    make [ Target.Tools; Target.Packages ]
     let sides = [ { Name = "lint"; Verb = [ "lint" ] }; { Name = "check"; Verb = "check" :: checkArgs } ]
     let width = sides |> List.map (fun side -> side.Name.Length) |> List.max
     // `Console.Out` is synchronised, so a line written by one side is never split by the other's.
