@@ -174,6 +174,9 @@
          `Tag.needs` recorded, so neither side of it is a copy. -->
     <Compile Include="VerifyTiers.fs" />
     <Compile Include="LiveConnections.fs" />
+    <!-- How the .NET CLR run executes the browser suites: several cases at once. Last before
+         `Main.fs`, its one caller. -->
+    <Compile Include="BrowserRunner.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
 
