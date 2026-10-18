@@ -19,35 +19,52 @@
     <link rel="stylesheet" href="./out/assets/player.css" media="not all" data-player-css />
   </head>
   <body>
-    <!-- The editor mounts here; window.__md() returns the fragment's serialized Markdown.
-         The bundle is the Fable-compiled app/browser/EditorHarness.fs, esbuilt by the
-         `Browser`-cap test build (mise). No inline JS — the no-authored-JS invariant holds. -->
-    <div id="host"></div>
-    <!-- The replay of a recorded terminal mounts here (Plan 13, stage 3e): the same
-         `asciinema-player` binding the client uses, driven by a `.cast` the client's own
-         rebuild produced. -->
-    <!-- Both replay hosts are given a HEIGHT, as the pane's read-only region gives its
-         player one: the player scales its terminal to fit its box in both directions
-         (`Replay.mount`), and a box whose height is its content has nothing to fit. This one
-         is the page's FIRST player, and narrow for its 80x24 recording, so the terminal is
-         scaled to the width — which is where a character cell measured wrong shows, as
-         columns running off the right-hand side. Both are kept short: the shell below them
-         is in the page's flow, and cases on a phone hit-test it where the viewport ends. -->
-    <div id="replay" style="width: 16rem; height: 14rem"></div>
-    <!-- A second recording, this one with a long idle gap in it and a chapter on the far
-         side (Plan 25, stage 1). The mount above cannot fail the way the real pane failed:
-         its recording has no dead air to compress and its one chapter sits at t=0, so a
-         chapter list on the wrong clock still looks right. This one answers whether
-         chapters and a start position ride the SAME clock as the records. -->
-    <div id="replay-gappy" style="height: 12rem"></div>
-    <!-- Two peers converging on ONE body, relayed in this page: no WebRTC, no Session
-         Process, no native addon. `#peer-a` is the author's editable composer, `#peer-b` the
-         read-only mirror a co-editor sees. `window.__caretStorm(true)` pushes presence
-         decorations into the mirror on every animation frame — which is what a real
-         collaborator's moving caret does, and what the two-peer WebRTC E2E can only
-         reproduce under load. -->
-    <div id="peer-a"></div>
-    <div id="peer-b"></div>
+    <!-- The page is two pages, chosen by its address, so that where a case's boxes stand is a
+         property of the page it asked for and of nothing that ran before it.
+
+         `/` is the SHELL'S page. The fixtures below are mounted and running, but out of the
+         page: fixed, so they add nothing the window could scroll by, and hidden, so nothing
+         paints, hit-tests or takes focus there. The shell is then the document — a viewport
+         tall, at its top — and no click, focus or retry can scroll it anywhere.
+
+         `/?fixtures` is the FIXTURES' page: the bundle puts them back in the page's flow, above
+         the shell, for the cases about the editor, the players and the two peers.
+
+         They used to be in the flow on every page, and the shell started 488px down. Its foot
+         was on the screen only once the window had scrolled to it, and only Playwright scrolled
+         it: each retry of a click on a moving target scrolls with the next of four alignments,
+         so where a click left the window depended on load. A box the shell drew near its foot
+         was below the screen in three of the four, and every case that measured one flaked. -->
+    <div id="fixtures" style="position: fixed; top: 0; left: 0; width: 100%; visibility: hidden">
+      <!-- The editor mounts here; window.__md() returns the fragment's serialized Markdown.
+           The bundle is the Fable-compiled app/browser/EditorHarness.fs, esbuilt by the
+           `Browser`-cap test build (mise). No inline JS — the no-authored-JS invariant holds. -->
+      <div id="host"></div>
+      <!-- The replay of a recorded terminal mounts here (Plan 13, stage 3e): the same
+           `asciinema-player` binding the client uses, driven by a `.cast` the client's own
+           rebuild produced. -->
+      <!-- Both replay hosts are given a HEIGHT, as the pane's read-only region gives its
+           player one: the player scales its terminal to fit its box in both directions
+           (`Replay.mount`), and a box whose height is its content has nothing to fit. This one
+           is the page's FIRST player, and narrow for its 80x24 recording, so the terminal is
+           scaled to the width — which is where a character cell measured wrong shows, as
+           columns running off the right-hand side. -->
+      <div id="replay" style="width: 16rem; height: 14rem"></div>
+      <!-- A second recording, this one with a long idle gap in it and a chapter on the far
+           side (Plan 25, stage 1). The mount above cannot fail the way the real pane failed:
+           its recording has no dead air to compress and its one chapter sits at t=0, so a
+           chapter list on the wrong clock still looks right. This one answers whether
+           chapters and a start position ride the SAME clock as the records. -->
+      <div id="replay-gappy" style="height: 12rem"></div>
+      <!-- Two peers converging on ONE body, relayed in this page: no WebRTC, no Session
+           Process, no native addon. `#peer-a` is the author's editable composer, `#peer-b` the
+           read-only mirror a co-editor sees. `window.__caretStorm(true)` pushes presence
+           decorations into the mirror on every animation frame — which is what a real
+           collaborator's moving caret does, and what the two-peer WebRTC E2E can only
+           reproduce under load. -->
+      <div id="peer-a"></div>
+      <div id="peer-b"></div>
+    </div>
     <!-- The client shell (Plan 14, stage 2): the real `View.view` over a fixed model, with
          no Session Process behind it. Here to answer the two questions only a browser can —
          where focus goes when a chat chip opens a pane tab, and whether the tab strip is a

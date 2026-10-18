@@ -314,10 +314,6 @@ let private itemsClearOfCard () : string list =
         match first Root.Document "#shell [data-repo-picker-dismiss]" with
         | None -> [ "the conversation is not drawn and nothing offers a way back to it" ]
         | Some way ->
-            // Into view first, exactly as an item is: this page carries the editor fixtures
-            // above the shell, so a control the shell draws on its own first screen can still
-            // be below the window — which is the harness's doing and not the card's.
-            Scrolling.intoView way "center"
             let box = way.getBoundingClientRect ()
             if paintedAt way (box.left + box.width / 2.0) (box.top + box.height / 2.0) then []
             else [ "the conversation is not drawn and a press does not reach the way back to it" ]
@@ -339,11 +335,6 @@ let private itemsClearOfCard () : string list =
                 if paintedAt item (box.left + box.width / 2.0) (box.top + box.height / 2.0) then None
                 else Some (sprintf "%s is not what a press in its middle lands on" (item.getAttribute "data-message-id")))
         shows @ unreached
-
-let private hideFixturesAboveShell () : string list =
-    for id in [ "host"; "replay" ] do
-        document.getElementById id |> Option.ofObj |> Option.iter (fun fixture -> fixture.setAttribute ("style", "display:none"))
-    []
 
 let private focusBeforePane () : string list =
     match first Root.Document "#shell [data-content-panel]" with
@@ -740,7 +731,6 @@ let private implement (measure: Probes.Measure) : Implementation =
     | Probes.Measure.PastShell -> readingNow (fun _ -> pastShell ())
     | Probes.Measure.AskCardColumn -> verdictNow askCardColumn
     | Probes.Measure.ItemsClearOfCard -> verdictNow (fun _ -> itemsClearOfCard ())
-    | Probes.Measure.HideFixturesAboveShell -> verdictNow (fun _ -> hideFixturesAboveShell ())
     | Probes.Measure.FocusBeforePane -> verdictNow (fun _ -> focusBeforePane ())
     | Probes.Measure.Burst -> Implementation.Reading (fun _ -> burst ())
     | Probes.Measure.LoneRecordInQuietFrame -> Implementation.Verdict (fun _ -> loneRecordInQuietFrame ())
