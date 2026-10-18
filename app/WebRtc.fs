@@ -154,7 +154,10 @@ module Answering =
           Gathering : System.TimeSpan
           /// How long an answered connection has to open its data channel before it counts
           /// as abandoned and is closed.
-          Open : System.TimeSpan }
+          Open : System.TimeSpan
+          /// How long a connection is held after the SESSION closed its channel, so that
+          /// what the session sent just before the close still reaches the far end.
+          Linger : System.TimeSpan }
 
     /// Gathering: this side asks no STUN or TURN server, so its candidates are host
     /// candidates, local work that arrives in a burst of milliseconds. Two seconds is a
@@ -165,9 +168,18 @@ module Answering =
     ///
     /// Open: twice the browser's whole handshake. A browser that has not opened by then
     /// has given up, closed its end, and is trying again with a new connection.
+    ///
+    /// Linger: a frame sent and then closed behind is still in SCTP's hands when the
+    /// channel reports closed, and closing the connection then can abort it before it is on
+    /// the wire. On a loaded box, five hundred such closes lost the last frame seventeen
+    /// times when the connection closed at once, and none when it was held: a rejected peer
+    /// saw a dropped connection instead of the reason. Five seconds leaves SCTP room to send
+    /// a lost packet again more than once. A far end that reads the close closes its own end
+    /// long before then.
     let shipped =
         { Gathering = System.TimeSpan.FromSeconds 2.0
-          Open = System.TimeSpan.FromSeconds 20.0 }
+          Open = System.TimeSpan.FromSeconds 20.0
+          Linger = System.TimeSpan.FromSeconds 5.0 }
 
     /// The answer, bounded: what gathering resolves with when it finishes inside `limit`,
     /// and otherwise what `soFar` has gathered at the limit. `Error` only when there is
@@ -235,9 +247,9 @@ module Answering =
         | None -> async.Return ()
 
     /// Answer `offerSdp` on a new peer connection. The data channel it opens goes to
-    /// `onChannel`. The connection is closed when that channel ends, when no channel has
-    /// opened within `bounds.Open`, or when the answer cannot be given. `Error` says why
-    /// there is no answer.
+    /// `onChannel`. The connection is closed when the far end ends that channel, `bounds.Linger`
+    /// after the session closes it, when no channel has opened within `bounds.Open`, or when
+    /// the answer cannot be given. `Error` says why there is no answer.
     let answer
         (bounds: Bounds)
         (peers: Peers)
@@ -246,10 +258,12 @@ module Answering =
         : Async<Result<string, string>> =
         let pc = createPeerConnection "yession-process"
         let mutable openDeadline : int option = None
+        let mutable lingering : int option = None
         let close =
             once (
                 async {
                     openDeadline |> Option.iter JS.clearTimeout
+                    lingering |> Option.iter JS.clearTimeout
                     do! closePeerConnection pc
                     // Held until the close has finished, not merely begun, so `closeAll`
                     // still awaits a close that something else started.
@@ -270,9 +284,20 @@ module Answering =
                                 let! frame = channel.Receive ()
                                 // The channel ended: the connection under it has nothing left
                                 // to carry. Closed in the background, so whoever is pumping
-                                // learns of the end without waiting on the native close.
-                                if Option.isNone frame then Async.StartImmediate close
+                                // learns of the end without waiting on the native close. Unless
+                                // the session ended it, and the connection is lingering.
+                                if Option.isNone frame && Option.isNone lingering then Async.StartImmediate close
                                 return frame
+                            }
+                    Close =
+                        fun () ->
+                            async {
+                                // What the session sent last may still be on its way
+                                // (`Bounds.Linger`). Set before the close, which is what
+                                // ends the channel under `Receive`.
+                                if Option.isNone lingering then
+                                    lingering <- Some (JS.setTimeout (fun () -> Async.StartImmediate close) (int bounds.Linger.TotalMilliseconds))
+                                do! channel.Close ()
                             } })
         openDeadline <-
             Some (JS.setTimeout (fun () -> Async.StartImmediate close) (int bounds.Open.TotalMilliseconds))
