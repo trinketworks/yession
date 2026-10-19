@@ -68,7 +68,6 @@ let private page (names: string list) (next: string option) : RepoPage =
 let private clientAt (latest: int64) (events: EventEnvelope<SessionEvent> list) : ClientModel =
     ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
     |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (offset latest) })
-    |> Support.step HistoryReadMsg
     |> Support.step
         (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
 
@@ -89,13 +88,12 @@ let private offeredTests =
         testCase "a client that has not connected is not, whatever it has read" <| fun () ->
             let unconnected =
                 ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
-                |> Support.step HistoryReadMsg
             Expect.isFalse (ClientModel.launchOffered unconnected) "the command it produces needs a session to send it to"
 
         testCase "a client still reading is not: the log may hold the repo it is about to see" <| fun () ->
             // Connected to a session whose log runs past what this client has folded.
             let behind = clientAt 40L fresh
-            Expect.isTrue behind.EventConsumer.IsCatchingUp "still catching up"
+            Expect.isTrue (HistorySync.behind behind.EventConsumer.Sync) "still catching up"
             Expect.isFalse (ClientModel.launchOffered behind) "not offered over an unread log"
             Expect.isFalse ((render behind).Contains "data-repo-picker") "and not drawn"
 
@@ -127,7 +125,6 @@ let private offeredTests =
             let reopened =
                 { init with Synced = { init.Synced with LaunchDismissed = true } }
                 |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (offset 1L) })
-                |> Support.step HistoryReadMsg
                 |> Support.step (EventsPageMsg { Events = fresh; LastOffset = Some (offset 1L); IsEnd = true })
             Expect.isFalse (ClientModel.launchOffered reopened) "the card a person put away does not come back"
     ]
@@ -419,7 +416,6 @@ let private askTests =
             let read =
                 ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
                 |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (offset 1L) })
-                |> Support.step HistoryReadMsg
             let arriving = EventsPageMsg { Events = fresh; LastOffset = Some (offset 1L); IsEnd = true }
             Expect.equal (asks arriving read) [ ClientEffect.Launch (LaunchEffect.Search "") ] "my repos, asked for once it is on screen"
 

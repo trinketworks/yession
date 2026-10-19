@@ -926,7 +926,7 @@ let private queueUnitTests =
                 [ "once only" ]
                 "re-applying an overlapping page adds nothing"
             Expect.equal model.EventConsumer.LastProcessedOffset (Some EventOffset.zero) "progress recorded"
-            Expect.isFalse model.EventConsumer.IsCatchingUp "caught up after consuming the page"
+            Expect.isFalse (HistorySync.behind model.EventConsumer.Sync) "caught up after consuming the page"
     ]
 
 // -----------------------------------------------------------------------------
@@ -1041,7 +1041,7 @@ let private e2eTests =
 
                 // Both consume the log so far (it already holds "ship it" from E2E-2).
                 let caughtUp (m: ClientModel) =
-                    not m.EventConsumer.IsCatchingUp
+                    not (HistorySync.behind m.EventConsumer.Sync)
                     && (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "ship it"))
                 do! a.Runner.WaitFor caughtUp
                 do! b.Runner.WaitFor caughtUp
@@ -1059,7 +1059,7 @@ let private e2eTests =
                 // the page size of 2 forces the catch-up across multiple reads.
                 let! b = reconnect b
                 do! b.Runner.WaitFor (fun m ->
-                        not m.EventConsumer.IsCatchingUp
+                        not (HistorySync.behind m.EventConsumer.Sync)
                         && Support.saidOn m = [ "ship it"; "while you were away" ])
 
                 // E2E-7: unsent draft content lives in the draft, never in the timeline —

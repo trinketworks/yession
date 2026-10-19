@@ -93,11 +93,11 @@ let tests =
                 // The session's own start is offset 0, written before any peer can be accepted,
                 // so the offset a joiner is told — and catches up to — is the one past it.
                 Expect.equal
-                    model.EventConsumer.LatestKnownOffset
+                    (HistorySync.target model.EventConsumer.LastProcessedOffset model.EventConsumer.Sync)
                     (EventOffset.create 1L |> Result.toOption)
                     "latest-known offset = the log's end when this peer joined"
                 Expect.equal model.EventConsumer.LastProcessedOffset None "nothing consumed yet"
-                Expect.isTrue model.EventConsumer.IsCatchingUp "catch-up active while behind the known offset"
+                Expect.isTrue (HistorySync.behind model.EventConsumer.Sync) "catch-up active while behind the known offset"
 
                 // The UI renders both offset displays and the catch-up indicator — once the
                 // catch-up has lasted long enough to be worth reporting, which is the only

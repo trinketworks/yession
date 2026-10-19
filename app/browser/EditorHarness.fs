@@ -804,8 +804,10 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
     { ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" } with
         Connection = Connected
         // A client already at work in the session, so what `__fold` brings is news rather
-        // than a log being replayed on load (`ClientModel.HeardThrough`).
-        HeardThrough = true
+        // than a log being replayed on load (`HistorySync.heardThrough`).
+        EventConsumer =
+            { (ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" }).EventConsumer with
+                Sync = Current }
         Session = Some (SessionId.create "harness" |> expect)
         // Two chapters, so the chapter rail has strokes to draw. Where a stroke
         // LANDS is arithmetic a model test settles; whether it lands beside the reading
@@ -1219,7 +1221,6 @@ let private launchModel : ClientModel =
     ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" }
     |> folded
         (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (offset 1L) })
-    |> folded HistoryReadMsg
     |> folded (EventsPageMsg { Events = events; LastOffset = Some (offset 1L); IsEnd = true })
     |> folded
         (LaunchMsg
@@ -1948,9 +1949,7 @@ do
                       EventConsumer =
                           { shellModel.EventConsumer with
                               LastProcessedOffset = Some (EventOffset.create 12L |> expect)
-                              LatestKnownOffset = Some (EventOffset.create 40L |> expect)
-                              IsCatchingUp = true
-                              CatchUpIsSlow = true } })
+                              Sync = Behind (EventOffset.create 40L |> expect, true) } })
           "degraded",
           (fun () ->
               show

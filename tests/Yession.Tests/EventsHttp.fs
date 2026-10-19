@@ -132,7 +132,7 @@ let private endpointTests =
                 do! compose a a.Hello.PeerId "fetched over http"
                 a.Connection.SendDraft a.Hello.PeerId
                 do! a.Runner.WaitFor (fun m ->
-                        not m.EventConsumer.IsCatchingUp
+                        not (HistorySync.behind m.EventConsumer.Sync)
                         && Support.saidOn m = [ "fetched over http" ])
                 do! a.Channel.Close ()
                 do! h.Stop ()

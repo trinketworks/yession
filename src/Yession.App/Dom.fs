@@ -748,7 +748,7 @@ module Dom =
         /// Writing a chapter's name, named when this client knows the chapter.
         let namingChapter (name: string) : string = "naming " + name
         let atSomeChapter = "naming a chapter"
-        // Event-feed health tokens (the HTTP leg that carries history). `IsCatchingUp` says
+        // Event-feed health tokens (the HTTP leg that carries history). `HistorySync` says
         // there is more to read; these say whether reading is getting through.
         let feedLive = "live"
         let feedRetrying = "retrying"

@@ -227,7 +227,8 @@ module Launch =
         | Choosing | Resolving _ | Cloning _ -> false
 
     /// The live question `anchor` asks, once, on the way to deciding: this client is
-    /// connected, has read the log through to where the session says it ends, and the
+    /// connected and has read the log through to where the session says it ends
+    /// (`readThrough`, which `ClientModel` answers from `HistorySync`), and the
     /// session has not BEGUN - no repo in it and nothing said. A session that has begun is
     /// the agent's to add a repo to (Plan 15).
     ///
@@ -235,25 +236,19 @@ module Launch =
     /// that failed leaves its failure on the timeline, and a person whose clone could not
     /// reach the repo needs the card still there to try another, not a note and a blank.
     ///
-    /// The catch-up conditions are what keep it honest: a client that has not looked yet, or
-    /// is still reading, has an empty projection too, and a launch card that flashed over
-    /// every cold open of an old session would teach people it means nothing.
+    /// Read through is what keeps it honest: a client that has not been told where the log
+    /// ends, or is still reading to it, has an empty projection too, and a launch card that
+    /// flashed over every cold open of an old session would teach people it means nothing.
     ///
     /// NOT what a render reads (`offered` is): see `anchor`, below, for why a live signal
     /// answers this question exactly once and is then retired.
-    let eligible
-        (connected: bool)
-        (historyRead: bool)
-        (latestKnown: EventOffset option)
-        (catchingUp: bool)
-        (begun: bool)
-        : bool =
-        connected && historyRead && latestKnown.IsSome && not catchingUp && not begun
+    let eligible (readThrough: bool) (begun: bool) : bool =
+        readThrough && not begun
 
     /// The card's start, ANCHORED: once `eligible` has been true, once, it is decided - a
     /// session that begins offered stays offered through whatever its OWN connection does
     /// next. Without this, a phone backgrounding the tab drops the socket; reconnecting
-    /// spends a moment `catchingUp` on whatever arrived while it was gone; and a card
+    /// spends a moment behind on whatever arrived while it was gone; and a card
     /// computed fresh from those live signals on every render winks out and back for no
     /// reason a person watching it could name. `begun` alone still closes it, live, in
     /// `offered` below - this only ever LATCHES true, never false, and never at all once the
@@ -262,16 +257,13 @@ module Launch =
     /// provider for a listing, and a question somebody already put away is not one to go
     /// and look up the answers to on every open.
     let anchor
-        (connected: bool)
-        (historyRead: bool)
-        (latestKnown: EventOffset option)
-        (catchingUp: bool)
+        (readThrough: bool)
         (begun: bool)
         (dismissed: bool)
         (launch: LaunchViewState)
         : LaunchViewState =
         if launch.Anchored || begun || dismissed then launch
-        elif eligible connected historyRead latestKnown catchingUp begun then
+        elif eligible readThrough begun then
             { launch with Anchored = true }
         else launch
 

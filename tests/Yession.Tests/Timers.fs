@@ -199,7 +199,7 @@ let tests =
             let clock, send, model = program ()
             send (available 2L)
             clock.Advance ClientModel.catchUpQuietMs
-            Expect.isTrue (model ()).EventConsumer.CatchUpIsSlow "a wait that lasted is a wait worth saying"
+            Expect.isTrue (HistorySync.slow (model ()).EventConsumer.Sync) "a wait that lasted is a wait worth saying"
 
         testCase "catch-up that ends inside its quiet interval is never reported" <| fun () ->
             let clock, send, model = program ()
@@ -207,7 +207,7 @@ let tests =
             clock.Advance (ClientModel.catchUpQuietMs / 2)
             send opened
             clock.Advance ClientModel.catchUpQuietMs
-            Expect.isFalse (model ()).EventConsumer.CatchUpIsSlow "a send's round trip is not news"
+            Expect.isFalse (HistorySync.slow (model ()).EventConsumer.Sync) "a send's round trip is not news"
 
         // One wait for the whole episode: a page that lands while more is still to come is
         // progress, and restarting the wait on each would keep a long catch-up from ever
@@ -218,7 +218,7 @@ let tests =
             clock.Advance (ClientModel.catchUpQuietMs / 2)
             send opened
             clock.Advance (ClientModel.catchUpQuietMs / 2)
-            Expect.isTrue (model ()).EventConsumer.CatchUpIsSlow "still behind at the interval, however many pages came"
+            Expect.isTrue (HistorySync.slow (model ()).EventConsumer.Sync) "still behind at the interval, however many pages came"
 
         // The connect's status follows the catch-up's rule: every client starts connecting, so
         // only a connect that has LASTED is said. A cold session that takes a minute used to

@@ -800,7 +800,7 @@ let create (deps: Deps) : Renderer =
     let rec setState (model: ClientModel) =
         latest <- Some model
         let since = now () - renderedAt
-        if model.EventConsumer.IsCatchingUp && since < float ClientModel.catchUpQuietMs then
+        if HistorySync.behind model.EventConsumer.Sync && since < float ClientModel.catchUpQuietMs then
             owed <- false
             if held = 0 then
                 held <-

@@ -299,14 +299,15 @@ module View =
 
     /// Whether a catch-up is worth showing: PROGRESS, not health, so it is the one thing that
     /// still speaks while everything works — and only once it has lasted long enough to be
-    /// something somebody is waiting on (`CatchUpIsSlow`). Offline, freshness is unknowable
-    /// and nothing is said. One rule for its two faces, the sidebar's line and the header's
-    /// bar, so they cannot disagree about whether there is a catch-up to show.
+    /// something somebody is waiting on (`HistorySync`'s `slow`), and only toward an end the
+    /// session has named, since a bar needs a whole to be part of. Offline, freshness is
+    /// unknowable and nothing is said. One rule for its two faces, the sidebar's line and the
+    /// header's bar, so they cannot disagree about whether there is a catch-up to show.
     let private showsCatchUp (model: ClientModel) : bool =
         match model.Connection with
         | Disconnected _
         | Retrying _ -> false
-        | _ -> model.EventConsumer.IsCatchingUp && model.EventConsumer.CatchUpIsSlow
+        | _ -> HistorySync.behind model.EventConsumer.Sync && HistorySync.slow model.EventConsumer.Sync
 
     /// The catch-up as a bar along the header's bottom rule (`Style.catchUpBar`): how much of
     /// the log this client has folded, of what it knows the log holds. A `progressbar` with
@@ -318,7 +319,7 @@ module View =
             let consumer = model.EventConsumer
             // Offsets count from zero, so the count folded is one past the last folded.
             let folded = consumer.LastProcessedOffset |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
-            let known = consumer.LatestKnownOffset |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
+            let known = HistorySync.target consumer.LastProcessedOffset consumer.Sync |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
             let percent = if known <= 0L then 0.0 else 100.0 * float (min folded known) / float known
             let width = sprintf "width: %.1f%%" percent
             html $"""<div class="{Style.catchUpBar}" role="progressbar" aria-label="{Dom.Text.catchingUp}"
@@ -331,7 +332,7 @@ module View =
         let catchUp =
             if not showsCatchUp then Lit.nothing
             else
-                html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}" data-catch-up>{Dom.Text.catchingUp}</span><span class="{Style.label} tabular-nums"><b class="text-ink-dim" data-last-processed-offset>{offsetText consumer.LastProcessedOffset}</b> / <b class="text-ink-dim" data-latest-known-offset>{offsetText consumer.LatestKnownOffset}</b></span></span>"""
+                html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}" data-catch-up>{Dom.Text.catchingUp}</span><span class="{Style.label} tabular-nums"><b class="text-ink-dim" data-last-processed-offset>{offsetText consumer.LastProcessedOffset}</b> / <b class="text-ink-dim" data-latest-known-offset>{offsetText (HistorySync.target consumer.LastProcessedOffset consumer.Sync)}</b></span></span>"""
         // The one thing a person can do about a settled disconnection. The supervised loop is
         // already trying; this is for the client it will not carry — a refused peer parks
         // until asked — and for anyone who would rather not wait out a backoff.
@@ -3464,22 +3465,31 @@ module View =
                           <span class="{Style.historyGapText}">{Dom.Text.historyMissingLocally}</span>
                         </p>""")
             | Some _, _, _ -> None
-        // Read through, in the body's own sense: the local store has been looked at AND the
-        // event consumer is not behind the session's own log. `HistoryRead` alone says only
-        // that the first of those finished — the second can still be running, with a real
-        // message (never seen on this device) a round trip from landing. Showing the idle
-        // caret the moment the local read resolves told that caller "nothing was ever said
-        // here" while it was, in fact, still arriving.
-        let caughtUp = model.HistoryRead && not model.EventConsumer.IsCatchingUp
+        // Read through, in the body's own sense: the session has said where its log ends and
+        // this client has folded to it, once (`HistorySync.heardThrough`). Anything less and
+        // a real message (never seen on this device) may be a round trip from landing — the
+        // idle caret shown when the local store came back empty told a cold open "nothing was
+        // ever said here" while its history was, in fact, still arriving. Or this client
+        // cannot reach the session at all, and what it kept is all it will have: then the
+        // timeline is what is kept, and the gap line or the caret says so, rather than a
+        // "catching up" nothing is doing.
+        let caughtUp =
+            ClientModel.heardThrough model
+            || (match model.Connection with
+                | Disconnected (Some _)
+                | Retrying _ -> true
+                | Disconnected None
+                | Connecting _
+                | Connected
+                | Reconnecting -> false)
         let body =
             match rows, items, caughtUp with
-            // Nothing here yet, and either this client has not looked at its own store, or it
-            // has and the session is still ahead of it — so a message may still be a round
-            // trip from landing. Shaped like the row it may become: an author line of the
-            // same height as a real one, `invisible` so it reserves the room without drawing
-            // a blank avatar, over the one body line the status itself stands on, both on the
-            // rail. When a real message supersedes this, it lands in the box this was already
-            // holding, rather than pushing it down.
+            // Nothing here yet, and this client has not yet read the log through — so a
+            // message may still be a round trip from landing. Shaped like the row it may
+            // become: an author line of the same height as a real one, `invisible` so it
+            // reserves the room without drawing a blank avatar, over the one body line the
+            // status itself stands on, both on the rail. When a real message supersedes this,
+            // it lands in the box this was already holding, rather than pushing it down.
             //
             // Not the agent's blue caret either (docs/visual-design.md, Colour: blue is never
             // a status) — it is `statusWait` with a beating dot, the same vocabulary "queued"
