@@ -29,12 +29,19 @@ open Yession.Analyzers.Expressions
 /// - every `unbox` and every `!!`, whatever they are applied to, matched as the library's
 ///   functions and not by their spelling (a test's own `!!` is not Fable's);
 /// - a `:?>` or `downcast` WRITTEN in the source whose operand is typed `obj`. That is `unbox`
-///   spelt differently. A downcast from a declared type (an `Event` to the `KeyboardEvent` it is,
-///   an `Element` to an `HTMLElement`) is the DOM's own shape, where a declared hierarchy is the
-///   only one available, and it is left alone. A type test (`:? string as s`) checks, and the
-///   compiler's own downcasts (structural equality, a `for` loop's enumerator) are nobody's to
-///   fix: both reach the typed tree as the same downcast, which is why a downcast is reported
-///   only where the syntax tree says one was written.
+///   spelt differently;
+/// - a `:?>` or `downcast` WRITTEN in the source whose operand is typed `Browser.Types.Event` or
+///   `Browser.Types.EventTarget`. Which event a listener is handed is decided by the event's name,
+///   a string, and what it reached by whatever was under the pointer, so the declared type says
+///   nothing about the answer. The browser can test both, and `Events` and `EventTargets`
+///   (Fable.BrowserExtras) narrow with that test.
+///
+///   A downcast from any other declared type (an `Element` to an `HTMLElement`) is the DOM's own
+///   shape, where a declared hierarchy is the only one available, and it is left alone. A type
+///   test (`:? string as s`) checks, and the compiler's own downcasts (structural equality, a
+///   `for` loop's enumerator) are nobody's to fix: both reach the typed tree as the same
+///   downcast, which is why a downcast is reported only where the syntax tree says one was
+///   written.
 ///
 /// Except on a value built in the same expression — `unbox (ResponseDouble reply)`, a record, a
 /// union case, a literal: there the author is holding the thing whose type is being asserted.
@@ -71,12 +78,25 @@ let private constructed (e: FSharpExpr) =
     | FSharpExprPatterns.Const _ -> true
     | _ -> false
 
-let private isObj (t: FSharpType) =
+let private fullName (t: FSharpType) =
     try
         let t = t.StripAbbreviations ()
-        t.HasTypeDefinition && t.TypeDefinition.TryFullName = Some "System.Object"
+        if t.HasTypeDefinition then t.TypeDefinition.TryFullName else None
     with _ ->
-        false
+        None
+
+let private isObj (t: FSharpType) = fullName t = Some "System.Object"
+
+/// What a listener is handed and what an event says it reached. Neither is a declared hierarchy
+/// the author is narrowing within: which `Event` a listener gets is decided by the event's name,
+/// in a string, and what `target` is decided by whatever was clicked. Both have a runtime class
+/// the browser can test, so `Events` and `EventTargets` (Fable.BrowserExtras) narrow them with a
+/// test that can answer no.
+let private isEventShape (t: FSharpType) =
+    match fullName t with
+    | Some "Browser.Types.Event"
+    | Some "Browser.Types.EventTarget" -> true
+    | _ -> false
 
 /// Where this file's source writes a downcast, by the line and column each starts at.
 let private writtenDowncasts (input: ParsedInput) =
@@ -95,6 +115,16 @@ let private writtenDowncasts (input: ParsedInput) =
 
 let private sameFile (a: string) (b: string) =
     try Path.GetFullPath a = Path.GetFullPath b with _ -> false
+
+let private eventMessage (project: string) =
+    "this downcast asserts what an event is, or what it reached, and checks nothing: under Fable "
+    + "it compiles to the value itself, so a listener handed another event, or an event that "
+    + "reached another node, is not refused here but read as the wrong shape. "
+    + $"`%s{project}` is product code. Narrow with the test the browser has instead: "
+    + "`Events.key`, `Events.mouse`, `Events.pointer` and friends wrap a handler so it runs only "
+    + "for the event class it names; `EventTargets.asElement`, `asHTMLElement` and friends answer "
+    + "`None` for a target of another class (Fable.BrowserExtras). Add the narrowing there when "
+    + "the class you want is missing."
 
 let private message (project: string) (reach: string list) =
     let named = String.concat ", " reach
@@ -120,28 +150,35 @@ let uncheckedCast: Analyzer<CliContext> =
                 let project = Path.GetFileNameWithoutExtension ctx.ProjectOptions.ProjectFileName
                 let written = writtenDowncasts ctx.ParseFileResults.ParseTree
 
+                let writtenDown (call: Call) value shape =
+                    isDowncast call.Callee
+                    && written.Contains (call.Where.StartLine, call.Where.StartColumn)
+                    && shape (operand value).Type
+
                 let reported (call: Call) =
                     match call.Args with
                     | [ value ] when not (constructed value) ->
-                        isUnbox call.Callee
-                        || isBang call.Callee
-                        || (isDowncast call.Callee
-                            && written.Contains (call.Where.StartLine, call.Where.StartColumn)
-                            && isObj (operand value).Type)
-                    | _ -> false
+                        if writtenDown call value isEventShape then Some (eventMessage project)
+                        elif isUnbox call.Callee || isBang call.Callee || writtenDown call value isObj then
+                            Some (message project reach)
+                        else
+                            None
+                    | _ -> None
 
                 let offenders =
                     [ for binding in Expressions.of' ctx do
                           for call in binding.Calls do
-                              if sameFile call.Where.FileName ctx.FileName && reported call then
-                                  yield call.Where ]
+                              if sameFile call.Where.FileName ctx.FileName then
+                                  match reported call with
+                                  | Some said -> yield call.Where, said
+                                  | None -> () ]
                     // A call reaches the walk more than once when it is a piped function's body.
-                    |> List.distinct
+                    |> List.distinctBy fst
 
                 return
-                    [ for range in offenders ->
+                    [ for range, said in offenders ->
                           { Type = "UncheckedCast"
-                            Message = message project reach
+                            Message = said
                             Code = Code
                             Severity = Severity.Error
                             Range = range
