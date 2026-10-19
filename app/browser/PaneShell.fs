@@ -347,6 +347,7 @@ let watchBreakpoint (changed: bool -> unit) : unit =
 /// shell resized to it would re-lay out under the reader's fingers.
 let followVisualViewport () : unit =
     let root = document.documentElement
+    setStyleProperty root "--shell-position" "fixed"
     let fit () =
         if Viewport.visualScale () <= 1.0 then
             setStyleProperty root "--visual-h" (sprintf "%fpx" (Viewport.visualHeight ()))
