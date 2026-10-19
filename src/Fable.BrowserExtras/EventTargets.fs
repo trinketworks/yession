@@ -20,15 +20,26 @@ module EventTargets =
     [<Emit("$0 instanceof Node")>]
     let private isNode (target: EventTarget) : bool = jsNative
 
+    [<Emit("$0 instanceof Element")>]
+    let private isElement (target: EventTarget) : bool = jsNative
+
     [<Emit("$0 instanceof HTMLElement")>]
     let private isHTMLElement (target: EventTarget) : bool = jsNative
 
     [<Emit("$0 instanceof HTMLInputElement")>]
     let private isHTMLInputElement (target: EventTarget) : bool = jsNative
 
+    [<Emit("$0 instanceof HTMLTextAreaElement")>]
+    let private isHTMLTextAreaElement (target: EventTarget) : bool = jsNative
+
     /// The target as a node, or `None` for one that is not (the window, a request).
     let asNode (target: EventTarget) : Node option =
         if isNode target then Some (target :?> Node) else None
+
+    /// The target as an element, or `None` for anything else — the document itself, a text
+    /// node, the window. An SVG element is one.
+    let asElement (target: EventTarget) : Element option =
+        if isElement target then Some (target :?> Element) else None
 
     /// The target as an HTML element, or `None` for anything else — the document itself, a
     /// text node, an SVG element.
@@ -40,3 +51,7 @@ module EventTargets =
     /// is `null` for a checkbox or a number field), asked of what this returns.
     let asHTMLInputElement (target: EventTarget) : HTMLInputElement option =
         if isHTMLInputElement target then Some (target :?> HTMLInputElement) else None
+
+    /// The target as a `<textarea>`, or `None` for anything else.
+    let asHTMLTextAreaElement (target: EventTarget) : HTMLTextAreaElement option =
+        if isHTMLTextAreaElement target then Some (target :?> HTMLTextAreaElement) else None

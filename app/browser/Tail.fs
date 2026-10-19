@@ -340,11 +340,10 @@ let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) :
     let attach () : unit =
         document.addEventListener (
             "click",
-            (fun event ->
+            Events.mouse (fun event ->
                 match EventTargets.asNode event.target |> Option.bind pressedIn with
                 | Some (surface, entry) ->
-                    // A click event is a `MouseEvent`: the one cast, on the line that reads it.
-                    let byKeyboard = (event :?> MouseEvent).detail = 0.0
+                    let byKeyboard = event.detail = 0.0
                     let held =
                         match EventTargets.asHTMLElement event.target with
                         | Some control when byKeyboard -> control :> Element

@@ -705,11 +705,10 @@ let installPaneResize (dispatch: Yession.App.ClientMsg -> unit) : unit =
 
     document.addEventListener (
         "pointerdown",
-        fun event ->
+        Events.pointer (fun event ->
             match handleUnder event.target with
             | None -> ()
             | Some handle ->
-                let event = event :?> PointerEvent
                 event.preventDefault ()
                 handle.focus ()
                 handle.setPointerCapture event.pointerId
@@ -722,13 +721,13 @@ let installPaneResize (dispatch: Yession.App.ClientMsg -> unit) : unit =
                 let pending : float option ref = ref None
                 // The pane's edge is on the LEFT of a right-hand column, so its width is the
                 // distance from the pointer to the right of the window.
-                let move = fun (moving: Event) ->
+                let move = Events.pointer (fun moving ->
                     let first = pending.Value.IsNone
-                    pending.Value <- Some (window.innerWidth - (moving :?> PointerEvent).clientX)
+                    pending.Value <- Some (window.innerWidth - moving.clientX)
                     if first then
                         nextFrame (fun () ->
                             pending.Value |> Option.iter setTo
-                            pending.Value <- None)
+                            pending.Value <- None))
                 let rec finish =
                     fun (_: Event) ->
                         document.documentElement.classList.remove "term-resizing"
@@ -737,15 +736,14 @@ let installPaneResize (dispatch: Yession.App.ClientMsg -> unit) : unit =
                         handle.removeEventListener ("pointercancel", finish)
                 handle.addEventListener ("pointermove", move)
                 handle.addEventListener ("pointerup", finish)
-                handle.addEventListener ("pointercancel", finish))
+                handle.addEventListener ("pointercancel", finish)))
 
     document.addEventListener (
         "keydown",
-        fun event ->
+        Events.key (fun event ->
             match handleUnder event.target with
             | None -> ()
             | Some _ ->
-                let event = event :?> KeyboardEvent
                 // Left GROWS this column, because the column is on the right and its edge is
                 // what moves.
                 let step = if event.shiftKey then 64.0 else 16.0
@@ -761,4 +759,4 @@ let installPaneResize (dispatch: Yession.App.ClientMsg -> unit) : unit =
                 | None -> ()
                 | Some act ->
                     act ()
-                    event.preventDefault ())
+                    event.preventDefault ()))
