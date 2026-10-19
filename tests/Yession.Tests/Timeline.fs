@@ -420,6 +420,17 @@ let private clientOf (events: EventEnvelope<SessionEvent> list) : ClientModel =
         (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
         (ClientModel.init { PeerId = ada; DisplayName = "swift-heron" })
 
+/// `clientOf`, then told by the session that its log ends where these events do — read
+/// through, so its timeline is drawn (`ClientModel.showsFolded`) rather than saying it is
+/// still reading. For the cases about what the chat DRAWS.
+let private shownOf (events: EventEnvelope<SessionEvent> list) : ClientModel =
+    clientOf events
+    |> Support.step
+        (ConnectedMsg
+            { SessionId = sessionId
+              AssignedDisplayName = "swift-heron"
+              LatestOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset) })
+
 /// A terminal's blocks, the surface the tail cases read from its end.
 let private blocksA = TailSurface.Blocks terminalA
 
@@ -626,7 +637,7 @@ let private paneTests =
 
         testCase "a preview has no command line" <| fun () ->
             // The reader is reading, not typing; back restores the terminal and its composer.
-            let html = Support.render (clientOf oneBlock |> Support.step (chip terminalA "1"))
+            let html = Support.render (shownOf oneBlock |> Support.step (chip terminalA "1"))
             Expect.isFalse
                 (html.Contains (Dom.attr Dom.Hooks.terminalInput (BodyKey.terminalDraft terminalA ada)))
                 "no composer under a preview"
@@ -635,7 +646,7 @@ let private paneTests =
         // for — nor an item of the pivot at all (F3): see "a preview is named under the
         // pivot, never in it".
         testCase "a preview is never one of the terminals' tabs" <| fun () ->
-            let html = Support.render (clientOf oneBlock |> Support.step (chip terminalA "1"))
+            let html = Support.render (shownOf oneBlock |> Support.step (chip terminalA "1"))
             Expect.equal
                 (Text.RegularExpressions.Regex.Matches (html, Dom.Hooks.paneTab + "=\"([^\"]*)\"")
                  |> Seq.map (fun m -> m.Groups.[1].Value)
@@ -737,7 +748,7 @@ let private namingTests =
                 match started terminalB "1" byAda "cd app && make" 1 with
                 | SessionEvent.TerminalBlockStarted s -> SessionEvent.TerminalBlockStarted { s with Description = Some "built the app" }
                 | other -> other
-            let chipOf events = textAt (Dom.attr Dom.Hooks.chatBlock "b-1") (Support.render (clientOf events))
+            let chipOf events = textAt (Dom.attr Dom.Hooks.chatBlock "b-1") (Support.render (shownOf events))
             let named = chipOf (List.take 3 threeUntitled @ [ at 4L 3.0 described ])
             let bare = chipOf threeUntitled
             Expect.isTrue (named.StartsWith "ran built the app") $"the description, after ran: {named}"
@@ -747,7 +758,7 @@ let private namingTests =
         testCase "a chat chip's accessible name says which terminal its command ran in" <| fun () ->
             // The chip's own words are replaced by its label for a screen reader, so the label
             // has to carry the terminal itself rather than lean on the visible name.
-            let html = Support.render (clientOf threeUntitled)
+            let html = Support.render (shownOf threeUntitled)
             let label = attributeOf (Dom.attr Dom.Hooks.chatBlock "b-1") "aria-label" html |> List.exactlyOne
             Expect.stringContains label "term 2" "where it ran, heard"
 
@@ -1230,7 +1241,7 @@ let private edgeTabTests =
             Expect.equal moves [ ClientEffect.Move (DomMove.IfDropped DomMove.FocusSwitcher) ] "onto the switcher, if dropped"
 
         testCase "an empty pane offers one way to make a terminal" <| fun () ->
-            let html = Support.render (clientOf [] |> Support.step ToggleContentMsg)
+            let html = Support.render (shownOf [] |> Support.step ToggleContentMsg)
             let doors =
                 System.Text.RegularExpressions.Regex.Matches(html, "(data-pane-new|data-terminal-new)[\\s=>]").Count
             Expect.equal doors 1 "one New terminal, not two"
@@ -1241,7 +1252,7 @@ let private edgeTabTests =
 /// One command in terminal A that ended as `result`, with terminal A on screen — so its block
 /// is in the pane's scrollback and its chip in the chat, both on one page.
 let private endedAs (result: CommandResult) : string =
-    clientOf
+    shownOf
         [ at 1L 0.0 (opened terminalA "build")
           at 2L 1.0 (started terminalA "1" byAda "false" 1)
           at 3L 2.0 (completed terminalA "1" result 3) ]
@@ -1251,7 +1262,7 @@ let private endedAs (result: CommandResult) : string =
 /// One command in terminal A whose terminal then closed with no completion saying how it
 /// went — a log from before the Process appended one — with terminal A on screen.
 let private cutOffByItsClose () : string =
-    clientOf
+    shownOf
         [ at 1L 0.0 (opened terminalA "build")
           at 2L 1.0 (started terminalA "1" byAda "exit" 1)
           at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "the shell exited with code 0"; By = Some ActorRef.System }) ]
@@ -1362,7 +1373,7 @@ let private statusTests =
                 "the word that already means over, with nothing saying how"
 
         testCase "a terminal running a command marks its tab, and an idle one does not" <| fun () ->
-            let strip = Support.render (clientOf threeUntitled |> showingAll)
+            let strip = Support.render (shownOf threeUntitled |> showingAll)
             Expect.equal
                 ([ terminalA; terminalB; terminalC ]
                  |> List.map (fun id ->
@@ -2666,7 +2677,7 @@ let private toolTests =
             let events =
                 [ at 1L 0.0 (SessionEvent.ToolUseStarted { ToolUseId = toolUse "1"; AgentTurnId = turn "a"; Namespace = "yession"; Name = "edit_file"; Arguments = Some args })
                   at 2L 1.0 (toolDoneWith "1" ToolCallOk None (Some "edited src/A.fs: −1 +1 lines")) ]
-            let model = clientOf events
+            let model = shownOf events
             let html = Support.render model
             let callAt = html.IndexOf (Dom.attr Dom.Hooks.chatTool "t-1")
             Expect.isTrue (callAt >= 0) "the call is drawn"
@@ -2695,7 +2706,7 @@ let private toolTests =
                   at 3L 2.0 (sent "1" "reading…")
                   at 4L 3.0 (used "3" "a" "edit_file")
                   at 5L 4.0 (used "4" "a" "read_file") ]
-            let shut = clientOf events
+            let shut = shownOf events
             let html = Support.render shut
             Expect.isTrue (html.Contains (Dom.attr "data-fold-body" "run-t-1")) "the first run has a fold"
             Expect.isTrue (html.Contains (Dom.attr "data-fold-body" "run-t-3")) "and the second its own"
@@ -2713,7 +2724,7 @@ let private toolTests =
         // two presses to reach one thing.
         testCase "a run of one call is the call, with no aggregate around it" <| fun () ->
             let events = [ at 1L 0.0 (used "1" "a" "read_file") ]
-            let html = Support.render (clientOf events)
+            let html = Support.render (shownOf events)
             Expect.isTrue (html.Contains (Dom.attr "data-fold-body" "call-t-1")) "the call has its fold"
             Expect.isFalse (html.Contains "data-fold-body=\"run-") "and nothing folds around it"
 
@@ -2894,7 +2905,7 @@ let private commandCallTests =
                 Expect.equal (commandRows (drawn prefix)) [ 1 ] (sprintf "after %d events: %A" prefix.Length (drawn prefix))
 
         testCase "the chip says starting, then running, then how it went" <| fun () ->
-            let seen = prefixesFrom 2 oneCommandCall |> List.map (clientOf >> Support.render >> commandChips)
+            let seen = prefixesFrom 2 oneCommandCall |> List.map (shownOf >> Support.render >> commandChips)
             Expect.equal
                 seen
                 [ [ "call", Dom.Text.commandStarting ]
@@ -2906,12 +2917,12 @@ let private commandCallTests =
                 "one chip throughout, and only what it says changes"
 
         testCase "a starting chip reads as the command it will be" <| fun () ->
-            let html = Support.render (clientOf (List.take 2 oneCommandCall))
+            let html = Support.render (shownOf (List.take 2 oneCommandCall))
             let said = textAt (Dom.attr Dom.Hooks.chatCommandCall "t-1") html
             Expect.isTrue (said.StartsWith "ran tested the app") $"ran, then the description the call gave: {said}"
 
         testCase "a message that landed while the command started stays below its chip" <| fun () ->
-            let html = Support.render (clientOf (List.take 5 oneCommandCall))
+            let html = Support.render (shownOf (List.take 5 oneCommandCall))
             let chipAt = html.IndexOf (Dom.attr Dom.Hooks.chatBlock "b-1")
             let messageAt = html.IndexOf "data-message-id=\"m-2\""
             Expect.isTrue (chipAt >= 0 && chipAt < messageAt) "the block is drawn where the call was, above what came after it"
@@ -2932,7 +2943,7 @@ let private commandCallTests =
                 @ [ at 5L 1.2 (callAnswered "1" None (Some NothingQueued) (Some "could not run the command: that terminal is not open")) ]
             Expect.equal (commandRows (drawn events)) [ 1 ] "still in the call's row"
             Expect.equal
-                (commandChips (Support.render (clientOf events)))
+                (commandChips (Support.render (shownOf events)))
                 [ "call", Dom.Text.commandNotStarted ]
                 "and it says the command did not start"
 
@@ -2940,7 +2951,7 @@ let private commandCallTests =
             let events =
                 List.take 2 oneCommandCall @ [ at 3L 1.0 (toolDone "1" (ToolCallFailed "unreadable arguments") None) ]
             Expect.equal
-                (commandChips (Support.render (clientOf events)))
+                (commandChips (Support.render (shownOf events)))
                 [ "call", Dom.Text.commandNotStarted ]
                 "a call that never reached the tool started nothing"
 
@@ -2948,7 +2959,7 @@ let private commandCallTests =
             let queued = at 3L 1.0 (callAnswered "1" None (Some (CommandQueued (QueueId.create "q-1" |> expect))) (Some "STARTED"))
             let answered = List.take 2 oneCommandCall @ [ queued ]
             let started = answered @ [ at 4L 3.0 (startedFor "1" (Some "1") agentForAda) ]
-            Expect.equal (commandChips (Support.render (clientOf answered))) [ "call", Dom.Text.queuedReady ] "queued, not finished"
+            Expect.equal (commandChips (Support.render (shownOf answered))) [ "call", Dom.Text.queuedReady ] "queued, not finished"
             Expect.equal (drawn started) [ "said:m-1"; "ran:b-1" ] "and its block takes the call's row when it starts"
 
         testCase "a person's block cannot take the agent's call's place" <| fun () ->
@@ -2981,7 +2992,7 @@ let private commandCallTests =
                   Description = Some "tested the app"
                   ToolUseId = Some (toolUse "1")
                   Size = None }
-            let model = clientOf (List.take 3 oneCommandCall)
+            let model = shownOf (List.take 3 oneCommandCall)
             let queued = { model with Synced = { model.Synced with Pending = Map.ofList [ entry.QueueId, entry ] } }
             let html = Support.render queued
             Expect.equal (attributeOf (Dom.attr Dom.Hooks.chatPending "q-1") "class" html) [] "no second chip at the tail"
@@ -3422,7 +3433,7 @@ let private listTests =
 
         testCase "the selected tab's × closes the tab and offers no kill" <| fun () ->
             // A × on a tab means close the tab; the stop is the list's.
-            let html = Support.render (clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA)))
+            let html = Support.render (shownOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA)))
             let pivot = markupAt Dom.Hooks.panePivot html
             Expect.equal
                 (pivot.Contains (Dom.attr Dom.Hooks.paneTabDismiss (TerminalId.value terminalA)),
@@ -5048,7 +5059,7 @@ let private replyRefRenderTests =
 
     testList "The reply ref, rendered" [
         testCase "a detached agent reply draws a ref that resolves to what it answers" <| fun () ->
-            let html = Support.render (clientOf (conversation "1" "please rebase onto master" [ "2", "and squash the fixups" ]))
+            let html = Support.render (shownOf (conversation "1" "please rebase onto master" [ "2", "and squash the fixups" ]))
             Expect.isTrue
                 (html.Contains (Dom.attr Dom.Hooks.replyRef (MessageId.value (message "1"))))
                 "the ref points at the message the turn answered"
@@ -5057,13 +5068,13 @@ let private replyRefRenderTests =
             Expect.isFalse (html.Contains Dom.Text.replyRefMissing) "the quote resolved to the real message, not the fallback"
 
         testCase "an adjacent agent reply draws no ref" <| fun () ->
-            let html = Support.render (clientOf (conversation "1" "please rebase onto master" []))
+            let html = Support.render (shownOf (conversation "1" "please rebase onto master" []))
             Expect.isFalse (html.Contains Dom.Hooks.replyRef) "a reply under its cause says nothing the eye cannot see"
 
         // The jump's two halves that only the markup settles: the ref whose source is loaded is
         // a live control, and the article it will land on is focusable so the cursor can.
         testCase "a ref whose source is loaded is a jump control, and its target can hold focus" <| fun () ->
-            let html = Support.render (clientOf (conversation "1" "please rebase onto master" [ "2", "and squash the fixups" ]))
+            let html = Support.render (shownOf (conversation "1" "please rebase onto master" [ "2", "and squash the fixups" ]))
             Expect.isTrue (html.Contains Dom.Hooks.replyJump) "the ref is the jump control, not an inert line"
             // The reveal lands the cursor on the target article, which a plain <article> cannot
             // hold — so every message is `tabindex=-1`, focusable on purpose and never a Tab stop.
@@ -5083,7 +5094,7 @@ let private replyRefRenderTests =
                   at 3L 2.0 (AgentMessageStarted { AgentTurnId = turnId; MessageId = agentMsg; Antecedent = None })
                   at 4L 3.0 (AgentMessageDelta { AgentTurnId = turnId; MessageId = agentMsg; Delta = "on it" })
                   at 5L 4.0 (AgentMessageCompleted { AgentTurnId = turnId; MessageId = agentMsg; Body = "on it" }) ]
-            let html = Support.render (clientOf events)
+            let html = Support.render (shownOf events)
             Expect.isTrue
                 (html.Contains (Dom.attr Dom.Hooks.replyRef (MessageId.value (message "gone"))))
                 "the ref still names what it answered"
@@ -5203,9 +5214,9 @@ let private sandboxTaskTests =
         // see it. The hook is asserted, not the design — a redesign may move the pulse, but a
         // running act must always SAY it is running, and a started one must stop saying so.
         testCase "a running sandbox act renders as running; the start clears it" <| fun () ->
-            let running = Support.render (clientOf [ at 1L 0.0 (starting "1") ])
+            let running = Support.render (shownOf [ at 1L 0.0 (starting "1") ])
             Expect.isTrue (running.Contains "data-act-status=\"running\"") "the running act says it is running"
-            let started = Support.render (clientOf [ at 1L 0.0 (starting "1"); at 2L 1.0 (startedSandbox "1") ])
+            let started = Support.render (shownOf [ at 1L 0.0 (starting "1"); at 2L 1.0 (startedSandbox "1") ])
             Expect.isFalse (started.Contains "data-act-status=\"running\"") "once started, nothing still says running"
             Expect.isTrue (started.Contains "data-act-status=\"complete\"") "the resolved act says it is complete"
     ]
@@ -5306,7 +5317,7 @@ let private sandboxCauseTests =
         testCase "a chain says its cause once" <| fun () ->
             let html =
                 Support.render (
-                    clientOf
+                    shownOf
                         [ at 1L 0.0 (repoAdded "a" "octo/hello")
                           at 2L 1.0 (repoAdded "b" "octo/other")
                           at 3L 2.0 (startingBecause "s" (Cause.Item (message "a")))
@@ -5317,7 +5328,7 @@ let private sandboxCauseTests =
         testCase "a loaded cause is named as who did what, with references" <| fun () ->
             let html =
                 Support.render (
-                    clientOf
+                    shownOf
                         [ at 1L 0.0 (repoAdded "a" "octo/hello")
                           at 2L 1.0 (repoAdded "b" "octo/other")
                           at 3L 2.0 (startingBecause "s" (Cause.Item (message "a"))) ])
@@ -5330,7 +5341,7 @@ let private sandboxCauseTests =
         testCase "a loaded cause offers a jump to it" <| fun () ->
             let html =
                 Support.render (
-                    clientOf
+                    shownOf
                         [ at 1L 0.0 (repoAdded "a" "octo/hello")
                           at 2L 1.0 (repoAdded "b" "octo/other")
                           at 3L 2.0 (startingBecause "s" (Cause.Item (message "a"))) ])
@@ -5373,7 +5384,7 @@ let private sandboxCauseTests =
         testCase "a start the boot brought up names the boot" <| fun () ->
             let html =
                 Support.render (
-                    clientOf
+                    shownOf
                         [ at 1L 0.0 (SessionEvent.SessionStarted { MessageId = message "boot" })
                           at 2L 1.0 (repoAdded "a" "octo/hello")
                           at 3L 2.0 (startingBecause "s" (Cause.Item (message "boot"))) ])
@@ -5382,7 +5393,7 @@ let private sandboxCauseTests =
         testCase "a start the first boot brought up offers no jump, with nothing drawn to jump to" <| fun () ->
             let html =
                 Support.render (
-                    clientOf
+                    shownOf
                         [ at 1L 0.0 (SessionEvent.SessionStarted { MessageId = message "boot" })
                           at 2L 1.0 (repoAdded "a" "octo/hello")
                           at 3L 2.0 (startingBecause "s" (Cause.Item (message "boot"))) ])
@@ -5397,7 +5408,7 @@ let private sandboxCauseTests =
             Expect.equal (linkOf "t" events) (Some (CauseLink.Drawn (Cause.Item (message "again")))) "its own boot, not the first one's chain"
 
         testCase "a cause that is not an item offers no jump" <| fun () ->
-            let html = Support.render (clientOf [ at 1L 0.0 (startingBecause "s" Cause.Booted) ])
+            let html = Support.render (shownOf [ at 1L 0.0 (startingBecause "s" Cause.Booted) ])
             Expect.isFalse ((causeLineOf "s" html).Contains "data-cause-jump") "nothing to jump to"
     ]
 
@@ -5424,7 +5435,7 @@ let private contentChipTests =
     testList "A file, referenced (Plan 26)" [
 
         testCase "the act of sharing one draws the chip, linked to the version's own bytes" <| fun () ->
-            let html = Support.render (clientOf [ at 1L 0.0 (sharedArtifact "a" (chart 0)) ])
+            let html = Support.render (shownOf [ at 1L 0.0 (sharedArtifact "a" (chart 0)) ])
             let hook = html.IndexOf (Dom.attr "data-entity-kind" "content")
             Expect.isTrue (hook >= 0) "the artifact is a reference, drawn as one"
             // From the anchor's own start, because the href is written before the hook: a
@@ -5567,7 +5578,7 @@ let private sessionBreakTests =
           Event = SessionResumed { MessageId = message id; LastHeardAt = at'.AddHours -hours } }
     let showing (reading: string) = Dom.attr Dom.Hooks.sessionBreak reading
     let press (id: string) (model: ClientModel) = Support.step (ToggleBreakTimeMsg (message id)) model
-    let oneBreak () = clientOf [ resumption "r" 1L 7.0 cameBack ]
+    let oneBreak () = shownOf [ resumption "r" 1L 7.0 cameBack ]
 
     testList "A break where the session was away" [
         testCase "a resumption draws a break saying how long, in words" <| fun () ->
@@ -5611,7 +5622,7 @@ let private sessionBreakTests =
         // Two breaks are two questions. This is what the set in the model buys over one slot,
         // and the only case that can tell the two apart.
         testCase "answering one break leaves the other alone" <| fun () ->
-            let model = clientOf [ resumption "first" 1L 7.0 cameBack; resumption "second" 2L 2.0 (cameBack.AddHours 9.0) ]
+            let model = shownOf [ resumption "first" 1L 7.0 cameBack; resumption "second" 2L 2.0 (cameBack.AddHours 9.0) ]
             let html = Support.render (press "first" model)
             Expect.stringContains html "2 hours later" "the break nobody pressed still reads as a duration"
             Expect.stringContains html (Moment.stamp cameBack) "and the pressed one as a moment"
@@ -5800,6 +5811,40 @@ let private historySyncTests =
             let read = booted |> Support.step (accepted (Some 1L)) |> Support.step (page EventsPageMsg log)
             let stale = read |> Support.step (EventsAvailableMsg (EventOffset.create 0L |> expect))
             Expect.equal stale.EventConsumer.Sync Current "an end is never moved backwards"
+
+        testCase "a page out of this client's own store is kept" <| fun () ->
+            let kept = booted |> Support.step (page LocalHistoryMsg log)
+            Expect.equal kept.EventConsumer.Sync (Opening (None, false, true)) "the reader's own picture"
+
+        testCase "a cold open waiting on the session's history is not drawn" <| fun () ->
+            let waiting = booted |> Support.step (accepted (Some 1L))
+            Expect.isFalse (ClientModel.presentable waiting) "the next page is a round trip away"
+
+        testCase "a cold open whose wait has lasted is drawn, to say so" <| fun () ->
+            let waiting = booted |> Support.step (accepted (Some 1L)) |> Support.step (CatchUpSlowMsg true)
+            Expect.isTrue (ClientModel.presentable waiting) "a wait worth saying is worth drawing"
+
+        testCase "what this client kept is drawn before the session has said anything" <| fun () ->
+            let kept = booted |> Support.step (page LocalHistoryMsg log)
+            Expect.isTrue (ClientModel.presentable kept) "the reader's own picture, at once"
+
+        testCase "what this client kept is held once the session says there is more" <| fun () ->
+            let behind =
+                booted
+                |> Support.step (page LocalHistoryMsg [ List.head log ])
+                |> Support.step (accepted (Some 1L))
+            Expect.isFalse (ClientModel.presentable behind) "the rest is a round trip away"
+
+        testCase "a client read through is drawn" <| fun () ->
+            let read = booted |> Support.step (accepted (Some 1L)) |> Support.step (page EventsPageMsg log)
+            Expect.isTrue (ClientModel.presentable read) "caught up"
+
+        testCase "a client that cannot reach its session is drawn as it is" <| fun () ->
+            let cut =
+                booted
+                |> Support.step (accepted (Some 1L))
+                |> Support.step (RejectedMsg "session unreachable")
+            Expect.isTrue (ClientModel.presentable cut) "what it has is all it will have"
     ]
 
 let private readLoopTests =

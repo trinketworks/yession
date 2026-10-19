@@ -73,8 +73,11 @@ type FeedHealth =
 type HistorySync =
     /// Has not yet been current since this page loaded: whatever is folded is a replay of the
     /// past (the local store, the first pages), not news. `target` is where the session said
-    /// the log ends, `None` until it has said.
-    | Opening of target: EventOffset option * slow: bool
+    /// the log ends, `None` until it has said. `kept` is whether any of what is folded came
+    /// out of this client's own store: that is the reader's own last picture of the session,
+    /// worth showing at once, where the first pages off the network are the session's
+    /// OLDEST history, a picture of nothing anybody asked to see.
+    | Opening of target: EventOffset option * slow: bool * kept: bool
     /// Was current, and the session has since said its log runs past what is folded.
     | Behind of target: EventOffset * slow: bool
     /// Has folded everything the session has said its log holds — including the case where it
@@ -86,7 +89,7 @@ module HistorySync =
     /// Whether the read has lasted long enough to be worth saying.
     let slow (sync: HistorySync) : bool =
         match sync with
-        | Opening (_, slow)
+        | Opening (_, slow, _)
         | Behind (_, slow) -> slow
         | Current -> false
 
@@ -94,7 +97,7 @@ module HistorySync =
     /// once current, what it has folded.
     let target (folded: EventOffset option) (sync: HistorySync) : EventOffset option =
         match sync with
-        | Opening (target, _) -> target
+        | Opening (target, _, _) -> target
         | Behind (target, _) -> Some target
         | Current -> folded
 
@@ -102,9 +105,9 @@ module HistorySync =
     /// read is owed.
     let behind (sync: HistorySync) : bool =
         match sync with
-        | Opening (Some _, _)
+        | Opening (Some _, _, _)
         | Behind _ -> true
-        | Opening (None, _)
+        | Opening (None, _, _)
         | Current -> false
 
     /// Whether this client has, once, been current since the page loaded — after which what a
@@ -127,7 +130,7 @@ module HistorySync =
             | Some latest, Some folded -> EventOffset.value folded >= EventOffset.value latest
         match sync, latest with
         | _, _ when reached -> Current
-        | Opening (_, slow), _ -> Opening (latest, slow)
+        | Opening (_, slow, kept), _ -> Opening (latest, slow, kept)
         | _, Some latest -> Behind (latest, slow sync)
         | _, None -> Current
 
@@ -136,13 +139,21 @@ module HistorySync =
     /// what it kept, never where the log ends.
     let folded (folded: EventOffset option) (sync: HistorySync) : HistorySync =
         match sync with
-        | Opening (None, _) -> sync
+        | Opening (None, _, _) -> sync
         | _ -> told folded None sync
+
+    /// Folded history out of this client's own store. Only a fact while opening: once the
+    /// log has been read through, where any of it came from no longer matters.
+    let kept (sync: HistorySync) : HistorySync =
+        match sync with
+        | Opening (target, slow, _) -> Opening (target, slow, true)
+        | Behind _
+        | Current -> sync
 
     /// The timer's verdict. Nothing to say once current.
     let withSlow (slow: bool) (sync: HistorySync) : HistorySync =
         match sync with
-        | Opening (target, _) -> Opening (target, slow)
+        | Opening (target, _, kept) -> Opening (target, slow, kept)
         | Behind (target, _) -> Behind (target, slow)
         | Current -> Current
 
@@ -2629,7 +2640,7 @@ module ClientModel =
             { LastProcessedOffset = None
               // Nothing said yet about where the log ends, and the server-rendered shell
               // is this state too: at first paint nobody has read anything.
-              Sync = Opening (None, false)
+              Sync = Opening (None, false, false)
               // Nothing has failed yet; the first read decides.
               Feed = FeedLive
               // Nothing has been looked at yet; the replay decides.
@@ -2703,6 +2714,43 @@ module ClientModel =
     /// (`HistorySync.heardThrough`).
     let heardThrough (model: ClientModel) : bool =
         HistorySync.heardThrough model.EventConsumer.Sync
+
+    /// Whether nothing more is coming to this client's picture of the log for now, whatever
+    /// it has read: it cannot reach the session, or its reads have stopped getting through.
+    /// What it has is then all it will have, and waiting to show it would be waiting for
+    /// nothing.
+    let private cutOff (model: ClientModel) : bool =
+        match model.Connection, model.EventConsumer.Feed with
+        | Disconnected (Some _), _
+        | Retrying _, _
+        | _, FeedStalled _ -> true
+        | (Disconnected None | Connecting _ | Connected | Reconnecting), (FeedLive | FeedRetrying _) -> false
+
+    /// Whether the timeline draws what is folded, or says it is still reading. Read through
+    /// once, it is the session's; before that, it is drawn only when it is the reader's own
+    /// picture (`kept`) or all there is (`cutOff`). Otherwise what is folded is the oldest
+    /// end of the log, a page at a time, and drawing it pinned to its foot was a screen of
+    /// somebody else's history swapped for the real end of it a moment later.
+    let showsFolded (model: ClientModel) : bool =
+        match model.EventConsumer.Sync with
+        | Behind _
+        | Current -> true
+        | Opening (_, _, kept) -> kept || cutOff model
+
+    /// Whether a model is worth putting on the screen, or should be held for the one that
+    /// follows it. A client waiting on the log is held — a page is at most a round trip away,
+    /// and every page drawn on the way is a picture the next one replaces — until it is read
+    /// through, or the wait has lasted long enough to be worth saying (`slow`), or nothing
+    /// is coming (`cutOff`). Opening on its own store before the session has said where the
+    /// log ends is not waiting on anything yet: that picture is drawn at once.
+    ///
+    /// Every change of this is a message (a page, the slow timer, a disconnect), so whoever
+    /// draws needs no clock of its own to honour it.
+    let presentable (model: ClientModel) : bool =
+        match model.EventConsumer.Sync with
+        | Current -> true
+        | Behind (_, slow) -> slow || cutOff model
+        | Opening (target, slow, kept) -> slow || cutOff model || (kept && Option.isNone target)
 
     let private withSynced (synced: SyncedSessionState<Ylmish.Text>) (model: ClientModel) : ClientModel =
         { model with Synced = synced }
@@ -4444,10 +4492,10 @@ module ClientModel =
             | Connecting true | Disconnected _ | Connected | Reconnecting | Retrying _ -> []
         let catchUp =
             match model.EventConsumer.Sync with
-            | Opening (_, false)
+            | Opening (_, false, _)
             | Behind (_, false) ->
                 [ { Key = [ "catch-up-slow" ]; After = catchUpQuietMs; Fire = CatchUpSlowMsg true } ]
-            | Opening (_, true)
+            | Opening (_, true, _)
             | Behind (_, true)
             | Current -> []
         let quiet =
@@ -4858,7 +4906,11 @@ module ClientModel =
                       // A page says what this client kept or was sent, never where the log
                       // ends — so one off the local store cannot make a client current that
                       // the session has not yet spoken to.
-                      Sync = HistorySync.folded highWater model.EventConsumer.Sync
+                      Sync =
+                        let sync = HistorySync.folded highWater model.EventConsumer.Sync
+                        match msg with
+                        | LocalHistoryMsg _ when not (List.isEmpty freshEvents) -> HistorySync.kept sync
+                        | _ -> sync
                       // A page off the NETWORK is proof the feed works, so recovery from a
                       // stall needs no separate signal. A page off the local store proves
                       // only that this client kept it — the feed is whatever it already

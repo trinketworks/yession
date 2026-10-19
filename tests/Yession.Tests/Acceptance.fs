@@ -982,20 +982,20 @@ let private uiChecklistTests =
         // trip from landing). So the caret was telling most people the opposite of the truth,
         // and neither state could be told from the other on screen.
         testCase "an empty timeline not yet read through says it is reading" <| fun () ->
-            let looking = Support.render (emptyAt (Opening (None, false)))
+            let looking = Support.render (emptyAt (Opening (None, false, false)))
             Expect.isTrue
                 (looking.Contains "data-history-loading")
                 "a client the session has not yet told where its log ends says it is reading, rather than claiming emptiness"
 
         testCase "the reading state says it in words" <| fun () ->
             Expect.isTrue
-                ((Support.render (emptyAt (Opening (None, false)))).Contains Dom.Text.readingHistory)
+                ((Support.render (emptyAt (Opening (None, false, false)))).Contains Dom.Text.readingHistory)
                 "the pulse alone reaches nobody who cannot see it"
 
         testCase "an empty timeline told where the log ends, and still short of it, is still reading" <| fun () ->
             // A message never kept on this device may still be a round trip from landing, so
             // the wait is SUSTAINED rather than giving way to the caret.
-            let stillBehind = Support.render (emptyAt (Opening (Some (EventOffset.create 7L |> expect), false)))
+            let stillBehind = Support.render (emptyAt (Opening (Some (EventOffset.create 7L |> expect), false, false)))
             Expect.isTrue (stillBehind.Contains "data-history-loading") "still behind the session's own log is still reading"
 
         testCase "an empty timeline read through says it is empty" <| fun () ->
@@ -1008,12 +1008,31 @@ let private uiChecklistTests =
                 ((Support.render (emptyAt Current)).Contains "data-history-loading")
                 "a client that has read through and found nothing is not still reading"
 
-        testCase "a timeline with messages in it shows no reading state, read through or not" <| fun () ->
-            let full =
+        testCase "a timeline read through with messages in it shows no reading state" <| fun () ->
+            Expect.isFalse
+                ((Support.render representativeModel).Contains "data-history-loading")
+                "a timeline with messages in it is not an empty one"
+
+        // The camera's cold open: the first pages off the network are the OLDEST end of the
+        // log, and drawn pinned to its foot they were a screen of somebody else's history,
+        // swapped for the real end of it a moment later.
+        testCase "history off the network before read through is not drawn" <| fun () ->
+            let opening =
                 Support.render
                     { representativeModel with
-                        EventConsumer = { representativeModel.EventConsumer with Sync = Opening (None, false) } }
-            Expect.isFalse (full.Contains "data-history-loading") "a timeline with messages in it is not an empty one"
+                        EventConsumer =
+                            { representativeModel.EventConsumer with
+                                Sync = Opening (Some (EventOffset.create 7L |> expect), true, false) } }
+            Expect.isTrue (opening.Contains "data-history-loading") "it says it is reading instead"
+
+        testCase "history this client kept is drawn before read through" <| fun () ->
+            let kept =
+                Support.render
+                    { representativeModel with
+                        EventConsumer =
+                            { representativeModel.EventConsumer with
+                                Sync = Opening (Some (EventOffset.create 7L |> expect), false, true) } }
+            Expect.isFalse (kept.Contains "data-history-loading") "the reader's own last picture is shown at once"
 
         testCase "a session whose only act is queued shows it and not the empty caret" <| fun () ->
             // Nothing is FOLDED in this session — its first command is still queued — so a

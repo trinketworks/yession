@@ -212,11 +212,6 @@ let private placeInputCursor (field: string) (peer: string) (anchor: int) (head:
 let private raf (f: unit -> unit) : unit =
     Browser.Dom.window.requestAnimationFrame (fun _ -> f ()) |> ignore
 
-// The render hold's clock: how long since the last render (see `setState`). What waits on the
-// model's own state is the model's to declare (`ClientModel.timers`); what needs pacing is
-// paced by the frame (`raf`).
-let private now () : float = Browser.Performance.performance.now ()
-
 // How long a render waits for an animation frame before it stops waiting (see `setState`). A
 // page that is on screen draws sixty times a second, so this never fires there; it is the
 // frame of a page in a background tab, which draws none, and a browser that throttles a
@@ -767,29 +762,24 @@ let create (deps: Deps) : Renderer =
     // the title is how a pull request that merged or stalled reaches them (`tabTitle`). On a
     // page anybody can see, the animation frame always wins.
     //
-    // And while the client is still CATCHING UP, less often than that. A cold open reads the
-    // whole log a page per round trip from the oldest, and the conversation is pinned to its
-    // foot, so every page rendered was a picture of history the reader never asked for,
-    // scrolling past under their eye — 116 of them on a session of 97 items, forty-nine
-    // thousand pixels of words moving. None of them is the tail, and the tail is what an open
-    // is for. So a render that would show a client still behind is HELD, and one render is
-    // made at most every `ClientModel.catchUpQuietMs` while that lasts — a long catch-up still
-    // shows its progress and its indicator — and the render that shows the client caught up
-    // is the next one the frame allows, whatever the hold. A send puts a client one event
-    // behind itself for a round trip, and the page that answers it lands caught up, so live
-    // traffic renders as it did; what is paced is a client that STAYS behind.
+    // And while the client is waiting on the log, not at all. A cold open reads the whole log
+    // a page per round trip from the oldest, and the conversation is pinned to its foot, so
+    // every page drawn was a picture of history the reader never asked for, replaced a moment
+    // later by the real end of it. Which models are worth drawing is the model's rule
+    // (`ClientModel.presentable`), not this module's: a model that is not is HELD, and the
+    // message that makes one presentable — a page, the slow timer, a disconnect — draws
+    // `latest`. So this keeps no clock for it. The first model is always drawn: it is the
+    // client taking over the server-rendered page, which shows the same state.
     //
-    // The two never both answer for one model. A model the hold takes cancels whatever the
-    // frame was owed (the hold's own timer will draw `latest`, which is newer); a model the
-    // hold lets through cancels the hold's timer. Either way what is drawn is `latest`, never
-    // the model that happened to ask, so a render that arrives late cannot draw a page older
-    // than one already asked for.
+    // A model the hold takes cancels whatever the frame was owed: `latest` is newer, and not
+    // worth drawing either. What is drawn is always `latest`, never the model that happened
+    // to ask, so a render that arrives late cannot draw a page older than one already asked
+    // for.
     //
     // A focus move (`PaneShell.move`) waits a frame for the render it needs, and still gets
     // it: an owed render is drawn by the frame callback the PREVIOUS render registered, which
     // is ahead of any callback registered since, a move's included.
-    let mutable renderedAt = -infinity
-    let mutable held = 0
+    let mutable drawn = false
     // The frame the last render is waiting out, by number, or 0 once it is over. By number
     // because each frame is ended by whichever of two callbacks comes first, and the other
     // must not end a frame that began after it was asked for.
@@ -799,21 +789,8 @@ let create (deps: Deps) : Renderer =
     let mutable owed = false
     let rec setState (model: ClientModel) =
         latest <- Some model
-        let since = now () - renderedAt
-        if HistorySync.behind model.EventConsumer.Sync && since < float ClientModel.catchUpQuietMs then
-            owed <- false
-            if held = 0 then
-                held <-
-                    JS.setTimeout
-                        (fun () ->
-                            held <- 0
-                            draw ())
-                        (ClientModel.catchUpQuietMs - int since)
-        else
-            if held <> 0 then
-                JS.clearTimeout held
-                held <- 0
-            draw ()
+        if drawn && not (ClientModel.presentable model) then owed <- false
+        else draw ()
     // `latest`, now if this frame has not been drawn yet, at its end if it has.
     and draw () =
         if frameOpen <> 0 then owed <- true
@@ -825,7 +802,7 @@ let create (deps: Deps) : Renderer =
                 owed <- false
                 latest |> Option.iter render
     and render (model: ClientModel) =
-        renderedAt <- now ()
+        drawn <- true
         countRender ()
         latest <- Some model
         frames <- frames + 1
