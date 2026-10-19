@@ -2976,6 +2976,7 @@ module View =
                 match block.Description |> Option.bind BlockDescription.ofProse with
                 | Some description -> html $"""<span class="{Style.chatChipName}">{description}</span>"""
                 | None -> html $"""<code class="{Style.chatChipCommand}">{BlockLabel.ofCommand block.Command}</code>"""
+            let verb = match block.Status with BlockRunning -> Dom.Text.running | _ -> Dom.Text.ran
             html $"""
                 <button type="button" class="{chip}"
                         data-chat-block="{BlockId.value blockId}"
@@ -2983,18 +2984,19 @@ module View =
                         data-terminal-id="{TerminalId.value terminalId}"
                         aria-label="{Dom.Text.commandChip (BlockLabel.ofBlock block) (terminalBlockStatusWord model block.Status) where}"
                         @click={Ev(fun _ -> dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalId, blockId)))))}>
-                  <span class="{Style.chatChipLine}" title="{block.Command}">{Entity.verb Dom.Text.ran} {what}</span>
+                  <span class="{Style.chatChipLine}" title="{block.Command}">{Entity.verb verb} {what}</span>
                   <span class="shrink-0">{terminalBlockStatusAt model terminalId block}</span>
                 </button>"""
         // A command the agent's call asked for, before its block exists — or when it never
         // will. The SAME chip the block will be, in the same place (`TimelineProjection`'s
-        // `claim` puts the block there): "ran", then what the call said the command is for, or
-        // the command in mono. Only the mark differs, so the swap reads as one chip changing
-        // state rather than one thing replaced by another.
+        // `claim` puts the block there): "running", then what the call said the command is
+        // for, or the command in mono. Only the verb and the mark differ, so the swap reads
+        // as one chip changing state rather than one thing replaced by another.
         //
-        // "ran" before anything has run, on purpose: it is the chip's verb, not a claim — the
-        // block chip says it while its command is still running, and a description is written
-        // to follow it (`Dom.Text.ran`). Where the command has got to is the mark's to say.
+        // "running" here, on purpose: nothing at this stage has finished, whatever the
+        // mark beside it says (`CommandDidNotStart` still gets this verb — it is the chip's
+        // starting word, not a claim that it is under way). The block chip picks up "ran"
+        // the moment its status leaves `BlockRunning`.
         //
         // Queued, it is the queue entry's chip as well: the hold it is under, and a press that
         // opens the terminal it waits in, which is where it can be edited or withdrawn. That
@@ -3044,7 +3046,7 @@ module View =
                         title="{title}"
                         ?disabled={Option.isNone opens}
                         @click={Ev(fun _ -> opens |> Option.iter (fun terminal -> dispatch (OpenInPaneMsg (Reading terminal))))}>
-                  <span class="{Style.chatChipLine}">{Entity.verb Dom.Text.ran} {what}</span>
+                  <span class="{Style.chatChipLine}">{Entity.verb Dom.Text.running} {what}</span>
                   <span class="shrink-0">{statusLine}</span>
                 </button>"""
         let cardLine (chip: string) =

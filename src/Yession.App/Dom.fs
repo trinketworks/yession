@@ -1232,7 +1232,9 @@ module Dom =
         let complete = "complete"
         let streaming = "streaming"
         /// An act that is under way — a sandbox coming up. Both the screen-reader name for its
-        /// pulse and the `data-act-status` value a test counts running work by.
+        /// pulse and the `data-act-status` value a test counts running work by. Also the
+        /// command chip's verb (`ran`, above) wears while its block has not finished, or has
+        /// not started yet: the same word for the same fact, not a second one invented here.
         let running = "running"
         let failed = "failed"
         /// How a turn stopped, as `data-turn-stopped` says it (`View.stoppedItem`): `failed`

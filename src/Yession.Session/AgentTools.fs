@@ -797,7 +797,7 @@ module AgentTools =
     let private executeCommandTool (capabilities: AgentCapabilities) : ToolDescriptor * (ToolCall -> Async<Result<ToolAnswer, string>>) =
         toolOfCall
             ToolName.ExecuteCommand
-            "Run a shell command in a session terminal — the only way to run anything, seen by everyone and on the record. Always pass `description`: several words or fewer, in the past tense, saying what the command did — the transcript shows it after \"ran\". Not for reading or editing files: use read_file and edit_file, which record WHICH file, unless a dedicated tool genuinely cannot do it — avoid cat, sed, awk, head, tail, grep -n and heredocs here. `sandbox`: a named work sandbox (start_work_sandbox); omit for the default one. `terminal`: a terminal from open_terminal, to run beside something long (each terminal runs one command at a time). For anything long-running pass background: true — it returns a handle at once, you end your turn, and you're woken when it finishes; otherwise it waits and hands back a check_pending handle if the command outlasts the wait. No stdin unless stdin: true (readers get EOF), so pass flags, not prompts. Scratch under $TMPDIR; /tmp is denied. Rewriting a file, write the new content before deleting the old — a delete-then-write can be refused halfway. Read the answer: it says which happened."
+            "Run a shell command in a session terminal — the only way to run anything, seen by everyone and on the record. Always pass `description`: several words or fewer, in the past tense, saying what the command did. The transcript puts \"running\" or \"ran\" in front of it for you — never write that word yourself (\"checked the build\", not \"ran the build\" or \"Ran the build\"). Not for reading or editing files: use read_file and edit_file, which record WHICH file, unless a dedicated tool genuinely cannot do it — avoid cat, sed, awk, head, tail, grep -n and heredocs here. `sandbox`: a named work sandbox (start_work_sandbox); omit for the default one. `terminal`: a terminal from open_terminal, to run beside something long (each terminal runs one command at a time). For anything long-running pass background: true — it returns a handle at once, you end your turn, and you're woken when it finishes; otherwise it waits and hands back a check_pending handle if the command outlasts the wait. No stdin unless stdin: true (readers get EOF), so pass flags, not prompts. Scratch under $TMPDIR; /tmp is denied. Rewriting a file, write the new content before deleting the old — a delete-then-write can be refused halfway. Read the answer: it says which happened."
             (toolArgs {
                 let! command = ToolArgs.text "command" "the shell command line to run, e.g. \"npm test -- --watch=false\""
                 and! terminal = ToolArgs.textOption "terminal" "the id of a terminal to run in, as open_terminal or list_terminals gave it; omit for your own terminal in the sandbox"
@@ -810,12 +810,12 @@ module AgentTools =
                     ToolArgs.flag
                         "stdin"
                         "true to let the command read the terminal's input, for the rare command that has to prompt; omit it and anything that reads stdin gets end-of-file at once"
-                // The transcript prefixes this with "ran" (`Dom.Text.ran` in Yession.App):
-                // change both together.
+                // The transcript prefixes this with "running" or "ran" (`Dom.Text.running` /
+                // `Dom.Text.ran` in Yession.App): change all three together.
                 and! description =
                     ToolArgs.textOption
                         "description"
-                        "several words or fewer, in the past tense, saying what the command did — \"fetched master\", \"built the app\". People read it after \"ran\". Pass one on every call."
+                        "several words or fewer, in the past tense, saying what the command did — \"fetched master\", \"built the app\". The transcript already puts \"running\" or \"ran\" in front of it, so don't: not \"ran fetched master\", just \"fetched master\". Pass one on every call."
                 return command, terminal, sandbox, background, stdin, description
              })
             (fun call (command, terminal, sandbox, background, stdin, description) ->
