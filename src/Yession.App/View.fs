@@ -1232,7 +1232,7 @@ module View =
             // given up — which is what the caller reads as "done". Preventing without blurring
             // would leave the keyboard open over a field that had stopped responding to Enter.
             e.preventDefault ()
-            (e.currentTarget :?> Browser.Types.HTMLElement).blur ()
+            EventTargets.asHTMLElement e.currentTarget |> Option.iter (fun field -> field.blur ())
 
     /// The bytes a keydown sends to a pty, and the browser told not to also act on it.
     ///
@@ -1376,7 +1376,7 @@ module View =
                        value="{titleStr}"
                        .value={titleStr}
                        @input={EvVal(fun v -> dispatch (EditTitleMsg (Ylmish.Text.edit v model.Synced.Title)))}
-                       @keydown={Ev(fun (e: Browser.Types.Event) -> commitOnEnter (e :?> Browser.Types.KeyboardEvent))}
+                       @keydown={Ev(Events.key commitOnEnter)}
                        @keyup={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
                        @click={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
                        @select={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
@@ -1647,10 +1647,11 @@ module View =
                     actions.Attach target (List.ofArray files)
                     true
             let picked (e: Browser.Types.Event) =
-                let input = e.target :?> Browser.Types.HTMLInputElement
-                take (CarriedFiles.ofInput input) |> ignore
-                // Emptied, so the same file chosen again is a change the input reports.
-                input.value <- ""
+                EventTargets.asHTMLInputElement e.target
+                |> Option.iter (fun input ->
+                    take (CarriedFiles.ofInput input) |> ignore
+                    // Emptied, so the same file chosen again is a change the input reports.
+                    input.value <- "")
             let pasted (e: Browser.Types.Event) = if take (CarriedFiles.ofPaste e) then e.preventDefault ()
             let dragged (e: Browser.Types.Event) = if CarriedFiles.inDrag e then e.preventDefault ()
             let dropped (e: Browser.Types.Event) = if take (CarriedFiles.ofDrop e) then e.preventDefault ()
@@ -2030,9 +2031,8 @@ module View =
             | Resolving _ -> "resolving"
             | Sent _ -> "sent"
             | Cloning _ -> "cloning"
-        let onFieldKey (e: Browser.Types.Event) =
-            let key : string = (e :?> Browser.Types.KeyboardEvent).key
-            if key = "Enter" && not busy then
+        let onFieldKey (e: Browser.Types.KeyboardEvent) =
+            if e.key = "Enter" && not busy then
                 e.preventDefault ()
                 dispatch (LaunchMsg LaunchSubmitted)
         // Holding a row asks for its branches, and so does opening its pane: `Launch.update`
@@ -2354,7 +2354,7 @@ module View =
                            enterkeyhint="go" ?readonly={busy}
                            .value={launch.Query}
                            @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchQueryTyped v)))}
-                           @keydown={Ev onFieldKey} />
+                           @keydown={Ev(Events.key onFieldKey)} />
                   </div>
                   <div class="{Style.askScroll}" data-repo-picker-body>
                     {listing}
@@ -2453,11 +2453,10 @@ module View =
             // Escape on the WRAPPER, so it fires wherever focus is inside the menu — and on
             // the control too, which is where focus is put back.
             html $"""
-                <div class="contents" @keydown={Ev(fun (e: Browser.Types.Event) ->
-                                                       let key = (e :?> Browser.Types.KeyboardEvent).key
-                                                       if key = "Escape" && opened then
+                <div class="contents" @keydown={Ev(Events.key (fun e ->
+                                                       if e.key = "Escape" && opened then
                                                            dispatch CloseItemMenuMsg
-                                                           dispatch (MoveMsg (DomMove.FocusItemActions item.MessageId)))}>
+                                                           dispatch (MoveMsg (DomMove.FocusItemActions item.MessageId))))}>
                   <button type="button" class="{dress}"
                           data-item-actions="{MessageId.value item.MessageId}"
                           aria-haspopup="menu" aria-expanded="{if opened then "true" else "false"}"
@@ -2627,7 +2626,7 @@ module View =
         // exactly that reason. Everywhere else passes `alwaysToggle`.
         let alwaysToggle (_: Browser.Types.Event) = true
         let notOnLink (e: Browser.Types.Event) =
-            match (e.target :?> Browser.Types.Element).closest "a" with
+            match EventTargets.asElement e.target |> Option.bind (fun target -> target.closest "a") with
             | Some _ -> false
             | None -> true
         let foldClickRow (key: FoldKey) (wanted: Browser.Types.Event -> bool) (children: TemplateResult list) =
@@ -3273,7 +3272,7 @@ module View =
                          value="{named}"
                          .value={named}
                          @input={EvVal(fun v -> dispatch (EditChapterNameMsg (item.MessageId, Ylmish.Text.edit v held)))}
-                         @keydown={Ev(fun (e: Browser.Types.Event) -> commitOnEnter (e :?> Browser.Types.KeyboardEvent))}
+                         @keydown={Ev(Events.key commitOnEnter)}
                          @keyup={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
                          @click={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
                          @select={Ev(fun e -> actions.ReportFieldSelection (ChapterName item.MessageId) (selectionOf e))}
@@ -3516,12 +3515,11 @@ module View =
         // reader asking the browser for the file in their own way, and a chip for something
         // the pane cannot draw is a download — the chip's mark already promised which, so
         // letting the `<a>` do its job keeps the two answers the same one.
-        let contentOpen (e: Browser.Types.Event) =
-            let mouse = e :?> Browser.Types.MouseEvent
+        let contentOpen (mouse: Browser.Types.MouseEvent) =
             let plain = not (mouse.ctrlKey || mouse.metaKey || mouse.shiftKey || mouse.altKey) && mouse.button = 0.0
             let hooked =
-                if isNull (box e.target) then None
-                else (e.target :?> Browser.Types.Element).closest ("[" + Dom.Hooks.content + "]")
+                EventTargets.asElement mouse.target
+                |> Option.bind (fun target -> target.closest ("[" + Dom.Hooks.content + "]"))
             match hooked |> Option.filter (fun _ -> plain) with
             | None -> ()
             | Some el ->
@@ -3531,14 +3529,14 @@ module View =
                     match ContentName.kind ref with
                     | ContentKind.Download -> ()
                     | ContentKind.Image _ ->
-                        e.preventDefault ()
+                        mouse.preventDefault ()
                         dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content ref)))
         // `tabindex="-1"`: never a Tab stop, but somewhere for focus to land when the jump
         // control that brought the reader here goes away under their hand (`composerTray`).
         let tail = TailSurface.key TailSurface.Conversation
         html $"""
             <div class="{Style.chatRegion}">
-              <section class="{Style.timeline}" data-conversation data-tail="{tail}" tabindex="-1" @click={Ev(contentOpen)}>{body}</section>
+              <section class="{Style.timeline}" data-conversation data-tail="{tail}" tabindex="-1" @click={Ev(Events.mouse contentOpen)}>{body}</section>
             </div>"""
 
     /// What a block printed, as TEXT — the cheap read of the same bytes the recording holds,
@@ -3778,11 +3776,13 @@ module View =
         let blocks = leader :: rest
         let key = BlockGroup.key terminal leader
         let opened = Set.contains key model.OpenFolds
-        // The element the listener is ON, which is the `<details>` — the one cast, on the
-        // line that needs it, answered as a bool at once.
+        // The element the listener is ON, which is the `<details>`, answered as a bool at once.
         let toggled (e: Browser.Types.Event) =
-            let isOpen = (e.currentTarget :?> Browser.Types.Element).hasAttribute "open"
-            if isOpen <> opened then dispatch (FoldSetMsg (key, isOpen))
+            match EventTargets.asElement e.currentTarget with
+            | Some details ->
+                let isOpen = details.hasAttribute "open"
+                if isOpen <> opened then dispatch (FoldSetMsg (key, isOpen))
+            | None -> ()
         let pressed (e: Browser.Types.Event) =
             e.preventDefault ()
             dispatch (FoldSetMsg (key, not opened))
@@ -3987,19 +3987,20 @@ module View =
                      @click={Ev(keysOnPress dispatch terminal)}>{body}<textarea class="{Style.terminalKeys}" data-terminal-keys="{id}"
                        aria-label="Type into the terminal" rows="1" wrap="off" inputmode="text" enterkeyhint="enter"
                        autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"
-                       @keydown={Ev(fun (e: Browser.Types.Event) ->
-                                       let key = e :?> Browser.Types.KeyboardEvent
+                       @keydown={Ev(Events.key (fun key ->
                                        // An IME's keys build a word it has not committed; the word
                                        // arrives whole at `compositionend`.
                                        if not (isComposing key) then
                                            match keystrokeOf key with
                                            | Some data -> actions.TypeIntoTerminal terminal data
-                                           | None -> ())}
+                                           | None -> ()))}
                        @input={Ev(fun (e: Browser.Types.Event) ->
                                      if not (isComposingInput e) then
-                                         sendInserted (actions.TypeIntoTerminal terminal) (e.currentTarget :?> Browser.Types.HTMLTextAreaElement))}
+                                         EventTargets.asHTMLTextAreaElement e.currentTarget
+                                         |> Option.iter (sendInserted (actions.TypeIntoTerminal terminal)))}
                        @compositionend={Ev(fun (e: Browser.Types.Event) ->
-                                              sendInserted (actions.TypeIntoTerminal terminal) (e.currentTarget :?> Browser.Types.HTMLTextAreaElement))}
+                                              EventTargets.asHTMLTextAreaElement e.currentTarget
+                                              |> Option.iter (sendInserted (actions.TypeIntoTerminal terminal)))}
                        ></textarea></div>"""
         else
             html $"""
@@ -4530,12 +4531,12 @@ module View =
                                       // Not the tab's press too: a × is not a way to select.
                                       e.stopPropagation ()
                                       dispatch (KillPressedMsg view.TerminalId))}
-                        @keydown={Ev(fun (e: Browser.Types.Event) ->
-                                      if armed && (e :?> Browser.Types.KeyboardEvent).key = "Escape" then
+                        @keydown={Ev(Events.key (fun e ->
+                                      if armed && e.key = "Escape" then
                                           // Escape here is about the arming, and only that: the
                                           // switcher or the preview around it stays.
                                           e.stopPropagation ()
-                                          dispatch (ArmKillMsg None))}
+                                          dispatch (ArmKillMsg None)))}
                         @focusout={Ev(fun _ -> if armed then dispatch (ArmKillMsg None))}>{content}</button>"""
 
     /// The `all` item's key: its pivot item's id and its panel's, as a terminal's tab key is
@@ -4595,8 +4596,7 @@ module View =
         // model says where that goes (`ClientModel.walkList`). Its default is refused here,
         // because that cannot wait for the model, and only for a key the walk claims, so Tab
         // still reaches the verbs.
-        let walk (from: ListRow) (e: Browser.Types.Event) =
-            let pressed = e :?> Browser.Types.KeyboardEvent
+        let walk (from: ListRow) (pressed: Browser.Types.KeyboardEvent) =
             if TabStrip.claimsRow pressed.key then
                 pressed.preventDefault ()
                 dispatch (WalkListMsg (pressed.key, from))
@@ -4669,7 +4669,7 @@ module View =
                   <button type="button" class="{nameClass}" data-terminal-list-row="{id}"
                           aria-current="{if selected = Some view.TerminalId then "true" else "false"}"
                           aria-labelledby="{nameId}" aria-describedby="{subtitleId}"
-                          @keydown={Ev(walk (ListRow.Terminal view.TerminalId))}
+                          @keydown={Ev(Events.key (walk (ListRow.Terminal view.TerminalId)))}
                           @click={Ev(fun _ -> dispatch (OpenInPaneMsg mode))}>
                     <span class="{Style.terminalListNameLine}">
                       <span class="{Style.terminalListNameText}" id="{nameId}" data-terminal-list-name>{name}</span>
@@ -4698,7 +4698,7 @@ module View =
                   <button type="button" class="{Style.terminalListName}"
                           data-artifact-list-row="{ContentRef.value content}"
                           aria-labelledby="{nameId}" aria-describedby="{sizeId}"
-                          @keydown={Ev(walk (ListRow.File content))}
+                          @keydown={Ev(Events.key (walk (ListRow.File content)))}
                           @click={Ev(fun _ ->
                                         dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content content))))}>
                     <span class="{Style.terminalListNameLine}">
@@ -4754,10 +4754,11 @@ module View =
                 actions.Upload (List.ofArray files)
                 true
         let picked (e: Browser.Types.Event) =
-            let input = e.target :?> Browser.Types.HTMLInputElement
-            take (CarriedFiles.ofInput input) |> ignore
-            // Emptied, so the same file chosen again is a change the input reports.
-            input.value <- ""
+            EventTargets.asHTMLInputElement e.target
+            |> Option.iter (fun input ->
+                take (CarriedFiles.ofInput input) |> ignore
+                // Emptied, so the same file chosen again is a change the input reports.
+                input.value <- "")
         let pasted (e: Browser.Types.Event) = if take (CarriedFiles.ofPaste e) then e.preventDefault ()
         let dragged (e: Browser.Types.Event) = if CarriedFiles.inDrag e then e.preventDefault ()
         let dropped (e: Browser.Types.Event) = if take (CarriedFiles.ofDrop e) then e.preventDefault ()
@@ -4916,7 +4917,7 @@ module View =
             if on || (nothingOn && firstTab = Some key) then "0" else "-1"
         let terminalItem
             (activate: unit -> unit)
-            (activateKey: Browser.Types.Event -> unit)
+            (activateKey: Browser.Types.KeyboardEvent -> unit)
             (view: TerminalView)
             =
             let on = onTerminal view.TerminalId
@@ -4985,14 +4986,14 @@ module View =
                     <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-tab="{id}"
                          id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
                          aria-selected="{if on then "true" else "false"}" tabindex="{stopAt key on}" title="{tooltip}"
-                         @keydown={Ev(activateKey)}
+                         @keydown={Ev(Events.key activateKey)}
                          @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}" data-terminal-tab-name>{name}</span>{mark}{peers}{dismiss}</div>"""
             else
                 html $"""
                     <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-closed-tab="{id}"
                          id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
                          aria-selected="{if on then "true" else "false"}" tabindex="{stopAt key on}" title="{tooltip}"
-                         @keydown={Ev(activateKey)}
+                         @keydown={Ev(Events.key activateKey)}
                          @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}" data-terminal-tab-name>{name}</span>{mark}{peers}{dismiss}</div>"""
         // What a preview is CALLED — its name under the pivot, its close's, and so its
         // panel's. One function, so they can never disagree. With it, what its name's
@@ -5032,10 +5033,9 @@ module View =
             // (`ClientModel.tabWalk`).
             //
             // Delete is the ×'s press from the keyboard: it puts the tab away.
-            let activateKey (e: Browser.Types.Event) =
-                let pressed = e :?> Browser.Types.KeyboardEvent
+            let activateKey (pressed: Browser.Types.KeyboardEvent) =
                 // Only keys pressed ON the item: Enter on its × is the ×'s, not a selection.
-                let onTab = System.Object.ReferenceEquals (e.target, e.currentTarget)
+                let onTab = System.Object.ReferenceEquals (pressed.target, pressed.currentTarget)
                 if onTab && (pressed.key = "Enter" || pressed.key = " ") then
                     // Space on a focused element scrolls the page.
                     pressed.preventDefault ()
@@ -5055,9 +5055,8 @@ module View =
             let name = ContentName.ofRef file
             let klass = if not on || onAll then Style.pivotItem else Style.pivotItemOn
             let activate () = dispatch (ShowPreviewMsg (Preview.ofSubject (PreviewSubject.Content file)))
-            let activateKey (e: Browser.Types.Event) =
-                let pressed = e :?> Browser.Types.KeyboardEvent
-                let onTab = System.Object.ReferenceEquals (e.target, e.currentTarget)
+            let activateKey (pressed: Browser.Types.KeyboardEvent) =
+                let onTab = System.Object.ReferenceEquals (pressed.target, pressed.currentTarget)
                 if onTab && (pressed.key = "Enter" || pressed.key = " ") then
                     pressed.preventDefault ()
                     activate ()
@@ -5081,7 +5080,7 @@ module View =
                 <div role="tab" class="{klass}" data-pane-tab="{key}" data-file-tab="{ContentRef.value file}"
                      id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
                      aria-selected="{if on then "true" else "false"}" tabindex="{stopAt key on}" title="{name}"
-                     @keydown={Ev(activateKey)}
+                     @keydown={Ev(Events.key activateKey)}
                      @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}">{name}</span>{dismiss}</div>"""
         // The door to every terminal and file: a button at the strip's end, beside `+`, that
         // drops the list down as a sheet over whatever the pane is showing. Not a tab: the
@@ -5270,9 +5269,8 @@ module View =
         // asks whether the menu is open — but the close above re-renders before the key
         // reaches it, so it asked the new model, found no menu, and took the `all` page away
         // from under the door focus was being handed back to.
-        let shutsOnEscape (e: Browser.Types.Event) =
-            let key = (e :?> Browser.Types.KeyboardEvent).key
-            if key = "Escape" && model.PaneMenu then
+        let shutsOnEscape (e: Browser.Types.KeyboardEvent) =
+            if e.key = "Escape" && model.PaneMenu then
                 e.stopPropagation ()
                 dispatch ClosePaneMenuMsg
                 dispatch (MoveMsg DomMove.FocusPaneNew)
@@ -5322,7 +5320,7 @@ module View =
                 html $"""
                     <div class="{Style.terminalEmpty}">
                       <span class="font-terminal text-heading text-ink-faint select-none" aria-hidden="true">$</span>
-                      <div class="{Style.terminalEmptyNewCell}" @keydown={Ev shutsOnEscape}>
+                      <div class="{Style.terminalEmptyNewCell}" @keydown={Ev(Events.key shutsOnEscape)}>
                         <button type="button" class="{Style.paneActPrimary}" data-terminal-new
                                 aria-haspopup="{if newAsks then "menu" else "false"}"
                                 aria-expanded="{if model.PaneMenu then "true" else "false"}"
@@ -5429,7 +5427,7 @@ module View =
             else
                 let named = if newAsks then Dom.Text.openSomethingNew else Dom.Text.aNewTerminal
                 html $"""
-                    <div class="{Style.terminalTabNewCell}" @keydown={Ev shutsOnEscape}>
+                    <div class="{Style.terminalTabNewCell}" @keydown={Ev(Events.key shutsOnEscape)}>
                       <button type="button" class="{Style.terminalTabNew}" data-pane-new
                               aria-haspopup="{if newAsks then "menu" else "false"}"
                               aria-expanded="{if model.PaneMenu then "true" else "false"}"
@@ -5484,11 +5482,10 @@ module View =
                    open over it, whose own Escape is about the menu and runs first, on the
                    element it hangs from. -->
               <div class="{Style.terminalPane}"
-                   @keydown={Ev(fun (e: Browser.Types.Event) ->
-                                    let key = (e :?> Browser.Types.KeyboardEvent).key
-                                    if key = "Escape" && not model.PaneMenu then
+                   @keydown={Ev(Events.key (fun e ->
+                                    if e.key = "Escape" && not model.PaneMenu then
                                         if onAll then dispatch CloseSwitcherMsg
-                                        else previewing |> Option.iter closePreview)}>
+                                        else previewing |> Option.iter closePreview))}>
                 {pivot}
                 <div class="{Style.paneUnderStrip}">
                   {toolbar}

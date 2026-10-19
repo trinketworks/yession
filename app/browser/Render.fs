@@ -320,8 +320,7 @@ let private bindTerminalInput
         el.addEventListener ("blur", fun _ -> onBlur ())
         el.addEventListener (
             "keydown",
-            fun event ->
-                let event = event :?> Browser.Types.KeyboardEvent
+            Events.key (fun event ->
                 if event.key = "Enter" && not (isComposing event) then
                     event.preventDefault ()
                     onEnter ()
@@ -333,7 +332,7 @@ let private bindTerminalInput
                     && Browser.Dom.window.getSelection().toString () = ""
                 then
                     event.preventDefault ()
-                    onInterrupt ())
+                    onInterrupt ()))
 
 // --- The render ---------------------------------------------------------------------------
 
@@ -729,11 +728,10 @@ let create (deps: Deps) : Renderer =
     // shortcut, and why it is the document's rather than the pane's.
     Browser.Dom.document.addEventListener (
         "keydown",
-        fun event ->
-            let pressed = event :?> Browser.Types.KeyboardEvent
+        Events.key (fun pressed ->
             if ClientModel.opensSwitcher pressed.code pressed.ctrlKey pressed.metaKey then
                 pressed.preventDefault ()
-                dispatch ToggleSwitcherMsg)
+                dispatch ToggleSwitcherMsg))
 
     // Render the Lit view on a model change. Lit diffs into the root, so the focused
     // textarea and its caret survive; only the timeline scroll is restored by hand.

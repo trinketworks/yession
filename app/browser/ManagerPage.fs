@@ -20,13 +20,14 @@ open Yession.App
 /// `[name]` — the selector for an attribute's presence.
 let private has (name: string) = "[" + name + "]"
 
-/// The element an event was dispatched at. Every listener below is on the document, and every
-/// event it listens for is dispatched at an element.
-let private targetOf (event: Event) : Element = event.target :?> Element
+/// The nearest element at or above the target that the selector matches, if any. Every listener
+/// below is on the document, and an event dispatched at the document itself has no element to
+/// start from.
+let private closestMatching (event: Event) (selector: string) : Element option =
+    EventTargets.asElement event.target |> Option.bind (fun target -> target.closest selector)
 
 /// The nearest element at or above the target carrying the hook, if any.
-let private closestTo (event: Event) (hook: string) : Element option =
-    (targetOf event).closest (has hook)
+let private closestTo (event: Event) (hook: string) : Element option = closestMatching event (has hook)
 
 let private attribute (element: Element) (name: string) : string option =
     match element.getAttribute name with
@@ -180,7 +181,7 @@ document.addEventListener (
 document.addEventListener (
     "click",
     fun event ->
-        match (targetOf event).closest (has Dom.Manager.archive + "," + has Dom.Manager.unarchive) with
+        match closestMatching event (has Dom.Manager.archive + "," + has Dom.Manager.unarchive) with
         | None -> ()
         | Some control -> pressAndSwap control window.location.search sessionsSection
 )
@@ -228,18 +229,17 @@ let private openRows (moved: bool) =
 // below waited for an event that a chip click could never produce.
 document.addEventListener (
     "click",
-    fun event ->
-        match closestTo event Dom.Manager.filter with
+    Events.mouse (fun click ->
+        match closestTo click Dom.Manager.filter with
         | None -> ()
         | Some control ->
-            let click = event :?> MouseEvent
             if not (click.metaKey || click.ctrlKey || click.shiftKey || click.button <> 0.0) then
-                event.preventDefault ()
+                click.preventDefault ()
                 // The last lit chip is a span with nowhere to go: the location stays as it is.
                 match attribute control "href" with
                 | Some href -> window.history.pushState (null, "", href)
                 | None -> window.history.pushState (null, "")
-                openRows true
+                openRows true)
 )
 
 // A row opens its session in a NEW tab (`target="_blank"`), so the Manager stays where it was —
@@ -250,18 +250,17 @@ document.addEventListener (
 // Manager, as it is after Create. A modified click is left alone, as on the filters above.
 document.addEventListener (
     "click",
-    fun event ->
-        match closestTo event Dom.Manager.openLink with
+    Events.mouse (fun click ->
+        match closestTo click Dom.Manager.openLink with
         | None -> ()
         | Some link ->
-            let click = event :?> MouseEvent
             if mediaMatches Dom.Manager.installedApp
                && not (click.metaKey || click.ctrlKey || click.shiftKey || click.button <> 0.0) then
                 match attribute link "href" with
                 | Some href ->
-                    event.preventDefault ()
+                    click.preventDefault ()
                     window.location.assign href
-                | None -> ()
+                | None -> ())
 )
 
 // Creating is deliberately NOT intercepted here (the reasoning is on the form itself) — but it
@@ -284,11 +283,11 @@ document.addEventListener (
 // was held for happened.
 window.addEventListener (
     "pageshow",
-    fun event ->
-        if (event :?> PageTransitionEvent).persisted then
+    Events.pageTransition (fun shown ->
+        if shown.persisted then
             let held = document.querySelectorAll "[aria-busy=\"true\"]"
             for i in 0 .. held.length - 1 do
-                held.[i].removeAttribute "aria-busy"
+                held.[i].removeAttribute "aria-busy")
 )
 
 // A button goes in where it is touched (`[data-press]`, tailwind.css). The stylesheet does the
@@ -302,14 +301,13 @@ let private pressAt (button: Element) (x: string) (y: string) =
 
 document.addEventListener (
     "pointerdown",
-    fun event ->
-        match closestTo event Dom.press with
+    Events.mouse (fun pointer ->
+        match closestTo pointer Dom.press with
         | None -> ()
         | Some button ->
-            let pointer = event :?> MouseEvent
             let box = button.getBoundingClientRect ()
             let along (at: float) (start: float) (size: float) = sprintf "%.2f" ((at - start) / size * 2.0 - 1.0)
-            pressAt button (along pointer.clientX box.left box.width) (along pointer.clientY box.top box.height)
+            pressAt button (along pointer.clientX box.left box.width) (along pointer.clientY box.top box.height))
 )
 
 document.addEventListener (

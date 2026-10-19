@@ -19,10 +19,9 @@ let private gatheringNeverEnds () =
     PagePatches.constructed "RTCPeerConnection" (fun (peer: RTCPeerConnection) ->
         // Its listeners go on in the constructor, before the page can set a handler of its own,
         // so they are heard first and can stop the event there.
-        peer.addEventListener ("icecandidate", fun e ->
-            let ice = e :?> RTCPeerConnectionIceEvent
-            if Option.isNone ice.candidate then e.stopImmediatePropagation ()
-            else PageGlobal.set Shims.candidates ((PageGlobal.tryGet Shims.candidates |> Option.defaultValue 0) + 1))
+        peer.addEventListener ("icecandidate", Events.ice (fun ice ->
+            if Option.isNone ice.candidate then ice.stopImmediatePropagation ()
+            else PageGlobal.set Shims.candidates ((PageGlobal.tryGet Shims.candidates |> Option.defaultValue 0) + 1)))
         peer.addEventListener ("icegatheringstatechange", fun e -> e.stopImmediatePropagation ()))
 
 let private answerApplied () =

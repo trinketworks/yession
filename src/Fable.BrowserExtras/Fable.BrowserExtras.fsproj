@@ -25,6 +25,7 @@
     <Compile Include="PageGlobals.fs" />
     <Compile Include="PagePatches.fs" />
     <Compile Include="EventTargets.fs" />
+    <Compile Include="Events.fs" />
     <!-- After BrowserExtras.fs, whose `CacheStorage` stores a worker reads and writes. -->
     <Compile Include="ServiceWorkerScope.fs" />
   </ItemGroup>
@@ -37,6 +38,7 @@
          Fable.Fetch's, and its registration is Fable.Browser.Worker's. -->
     <PackageReference Include="Fable.Fetch" />
     <PackageReference Include="Fable.Browser.Worker" />
+    <PackageReference Include="Fable.Browser.WebRTC" />
   </ItemGroup>
 
 </Project>

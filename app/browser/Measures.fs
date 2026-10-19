@@ -349,8 +349,8 @@ let private focusBeforePane () : string list =
                 && (int (pane.compareDocumentPosition b) &&& 2) <> 0)
         PageGlobal.set Probes.focusStops [||]
         document.addEventListener ("focusin", fun e ->
-            let target = e.target :?> Element
-            let stop = if (closest target "[data-content-panel]").IsSome then "pane" else "elsewhere"
+            let inPane = EventTargets.asElement e.target |> Option.bind (fun target -> closest target "[data-content-panel]")
+            let stop = if inPane.IsSome then "pane" else "elsewhere"
             let stops = PageGlobal.tryGet Probes.focusStops |> Option.defaultValue [||]
             PageGlobal.set Probes.focusStops (Array.append stops [| stop |]))
         let landed =
