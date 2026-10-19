@@ -3281,7 +3281,11 @@ module View =
                          @blur={Ev(fun _ -> actions.ReportFieldSelection (ChapterName item.MessageId) None)}>
                   {cursors}
                 </div>"""
-        let rows = TimelineProjection.rows model.Conversation model.Timeline
+        // What is folded is drawn only once it is worth drawing (`ClientModel.showsFolded`):
+        // until then the timeline says it is reading, rather than showing the oldest end of
+        // the log a page at a time.
+        let showsFolded = ClientModel.showsFolded model
+        let rows = if showsFolded then TimelineProjection.rows model.Conversation model.Timeline else []
         // Every row resolved to (whose act it is, its rendering) BEFORE grouping, so a row
         // whose backing state a page boundary withheld contributes no entry — never an empty
         // element, and never an author line standing over nothing. An act note carries
@@ -3465,58 +3469,44 @@ module View =
                           <span class="{Style.historyGapText}">{Dom.Text.historyMissingLocally}</span>
                         </p>""")
             | Some _, _, _ -> None
-        // Read through, in the body's own sense: the session has said where its log ends and
-        // this client has folded to it, once (`HistorySync.heardThrough`). Anything less and
-        // a real message (never seen on this device) may be a round trip from landing — the
-        // idle caret shown when the local store came back empty told a cold open "nothing was
-        // ever said here" while its history was, in fact, still arriving. Or this client
-        // cannot reach the session at all, and what it kept is all it will have: then the
-        // timeline is what is kept, and the gap line or the caret says so, rather than a
-        // "catching up" nothing is doing.
-        let caughtUp =
-            ClientModel.heardThrough model
-            || (match model.Connection with
-                | Disconnected (Some _)
-                | Retrying _ -> true
-                | Disconnected None
-                | Connecting _
-                | Connected
-                | Reconnecting -> false)
+        // This client has not yet read the log through, so a message may still be a round
+        // trip from landing. Shaped like the row it may become: an author line of the same
+        // height as a real one, `invisible` so it reserves the room without drawing a blank
+        // avatar, over the one body line the status itself stands on, both on the rail. When
+        // a real message supersedes this, it lands in the box this was already holding,
+        // rather than pushing it down.
+        //
+        // Not the agent's blue caret either (docs/visual-design.md, Colour: blue is never a
+        // status) — it is `statusWait` with a beating dot, the same vocabulary "queued" and
+        // "catching up" already wear elsewhere. `role="status"` because it is a state, and the
+        // text is visible rather than only `srOnly`: a dot alone reaches nobody who cannot see
+        // it beat.
+        let reading =
+            html $"""
+                <section class="{Style.messageGroup}" role="status" data-history-loading>
+                  <header class="{Style.messageGroupHead} invisible" aria-hidden="true"><span class="{Style.avatar}"></span></header>
+                  <p class="{Style.messageBody}">
+                    <span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{Dom.Text.readingHistory}</span>
+                  </p>
+                </section>"""
         let body =
-            match rows, items, caughtUp with
-            // Nothing here yet, and this client has not yet read the log through — so a
-            // message may still be a round trip from landing. Shaped like the row it may
-            // become: an author line of the same height as a real one, `invisible` so it
-            // reserves the room without drawing a blank avatar, over the one body line the
-            // status itself stands on, both on the rail. When a real message supersedes this,
-            // it lands in the box this was already holding, rather than pushing it down.
-            //
-            // Not the agent's blue caret either (docs/visual-design.md, Colour: blue is never
-            // a status) — it is `statusWait` with a beating dot, the same vocabulary "queued"
-            // and "catching up" already wear elsewhere. `role="status"` because it is a state,
-            // and the text is visible rather than only `srOnly`: a dot alone reaches nobody
-            // who cannot see it beat.
-            | [], [], false ->
-                [ html $"""
-                    <section class="{Style.messageGroup}" role="status" data-history-loading>
-                      <header class="{Style.messageGroupHead} invisible" aria-hidden="true"><span class="{Style.avatar}"></span></header>
-                      <p class="{Style.messageBody}">
-                        <span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{Dom.Text.readingHistory}</span>
-                      </p>
-                    </section>""" ]
-            // Read through, and there is genuinely nothing: the caret now only ever means
-            // what it has always said, which is why it can stay wordless and decorative.
-            // Unless what is known is that history is missing — then the timeline is
-            // truncated rather than empty, and the line saying so stands where the caret
-            // would have.
-            | [], [], true ->
+            match showsFolded, rows, items with
+            // Still reading. Anything of this client's own on the screen regardless — a
+            // command it queued, an add the session refused — stays, under the line saying
+            // the rest is on its way.
+            | false, _, _ -> reading :: items
+            // Shown, and there is genuinely nothing: the caret only ever means what it has
+            // always said, which is why it can stay wordless and decorative. Unless what is
+            // known is that history is missing — then the timeline is truncated rather than
+            // empty, and the line saying so stands where the caret would have.
+            | true, [], [] ->
                 match missing with
                 | Some line -> [ line ]
                 | None ->
-                    // Hooked like its sibling above, and for the same reason: what a mark
-                    // MEANS is not readable from the mark, and these two mean opposite things.
+                    // Hooked like the reading row, and for the same reason: what a mark MEANS
+                    // is not readable from the mark, and these two mean opposite things.
                     [ html $"""<div class="{Style.timelineIdle}" data-timeline-empty aria-hidden="true"><span class="{Style.caretIdle}"></span></div>""" ]
-            | _ -> Option.toList missing @ items
+            | true, _, _ -> Option.toList missing @ items
         // A press on a content chip, wherever in the timeline it sits — a message body's link or
         // a fold's note — shows the file in the pane instead of leaving the page. Delegated on
         // the conversation rather than bound per chip, because a chip is a pure template that
