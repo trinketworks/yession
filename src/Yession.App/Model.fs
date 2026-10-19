@@ -59,23 +59,99 @@ type FeedHealth =
     /// the next availability hint or reconnect re-arms the read — editing keeps working.
     | FeedStalled of reason: string
 
+/// Where this client's picture of the log stands against where the session says the log
+/// ends. One union rather than the flags it replaced (`HistoryRead`, `IsCatchingUp`,
+/// `CatchUpIsSlow`, an optional latest offset and the `HeardThrough` latch), because those
+/// spelled sixteen states and four of them were real — and the others were what the screen
+/// showed: an idle caret saying "nothing was ever said here" over a session whose history was
+/// a round trip away, because "looked at my own store" read as "read the log".
+///
+/// `slow` lives inside the two cases that wait, so "slow but not waiting" cannot be written,
+/// and is set only by the timer the model declares while waiting (`ClientModel.timers`):
+/// sending a message puts a client one event behind itself for a round trip, and a status
+/// that flipped on every send would be a flicker, not information.
+type HistorySync =
+    /// Has not yet been current since this page loaded: whatever is folded is a replay of the
+    /// past (the local store, the first pages), not news. `target` is where the session said
+    /// the log ends, `None` until it has said.
+    | Opening of target: EventOffset option * slow: bool
+    /// Was current, and the session has since said its log runs past what is folded.
+    | Behind of target: EventOffset * slow: bool
+    /// Has folded everything the session has said its log holds — including the case where it
+    /// said the log is empty, which "not yet told" can no longer be confused with.
+    | Current
+
+module HistorySync =
+
+    /// Whether the read has lasted long enough to be worth saying.
+    let slow (sync: HistorySync) : bool =
+        match sync with
+        | Opening (_, slow)
+        | Behind (_, slow) -> slow
+        | Current -> false
+
+    /// Where the log ends, as far as this client knows: the target it is reading towards, or,
+    /// once current, what it has folded.
+    let target (folded: EventOffset option) (sync: HistorySync) : EventOffset option =
+        match sync with
+        | Opening (target, _) -> target
+        | Behind (target, _) -> Some target
+        | Current -> folded
+
+    /// Whether there is a known end this client has not folded to — the one state in which a
+    /// read is owed.
+    let behind (sync: HistorySync) : bool =
+        match sync with
+        | Opening (Some _, _)
+        | Behind _ -> true
+        | Opening (None, _)
+        | Current -> false
+
+    /// Whether this client has, once, been current since the page loaded — after which what a
+    /// page brings is NEWS, and before which it is history being replayed. A later catch-up
+    /// (a reconnect, the round trip after any send) is `Behind`, never `Opening` again.
+    let heardThrough (sync: HistorySync) : bool =
+        match sync with
+        | Opening _ -> false
+        | Behind _
+        | Current -> true
+
+    /// The session said its log ends at `latest` (`None`: the log is empty). An end is never
+    /// moved backwards — a hint can be older than a page already folded.
+    let told (folded: EventOffset option) (latest: EventOffset option) (sync: HistorySync) : HistorySync =
+        let latest = EventOffset.maxOption (target folded sync) latest
+        let reached =
+            match latest, folded with
+            | None, _ -> true
+            | Some _, None -> false
+            | Some latest, Some folded -> EventOffset.value folded >= EventOffset.value latest
+        match sync, latest with
+        | _, _ when reached -> Current
+        | Opening (_, slow), _ -> Opening (latest, slow)
+        | _, Some latest -> Behind (latest, slow sync)
+        | _, None -> Current
+
+    /// `folded` moved and nothing new was said about the end. Before the session has said
+    /// anything there is nothing to have reached: a page out of this client's own store says
+    /// what it kept, never where the log ends.
+    let folded (folded: EventOffset option) (sync: HistorySync) : HistorySync =
+        match sync with
+        | Opening (None, _) -> sync
+        | _ -> told folded None sync
+
+    /// The timer's verdict. Nothing to say once current.
+    let withSlow (slow: bool) (sync: HistorySync) : HistorySync =
+        match sync with
+        | Opening (target, _) -> Opening (target, slow)
+        | Behind (target, _) -> Behind (target, slow)
+        | Current -> Current
+
 /// How far the client has consumed the event log versus what it knows exists.
 type EventConsumerState =
     { LastProcessedOffset : EventOffset option
-      LatestKnownOffset   : EventOffset option
-      IsCatchingUp        : bool
-      /// Whether catch-up has lasted long enough to be worth SAYING. Sending a message puts
-      /// the client behind its own event for a round trip, so `IsCatchingUp` is true for a
-      /// few dozen milliseconds every time anyone sends anything — and a status that flips
-      /// to "catching up" and back on every send is a flicker, not information. The truth
-      /// stays in `IsCatchingUp` (the read loop reads it); this is what the UI reports.
-      ///
-      /// Set by the timer the model declares while catch-up runs (`ClientModel.timers`),
-      /// which stops when it ends, so the threshold is one number in one place
-      /// (`ClientModel.catchUpQuietMs`). It can only ever be true WHILE catching up — the
-      /// reducer holds that as an invariant of the state, whoever dispatches.
-      CatchUpIsSlow       : bool
-      /// Whether reads are getting through at all. `IsCatchingUp` says there is more to
+      /// Where that stands against the end of the log (`HistorySync`).
+      Sync                : HistorySync
+      /// Whether reads are getting through at all. `Sync` says there is more to
       /// read; this says whether reading is possible — the distinction the old design had
       /// no way to express, because a failed fetch was reported as an empty final page.
       Feed                : FeedHealth
@@ -424,7 +500,7 @@ type TerminalFeed =
     { Records : Map<int, TranscriptRecord>
       /// The transcript length this client believes the session has, from availability
       /// hints and from the records it has seen. Drives catch-up the way
-      /// `LatestKnownOffset` drives the event feed.
+      /// `HistorySync`'s target drives the event feed.
       KnownLength : int
       /// How far a contiguous prefix has been read. Fetching resumes here.
       ReadThrough : int
@@ -1355,18 +1431,6 @@ type ClientModel =
       /// and a default of false would have every server-rendered page announce a missing store
       /// before the client that knows has had a chance to look.
       CanKeepHistory : bool
-      /// Whether this client has finished reading the history it already had (Plan 20).
-      ///
-      /// It exists because an empty timeline had two opposite meanings wearing one mark: the
-      /// idle caret says *nothing was ever said here*, and it was also what a client showed
-      /// while it had not yet looked. After the local store landed, the second is the common
-      /// case on a cold open — so the caret was telling most people the opposite of the truth.
-      ///
-      /// One flag rather than a `Pending | Restoring | Restored`: the view asks one question,
-      /// "has this client looked yet", and a state nothing distinguishes is a state nobody
-      /// can act on. Starts FALSE, including on the server-rendered shell, because at first
-      /// paint no client has looked.
-      HistoryRead : bool
       Synced        : SyncedSessionState<Ylmish.Text>
       Conversation  : ConversationProjection
       /// The terminal half of the chat (Plan 14, stage 1): block chips and lease-stretch
@@ -1576,13 +1640,6 @@ type ClientModel =
       /// can be told from "never remembered", which `TerminalsOpen = false` alone cannot say.
       /// Set at boot, never changed.
       PaneRemembered : bool
-      /// Whether this client has, once, read the log through to where the session said it
-      /// ended — after which what a page brings is NEWS, and before which it is history being
-      /// replayed. Latched: a later catch-up (a reconnect, or the round trip after any send)
-      /// does not turn news back into history. What reads it is a move that answers a change
-      /// under the reader (`keyboardSwap`): a terminal's face changing in a replayed log is
-      /// not something that happened under anybody's hand.
-      HeardThrough : bool
       /// Whether the pane may still open ITSELF, once, when the log has been read through
       /// (P1-4, `openOfItself`): a desktop's first look at a session with a terminal running
       /// should show it, rather than a header with nothing in it about the build.
@@ -1680,7 +1737,7 @@ type ClientModel =
       /// refusal under the row it was sent from.
       Refused       : Refusal option
       /// The last time somebody took a terminal's keyboard from this client, while it still
-      /// stands: set by the steal arriving as NEWS (`HeardThrough` — a steal replayed on a
+      /// stands: set by the steal arriving as NEWS (`heardThrough` — a steal replayed on a
       /// reload happened to nobody who is here now), and gone the moment it is no longer
       /// true — this client takes it back, the taker hands it on or back, the terminal ends —
       /// or once it has been read and put away (`DismissStolenMsg`). One slot: a second steal
@@ -1927,11 +1984,6 @@ type ClientMsg =
     /// attempted when it is dispatched, and the next one repairs it. See
     /// `EventConsumerState.MissingBefore`.
     | LocalHistoryGapMsg of EventOffset
-    /// The client has finished reading what it already had (Plan 20) — whether that was a
-    /// full conversation, or nothing at all because it keeps nothing. Either way it has now
-    /// LOOKED, which is what the timeline needs to know before it can claim a session is
-    /// empty.
-    | HistoryReadMsg
     /// The event feed's health changed: a read failed and is being retried (reported by the
     /// resilience policy composed with the transport), or it failed for good (reported by
     /// the read loop, which is the one place that knows a read is over). A successful page
@@ -1940,7 +1992,7 @@ type ClientMsg =
     /// Catch-up has been running long enough to be worth saying (or has stopped being).
     /// The client arms a timer when catch-up begins; this is what the timer reports, and
     /// it is the ONLY thing that lights the "catching up" status — see
-    /// `EventConsumerState.CatchUpIsSlow` for why the truth alone is too noisy to show.
+    /// `HistorySync` for why the truth alone is too noisy to show.
     | CatchUpSlowMsg of bool
     /// The attempt to connect has run for `ClientModel.connectingQuietMs` — fired by the timer
     /// `ClientModel.timers` declares while the model is `Connecting false`, never by anything
@@ -2552,15 +2604,6 @@ module GitHubPoll =
 
 module ClientModel =
 
-    /// Is `latest` strictly ahead of `processed` (i.e. there is more to consume)?
-    let private isBehind (processed: EventOffset option) (latest: EventOffset option) : bool =
-        match latest with
-        | None -> false
-        | Some latest ->
-            match processed with
-            | None -> true
-            | Some processed -> EventOffset.value latest > EventOffset.value processed
-
     /// The model for a freshly loaded client: connecting, nothing consumed, idle. The
     /// optimistic start is deliberate and is what `connectionReport` already assumes ("Connecting
     /// is the state every client starts in"): a client that has just loaded IS about to connect,
@@ -2576,7 +2619,6 @@ module ClientModel =
           EphemeralStorage = false
           Build = None
           CanKeepHistory = true
-          HistoryRead = false
           Synced = (SyncedSessionState.empty CollabText.ylmish)
           Conversation = ConversationProjection.empty
           Approvals = RepoApprovals.empty
@@ -2585,9 +2627,9 @@ module ClientModel =
           Timeline = TimelineProjection.empty
           EventConsumer =
             { LastProcessedOffset = None
-              LatestKnownOffset = None
-              IsCatchingUp = false
-              CatchUpIsSlow = false
+              // Nothing said yet about where the log ends, and the server-rendered shell
+              // is this state too: at first paint nobody has read anything.
+              Sync = Opening (None, false)
               // Nothing has failed yet; the first read decides.
               Feed = FeedLive
               // Nothing has been looked at yet; the replay decides.
@@ -2618,7 +2660,6 @@ module ClientModel =
           TerminalsOpen = false
           PaneMemory = None
           PaneRemembered = false
-          HeardThrough = false
           PaneOpensItself = false
           Seen = Map.empty
           Column = Column.initial
@@ -2654,15 +2695,14 @@ module ClientModel =
               Polling = PollWaiting 0 }
           Queries = { Declared = []; Values = Map.empty } }
 
-    /// Advance the latest-known offset and recompute the catch-up indicator. "Slow" is a
-    /// property of a catch-up that is STILL RUNNING, so it dies with the catch-up it
-    /// described — the timer that set it never has to be raced.
-    let private withLatestKnown (latest: EventOffset option) (consumer: EventConsumerState) : EventConsumerState =
-        let catchingUp = isBehind consumer.LastProcessedOffset latest
-        { consumer with
-            LatestKnownOffset = latest
-            IsCatchingUp = catchingUp
-            CatchUpIsSlow = catchingUp && consumer.CatchUpIsSlow }
+    /// The session said where its log ends (`None`: it is empty).
+    let private told (latest: EventOffset option) (consumer: EventConsumerState) : EventConsumerState =
+        { consumer with Sync = HistorySync.told consumer.LastProcessedOffset latest consumer.Sync }
+
+    /// Whether this client has, once, read the log through since the page loaded
+    /// (`HistorySync.heardThrough`).
+    let heardThrough (model: ClientModel) : bool =
+        HistorySync.heardThrough model.EventConsumer.Sync
 
     let private withSynced (synced: SyncedSessionState<Ylmish.Text>) (model: ClientModel) : ClientModel =
         { model with Synced = synced }
@@ -2685,21 +2725,29 @@ module ClientModel =
     let launchOffered (model: ClientModel) : bool =
         Launch.offered (launchBegun model) model.Synced.LaunchDismissed model.Launch
 
+    /// Whether this client has read the log through to where the session says it ends — the
+    /// moment a remembered strip can be checked against what the session has, and the launch
+    /// card can be decided. Connected, because only the session knows where its log ends, and
+    /// current against what it said (`HistorySync.Current`).
+    let private readThrough (model: ClientModel) : bool =
+        model.Connection = Connected
+        && (match model.EventConsumer.Sync with
+            | Current -> true
+            | Opening _
+            | Behind _ -> false)
+
     /// Keeps `model.Launch.Anchored` decided. Run after every message (`update`, below,
     /// pipes its whole result through this), so whichever one first carries the client past
-    /// eligible - connected, historyRead, its own read of the log, caught up, still
-    /// unstarted - is the one that anchors it, for the rest of this client's life on this
-    /// session. Idempotent: a model already anchored, or not yet eligible, comes back with
-    /// the same `Launch` it was given, so paying this after every message costs a few
-    /// comparisons on the ones that were never going to move it.
+    /// eligible - read through (`readThrough`), still unstarted - is the one that anchors it,
+    /// for the rest of this client's life on this session. Idempotent: a model already
+    /// anchored, or not yet eligible, comes back with the same `Launch` it was given, so paying
+    /// this after every message costs a few comparisons on the ones that were never going to
+    /// move it.
     let private reconcileLaunch (model: ClientModel) : ClientModel =
         { model with
             Launch =
                 Launch.anchor
-                    (model.Connection = Connected)
-                    model.HistoryRead
-                    model.EventConsumer.LatestKnownOffset
-                    model.EventConsumer.IsCatchingUp
+                    (readThrough model)
                     (launchBegun model)
                     model.Synced.LaunchDismissed
                     model.Launch }
@@ -2989,19 +3037,6 @@ module ClientModel =
                 // the log to confirm.
                 FileTabs = memory.Files }
 
-    /// Whether this client has read the log through to where the session says it ends — the
-    /// moment a remembered strip can be checked against what the session has. Connected,
-    /// because only the session knows where its log ends; the local store read, because it
-    /// is read first and holds most of it; and caught up.
-    let private readThrough (model: ClientModel) : bool =
-        model.Connection = Connected && model.HistoryRead && not model.EventConsumer.IsCatchingUp
-
-    /// Latch `HeardThrough` on whichever message first carries the client past `readThrough`.
-    /// Run last after every message (`fold`), so that it is the fold's own verdict and no
-    /// message has to remember to set it.
-    let private heard (model: ClientModel) : ClientModel =
-        if model.HeardThrough || not (readThrough model) then model else { model with HeardThrough = true }
-
     /// The terminal this person is LOOKING at: the pane's terminal, while the pane is on screen
     /// and nothing is laid over it — not the `all` page, not a preview. What the pane is ABOUT
     /// (`selectedTerminal`) stays the same under both, but its output is not on screen, so a
@@ -3022,10 +3057,10 @@ module ClientModel =
     /// that line, when it is news itself and has been seen not at all. A remembered record
     /// (`remembered`) is left as it was, so what finished while this person was away is news.
     ///
-    /// Run after every message, before `heard`, so the message that crosses the line can be
-    /// told from those after it.
-    let private notice (model: ClientModel) : ClientModel =
-        if not model.HeardThrough && not (readThrough model) then model
+    /// Run after every message, with the model from before it (`before`), so the message that
+    /// crosses the line can be told from those after it.
+    let private notice (before: ClientModel) (model: ClientModel) : ClientModel =
+        if not (heardThrough before) && not (readThrough model) then model
         else
             let looked = looking model
             let seen =
@@ -3035,7 +3070,7 @@ module ClientModel =
                         let terminal = view.TerminalId
                         if looked = Some terminal then Map.add terminal (CommandTally.ofView view) seen
                         elif Map.containsKey terminal seen then seen
-                        elif model.HeardThrough then Map.add terminal CommandTally.zero seen
+                        elif heardThrough before then Map.add terminal CommandTally.zero seen
                         else Map.add terminal (CommandTally.ofView view) seen)
                     model.Seen
             if seen = model.Seen then model else { model with Seen = seen }
@@ -3044,11 +3079,11 @@ module ClientModel =
     /// tab's and its row's "unseen" mark. Something that FAILED in that time wins over
     /// everything that went through, because it is the one a person has to go and read.
     ///
-    /// Never while the log is still being replayed (`HeardThrough`): before then a remembered
+    /// Never while the log is still being replayed (`heardThrough`): before then a remembered
     /// terminal is part-way through its own history, and would read as news it is not.
     let unseen (terminal: TerminalId) (model: ClientModel) : Unseen option =
         match Projection.tryFind terminal model.Terminals with
-        | Some view when model.HeardThrough ->
+        | Some view when heardThrough model ->
             let now = CommandTally.ofView view
             let seen = Map.tryFind terminal model.Seen |> Option.defaultValue CommandTally.zero
             if now.Finished <= seen.Finished then None
@@ -3150,9 +3185,9 @@ module ClientModel =
     /// it yet" look identical, so a pane brought up early — the edge tab pressed before the log
     /// arrived, or the pane put back open by a reload's memory (`remembered`) over a strip that
     /// had nothing in it — lands on the empty pane honestly, and is landed again by the message
-    /// that carries the client past that line (`heard`, which runs after this and latches it).
-    let private landsWhenHeard (model: ClientModel) : ClientModel =
-        if model.HeardThrough || not model.TerminalsOpen || not (readThrough model) then model
+    /// that carries the client past that line (`before` is the model from before it).
+    let private landsWhenHeard (before: ClientModel) (model: ClientModel) : ClientModel =
+        if heardThrough before || not model.TerminalsOpen || not (readThrough model) then model
         else landed model
 
     /// Where the keyboard goes when `landsWhenHeard` put the switcher up under a pane that was
@@ -3161,7 +3196,7 @@ module ClientModel =
     /// where the hand is. Not for a pane that came up on the same message (`openOfItself`):
     /// focus resting on `body` then is a page that has just loaded, not a control that went.
     let heardLanding (before: ClientModel) (after: ClientModel) : DomMove option =
-        let crossed = not before.HeardThrough && after.HeardThrough
+        let crossed = not (heardThrough before) && heardThrough after
         if before.TerminalsOpen && crossed && not before.Switcher && after.Switcher then
             Some (DomMove.IfDropped DomMove.FocusSwitcher)
         else None
@@ -3922,7 +3957,7 @@ module ClientModel =
     /// terminal took the default with it, the terminal the pane has moved to), and only if it
     /// was dropped (`IfDropped`): an arrival does not know where the hand is.
     ///
-    /// Only for NEWS (`HeardThrough`): a log being replayed on load changes a terminal's face
+    /// Only for NEWS (`heardThrough`): a log being replayed on load changes a terminal's face
     /// under nobody's hand, and focus resting on `body` then is a page that has just loaded,
     /// not a control that went.
     ///
@@ -3934,7 +3969,7 @@ module ClientModel =
             Projection.tryFind terminal model.Terminals |> Option.map (fun view -> view.IsOpen, view.Lease)
         let covered (model: ClientModel) = Option.isSome (preview model) || model.Switcher
         match selectedTerminal before with
-        | Some shown when before.HeardThrough && not (covered before) && not (covered after) ->
+        | Some shown when heardThrough before && not (covered before) && not (covered after) ->
             let live = selectedTerminal after = Some shown && offers after shown = Some (true, Some (me after))
             let killed = before.KillPending = Some shown && after.KillPending = None
             if offers before shown <> offers after shown && not live && not killed then
@@ -3958,13 +3993,13 @@ module ClientModel =
     ///
     /// And on the two moments a selection that has not changed is first drawn where it can be
     /// measured: the column opening (a shut strip has no width, so a selection made behind it
-    /// could not be revealed), and the log read through (`HeardThrough`), before which renders
+    /// could not be revealed), and the log read through (`heardThrough`), before which renders
     /// are held while a reload replays it, so a remembered selection may not have been drawn by
     /// the frame its own reveal ran in.
     let pivotReveal (before: ClientModel) (after: ClientModel) : DomMove option =
         let shown (model: ClientModel) = if model.Switcher then None else selectedTerminal model
         let opened = after.TerminalsOpen && not before.TerminalsOpen
-        let caughtUp = after.HeardThrough && not before.HeardThrough
+        let caughtUp = heardThrough after && not (heardThrough before)
         match shown after with
         | Some _ when shown before <> shown after || opened || caughtUp -> Some DomMove.RevealPivot
         | Some _ | None -> None
@@ -4330,7 +4365,7 @@ module ClientModel =
     /// pause to reason — or to reach for a tool — shows as one within a breath.
     let writingQuietMs = 700
 
-    /// How long catch-up must run before it is worth SAYING (`EventConsumerState.CatchUpIsSlow`).
+    /// How long catch-up must run before it is worth SAYING (`HistorySync`'s `slow`).
     /// Long enough that a send — which puts this client one event behind itself for a round
     /// trip — never lights it; short enough that a real wait is reported rather than sat
     /// through in silence.
@@ -4408,9 +4443,13 @@ module ClientModel =
                 [ { Key = [ "connecting-slow" ]; After = connectingQuietMs; Fire = ConnectingSlowMsg } ]
             | Connecting true | Disconnected _ | Connected | Reconnecting | Retrying _ -> []
         let catchUp =
-            if model.EventConsumer.IsCatchingUp && not model.EventConsumer.CatchUpIsSlow then
+            match model.EventConsumer.Sync with
+            | Opening (_, false)
+            | Behind (_, false) ->
                 [ { Key = [ "catch-up-slow" ]; After = catchUpQuietMs; Fire = CatchUpSlowMsg true } ]
-            else []
+            | Opening (_, true)
+            | Behind (_, true)
+            | Current -> []
         let quiet =
             model.Conversation.Items
             |> List.choose writingStamp
@@ -4461,7 +4500,7 @@ module ClientModel =
     /// and through `landsWhenHeard` after it, so a pane already up when that line is crossed
     /// lands where a pane brought up then would;
     /// and through `notice`, so what this person has looked at is counted from wherever the
-    /// message left the pane; and through `holdList` after it, last before `heard`, so the
+    /// message left the pane; and through `holdList` after it, last, so the
     /// list's sheet holds a terminal by what it is once that has been counted.
     /// The pane put away — and any popover hanging in it, which does not outlive it.
     let private paneHidden (model: ClientModel) : ClientModel =
@@ -4498,7 +4537,7 @@ module ClientModel =
         { model with PaneRoom = { model.PaneRoom with Chosen = Some width } }
 
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
-        heard (holdList (notice (reconcileLaunch (landsWhenHeard (openOfItself model (settle (recall (
+        holdList (notice model (reconcileLaunch (landsWhenHeard model (openOfItself model (settle (recall (
         match msg with
         | ConnectingMsg ->
             (match model.Connection with
@@ -4517,13 +4556,13 @@ module ClientModel =
                 Connection = Connected
                 Session = Some accepted.SessionId
                 Peer = { model.Peer with DisplayName = accepted.AssignedDisplayName }
-                EventConsumer = withLatestKnown accepted.LatestOffset model.EventConsumer }
+                EventConsumer = told accepted.LatestOffset model.EventConsumer }
         | RejectedMsg reason ->
             { model with Connection = Disconnected (Some reason) }
         | RetryingMsg (reason, failures) ->
             { model with Connection = Retrying (reason, failures) }
         | EventsAvailableMsg latest ->
-            { model with EventConsumer = withLatestKnown (Some latest) model.EventConsumer }
+            { model with EventConsumer = told (Some latest) model.EventConsumer }
         // An answer is folded whichever read it answers — the fold is offset-gated, so a late
         // one costs nothing — and what it settles is `reads`' to decide, below.
         | EventsReadMsg (_, Ok page) -> fold (EventsPageMsg page) model
@@ -4611,14 +4650,14 @@ module ClientModel =
             // asked of the attribution this page folds — as `opened` below asks it, and for
             // the same reason.
             //
-            // Only NEWS (`HeardThrough`): the log keeps every steal for ever, and a reload that
+            // Only NEWS (`heardThrough`): the log keeps every steal for ever, and a reload that
             // announced last week's would be telling nobody anything. Then held only while it
             // is still true — the taker still has the keyboard of a terminal still open — so a
             // notice can never outlive the steal it reports, whichever event ended it.
             let stolen =
                 let mine = Attribution.actorFor attribution.PeerUsers model.Peer.PeerId
                 let heard =
-                    if not model.HeardThrough then model.Stolen
+                    if not (heardThrough model) then model.Stolen
                     else
                         freshEvents
                         |> List.fold
@@ -4686,7 +4725,7 @@ module ClientModel =
             // Each in the slot its opening gives it (`withTab`), which for a terminal that has
             // just arrived is the end.
             //
-            // A page of HISTORY (`HeardThrough`) is not a terminal closing under anybody: it
+            // A page of HISTORY (`heardThrough`) is not a terminal closing under anybody: it
             // closed while this client was not here, and a strip rebuilt from the log with no
             // memory to say otherwise (`recall`) would otherwise be every terminal this person
             // ever opened. So a replay keeps only what still runs, or what is on screen — and a
@@ -4698,14 +4737,14 @@ module ClientModel =
                 |> List.filter (fun terminal ->
                     showing = Some terminal
                     || (not (Set.contains (ViewingTerminal terminal) closed)
-                        && (model.HeardThrough
+                        && (heardThrough model
                             || Projection.tryFind terminal terminals |> Option.exists (fun view -> view.IsOpen))))
             // A file put in front of the people here opens its tab, as a terminal does, and
-            // `close_tab` takes it out. Only as news (`HeardThrough`): a page of history would
+            // `close_tab` takes it out. Only as news (`heardThrough`): a page of history would
             // bring back every file ever handed over, including the ones this reader put away,
             // and the strip they kept comes back from their memory instead (`remembered`).
             let fileTabs =
-                if not model.HeardThrough then model.FileTabs
+                if not (heardThrough model) then model.FileTabs
                 else
                     freshEvents
                     |> List.fold
@@ -4742,8 +4781,8 @@ module ClientModel =
             // reader on whatever the agent was showing an hour ago, ahead of whatever they
             // opened since. Arriving history is not a command.
             //
-            // Read off `LastProcessedOffset` rather than `IsCatchingUp`, which looks like the
-            // right question and is not: catch-up is true for a few dozen milliseconds every
+            // Read off `LastProcessedOffset` rather than `Sync`, which looks like the right
+            // question and is not: a client is behind for a few dozen milliseconds every
             // time ANYBODY sends anything (its own declaration says so), so a focus landing in
             // that window would be dropped for a reason having nothing to do with it. Having
             // folded nothing yet is the one fact that distinguishes a page of history from a
@@ -4781,7 +4820,6 @@ module ClientModel =
                 match pane |> Option.bind PaneMode.preview with
                 | Some preview -> filesFor preview.Subject fileTabs
                 | None -> fileTabs
-            let latestKnown = EventOffset.maxOption model.EventConsumer.LatestKnownOffset highWater
             { model with
                 Conversation = conversation
                 Launch = launch
@@ -4817,12 +4855,10 @@ module ClientModel =
                 Attribution = attribution
                 EventConsumer =
                     { LastProcessedOffset = highWater
-                      LatestKnownOffset = latestKnown
-                      IsCatchingUp = isBehind highWater latestKnown
-                      // A catch-up that has finished was never slow, whatever the timer
-                      // was about to say.
-                      CatchUpIsSlow =
-                        isBehind highWater latestKnown && model.EventConsumer.CatchUpIsSlow
+                      // A page says what this client kept or was sent, never where the log
+                      // ends — so one off the local store cannot make a client current that
+                      // the session has not yet spoken to.
+                      Sync = HistorySync.folded highWater model.EventConsumer.Sync
                       // A page off the NETWORK is proof the feed works, so recovery from a
                       // stall needs no separate signal. A page off the local store proves
                       // only that this client kept it — the feed is whatever it already
@@ -4833,8 +4869,8 @@ module ClientModel =
                         | _ -> model.EventConsumer.Feed
                       // A page off the NETWORK resumes at the cursor and runs unbroken from
                       // it, so whatever the store was missing before it is being filled —
-                      // what is left to arrive is ordinary catch-up, which `IsCatchingUp`
-                      // already says. A page off the local store is what found the hole in
+                      // what is left to arrive is ordinary catch-up, which `Sync` already
+                      // says. A page off the local store is what found the hole in
                       // the first place and cannot have repaired it.
                       MissingBefore =
                         match msg with
@@ -4844,16 +4880,15 @@ module ClientModel =
                       Reading = model.EventConsumer.Reading } }
         | LocalHistoryGapMsg resumesAt ->
             { model with EventConsumer = { model.EventConsumer with MissingBefore = Some resumesAt } }
-        | HistoryReadMsg -> { model with HistoryRead = true }
         | EventFeedMsg health ->
             { model with EventConsumer = { model.EventConsumer with Feed = health } }
         | CatchUpSlowMsg slow ->
-            // Gated on still being behind: slow is a property of a catch-up that is running,
-            // and the state holds that whoever dispatches.
+            // Slow is a property of a wait that is running; a late timer over a client that
+            // is current has nothing to land on (`HistorySync.withSlow`).
             { model with
                 EventConsumer =
                     { model.EventConsumer with
-                        CatchUpIsSlow = slow && model.EventConsumer.IsCatchingUp } }
+                        Sync = HistorySync.withSlow slow model.EventConsumer.Sync } }
         | AgentQuietMsg stamp -> { model with Agent = { model.Agent with Quiet = Some stamp } }
         | DisconnectedMsg ->
             // What was asked over the channel that just died will never be answered over it:
@@ -5498,7 +5533,7 @@ module ClientModel =
                     | Some (Previewing ({ Preview.Subject = PreviewSubject.Content shown }, under)) when shown = file ->
                         under |> Option.map OnTerminal
                     | other -> other }
-        ))))))))
+        )))))))
 
     /// The read loop's decisions: what a message, once folded, asks to be read next — of the
     /// event log and of each terminal's transcript — and what it settles of the reads out.
@@ -5542,7 +5577,7 @@ module ClientModel =
         // Behind, and nothing out: the one state in which a hint is worth a read.
         let askEventsIfBehind (model: ClientModel) =
             if model.EventConsumer.Reading.IsNone
-               && isBehind model.EventConsumer.LastProcessedOffset model.EventConsumer.LatestKnownOffset then
+               && HistorySync.behind model.EventConsumer.Sync then
                 askEvents model
             else model, []
         let askTranscript (terminal: TerminalId) (fromSeq: int) (owed: bool) (model: ClientModel) =

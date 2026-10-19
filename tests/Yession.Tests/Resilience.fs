@@ -1576,9 +1576,6 @@ let private surfaceTests =
                 Support.render
                     { model with
                         Connection = Disconnected (Some "session unreachable")
-                        // As the replay leaves it: the walk that found the hole is the walk
-                        // that finished looking.
-                        HistoryRead = true
                         EventConsumer =
                             { model.EventConsumer with MissingBefore = Some (EventOffset.create 22L |> expect) } }
             Expect.isTrue (html.Contains "data-history-gap") "the timeline says its earlier half is not here"

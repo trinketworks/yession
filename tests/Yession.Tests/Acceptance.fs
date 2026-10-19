@@ -90,9 +90,6 @@ let private representativeModel : ClientModel =
       // A representative client is one that can keep what it is given; the case that cannot
       // is the exception, and says so where it matters.
       CanKeepHistory = true
-      // A representative client has been to look; the timeline it renders is the session's,
-      // not a placeholder for one it has not read.
-      HistoryRead = true
       Synced =
         // Draft/queue bodies are rich-text `Y.XmlFragment`s mounted by the browser editor,
         // not fields on the model — so the SSR fixture carries only the slot's identity; the
@@ -147,11 +144,11 @@ let private representativeModel : ClientModel =
             TerminalItems = [ TimelineBlock (EventOffset.create 2L |> expect, terminalId, blockId) ] }
       EventConsumer =
         { LastProcessedOffset = Some (EventOffset.create 5L |> expect)
-          LatestKnownOffset = Some (EventOffset.create 7L |> expect)
-          IsCatchingUp = true
-          // Long enough to be worth saying, so the catch-up status and its offsets are on
-          // screen for the checklist. A brief one is deliberately silent (`CatchUpIsSlow`).
-          CatchUpIsSlow = true
+          // A representative client has read the log through once — the timeline it renders
+          // is the session's, not a placeholder for one it has not read — and is behind it
+          // again, for long enough to be worth saying, so the catch-up status and its offsets
+          // are on screen for the checklist. A brief one is deliberately silent.
+          Sync = Behind (EventOffset.create 7L |> expect, true)
           Feed = FeedLive
           MissingBefore = None
           Reading = None }
@@ -224,7 +221,6 @@ let private representativeModel : ClientModel =
       TerminalsOpen = true
       PaneMemory = None
       PaneRemembered = false
-      HeardThrough = true
       PaneOpensItself = false
       Seen = Map.empty
       Column = Column.initial
@@ -605,6 +601,15 @@ let private themedGreen () : string =
     | "" -> failwith "Style.ansiClasses gives SGR 32 no class: a green run would wear no theme token"
     | classes -> classes
 
+/// The representative session with nothing in it — no conversation, no terminal items, nothing
+/// queued (a command waiting to run is something ON the screen) — standing at `sync`.
+let private emptyAt (sync: HistorySync) : ClientModel =
+    { representativeModel with
+        Conversation = ConversationProjection.empty
+        Timeline = TimelineProjection.empty
+        Synced = { representativeModel.Synced with Pending = Map.empty }
+        EventConsumer = { representativeModel.EventConsumer with Sync = sync } }
+
 let private uiChecklistTests =
     testList "UI checklist" [
         // Pinned ONCE, over the whole shell, rather than remembered at each control: the
@@ -970,75 +975,53 @@ let private uiChecklistTests =
                 (html.Contains (Dom.attr Dom.Hooks.githubSignInRequired "mine"))
                 "and the panel still reports the credential honestly"
 
-        testCase "an empty timeline says whether it has caught up, and the caret means one thing again" <| fun () ->
-            // Two opposite facts used to wear the same mark. The idle caret says "nothing was
-            // ever said here"; it was also what a client showed BEFORE it had read anything,
-            // or while it was still behind the session's own log — the ordinary cold open,
-            // and the catch-up that can still follow it (a message never kept on this
-            // device, a round trip from landing). So the caret was telling most people the
-            // opposite of the truth, and neither state could be told from the other on screen.
-            let empty =
-                { representativeModel with
-                    Conversation = ConversationProjection.empty
-                    Timeline = TimelineProjection.empty
-                    // Nothing queued either: a command waiting to run is something ON the
-                    // screen, and a session with one is not the empty one this is about.
-                    Synced = { representativeModel.Synced with Pending = Map.empty }
-                    // Caught up by default: this fixture is about the LOCAL read and the
-                    // catch-up that can follow it, each pinned on its own below — not about
-                    // `representativeModel.EventConsumer`'s own catch-up, which is deliberately
-                    // mid-catch-up for the header checklist elsewhere.
-                    EventConsumer =
-                        { representativeModel.EventConsumer with
-                            IsCatchingUp = false
-                            LatestKnownOffset = representativeModel.EventConsumer.LastProcessedOffset } }
-            let looking = Support.render { empty with HistoryRead = false }
+        // Two opposite facts used to wear the same mark. The idle caret says "nothing was ever
+        // said here"; it was also what a client showed BEFORE it had read anything, or while
+        // it was still behind the session's own log — the ordinary cold open, and the
+        // catch-up that can still follow it (a message never kept on this device, a round
+        // trip from landing). So the caret was telling most people the opposite of the truth,
+        // and neither state could be told from the other on screen.
+        testCase "an empty timeline not yet read through says it is reading" <| fun () ->
+            let looking = Support.render (emptyAt (Opening (None, false)))
             Expect.isTrue
                 (looking.Contains "data-history-loading")
-                "a client that has not looked yet says it is reading, rather than claiming emptiness"
+                "a client the session has not yet told where its log ends says it is reading, rather than claiming emptiness"
+
+        testCase "the reading state says it in words" <| fun () ->
             Expect.isTrue
-                (looking.Contains Dom.Text.readingHistory)
-                "and says it in words too, since the pulse alone reaches nobody who cannot see it"
-            let looked = Support.render { empty with HistoryRead = true }
+                ((Support.render (emptyAt (Opening (None, false)))).Contains Dom.Text.readingHistory)
+                "the pulse alone reaches nobody who cannot see it"
+
+        testCase "an empty timeline told where the log ends, and still short of it, is still reading" <| fun () ->
+            // A message never kept on this device may still be a round trip from landing, so
+            // the wait is SUSTAINED rather than giving way to the caret.
+            let stillBehind = Support.render (emptyAt (Opening (Some (EventOffset.create 7L |> expect), false)))
+            Expect.isTrue (stillBehind.Contains "data-history-loading") "still behind the session's own log is still reading"
+
+        testCase "an empty timeline read through says it is empty" <| fun () ->
+            Expect.isTrue
+                ((Support.render (emptyAt Current)).Contains "data-timeline-empty")
+                "a client that has read through and found nothing says so"
+
+        testCase "an empty timeline read through is not still reading" <| fun () ->
             Expect.isFalse
-                (looked.Contains "data-history-loading")
+                ((Support.render (emptyAt Current)).Contains "data-history-loading")
                 "a client that has read through and found nothing is not still reading"
-            // Read locally, but still behind the session's own log: a message never kept on
-            // this device may still be a round trip from landing, so the wait is SUSTAINED
-            // rather than giving way to the caret that says nothing was ever said here.
-            let stillBehind =
+
+        testCase "a timeline with messages in it shows no reading state, read through or not" <| fun () ->
+            let full =
                 Support.render
-                    { empty with
-                        HistoryRead = true
-                        EventConsumer = { empty.EventConsumer with IsCatchingUp = true } }
-            Expect.isTrue
-                (stillBehind.Contains "data-history-loading")
-                "read through locally, but still behind the session's own log, is still reading"
-            // The other half, and the reason this is worth pinning: a session that HAS messages
-            // never shows either, whether or not the client has finished looking.
-            let full = Support.render { representativeModel with HistoryRead = false }
-            Expect.isFalse
-                (full.Contains "data-history-loading")
-                "a timeline with messages in it is not an empty one"
-            // Nor is one whose only act has not run yet. Nothing is FOLDED in this session —
-            // its first command is still queued — so a caret keyed on the fold would stand
-            // over the one thing on the screen and say the session was empty.
-            let queuedOnly =
-                Support.render
-                    { empty with
-                        HistoryRead = true
-                        Synced = representativeModel.Synced }
-            Expect.isTrue
-                (queuedOnly.Contains Dom.Hooks.chatPending)
-                "a session whose first act is queued shows it"
-            Expect.isFalse
-                (queuedOnly.Contains "data-timeline-empty")
-                "and does not also say it is empty"
-            // …which the same session with nothing queued does say, so the line above is a
-            // verdict rather than a hook that never renders.
-            Expect.isTrue
-                ((Support.render { empty with HistoryRead = true }).Contains "data-timeline-empty")
-                "an empty one still says so"
+                    { representativeModel with
+                        EventConsumer = { representativeModel.EventConsumer with Sync = Opening (None, false) } }
+            Expect.isFalse (full.Contains "data-history-loading") "a timeline with messages in it is not an empty one"
+
+        testCase "a session whose only act is queued shows it and not the empty caret" <| fun () ->
+            // Nothing is FOLDED in this session — its first command is still queued — so a
+            // caret keyed on the fold would stand over the one thing on the screen and say the
+            // session was empty.
+            let queuedOnly = Support.render { emptyAt Current with Synced = representativeModel.Synced }
+            Expect.isTrue (queuedOnly.Contains Dom.Hooks.chatPending) "a session whose first act is queued shows it"
+            Expect.isFalse (queuedOnly.Contains "data-timeline-empty") "and does not also say it is empty"
 
         testCase "the way back to the latest message is rendered, named, and the chat's" <| fun () ->
             // Whether it is OFFERED is the reader's scroll, which `Tail` in the browser reports
@@ -3224,10 +3207,7 @@ let private syncStatusTests =
         let settled =
             { representativeModel with
                 EventConsumer =
-                    { representativeModel.EventConsumer with
-                        LatestKnownOffset = representativeModel.EventConsumer.LastProcessedOffset
-                        IsCatchingUp = false
-                        CatchUpIsSlow = false } }
+                    { representativeModel.EventConsumer with Sync = Current } }
 
         // It used to be said once, having been said three times before that. Now it is said
         // nowhere: "everything is fine" is the least actionable thing a screen can carry, and
@@ -3242,7 +3222,7 @@ let private syncStatusTests =
                 "but the state is still on the attribute a test reads"
 
         testCase "a brief catch-up says nothing at all" <| fun () ->
-            let html = Support.render { representativeModel with EventConsumer = { representativeModel.EventConsumer with CatchUpIsSlow = false } }
+            let html = Support.render { representativeModel with EventConsumer = { representativeModel.EventConsumer with Sync = Behind (EventOffset.create 7L |> expect, false) } }
             Expect.isFalse (html.Contains Dom.Hooks.catchUp) "the sidebar line stays put"
             Expect.isFalse (html.Contains "Catching up") "and nothing anywhere else says it either"
 
@@ -3262,11 +3242,11 @@ let private syncStatusTests =
             let folded = representativeModel.EventConsumer.LastProcessedOffset |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
             Expect.isTrue (html.Contains (sprintf "aria-valuenow=\"%d\"" folded)) "carrying how far it has got"
 
-        // The flag describes a catch-up that is RUNNING, so it cannot outlive one: a timer
-        // that fires just as the page lands must not leave a status nothing can clear.
+        // Slow describes a catch-up that is RUNNING (`HistorySync` keeps it inside the cases
+        // that wait), so a timer that fires just as the page lands has nothing to land on.
         testCase "'slow' cannot be claimed once there is nothing left to catch up on" <| fun () ->
             let model = Support.step (CatchUpSlowMsg true) settled
-            Expect.isFalse model.EventConsumer.CatchUpIsSlow "a late timer is refused, not stored"
+            Expect.isFalse (HistorySync.slow model.EventConsumer.Sync) "a late timer is refused, not stored"
             Expect.isFalse ((Support.render model).Contains Dom.Hooks.catchUp) "and nothing is shown"
     ]
 
@@ -3472,7 +3452,6 @@ let private chromeTests =
                   at 1L (PeerJoined { PeerId = ada; DisplayName = "swift-heron"; User = None }) ]
             ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
             |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (EventOffset.create 1L |> expect) })
-            |> Support.step HistoryReadMsg
             |> Support.step (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
             |> Support.step (LaunchMsg (LaunchListingArrived ("", ListingLoaded { Candidates = [ candidate ]; Next = None })))
             |> Support.step (LaunchMsg (LaunchSelected candidate))

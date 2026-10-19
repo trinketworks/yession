@@ -444,10 +444,9 @@ let private withPage (events: EventEnvelope<SessionEvent> list) (model: ClientMo
 
 /// A client that has read the log through — booted, its local store read, connected to a
 /// session whose log ends at the last of `events`, and caught up — so that what arrives next
-/// is NEWS (`ClientModel.HeardThrough`) rather than history being replayed.
+/// is NEWS (`HistorySync.heardThrough`) rather than history being replayed.
 let private heardOf (events: EventEnvelope<SessionEvent> list) : ClientModel =
     ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
-    |> Support.step HistoryReadMsg
     |> Support.step
         (ConnectedMsg
             { SessionId = sessionId
@@ -810,7 +809,6 @@ let private reloaded (memory: PaneMemory) (pages: EventEnvelope<SessionEvent> li
     let booted =
         ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
         |> ClientModel.remembered (Some memory)
-        |> Support.step HistoryReadMsg
         |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest })
     pages |> List.fold (fun model page -> withPage page model) booted
 
@@ -829,12 +827,11 @@ let private panesKept (msgs: ClientMsg list) (model: ClientModel) : PaneMemory l
         (model, [])
     |> snd
 
-/// A reload's messages after boot: the local store read, the session accepted with its log
+/// A reload's messages after boot: the session accepted with its log
 /// ending at the last of `events`, and one page carrying them.
 let private reloading (events: EventEnvelope<SessionEvent> list) : ClientMsg list =
     let latest = events |> List.tryLast |> Option.map (fun e -> e.Offset)
-    [ HistoryReadMsg
-      ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest }
+    [ ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest }
       EventsPageMsg { Events = events; LastOffset = latest; IsEnd = true } ]
 
 let private reloadTests =
@@ -949,7 +946,6 @@ let private reloadTests =
             let catchingUp =
                 ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
                 |> ClientModel.remembered (Some memory)
-                |> Support.step HistoryReadMsg
                 |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (EventOffset.create 9L |> expect) })
                 |> withPage [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "shell") ]
             Expect.equal (ClientModel.selectedTerminal catchingUp) (Some terminalB) "the terminal that was on top, already"
@@ -975,8 +971,7 @@ let private reloadTests =
             let memory = { remembering [ terminalA; terminalB ] with PaneMemory.Selected = Some terminalB }
             let booted = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } |> ClientModel.remembered (Some memory)
             let msgs =
-                [ HistoryReadMsg
-                  ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (EventOffset.create 9L |> expect) }
+                [ ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (EventOffset.create 9L |> expect) }
                   EventsPageMsg { Events = [ at 1L 0.0 (opened terminalA "build") ]; LastOffset = Some (EventOffset.create 1L |> expect); IsEnd = false } ]
             Expect.equal (panesKept msgs booted) [] "the half-restored strip is not written over the whole one"
 
@@ -1030,7 +1025,6 @@ let private firstLook (wide: bool) (pages: EventEnvelope<SessionEvent> list list
     let booted =
         { ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } with PaneOpensItself = wide }
         |> ClientModel.remembered None
-        |> Support.step HistoryReadMsg
         |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest })
     pages |> List.fold (fun model page -> withPage page model) booted
 
@@ -1046,7 +1040,6 @@ let private twoOpenOneEnded =
 /// of two pages folded, a terminal somebody else opened in it, and the last still to come.
 let private upBeforeTheLog : ClientModel =
     ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
-    |> Support.step HistoryReadMsg
     |> Support.step
         (ConnectedMsg
             { SessionId = sessionId
@@ -1145,7 +1138,6 @@ let private edgeTabTests =
             let latest = Some (EventOffset.create 9L |> expect)
             let partial =
                 { ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } with PaneOpensItself = true }
-                |> Support.step HistoryReadMsg
                 |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest })
                 |> withPage [ at 1L 0.0 (opened terminalA "build") ]
             Expect.isFalse partial.TerminalsOpen "still catching up"
@@ -1155,7 +1147,6 @@ let private edgeTabTests =
             let model =
                 { ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } with PaneOpensItself = true }
                 |> ClientModel.remembered (Some PaneMemory.untouched)
-                |> Support.step HistoryReadMsg
                 |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest })
                 |> withPage [ at 1L 0.0 (opened terminalA "build") ]
             Expect.isFalse model.TerminalsOpen "this browser's own answer wins"
@@ -1166,7 +1157,6 @@ let private edgeTabTests =
                 { ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } with PaneOpensItself = true }
                 |> Support.step ToggleContentMsg
                 |> Support.step ToggleContentMsg
-                |> Support.step HistoryReadMsg
                 |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest })
                 |> withPage [ at 1L 0.0 (opened terminalA "build") ]
             Expect.isFalse model.TerminalsOpen "somebody already answered"
@@ -1411,7 +1401,6 @@ let private hearing (memory: PaneMemory option) (history: EventEnvelope<SessionE
     let latest = history |> List.tryLast |> Option.map (fun e -> e.Offset)
     ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
     |> ClientModel.remembered memory
-    |> Support.step HistoryReadMsg
     |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest })
     |> withPage history
 
@@ -4485,7 +4474,6 @@ let private tabTests =
             // control went; a lease that ended an hour ago is history, not a swap.
             let replayed =
                 ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
-                |> Support.step HistoryReadMsg
                 |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (EventOffset.create 3L |> expect) })
                 |> withPage [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (took terminalA (PeerRef ada) 0) ]
             let _, effects =
@@ -5772,6 +5760,48 @@ let private presenceTests =
 // and what an answer settles. The connection only carries a read out and hands the answer
 // back under the number it was asked with, so every rule is here, a fold away from a test.
 
+/// Where a client stands against the log (`HistorySync`), reached the way a client reaches it:
+/// by the messages a cold open, a reload and a live session send.
+let private historySyncTests =
+    let booted = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+    let accepted (latest: int64 option) =
+        ConnectedMsg
+            { SessionId = sessionId
+              AssignedDisplayName = "swift-heron"
+              LatestOffset = latest |> Option.map (fun o -> EventOffset.create o |> expect) }
+    let page (msg: EventPage<SessionEvent> -> ClientMsg) (events: EventEnvelope<SessionEvent> list) =
+        msg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true }
+    let log = [ at 0L 0.0 (opened terminalA "build"); at 1L 1.0 (opened terminalB "tests") ]
+    testList "history sync" [
+        // The cold open the camera filmed: the local store came back, and the empty caret
+        // replaced "catching up" while the session's history was still a round trip away.
+        testCase "a page out of this client's own store does not make it read through" <| fun () ->
+            let kept = booted |> Support.step (page LocalHistoryMsg log)
+            Expect.isFalse (HistorySync.heardThrough kept.EventConsumer.Sync) "what was kept is not where the log ends"
+
+        testCase "a session that says its log is empty is read through at once" <| fun () ->
+            let connected = booted |> Support.step (accepted None)
+            Expect.equal connected.EventConsumer.Sync Current "an empty log has nothing to read"
+
+        testCase "a session whose log runs past what is folded is not read through" <| fun () ->
+            let connected = booted |> Support.step (accepted (Some 1L))
+            Expect.isFalse (HistorySync.heardThrough connected.EventConsumer.Sync) "the history is still to come"
+
+        testCase "folding to where the session said the log ends is read through" <| fun () ->
+            let read = booted |> Support.step (accepted (Some 1L)) |> Support.step (page EventsPageMsg log)
+            Expect.equal read.EventConsumer.Sync Current "caught up"
+
+        testCase "a client read through that hears of more is behind, never opening again" <| fun () ->
+            let read = booted |> Support.step (accepted (Some 1L)) |> Support.step (page EventsPageMsg log)
+            let hinted = read |> Support.step (EventsAvailableMsg (EventOffset.create 3L |> expect))
+            Expect.equal hinted.EventConsumer.Sync (Behind (EventOffset.create 3L |> expect, false)) "news, not history"
+
+        testCase "a hint older than what is folded does not put a client behind" <| fun () ->
+            let read = booted |> Support.step (accepted (Some 1L)) |> Support.step (page EventsPageMsg log)
+            let stale = read |> Support.step (EventsAvailableMsg (EventOffset.create 0L |> expect))
+            Expect.equal stale.EventConsumer.Sync Current "an end is never moved backwards"
+    ]
+
 let private readLoopTests =
     let offset (n: int64) = EventOffset.create n |> expect
     let accepted (latest: int64 option) =
@@ -6230,4 +6260,5 @@ let tests =
         presenceTests
         revealTests
         readLoopTests
+        historySyncTests
     ]
