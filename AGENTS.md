@@ -242,9 +242,10 @@ introduce any of these, and remove them from code you are already changing:
 - **Dynamic access: `?` and `?<-`** (rule YES015 reports them). `fs?readdirSync path` is one typo
   away from a silent `undefined`. Bind the module. Key the map with a type.
 - **`unbox`, `!!`, `:?>` on a value you did not just construct** (rule YES016 reports `unbox`,
-  `!!` and a `:?>` from `obj`; a downcast from a declared type is yours to judge). They assert and
-  do not check. A `Y.Text` unboxed as `string` does not throw, and the fault surfaces somewhere
-  else. Decode it, or type whatever produced it.
+  `!!` and a `:?>` from `obj`, `Event` or `EventTarget`; a downcast from another declared type is
+  yours to judge). They assert and do not check. A `Y.Text` unboxed as `string` does not throw,
+  and the fault surfaces somewhere else. Decode it, or type whatever produced it. An event or its
+  target is narrowed with `Events` and `EventTargets` (Fable.BrowserExtras).
 - **`obj` in a signature** (rule YES017 reports it in a function's or a member's). Both ends are
   free to disagree about the contract. If it crosses a wire, use a codec. If it configures a
   binding, use that binding's options type.

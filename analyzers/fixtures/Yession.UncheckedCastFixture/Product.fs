@@ -68,6 +68,23 @@ let record: Buffer = unbox {| toString = fun () -> "record" |}
 
 let narrow (element: Element) : HtmlElement = element :?> HtmlElement
 
+// A downcast from what a listener is handed, or from what an event reached. Which `Event` a
+// listener gets is decided by a string, and what `target` is by whatever was clicked, so these
+// are reported even though `Event` and `EventTarget` are declared types.
+
+let pressed (event: Browser.Types.Event) : string =
+    (event :?> Browser.Types.KeyboardEvent).key // YES016
+
+let reached (event: Browser.Types.Event) : string =
+    (event.target :?> Browser.Types.Element).tagName // YES016
+
+let on (event: Browser.Types.Event) : Browser.Types.HTMLElement =
+    downcast event.currentTarget // YES016
+
+// Within the DOM's element hierarchy, the downcast is still the author's to judge.
+
+let held (element: Browser.Types.Element) : Browser.Types.HTMLElement = element :?> Browser.Types.HTMLElement
+
 // A type test checks, and the compiler writes downcasts of its own for one.
 
 let describe (value: obj) : string =

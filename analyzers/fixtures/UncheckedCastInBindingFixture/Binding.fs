@@ -23,3 +23,7 @@ let bang (value: obj) : string = !!value
 let down (value: obj) : string = value :?> string
 
 let inferredDown (value: obj) : Buffer = downcast value
+
+let pressed (event: Browser.Types.Event) : string = (event :?> Browser.Types.KeyboardEvent).key
+
+let reached (event: Browser.Types.Event) : string = (event.target :?> Browser.Types.Element).tagName
