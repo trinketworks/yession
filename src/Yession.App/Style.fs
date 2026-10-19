@@ -4806,7 +4806,15 @@ module Style =
     /// which is what the layout below already assumes, every region being sized off this one
     /// height. On a viewport that never changes (every desktop, and the test harnesses) the
     /// two units are the same number.
-    let app = "flex h-dvh overflow-hidden bg-bg text-ink font-ui antialiased"
+    ///
+    /// iOS does not shorten `100dvh` for its keyboard, though. It pans the full-height page up
+    /// to the composer, and the top of the timeline goes above the screen, out of reach of any
+    /// scroll. So the session's page measures the visual viewport (`PaneShell.followVisualViewport`)
+    /// and the shell is FIXED to it: `--visual-h` tall, `--visual-top` down the layout viewport.
+    /// Unset, as before the script runs and on every page that does not run it, they are `100dvh`
+    /// and 0: the same box as before.
+    let app =
+        "fixed inset-x-0 top-[var(--visual-top,0px)] flex h-[var(--visual-h,100dvh)] overflow-hidden bg-bg text-ink font-ui antialiased"
 
     /// The same ground and face as `app`, on a page that is a DOCUMENT rather than a shell: the
     /// Manager's standalone pages (`/open` while a session launches, a refusal with a way
