@@ -665,11 +665,16 @@ let private uiRenderTests =
             Expect.isFalse (crashed.Contains Dom.Manager.stop) "nor has an exited one"
             Expect.isFalse (crashed.Contains "data-launch") "and it too relaunches by its name"
 
-        // The FLOOR, and the reason the state keeps a word at every width. A row says its
-        // state with a dot and a word. Drop the word and four of the six states are one
-        // solid dot — stopped, archived, failed to start and exited — and the last two draw
-        // that dot in one colour, so two states become one picture and the rest differ by
-        // colour alone (WCAG 2.0 SC 1.4.1).
+        // The FLOOR. A row says its state in words, in every arm. Drop a word and four of the
+        // six states are one solid dot — stopped, archived, failed to start and exited — and
+        // the last two draw that dot in one colour, so two states become one picture and the
+        // rest differ by colour alone (WCAG 2.0 SC 1.4.1).
+        //
+        // A phone PAINTS only four of them (`ManagerUi.PhoneVoice`): the two resting states
+        // are said by the name's ink and by a live mark present or absent, so their words go
+        // to `sr-only`. That is why this asks the markup and not the screen — the word must
+        // exist and be announced in every arm, whatever a given width chooses to paint. Which
+        // widths paint which is the design, and it is pictured rather than pinned.
         //
         // What is pinned is that the state is SAID, not which words say it. The copy is the
         // design and will move; that a reader who cannot tell the dots apart still learns the

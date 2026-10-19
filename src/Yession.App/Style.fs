@@ -711,6 +711,18 @@ module Style =
     /// the phone drops instead is the TAIL (`recordRowAside`).
     let recordRowState = cls [ small; "truncate shrink-0 -ml-3 phone:ml-0" ]
 
+    /// A state word a phone does not paint, because the row already says that state another
+    /// way: `running` by one green mark beside a full-ink name, `stopped` by a dimmed name
+    /// with no mark at all. `sr-only` and never `hidden` — `display:none` takes a thing out of
+    /// the accessibility tree as well as off the screen, and a reader who cannot see the
+    /// name's ink is exactly the one who still needs the word.
+    ///
+    /// Only the two RESTING states wear it. Starting, a launch that failed, an exit and an
+    /// archive are events, nothing else on the row says them, and they are what a list is
+    /// scanned for — so they keep their words and, on a list at rest, they are the only words
+    /// on it.
+    let recordRowWord = "phone:sr-only"
+
     /// The tail after a state word: a running session's own summary. Shown where there is
     /// width for it, and dropped on a phone, where it would spend the name's room on a
     /// nicety.

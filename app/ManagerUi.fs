@@ -107,6 +107,29 @@ module private Col =
 /// session picks up a third pull request is a list you cannot keep your place in. The
 /// clipping is the line's own (`truncate` on the block; `overflow` does nothing to an inline
 /// span). The worst it can lose is the tail of a count; the state is first and always whole.
+/// What a PHONE draws of a state. A list is scanned for the exception, and a column of the
+/// resting word under every name is the opposite of scanning: four rows of five said "stopped"
+/// under four names that were already dimmed for being stopped.
+///
+/// Every arm still RENDERS its word. What changes is whether the phone paints it, and the two
+/// that it does not go to `sr-only` rather than `hidden` — `display:none` would take the state
+/// out of the accessibility tree as well as off the screen, and a reader who cannot see the
+/// name's ink is exactly who still needs the word.
+type private PhoneVoice =
+    /// Drawn in full. Every state that is an EVENT — starting, a launch that failed, an exit,
+    /// an archive — because nothing else on the row says any of them. These are what a list of
+    /// resting rows is scanned FOR, and they now stand alone on the screen.
+    | Spoken
+    /// The mark is drawn, the word is for the screen reader. `running` is the one state the
+    /// list is scanned for, and one green dot beside a full-ink name is unmistakable where it
+    /// is the only mark on the column.
+    | Mark
+    /// Neither is drawn. `stopped` is the list's RESTING state, and a dimmed name with no live
+    /// mark beside it is what a row at rest looks like. Against `running` the difference a
+    /// sighted reader reads is a mark present or absent, which is not a colour (WCAG 2.0
+    /// SC 1.4.1); the word is still announced.
+    | Silent
+
 let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
     let nothing = html $""""""
     // ONE shape for every state, so no state can arrive wearing a voice of its own: the status
@@ -114,17 +137,23 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
     // line's own small voice. Where it starts a line its dot hangs in the gutter left of the
     // rail, and where it rides the end of the name's line it does not — `Style.recordRowState`
     // holds both, and says why (docs/visual-design.md, Space).
-    let line (face: string) (dot: string) (hook: string) (word: string) (rest: TemplateResult) =
+    let line (voice: PhoneVoice) (face: string) (dot: string) (hook: string) (word: string) (rest: TemplateResult) =
+        let mark = html $"""<span class="{dot}" aria-hidden="true"></span>"""
+        let said =
+            match voice with
+            | Spoken -> html $"""{mark}{word}"""
+            | Mark -> html $"""{mark}<span class="{Style.recordRowWord}">{word}</span>"""
+            | Silent -> html $"""<span class="{Style.recordRowWord}">{mark}{word}</span>"""
         html
-            $"""<div class="{Style.recordRowState}"><span class="{face}" data-status="{hook}"><span class="{dot}" aria-hidden="true"></span>{word}</span>{rest}</div>"""
+            $"""<div class="{Style.recordRowState}"><span class="{face}" data-status="{hook}">{said}</span>{rest}</div>"""
     match view.Record.ArchivedAt, view.Status with
     // An operator's decision, not a process state — but it belongs on this line, because
     // "archived" is the answer a reader wants here and "stopped" for a session that can no
     // longer start is true and useless. A step fainter than `stopped`: it is the one state
     // nothing can be done to without first being undone.
-    | Some _, _ -> line Style.statusFaint Style.statusDot Dom.Manager.statusArchived "archived" nothing
+    | Some _, _ -> line Spoken Style.statusFaint Style.statusDot Dom.Manager.statusArchived "archived" nothing
     | None, ProcessManager.NotRunning ->
-        line Style.statusWait Style.statusDot Dom.Manager.statusStopped "stopped" nothing
+        line Silent Style.statusWait Style.statusDot Dom.Manager.statusStopped "stopped" nothing
     | None, ProcessManager.Running _ ->
         // Rendered in the line's own voice and NOT toned. The Manager stores a line it was
         // told and never learns what it is made of, so any colour it chose would be a colour
@@ -135,9 +164,9 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
             match view.Summary with
             | Some said -> html $"""<span class="{Style.recordRowAside}" data-session-summary> · {said}</span>"""
             | None -> nothing
-        line Style.statusOk Style.statusDotLiveLead Dom.Manager.statusRunning "running" summary
+        line Mark Style.statusOk Style.statusDotLiveLead Dom.Manager.statusRunning "running" summary
     | None, ProcessManager.Launching ->
-        line Style.statusWait Style.statusDotBeat Dom.Manager.statusStarting "starting" nothing
+        line Spoken Style.statusWait Style.statusDotBeat Dom.Manager.statusStarting "starting" nothing
     | None, ProcessManager.LaunchFailed reason ->
         // The reason stays in the line's own voice: the red is the WORD's, and a sentence set
         // in it would be the red statement the doctrine allows one of, twice. It is NOT the
@@ -145,6 +174,7 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
         // reason is why a reader is on this row, and `display:none` would take it out of the
         // accessibility tree as well as off the screen. The name clips instead.
         line
+            Spoken
             Style.statusErr
             Style.statusDot
             Dom.Manager.statusFailed
@@ -152,7 +182,7 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
             (html $"""<span title="{reason}"> · {reason}</span>""")
     | None, ProcessManager.Exited code ->
         let reason = code |> Option.map string |> Option.defaultValue "signal"
-        line Style.statusErr Style.statusDot Dom.Manager.statusExited (sprintf "exited (%s)" reason) nothing
+        line Spoken Style.statusErr Style.statusDot Dom.Manager.statusExited (sprintf "exited (%s)" reason) nothing
 
 /// The name text, styled by state but carrying no link of its own — the cell around it
 /// (`rowTemplate`) is the one hit area, covering this and `stateLine` both. A session that
