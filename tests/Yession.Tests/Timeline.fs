@@ -743,7 +743,7 @@ let private namingTests =
                 [ "term 2"; "term 2" ]
                 "one terminal, one name, wherever it is named"
 
-        testCase "a chat chip reads as ran and what ran, not where" <| fun () ->
+        testCase "a chat chip reads as its verb and what ran, not where" <| fun () ->
             let described =
                 match started terminalB "1" byAda "cd app && make" 1 with
                 | SessionEvent.TerminalBlockStarted s -> SessionEvent.TerminalBlockStarted { s with Description = Some "built the app" }
@@ -751,8 +751,10 @@ let private namingTests =
             let chipOf events = textAt (Dom.attr Dom.Hooks.chatBlock "b-1") (Support.render (shownOf events))
             let named = chipOf (List.take 3 threeUntitled @ [ at 4L 3.0 described ])
             let bare = chipOf threeUntitled
-            Expect.isTrue (named.StartsWith "ran built the app") $"the description, after ran: {named}"
-            Expect.isTrue (bare.StartsWith "ran make") $"a person's command, after ran: {bare}"
+            // Neither block completes here, so the verb is still "running" — it swaps to
+            // "ran" only once the block's status leaves `BlockRunning`.
+            Expect.isTrue (named.StartsWith "running built the app") $"the description, after running: {named}"
+            Expect.isTrue (bare.StartsWith "running make") $"a person's command, after running: {bare}"
             Expect.isFalse (named.Contains "term 2") "the terminal is not on the line"
 
         testCase "a chat chip's accessible name says which terminal its command ran in" <| fun () ->
@@ -2919,7 +2921,7 @@ let private commandCallTests =
         testCase "a starting chip reads as the command it will be" <| fun () ->
             let html = Support.render (shownOf (List.take 2 oneCommandCall))
             let said = textAt (Dom.attr Dom.Hooks.chatCommandCall "t-1") html
-            Expect.isTrue (said.StartsWith "ran tested the app") $"ran, then the description the call gave: {said}"
+            Expect.isTrue (said.StartsWith "running tested the app") $"running, then the description the call gave: {said}"
 
         testCase "a message that landed while the command started stays below its chip" <| fun () ->
             let html = Support.render (shownOf (List.take 5 oneCommandCall))
