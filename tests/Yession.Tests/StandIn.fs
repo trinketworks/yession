@@ -44,6 +44,11 @@ type Act =
     | ExitIfDevices of standard: (bool * bool * bool) * matched: int * otherwise: int
     /// Print `<name>=<value>`, or `<name>=absent` when the variable is not set.
     | PrintVariable of name: string
+    /// Fetch `url` and print the body, exiting 0, or print why not and exit 9.
+    | Fetch of url: string
+    /// Connect to the unix socket at `path` and exit 0 once connected. A connect that fails
+    /// ends the child on its unhandled `error`, exit 1, with the error's code on stderr.
+    | Connect of path: string
     /// Stand in for a session a Manager launches: add this process's pid to the `ledger` file,
     /// then keep the spawn contract as far as `readiness` says. The ledger is the witness that
     /// can count the children, which the Manager's own view cannot.
@@ -72,6 +77,8 @@ module Act =
         | ExitIfDevices ((stdin, stdout, stderr), matched, otherwise) ->
             [ "exit-if-devices"; flag stdin + flag stdout + flag stderr; string matched; string otherwise ]
         | PrintVariable name -> [ "print-variable"; name ]
+        | Fetch url -> [ "fetch"; url ]
+        | Connect path -> [ "connect"; path ]
         | Session (ledger, ReadyAfter milliseconds) -> [ "session"; ledger; "ready-after"; string milliseconds ]
         | Session (ledger, ExitAfter (milliseconds, code)) ->
             [ "session"; ledger; "exit-after"; string milliseconds; string code ]
@@ -130,6 +137,8 @@ module Act =
             | _, _, Error e, _
             | _, _, _, Error e -> Error e
         | [ "print-variable"; name ] -> Ok (PrintVariable name)
+        | [ "fetch"; url ] -> Ok (Fetch url)
+        | [ "connect"; path ] -> Ok (Connect path)
         | [ "session"; ledger; "ready-after"; ms ] ->
             code ms |> Result.map (fun ms -> Session (ledger, ReadyAfter ms))
         | [ "session"; ledger; "exit-after"; ms; c ] ->
@@ -137,9 +146,13 @@ module Act =
         | [ "session"; ledger; "never-ready" ] -> Ok (Session (ledger, NeverReady))
         | _ -> Error (sprintf "not a stand-in act: %s" (String.concat " " arguments))
 
-/// The compiled `StandInMain.fs`, beside the suite's own entry, which is this process's
-/// script. Absolute, so a child started in another directory still finds it.
-let private entry () : string = path.join (path.dirname ``process``.argv.[1], "StandInMain.js")
+/// The directory the suite was compiled to, which is this process's script's. A sandbox that
+/// runs a stand-in has to be able to read it: the program and everything it imports are here.
+let directory () : string = path.dirname ``process``.argv.[1]
+
+/// The compiled `StandInMain.fs`, beside the suite's own entry. Absolute, so a child started
+/// in another directory still finds it.
+let private entry () : string = path.join (directory (), "StandInMain.js")
 
 /// The arguments that start a stand-in doing `act`, after the path of Node itself.
 let command (act: Act) : string list = entry () :: Act.arguments act
