@@ -735,7 +735,7 @@ module Viewport =
 
     /// Call `changed` whenever the visual viewport resizes or pans; nothing where there is no
     /// visual viewport, since then nothing about it can change.
-    [<Emit("(globalThis.visualViewport && (globalThis.visualViewport.addEventListener('resize', $0), globalThis.visualViewport.addEventListener('scroll', $0)))")>]
+    [<Emit("(function (changed) { const v = globalThis.visualViewport; if (v) { v.addEventListener('resize', changed); v.addEventListener('scroll', changed) } })($0)")>]
     let onVisualChange (changed: unit -> unit) : unit = jsNative
 
 /// The document's selection, as far as a measurement reads it.
