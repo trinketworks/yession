@@ -17,6 +17,15 @@ type Condition =
     | Set of name: string
     | Unset of name: string
 
+/// When a stand-in session prints its readiness line, if it ever does.
+type Readiness =
+    /// Print it after this long, then wait to be stopped.
+    | ReadyAfter of milliseconds: int
+    /// Exit with `code` after this long, never having printed it.
+    | ExitAfter of milliseconds: int * code: int
+    /// Never print it, and wait to be stopped: a boot that is still under way.
+    | NeverReady
+
 /// What a stand-in does once it has started.
 type Act =
     /// Exit at once with this code.
@@ -35,6 +44,10 @@ type Act =
     | ExitIfDevices of standard: (bool * bool * bool) * matched: int * otherwise: int
     /// Print `<name>=<value>`, or `<name>=absent` when the variable is not set.
     | PrintVariable of name: string
+    /// Stand in for a session a Manager launches: add this process's pid to the `ledger` file,
+    /// then keep the spawn contract as far as `readiness` says. The ledger is the witness that
+    /// can count the children, which the Manager's own view cannot.
+    | Session of ledger: string * readiness: Readiness
 
 [<RequireQualifiedAccess>]
 module Act =
@@ -59,6 +72,10 @@ module Act =
         | ExitIfDevices ((stdin, stdout, stderr), matched, otherwise) ->
             [ "exit-if-devices"; flag stdin + flag stdout + flag stderr; string matched; string otherwise ]
         | PrintVariable name -> [ "print-variable"; name ]
+        | Session (ledger, ReadyAfter milliseconds) -> [ "session"; ledger; "ready-after"; string milliseconds ]
+        | Session (ledger, ExitAfter (milliseconds, code)) ->
+            [ "session"; ledger; "exit-after"; string milliseconds; string code ]
+        | Session (ledger, NeverReady) -> [ "session"; ledger; "never-ready" ]
 
     let private code (text: string) : Result<int, string> =
         match System.Int32.TryParse text with
@@ -113,6 +130,11 @@ module Act =
             | _, _, Error e, _
             | _, _, _, Error e -> Error e
         | [ "print-variable"; name ] -> Ok (PrintVariable name)
+        | [ "session"; ledger; "ready-after"; ms ] ->
+            code ms |> Result.map (fun ms -> Session (ledger, ReadyAfter ms))
+        | [ "session"; ledger; "exit-after"; ms; c ] ->
+            codes ms c |> Result.map (fun (ms, c) -> Session (ledger, ExitAfter (ms, c)))
+        | [ "session"; ledger; "never-ready" ] -> Ok (Session (ledger, NeverReady))
         | _ -> Error (sprintf "not a stand-in act: %s" (String.concat " " arguments))
 
 /// The compiled `StandInMain.fs`, beside the suite's own entry, which is this process's

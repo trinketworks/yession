@@ -9,6 +9,7 @@ module Yession.Tests.StandInMain
 open Fable.Core
 open Node.Api
 open Fable.NodeExtras
+open Yession.Manager
 open Yession.Tests.StandIn
 
 let private holds (condition: Condition) : bool =
@@ -18,6 +19,18 @@ let private holds (condition: Condition) : bool =
     | Unset name -> (ProcessEnv.get name).IsNone
 
 let private isDevice (descriptor: int) : bool = (fs.fstatSync descriptor).isCharacterDevice ()
+
+/// Keep this process alive until something stops it.
+let private waitToBeStopped () : unit = JS.setInterval ignore 1000 |> ignore
+
+let private session (ledger: string) (readiness: Readiness) : unit =
+    TestFiles.append ledger (sprintf "%d\n" (int ``process``.pid))
+    match readiness with
+    | ReadyAfter milliseconds ->
+        JS.setTimeout (fun () -> printfn "%s" (ReadyLine.encode { Port = 1; Version = None })) milliseconds |> ignore
+        waitToBeStopped ()
+    | ExitAfter (milliseconds, code) -> JS.setTimeout (fun () -> Processes.exitWith code) milliseconds |> ignore
+    | NeverReady -> waitToBeStopped ()
 
 let private perform (act: Act) : unit =
     match act with
@@ -31,6 +44,7 @@ let private perform (act: Act) : unit =
     | ExitIfDevices (standard, matched, otherwise) ->
         Processes.exitWith (if (isDevice 0, isDevice 1, isDevice 2) = standard then matched else otherwise)
     | PrintVariable name -> printfn "%s=%s" name (ProcessEnv.get name |> Option.defaultValue "absent")
+    | Session (ledger, readiness) -> session ledger readiness
 
 match Act.parse (``process``.argv |> Seq.skip 2 |> List.ofSeq) with
 | Ok act -> perform act
