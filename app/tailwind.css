@@ -194,6 +194,18 @@
 @keyframes ask-rise {
   from { height: 0; opacity: 0; }
 }
+/* The composer's line arriving when its editor mounts (`Style.draftInput`). The page the
+   server sends has the field's box but no editor in it, so the line — the prompt, or a draft
+   kept from before — appears with the client, and the band grew under the reader by a line
+   in one frame. It unfolds instead: from nothing to one line of its own height (`1lh`), and
+   down a touch and in, as `Motion.unfold` does, at its pace. `overflow: clip` in both stops,
+   so it holds for the whole run and the words are cut by the growing box, not spilled over
+   it; a draft longer than a line is already capped by the field and shows the rest when the
+   run ends and the box is its own again. */
+@keyframes line-unfold {
+  from { max-height: 0; opacity: 0; translate: 0 -0.25rem; overflow: clip; }
+  to { max-height: 1lh; opacity: 1; translate: 0 0; overflow: clip; }
+}
 /* A command landing in its terminal: lifted (`Style.paneToolbarLifted`) — the ground two steps
    up — and settling back into the history. The rim is this keyframe's own: it has to animate,
    and a border would reflow the row mid-animation, which is why the lifted state says its step
