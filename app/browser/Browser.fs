@@ -1259,6 +1259,7 @@ let private start () =
         // The column is beside the chat or a drawer over it according to the stylesheet's
         // breakpoint, which a window resized or a phone turned can cross at any time.
         PaneShell.watchBreakpoint (fun wide -> dispatchRef (ViewportMsg wide))
+        PaneShell.followVisualViewport ()
 
         // The local peer's draft slot follows its body: published on the first keystroke,
         // retracted when the composer empties. Watches the body itself, so a keystroke and a

@@ -729,6 +729,15 @@ module Viewport =
     [<Emit("(globalThis.visualViewport ? globalThis.visualViewport.offsetTop : 0)")>]
     let visualOffsetTop () : float = jsNative
 
+    /// How far the visual viewport is pinch-zoomed; 1 where there is no visual viewport to ask.
+    [<Emit("(globalThis.visualViewport ? globalThis.visualViewport.scale : 1)")>]
+    let visualScale () : float = jsNative
+
+    /// Call `changed` whenever the visual viewport resizes or pans; nothing where there is no
+    /// visual viewport, since then nothing about it can change.
+    [<Emit("(function (changed) { const v = globalThis.visualViewport; if (v) { v.addEventListener('resize', changed); v.addEventListener('scroll', changed) } })($0)")>]
+    let onVisualChange (changed: unit -> unit) : unit = jsNative
+
 /// The document's selection, as far as a measurement reads it.
 [<RequireQualifiedAccess>]
 module Selection =

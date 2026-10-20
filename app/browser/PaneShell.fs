@@ -336,6 +336,25 @@ let setColumn (column: Yession.App.Column) : unit =
 let watchBreakpoint (changed: bool -> unit) : unit =
     (mediaQuery Yession.App.Style.wideMedia).addEventListener ("change", fun change -> changed change.matches)
 
+/// Keep the shell on the part of the window that can be seen (`Style.app` reads what this
+/// sets). iOS does not shorten `100dvh` for its keyboard: it leaves the layout full height and
+/// pans the page up to the focused composer, so the top of the shell — the header, and the top
+/// of the conversation's scrollport — sits above the screen where no scroll can reach it.
+/// The visual viewport is the part that IS on screen, and its size and pan are what the
+/// shell takes.
+///
+/// Not while pinch-zoomed: then the visual viewport is a magnified part of the page, and a
+/// shell resized to it would re-lay out under the reader's fingers.
+let followVisualViewport () : unit =
+    let root = document.documentElement
+    setStyleProperty root "--shell-position" "fixed"
+    let fit () =
+        if Viewport.visualScale () <= 1.0 then
+            setStyleProperty root "--visual-h" (sprintf "%fpx" (Viewport.visualHeight ()))
+            setStyleProperty root "--visual-top" (sprintf "%fpx" (Viewport.visualOffsetTop ()))
+    fit ()
+    Viewport.onVisualChange fit
+
 /// The nav toggle pressed is the one about to disappear: focus goes to whichever control
 /// replaces it — the column's collapse when it is on screen, the header's reopen when not.
 let private toNavToggle (shown: bool) : unit =
