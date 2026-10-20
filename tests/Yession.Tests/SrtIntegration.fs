@@ -70,6 +70,12 @@ let private policyIn (workspace: string) (domains: string list) : SandboxPolicy 
       Filesystem = Confined
       Derived = Map.empty }
 
+/// The same policy, able to read the suite's compiled output as well, so a stand-in
+/// (`StandIn`) can run inside it. Only for a case whose question is not what may be read:
+/// the read is the one this widens.
+let private withStandIns (policy: SandboxPolicy) : SandboxPolicy =
+    { policy with ReadPaths = policy.ReadPaths @ [ StandIn.directory () ] }
+
 /// How this box confines, as the run's environment configures it — the same parse the
 /// Session does at boot, so the suite exercises the deployed shape.
 let private srtTools () =
@@ -185,20 +191,18 @@ let tests =
 
                 // Then one that does. The read and write halves are what `grantsFrom`
                 // produces for a `Socket` leaf beside the socket itself, so this is the
-                // policy a resource really becomes.
+                // policy a resource really becomes, with the stand-in's read beside it.
                 let! second =
-                    startSandbox
-                        { policyIn workspace [] with
-                            ReadPaths = [ workspace; socketPath ]
-                            WritePaths = [ workspace; socketPath ]
-                            Sockets = [ socketPath ] }
+                    startSandbox (
+                        withStandIns
+                            { policyIn workspace [] with
+                                ReadPaths = [ workspace; socketPath ]
+                                WritePaths = [ workspace; socketPath ]
+                                Sockets = [ socketPath ] }
+                    )
 
-                let connect =
-                    sprintf
-                        "%s -e \"const n=require('node:net');const c=n.connect(%s);c.on('connect',()=>{c.end();process.exit(0)});c.on('error',e=>{console.error(e.code);process.exit(1)})\""
-                        (nodePath ())
-                        ("'" + socketPath + "'")
-                let! run, _, err = shell second connect
+                let! run, _, err =
+                    runInSandbox second (nodePath ()) (StandIn.command (StandIn.Connect socketPath)) Map.empty None
                 close ()
                 Expect.equal (exitCode run) 0
                     (sprintf "the second sandbox reached the socket it named, said: %s" err)
@@ -360,10 +364,10 @@ let tests =
                 // allow-back list stops matching where this box keeps its runtime.
                 let workspace = TestFiles.tempDir "yession-srt-"
                 let! sandbox = startSandbox (policyIn workspace [])
-                let! run, out, _ =
-                    runInSandbox sandbox (nodePath ()) [ "-e"; "process.stdout.write('ran')" ] Map.empty None
+                // `--version` runs no program, so the interpreter is the only thing it reads.
+                let! run, out, _ = runInSandbox sandbox (nodePath ()) [ "--version" ] Map.empty None
                 Expect.equal (exitCode run) 0 "the interpreter this very process runs on is reachable inside"
-                Expect.isTrue (out.Contains "ran") "and it produced its output"
+                Expect.isTrue (out.StartsWith "v") "and it produced its output"
                 do! sandbox.Dispose ()
             })
 
@@ -376,10 +380,9 @@ let tests =
                 let policy =
                     Sandboxes.AgentSandbox.policyFor ambient home (Sandboxes.AgentSandbox.envFor ambient home None)
                 let! sandbox = startSandbox policy
-                let! run, out, _ =
-                    runInSandbox sandbox (nodePath ()) [ "-e"; "process.stdout.write('ran')" ] Map.empty (Some home)
+                let! run, out, _ = runInSandbox sandbox (nodePath ()) [ "--version" ] Map.empty (Some home)
                 Expect.equal (exitCode run) 0 "the interpreter the CLI runs on is readable under the agent's policy"
-                Expect.isTrue (out.Contains "ran") "and it produced its output"
+                Expect.isTrue (out.StartsWith "v") "and it produced its output"
                 do! sandbox.Dispose ()
             })
 
@@ -405,15 +408,17 @@ let tests =
                 // is unshared, so an unlisted host cannot be connected to whether or not this
                 // box has a route to it.
                 let workspace = TestFiles.tempDir "yession-srt-"
-                let! sandbox = startSandbox (policyIn workspace [ "api.anthropic.com" ])
+                let! sandbox = startSandbox (withStandIns (policyIn workspace [ "api.anthropic.com" ]))
                 let! run, _, _ =
                     runInSandbox
                         sandbox
                         (nodePath ())
-                        [ "-e"; "fetch('https://example.com').then(() => process.exit(0), () => process.exit(9))" ]
+                        (StandIn.command (StandIn.Fetch "https://example.com"))
                         Map.empty
                         None
-                Expect.notEqual (exitCode run) 0 "an unlisted domain is unreachable"
+                // 9 is the stand-in's own word for a refused fetch: a stand-in that could not
+                // start at all exits otherwise, and must not read as a refusal.
+                Expect.equal (exitCode run) 9 "an unlisted domain is unreachable"
                 do! sandbox.Dispose ()
             })
 
@@ -560,17 +565,15 @@ let siblings =
             do! Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "0.0.0.0", fun () -> cont ()) |> ignore)
             let url = sprintf "http://%s:%d/" host (serverPort server)
             let workspace = TestFiles.tempDir "yession-srt-"
-            let! wider = startSandbox (policyIn workspace (Sandboxes.hostRouteHere (Interop.ownAddresses ()) SrtBackend host (serverPort server)))
-            let! narrower = startSandbox (policyIn workspace [])
+            let! wider =
+                startSandbox (withStandIns (policyIn workspace (Sandboxes.hostRouteHere (Interop.ownAddresses ()) SrtBackend host (serverPort server))))
+            let! narrower = startSandbox (withStandIns (policyIn workspace []))
             // Node's `fetch` takes the proxy srt names only when told to.
             let fetch (sandbox: Sandbox) =
                 runInSandbox
                     sandbox
                     (nodePath ())
-                    [ "-e"
-                      sprintf
-                          "fetch('%s').then(r => r.text()).then(t => { process.stdout.write(t); process.exit(0) }, e => { console.error(String(e.cause ?? e)); process.exit(9) })"
-                          url ]
+                    (StandIn.command (StandIn.Fetch url))
                     (Map.ofList [ "NODE_USE_ENV_PROXY", "1" ])
                     None
             let! reached, reachedOut, reachedErr = fetch wider

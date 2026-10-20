@@ -32,6 +32,19 @@ let private session (ledger: string) (readiness: Readiness) : unit =
     | ExitAfter (milliseconds, code) -> JS.setTimeout (fun () -> Processes.exitWith code) milliseconds |> ignore
     | NeverReady -> waitToBeStopped ()
 
+let private fetch (url: string) : unit =
+    Fetch.fetchUnsafe url []
+    |> Promise.bind (fun response -> response.text ())
+    |> Promise.map (fun body ->
+        ``process``.stdout.write body |> ignore
+        Processes.exitWith 0)
+    |> Promise.catch (fun error ->
+        // The error itself, not its message: Node prints its `cause`, which is where a fetch
+        // says what refused it.
+        JS.console.error error
+        Processes.exitWith 9)
+    |> ignore
+
 let private perform (act: Act) : unit =
     match act with
     | Exit code -> Processes.exitWith code
@@ -44,6 +57,8 @@ let private perform (act: Act) : unit =
     | ExitIfDevices (standard, matched, otherwise) ->
         Processes.exitWith (if (isDevice 0, isDevice 1, isDevice 2) = standard then matched else otherwise)
     | PrintVariable name -> printfn "%s=%s" name (ProcessEnv.get name |> Option.defaultValue "absent")
+    | Fetch url -> fetch url
+    | Connect path -> net.connect (path, fun (_: Node.Net.Socket) -> Processes.exitWith 0) |> ignore
     | Session (ledger, readiness) -> session ledger readiness
 
 match Act.parse (``process``.argv |> Seq.skip 2 |> List.ofSeq) with
