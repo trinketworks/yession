@@ -3492,10 +3492,14 @@ module View =
                 </section>"""
         let body =
             match showsFolded, rows, items with
-            // Still reading. Anything of this client's own on the screen regardless — a
-            // command it queued, an add the session refused — stays, under the line saying
-            // the rest is on its way.
-            | false, _, _ -> reading :: items
+            // Still reading. The line saying so waits as the header's catch-up bar does,
+            // until the wait has lasted long enough to be worth saying (`HistorySync.slow`):
+            // a reload's own store answers in a few hundred milliseconds, and "catching up"
+            // over a conversation already on this device, for that long, is a flash of a
+            // state nobody is in. Anything of this client's own on the screen regardless — a
+            // command it queued, an add the session refused — stays, under it.
+            | false, _, _ when HistorySync.slow model.EventConsumer.Sync -> reading :: items
+            | false, _, _ -> items
             // Shown, and there is genuinely nothing: the caret only ever means what it has
             // always said, which is why it can stay wordless and decorative. Unless what is
             // known is that history is missing — then the timeline is truncated rather than

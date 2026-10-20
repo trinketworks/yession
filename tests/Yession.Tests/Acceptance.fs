@@ -981,22 +981,35 @@ let private uiChecklistTests =
         // catch-up that can still follow it (a message never kept on this device, a round
         // trip from landing). So the caret was telling most people the opposite of the truth,
         // and neither state could be told from the other on screen.
-        testCase "an empty timeline not yet read through says it is reading" <| fun () ->
-            let looking = Support.render (emptyAt (Opening (None, false, false)))
+        testCase "an empty timeline not yet read through, for long enough to say, says it is reading" <| fun () ->
+            let looking = Support.render (emptyAt (Opening (None, true, false)))
             Expect.isTrue
                 (looking.Contains "data-history-loading")
                 "a client the session has not yet told where its log ends says it is reading, rather than claiming emptiness"
 
         testCase "the reading state says it in words" <| fun () ->
             Expect.isTrue
-                ((Support.render (emptyAt (Opening (None, false, false)))).Contains Dom.Text.readingHistory)
+                ((Support.render (emptyAt (Opening (None, true, false)))).Contains Dom.Text.readingHistory)
                 "the pulse alone reaches nobody who cannot see it"
 
         testCase "an empty timeline told where the log ends, and still short of it, is still reading" <| fun () ->
             // A message never kept on this device may still be a round trip from landing, so
             // the wait is SUSTAINED rather than giving way to the caret.
-            let stillBehind = Support.render (emptyAt (Opening (Some (EventOffset.create 7L |> expect), false, false)))
+            let stillBehind = Support.render (emptyAt (Opening (Some (EventOffset.create 7L |> expect), true, false)))
             Expect.isTrue (stillBehind.Contains "data-history-loading") "still behind the session's own log is still reading"
+
+        // A reload's own store answers in a few hundred milliseconds; "catching up" for that
+        // long, over a conversation already on this device, was a flash of a state nobody
+        // was in.
+        testCase "a brief wait says nothing yet" <| fun () ->
+            Expect.isFalse
+                ((Support.render (emptyAt (Opening (None, false, false)))).Contains "data-history-loading")
+                "no reading line before the wait is worth saying"
+
+        testCase "a brief wait does not claim the session is empty either" <| fun () ->
+            Expect.isFalse
+                ((Support.render (emptyAt (Opening (None, false, false)))).Contains "data-timeline-empty")
+                "nothing is said at all"
 
         testCase "an empty timeline read through says it is empty" <| fun () ->
             Expect.isTrue
