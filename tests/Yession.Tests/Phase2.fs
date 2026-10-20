@@ -2107,7 +2107,7 @@ let private commandFoldTests =
                             environment.Spawn
                                 { Executable = "node"
                                   Arguments =
-                                    [ "-e"; "console.log('key=' + (process.env.ANTHROPIC_API_KEY || 'absent'))" ]
+                                    StandIn.command (StandIn.PrintVariable "ANTHROPIC_API_KEY")
                                   Env = Map.empty
                                   WorkingDirectory = None
                                   Via = Entrypoint }
@@ -2118,7 +2118,7 @@ let private commandFoldTests =
                             let! ended = handle.Exited
                             Expect.equal ended (SandboxExited 0) "the probe ran"
                             Expect.isTrue
-                                (output.Contains "key=absent")
+                                (output.Contains "ANTHROPIC_API_KEY=absent")
                                 "the planted credential does not reach the command"
                     })
             }
@@ -2599,7 +2599,7 @@ let private killedAfterAbort (spawner: Fable.ClaudeAgentSdk.Spawner) : Async<boo
         let controller = abortController ()
 
         let spawned =
-            askSpawner spawner (nodePath ()) [| "-e"; "setTimeout(() => {}, 60000)" |] Map.empty (Some controller.signal)
+            askSpawner spawner (nodePath ()) (Array.ofList (StandIn.command StandIn.Linger)) Map.empty (Some controller.signal)
 
         let exited = ref false
         Fable.ClaudeAgentSdk.SpawnedProcess.onExit spawned (fun _ _ -> exited.Value <- true)
@@ -2617,7 +2617,7 @@ let private agentSpawnerPortsTests =
                 askSpawner
                     (Sandboxes.AgentSandbox.hostClaudeSpawner ())
                     (nodePath ())
-                    [| "-e"; "process.exit(process.env.YESSION_MARK === 'set' ? 4 : 5)" |]
+                    (Array.ofList (StandIn.command (StandIn.ExitIf ([ StandIn.Equal ("YESSION_MARK", "set") ], 4, 5))))
                     (Map.ofList [ "YESSION_MARK", "set" ])
                     None
 
@@ -2636,7 +2636,7 @@ let private agentSpawnerPortsTests =
                 askSpawner
                     (Sandboxes.AgentSandbox.hostClaudeSpawner ())
                     (nodePath ())
-                    [| "-e"; "setTimeout(() => {}, 60000)" |]
+                    (Array.ofList (StandIn.command StandIn.Linger))
                     Map.empty
                     (Some controller.signal)
 
@@ -2658,7 +2658,7 @@ let private agentSpawnerPortsTests =
                 askSpawner
                     (Sandboxes.AgentSandbox.hostClaudeSpawner ())
                     (nodePath ())
-                    [| "-e"; "setTimeout(() => {}, 60000)" |]
+                    (Array.ofList (StandIn.command StandIn.Linger))
                     Map.empty
                     (Some controller.signal)
 
