@@ -219,7 +219,7 @@ let
     dontFixup = true;
     outputHashMode = "recursive";
     outputHashAlgo = "sha256";
-    outputHash = "sha256-5Hbz/sgEPZecuyCyJJAfR0X6NH/PpORRtLMtKLHbdUs=";
+    outputHash = "sha256-u4c2DZNlcluPvBOTOUr5paLzpUCI0K0jXRBapwENaLk=";
   };
 
   # Offline NuGet for a build: the tools already in the global-packages folder, and the locked
