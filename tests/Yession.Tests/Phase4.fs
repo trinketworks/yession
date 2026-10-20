@@ -1710,20 +1710,17 @@ let private registryPublishTests =
             }
     ]
 
-// A session that is nothing but its readiness line: writes its pid to `ledger`, prints the
-// line after a beat, then waits to be stopped. Enough of the spawn contract for the
-// Manager's launch bookkeeping to run against, and the beat is the point — it is the window
-// in which a second launch used to slip through, and a real session's window is seconds
-// wide. The ledger is the only witness that can count: the Manager's own view holds ONE
-// child per session by construction, which is exactly why it could not see the other.
-let private stubSession (ledger: string) (body: string) =
-    [ "-e"
-      sprintf "require('fs').appendFileSync(%s, process.pid + '\\n'); %s" (JS.JSON.stringify ledger) body ]
+// A session that is nothing but its readiness line (`StandIn.Session`): writes its pid to
+// `ledger`, prints the line after a beat, then waits to be stopped. Enough of the spawn
+// contract for the Manager's launch bookkeeping to run against, and the beat is the point —
+// it is the window in which a second launch used to slip through, and a real session's window
+// is seconds wide. The ledger is the only witness that can count: the Manager's own view
+// holds ONE child per session by construction, which is exactly why it could not see the
+// other.
+let private stubSession (ledger: string) (readiness: StandIn.Readiness) =
+    StandIn.command (StandIn.Session (ledger, readiness))
 
-let private readyThenWait (readyAfterMs: int) =
-    sprintf "setTimeout(() => console.log(JSON.stringify({ yession: 'ready', port: 1 })), %d); setInterval(() => {}, 1000)" readyAfterMs
-
-let private exitBeforeReady = "setTimeout(() => process.exit(3), 200)"
+let private exitBeforeReady = StandIn.ExitAfter (200, 3)
 
 /// The pids the ledger saw — and, whatever the assertion says next, none of them left
 /// running: an orphan holds the suite's stdout open and turns a red case into a hang.
@@ -1739,7 +1736,7 @@ let private spawnedChildren (ledger: string) : int list =
         try sigkill pid with _ -> ()
     pids
 
-let private managerOfStubs (name: string) (body: string) =
+let private managerOfStubs (name: string) (readiness: StandIn.Readiness) =
     let dataDir =
         sprintf "tests/Yession.Tests/out/.data/%s-%d" name (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
     Fs.ensureDir dataDir
@@ -1747,7 +1744,7 @@ let private managerOfStubs (name: string) (body: string) =
     async {
         let! pm =
             ProcessManager.create
-                { ProcessManager.Options.defaults dataDir nodePath (stubSession ledger body) with
+                { ProcessManager.Options.defaults dataDir nodePath (stubSession ledger readiness) with
                     Strategy = Some Strategy.localhost }
         return pm, ledger
     }
@@ -1761,7 +1758,7 @@ let private launchOnceTests =
         // the session up, and it is coming up — it is handed the same outcome.
         testCaseAsync "two launches in flight at once spawn one child, and both askers get its port" <|
             async {
-                let! pm, ledger = managerOfStubs "launch-once" (readyThenWait 300)
+                let! pm, ledger = managerOfStubs "launch-once" (StandIn.ReadyAfter 300)
                 let record = pm.CreateSession "launch-once" "Launch once" |> expect
                 let! first = pm.Launch record.SessionId |> Async.StartChild
                 let! second = pm.Launch record.SessionId |> Async.StartChild
@@ -1806,7 +1803,7 @@ let private runningBehindUi (name: string) =
     async {
         let! pm =
             ProcessManager.createWithUi
-                { ProcessManager.Options.defaults dataDir nodePath (stubSession ledger (readyThenWait 0)) with
+                { ProcessManager.Options.defaults dataDir nodePath (stubSession ledger (StandIn.ReadyAfter 0)) with
                     Strategy = Some Strategy.localhost }
                 (Some ManagerUi.tryHandle)
         let record = pm.CreateSession name "" |> expect
@@ -1850,7 +1847,7 @@ let private openRunningTests =
 ///
 /// The launch timeout is the case's to set: a launch that never comes up is joined by
 /// `StopAll`, so it is also how long that case's teardown takes.
-let private stoppedBehindUi (name: string) (launchTimeoutMs: int) (body: string) =
+let private stoppedBehindUi (name: string) (launchTimeoutMs: int) (readiness: StandIn.Readiness) =
     let dataDir =
         sprintf "tests/Yession.Tests/out/.data/%s-%d" name (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
     Fs.ensureDir dataDir
@@ -1858,7 +1855,7 @@ let private stoppedBehindUi (name: string) (launchTimeoutMs: int) (body: string)
     async {
         let! pm =
             ProcessManager.createWithUi
-                { ProcessManager.Options.defaults dataDir nodePath (stubSession ledger body) with
+                { ProcessManager.Options.defaults dataDir nodePath (stubSession ledger readiness) with
                     Strategy = Some Strategy.localhost
                     LaunchTimeoutMs = launchTimeoutMs }
                 (Some ManagerUi.tryHandle)
@@ -1869,7 +1866,7 @@ let private stoppedBehindUi (name: string) (launchTimeoutMs: int) (body: string)
 
 /// A child that never prints its readiness line: a launch that stays in flight for as long as
 /// a case needs it to, which is what a slow boot looks like from the Manager.
-let private neverReady = "setInterval(() => {}, 1000)"
+let private neverReady = StandIn.NeverReady
 
 // `/open` on a session it has to launch. The screen is answered BEFORE the launch is: a
 // browser held on a navigation for as long as a boot takes has no document to paint, which
