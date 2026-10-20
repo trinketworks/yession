@@ -3579,6 +3579,9 @@ module Style =
               // Gone on focus, not merely pushed down: the ramp would otherwise sit over the
               // line being typed the moment a draft scrolls inside.
               "group-focus-within:[mask-image:none] motion-reduce:transition-none"
+              // The line unfolds in when the editor mounts, rather than the band growing a
+              // line in one frame (`line-unfold` in `tailwind.css`).
+              "motion-safe:[&>.ProseMirror]:animate-line-unfold"
               fieldBare
               messageVoice false
               // No `placeholder:` variant: this field is a mounted editor, not an `<input>`,
