@@ -269,14 +269,14 @@ let private bare =
       Streams = { Stdin = Pipe; Stdout = Pipe; Stderr = Pipe }
       Detached = false }
 
-let private node (script: string) (arguments: string list) (options: SpawnOptions) =
-    spawn ``process``.execPath ([ "-e"; script ] @ arguments) options
+let private standIn (act: StandIn.Act) (options: SpawnOptions) =
+    spawn ``process``.execPath (StandIn.command act) options
 
 let portsTests =
     testList "Node platform bindings, spawning (Fable.NodeExtras)" [
 
         testCaseAsync "a child's exit code is readable once it has exited" <| async {
-            let child = node "process.exit(3)" [] bare
+            let child = standIn (StandIn.Exit 3) bare
             let! _ = until (fun () -> (exitCode child).IsSome)
             Expect.equal (exitCode child) (Some 3) "the code the child chose"
         }
@@ -285,9 +285,8 @@ let portsTests =
         // `obj` — so what is pinned is that each field arrives under the name Node reads it by.
         testCaseAsync "the environment given is the environment the child has" <| async {
             let child =
-                node
-                    "process.exit(process.env.YESSION_MARK === 'set' ? 4 : 5)"
-                    []
+                standIn
+                    (StandIn.ExitIf ([ StandIn.Equal ("YESSION_MARK", "set") ], 4, 5))
                     { bare with Env = ChildEnv.Replacing (Map [ "YESSION_MARK", "set" ]) }
 
             let! _ = until (fun () -> (exitCode child).IsSome)
@@ -299,9 +298,8 @@ let portsTests =
         // has one, the caller named none, and the child must still have it.
         testCaseAsync "an added environment is this process's with the names given over it" <| async {
             let child =
-                node
-                    "process.exit(process.env.YESSION_MARK === 'set' && process.env.PATH ? 4 : 5)"
-                    []
+                standIn
+                    (StandIn.ExitIf ([ StandIn.Equal ("YESSION_MARK", "set"); StandIn.Set "PATH" ], 4, 5))
                     { bare with Env = ChildEnv.Adding (Map [ "YESSION_MARK", "set" ]) }
 
             let! _ = until (fun () -> (exitCode child).IsSome)
@@ -312,9 +310,8 @@ let portsTests =
         // accident is the fault `ChildEnv` exists to make unwritable.
         testCaseAsync "a replaced environment is only the names given" <| async {
             let child =
-                node
-                    "process.exit(process.env.PATH === undefined ? 4 : 5)"
-                    []
+                standIn
+                    (StandIn.ExitIf ([ StandIn.Unset "PATH" ], 4, 5))
                     { bare with Env = ChildEnv.Replacing (Map [ "YESSION_MARK", "set" ]) }
 
             let! _ = until (fun () -> (exitCode child).IsSome)
@@ -330,11 +327,8 @@ let portsTests =
         // not `/dev/null` is the part the wiring decides.
         testCaseAsync "each of the three streams is wired where it was told" <| async {
             let child =
-                node
-                    ("const fs = require('node:fs');"
-                     + "const kind = fd => fs.fstatSync(fd).isCharacterDevice() ? 'c' : 'n';"
-                     + "process.exit(kind(0) + kind(1) + kind(2) === 'cnn' ? 4 : 5)")
-                    []
+                standIn
+                    (StandIn.ExitIfDevices ((true, false, false), 4, 5))
                     { bare with Streams = { Stdin = Ignore; Stdout = Pipe; Stderr = Pipe } }
 
             let! _ = until (fun () -> (exitCode child).IsSome)
@@ -347,7 +341,7 @@ let portsTests =
         // fires FIRST is not asserted: the answer is Node's, not this binding's, and a case
         // that raced the two would be a case that fails for the weather.
         testCaseAsync "a child's exit is reported with the code it chose" <| async {
-            let child = node "process.exit(8)" [] bare
+            let child = standIn (StandIn.Exit 8) bare
             let mutable reported : int option option = None
             ChildProcessStreams.onExit child (fun code -> reported <- Some code)
             let! _ = until (fun () -> reported.IsSome)
@@ -358,10 +352,7 @@ let portsTests =
             let directory = os.tmpdir ()
 
             let child =
-                node
-                    "const fs = require('node:fs'); process.exit(fs.realpathSync(process.cwd()) === fs.realpathSync(process.argv[1]) ? 6 : 7)"
-                    [ directory ]
-                    { bare with Cwd = Some directory }
+                standIn (StandIn.ExitIfStartedIn (directory, 6, 7)) { bare with Cwd = Some directory }
 
             let! _ = until (fun () -> (exitCode child).IsSome)
             Expect.equal (exitCode child) (Some 6) "the child started where it was told to"
@@ -369,7 +360,7 @@ let portsTests =
 
         // `killed` says a signal was SENT, which is why it is true before the child is gone.
         testCaseAsync "a child is killed from the moment it is signalled" <| async {
-            let child = node "setTimeout(() => {}, 60000)" [] bare
+            let child = standIn StandIn.Linger bare
             child.kill "SIGKILL"
             let signalled = killed child
             let! _ = until (fun () -> (signalCode child).IsSome)
@@ -379,7 +370,7 @@ let portsTests =
         // And the other half of the pair: a child a signal ended has no exit code to report, so
         // a caller reading only `exitCode` cannot tell it from one still running.
         testCaseAsync "a child a signal ended reports the signal rather than a code" <| async {
-            let child = node "setTimeout(() => {}, 60000)" [] bare
+            let child = standIn StandIn.Linger bare
             child.kill "SIGKILL"
             let! _ = until (fun () -> (signalCode child).IsSome)
             Expect.equal (signalCode child) (Some "SIGKILL") "the signal that ended it"
@@ -870,7 +861,7 @@ let seamTests =
             let child =
                 spawnWithEnv
                     ``process``.execPath
-                    [ "-e"; "process.exit(process.env.YESSION_MARK === 'set' ? 4 : 5)" ]
+                    (StandIn.command (StandIn.ExitIf ([ StandIn.Equal ("YESSION_MARK", "set") ], 4, 5)))
                     env
                     None
                     Pipe
@@ -886,7 +877,7 @@ let seamTests =
             let child =
                 spawnWithEnv
                     ``process``.execPath
-                    [ "-e"; "process.exit(process.env.PATH === undefined ? 6 : 7)" ]
+                    (StandIn.command (StandIn.ExitIf ([ StandIn.Unset "PATH" ], 6, 7)))
                     (VerbatimEnv.ofMap Map.empty)
                     None
                     Pipe
@@ -902,9 +893,7 @@ let seamTests =
             let child =
                 spawnWithEnv
                     ``process``.execPath
-                    [ "-e"
-                      "const fs = require('node:fs'); process.exit(fs.realpathSync(process.cwd()) === fs.realpathSync(process.argv[1]) ? 8 : 9)"
-                      directory ]
+                    (StandIn.command (StandIn.ExitIfStartedIn (directory, 8, 9)))
                     (VerbatimEnv.ofMap Map.empty)
                     (Some directory)
                     Pipe
