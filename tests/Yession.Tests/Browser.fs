@@ -4313,8 +4313,13 @@ let editorTests =
         editorCaseIn 390 844 "typing in the composer with the keyboard up never scrolls the page past the shell" <| fun page ->
             async {
                 do! waitVisible "the composer" page "#shell [data-draft-editor] .ProseMirror"
-                let! _ = Probe.verdictWith page Yession.App.Probes.Measure.RoomBelowShell 400
+                // Focused BEFORE the room is made, while the shell is the whole document. A
+                // click Playwright retries scrolls again with its next alignment, and with the
+                // room already there that scroll took the page 342px (centre) or 400px (start)
+                // down before a key was pressed: the gap below was the click's, not typing's.
                 do! awaitU (page.ClickAsync "#shell [data-draft-editor] .ProseMirror")
+                let! room = Probe.verdictWith page Yession.App.Probes.Measure.RoomBelowShell 400
+                Expect.isEmpty room "the page has room to scroll below the shell"
                 let! cdp = await (page.Context.NewCDPSessionAsync page)
                 let scale = Collections.Generic.Dictionary<string, obj> ()
                 scale.["pageScaleFactor"] <- box 1.6
@@ -4328,6 +4333,12 @@ let editorTests =
                         | [ gap ] -> return gap
                         | _ -> return failwith "there is no shell to measure past"
                     }
+                // The arrangement's premise, read before the action: nothing past the shell is
+                // on screen yet. A page the arrangement already moved fails HERE, naming the
+                // arrangement, and is never reported as typing's double scroll.
+                let! arranged = pastShell ()
+                if arranged > 1.0 then
+                    failwithf "the arrangement left %.0fpx of page under the shell before any typing" arranged
                 do! awaitU (page.Keyboard.TypeAsync "one")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! awaitU (page.Keyboard.TypeAsync "two")
