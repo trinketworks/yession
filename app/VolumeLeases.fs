@@ -89,6 +89,8 @@ let pinOnce (clock: Clock) (log: string -> unit) (sandbox: Sandbox) (lease: Leas
                 log (sprintf "volume %s: pin %s exited %d%s" lease.Volume lease.Maintenance.Pin code (said ()))
             | Some (SandboxSignalled signal) ->
                 log (sprintf "volume %s: pin %s was ended by %s%s" lease.Volume lease.Maintenance.Pin signal (said ()))
+            | Some (SandboxKilledForMemory kill) ->
+                log (sprintf "volume %s: pin %s was %s%s" lease.Volume lease.Maintenance.Pin (MemoryKill.described kill) (said ()))
             | Some (SandboxRunFailed reason) ->
                 log (sprintf "volume %s: pin %s failed: %s%s" lease.Volume lease.Maintenance.Pin reason (said ()))
             | None ->

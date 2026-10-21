@@ -2706,8 +2706,7 @@ let private scriptedEnvironment (script: string -> (OutputStream * string) list 
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> Some "scripted"
           Shell = fun () -> None
-          Realisation = fun () -> []
-          MemoryEvents = fun () -> async { return None } }
+          Realisation = fun () -> [] }
     environment, spawned
 
 /// An in-memory transcript, a reader for what it holds, and a reader for the keyframes the
@@ -4669,8 +4668,7 @@ let private profileEnvironment (present: unit -> Set<string>) =
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> Some "scripted"
           Shell = fun () -> None
-          Realisation = fun () -> []
-          MemoryEvents = fun () -> async { return None } }
+          Realisation = fun () -> [] }
     environment, ptySpawned, typed
 
 /// A sandbox whose BLOCKS do not finish until the test says so — the only way to hold a
@@ -4701,8 +4699,7 @@ let private blockingEnvironment () =
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> Some "scripted"
           Shell = fun () -> None
-          Realisation = fun () -> []
-          MemoryEvents = fun () -> async { return None } }
+          Realisation = fun () -> [] }
     environment, spawned, release
 
 /// A terminal's shell is the sandbox's own when its backend found one, and a block that
@@ -6256,32 +6253,45 @@ let private shownOutputTests =
                 "the window's worth of lines drawn, the rest counted"
     ]
 
-/// A scripted sandbox whose memory counters answer `readings` in turn, one per read, and
-/// stay at the last one. Returns how many reads were made.
-let private countingMemory (exitCode: int) (readings: MemoryEvents list) =
-    let environment, _ = scriptedEnvironment (fun _ -> [], exitCode)
-    let mutable reads = 0
-    let read () =
+/// A spawn whose one process ends as `run`.
+let private endingAs (run: SandboxRun) : SandboxSpawn =
+    fun _ _ ->
         async {
-            let index = min reads (List.length readings - 1)
-            reads <- reads + 1
-            return Some readings.[index]
+            return
+                Ok
+                    { WriteStdin = ignore
+                      CloseStdin = ignore
+                      Kill = ignore
+                      Exited = async { return run } }
         }
-    { environment with MemoryEvents = read }, (fun () -> reads)
 
-/// How one block ended, run in a sandbox whose counters answer `readings`.
-let private blockResultUnder (exitCode: int) (readings: MemoryEvents list) =
+/// A clock whose deadlines never come: every read below answers at once, so none is late.
+let private neverLate : Clock =
+    { Now = fun () -> DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+      After = fun _ -> Async.FromContinuations (fun _ -> ()) }
+
+let private make : SandboxExec = { Executable = "make"; Arguments = []; Env = Map.empty; WorkingDirectory = None; Via = Direct }
+
+/// How one process ended under `MemoryWatch`, in a sandbox whose counters answer
+/// `readings` in turn, one per read, and stay at the last one. With how many reads were
+/// made, and what the watch said it could not tell.
+let private endingUnder (run: SandboxRun) (readings: Result<MemoryEvents, string> list) =
     async {
-        let log = newLog ()
-        let environment, reads = countingMemory exitCode readings
-        let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
-        let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
-        let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
-        let id = opened |> expect
-        do! terminals.RunBlock id (entry "a1" id byAda 1.0) "dotnet build" ignore
-        let! events = eventsOf log
-        let result = events |> List.pick (function SessionEvent.TerminalBlockCompleted e -> Some e.Result | _ -> None)
-        return result, reads ()
+        let mutable reads = 0
+        let read () =
+            async {
+                let index = min reads (List.length readings - 1)
+                reads <- reads + 1
+                return readings.[index]
+            }
+        let unread = ResizeArray<string> ()
+        let spawn = MemoryWatch.watched neverLate read unread.Add (endingAs run)
+        match! spawn make ignore with
+        | Error reason -> return failwith reason
+        | Ok handle ->
+            let! ended = handle.Exited
+            let! _ = handle.Exited
+            return ended, reads, List.ofSeq unread
     }
 
 let private counters (oom: int64) (oomKill: int64) : MemoryEvents = { Oom = oom; OomKill = oomKill }
@@ -6308,12 +6318,15 @@ let private memoryKillTests =
             Expect.isNone (MemoryEvents.killed (counters 2L 4L) (counters 3L 4L)) "an oom that killed nothing killed nothing"
 
         testCase "only a SIGKILL exit becomes a memory kill" <| fun () ->
-            let result = CommandResult.withMemory (Some (counters 0L 0L)) (Some (counters 0L 1L)) (CommandFailed 1)
-            Expect.equal result (CommandFailed 1) "exit 1 is the command's own answer, whatever died beside it"
+            let ended = MemoryWatch.ended (Ok (counters 0L 0L)) (Ok (counters 0L 1L)) (SandboxExited 1)
+            Expect.equal ended (Ok (SandboxExited 1)) "exit 1 is the command's own answer, whatever died beside it"
 
-        testCase "a SIGKILL with a missing reading stays exit 137" <| fun () ->
-            let result = CommandResult.withMemory None (Some (counters 0L 1L)) (CommandFailed 137)
-            Expect.equal result (CommandFailed 137) "no cause is said without both readings"
+        testCase "a SIGKILL with a missing reading says no cause, and which reading went missing" <| fun () ->
+            let ended = MemoryWatch.ended (Error "cat ended SandboxExited 126") (Ok (counters 0L 1L)) (SandboxExited 137)
+            Expect.equal
+                ended
+                (Error "exit 137, and the counters before it could not be read: cat ended SandboxExited 126")
+                "no cause is said without both readings, and why not is"
 
         testCase "a memory kill crosses the wire" <| fun () ->
             let event =
@@ -6338,28 +6351,70 @@ let private memoryKillTests =
             | Ok (SessionEvent.TerminalBlockCompleted decoded) -> Expect.equal decoded.Result (CommandFailed 137) "exit 137, no cause"
             | other -> failwithf "an old completion must still read back, got %A" other
 
-        testCaseAsync "a block the sandbox's limit killed completes as killed for memory" <|
+        testCaseAsync "a process the sandbox's limit killed ends as killed for memory" <|
             async {
-                let! result, _ = blockResultUnder 137 [ counters 0L 0L; counters 1L 1L ]
-                Expect.equal result (CommandKilledForMemory SandboxLimit) "the block says why it died"
+                let! ended, _, _ = endingUnder (SandboxExited 137) [ Ok (counters 0L 0L); Ok (counters 1L 1L) ]
+                Expect.equal ended (SandboxKilledForMemory SandboxLimit) "the process says why it died"
             }
 
-        testCaseAsync "a block the machine's OOM killed completes as killed for memory" <|
+        testCaseAsync "a process the machine's OOM killed ends as killed for memory" <|
             async {
-                let! result, _ = blockResultUnder 137 [ counters 0L 4L; counters 0L 5L ]
-                Expect.equal result (CommandKilledForMemory MachineOutOfMemory) "the block says the machine ran out"
+                let! ended, _, _ = endingUnder (SandboxExited 137) [ Ok (counters 0L 4L); Ok (counters 0L 5L) ]
+                Expect.equal ended (SandboxKilledForMemory MachineOutOfMemory) "the process says the machine ran out"
             }
 
-        testCaseAsync "a block killed with no OOM kill in the sandbox stays exit 137" <|
+        testCaseAsync "a process killed with no OOM kill in the sandbox stays exit 137" <|
             async {
-                let! result, _ = blockResultUnder 137 [ counters 0L 4L; counters 0L 4L ]
-                Expect.equal result (CommandFailed 137) "a kill -9 is not a memory kill"
+                let! ended, _, _ = endingUnder (SandboxExited 137) [ Ok (counters 0L 4L); Ok (counters 0L 4L) ]
+                Expect.equal ended (SandboxExited 137) "a kill -9 is not a memory kill"
             }
 
-        testCaseAsync "a block that did not die from SIGKILL reads the counters once" <|
+        testCaseAsync "a process that did not die from SIGKILL reads the counters once" <|
             async {
-                let! _, reads = blockResultUnder 0 [ counters 0L 0L; counters 0L 1L ]
+                let! _, reads, _ = endingUnder (SandboxExited 0) [ Ok (counters 0L 0L); Ok (counters 0L 1L) ]
                 Expect.equal reads 1 "only a SIGKILL exit pays for the second read"
+            }
+
+        // An ending is a value its holder may ask for more than once. `endingUnder` asks
+        // twice, so a second pair of reads would show here.
+        testCaseAsync "an ending asked for twice reads the counters only around the one process" <|
+            async {
+                let! _, reads, _ = endingUnder (SandboxExited 137) [ Ok (counters 0L 0L); Ok (counters 0L 0L) ]
+                Expect.equal reads 2 "one reading before and one after"
+            }
+
+        // The fault this is here for: the read right after an OOM kill is the one that can
+        // fail, and it used to fail as a bare exit 137 with nothing anywhere saying why.
+        testCaseAsync "an exit 137 whose second reading failed says why" <|
+            async {
+                let! ended, _, unread = endingUnder (SandboxExited 137) [ Ok (counters 0L 0L); Error "the exec did not start: busy" ]
+                Expect.equal
+                    (ended, unread)
+                    (SandboxExited 137, [ "exit 137, and the counters after it could not be read: the exec did not start: busy" ])
+                    "the exit as it was, and the reason heard"
+            }
+
+        testCaseAsync "a block whose process the kernel killed for memory completes as killed for memory" <|
+            async {
+                let log = newLog ()
+                let scripted, _ = scriptedEnvironment (fun _ -> [], 137)
+                let environment =
+                    { scripted with
+                        Spawn =
+                            fun exec onChunk ->
+                                async {
+                                    match! scripted.Spawn exec onChunk with
+                                    | Ok handle -> return Ok { handle with Exited = async { return SandboxKilledForMemory SandboxLimit } }
+                                    | Error reason -> return Error reason
+                                } }
+                let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+                let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
+                let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                let id = opened |> expect
+                do! terminals.RunBlock id (entry "a1" id byAda 1.0) "dotnet build" ignore
+                let! events = eventsOf log
+                let result = events |> List.pick (function SessionEvent.TerminalBlockCompleted e -> Some e.Result | _ -> None)
+                Expect.equal result (CommandKilledForMemory SandboxLimit) "the block says why it died"
             }
     ]
 

@@ -1342,9 +1342,6 @@ module HostSandbox =
                                         return Pty.spawn exec.Executable exec.Arguments cwd env cols rows onOutput
                                     })
                           Shell = None
-                          // The host process is in the operator's own cgroup, not one of
-                          // the sandbox's: its counters would be somebody else's.
-                          MemoryEvents = fun () -> async { return None }
                           Dispose = fun () -> async { children.KillAll () } }
             }
 
@@ -1565,25 +1562,33 @@ module DockerSandbox =
     /// The container's own memory counters, read with a bare exec of `cat`: no entrypoint,
     /// no shell, so it costs one exec and nothing a devshell would add. A docker container
     /// on cgroup v2 has a private cgroup namespace, so `MemoryEvents.path` is its own cgroup.
-    /// `None` for any failure: the counters only add a cause to a result, and a missing cause
-    /// leaves the result as the shell reported it.
-    let private memoryEvents (spawn: SandboxExec -> (OutputStream * string -> unit) -> Async<Result<SandboxProcessHandle, string>>) : Async<MemoryEvents option> =
+    /// `Error` says which way the read failed, stderr and all, because the failure that
+    /// matters is the one right after an OOM kill, and nothing else will ever say why.
+    let private memoryEvents (spawn: SandboxSpawn) : Async<Result<MemoryEvents, string>> =
         async {
             try
                 let said = System.Text.StringBuilder ()
+                let complained = System.Text.StringBuilder ()
                 let exec =
                     { Executable = "cat"
                       Arguments = [ MemoryEvents.path ]
                       Env = Map.empty
                       WorkingDirectory = None
                       Via = Direct }
-                match! spawn exec (fun (stream, chunk) -> if stream = Stdout then said.Append chunk |> ignore) with
-                | Error _ -> return None
+                let onChunk (stream, chunk: string) =
+                    match stream with
+                    | Stdout -> said.Append chunk |> ignore
+                    | Stderr -> complained.Append chunk |> ignore
+                match! spawn exec onChunk with
+                | Error reason -> return Error (sprintf "the exec did not start: %s" reason)
                 | Ok handle ->
                     match! handle.Exited with
-                    | SandboxExited 0 -> return MemoryEvents.parse (said.ToString ())
-                    | _ -> return None
-            with _ -> return None
+                    | SandboxExited 0 ->
+                        match MemoryEvents.parse (said.ToString ()) with
+                        | Some counters -> return Ok counters
+                        | None -> return Error (sprintf "%s said %A" MemoryEvents.path (said.ToString ()))
+                    | ended -> return Error (sprintf "cat ended %A: %s" ended (complained.ToString().Trim ()))
+            with ex -> return Error ex.Message
         }
 
     /// Where each dialect's shell is on the far side of the entrypoint, by asking: one
@@ -1617,6 +1622,8 @@ module DockerSandbox =
                 | SandboxRunFailed reason -> return Error (sprintf "could not look for a shell behind the entrypoint: %s" reason)
                 | SandboxSignalled signal ->
                     return Error (sprintf "the look for a shell behind the entrypoint was ended by %s" signal)
+                | SandboxKilledForMemory kill ->
+                    return Error (sprintf "the look for a shell behind the entrypoint was %s" (MemoryKill.described kill))
                 // The look itself ends `; true`, so it exits 0 whatever it found: any other
                 // code is the ENTRYPOINT failing before the look ran — `nix develop` losing a
                 // fetch, say. Reported as that, with its code, rather than as "found none",
@@ -2031,10 +2038,14 @@ module DockerSandbox =
                         return
                             Ok
                                 { Ref = container.id
-                                  Spawn = spawn
+                                  Spawn =
+                                      MemoryWatch.watched
+                                          Clock.system
+                                          (fun () -> memoryEvents spawn)
+                                          (eprintfn "[sandbox %s] %s" name)
+                                          spawn
                                   SpawnPty = Some spawnPty
                                   Shell = Some shell
-                                  MemoryEvents = fun () -> memoryEvents spawn
                                   Dispose = dispose }
                 with ex -> return Error (sprintf "docker sandbox failed: %s" ex.Message)
             }
@@ -2919,9 +2930,6 @@ module SrtSandbox =
                                                 with ex -> return Error ex.Message
                                             })
                                   Shell = None
-                                  // srt confines a process, not its memory: it makes no
-                                  // cgroup, so there are no counters of its own to read.
-                                  MemoryEvents = fun () -> async { return None }
                                   // The host goes with the sandbox: its manager — the proxies
                                   // and bridges every command here reached the network through
                                   // — confined this sandbox and nothing else.

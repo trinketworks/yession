@@ -93,16 +93,6 @@ let tests =
 
             // -- Tier 2: the current engine ------------------------------------------------
 
-            // The counters a block's memory kill is read from (`MemoryEvents`). A fresh
-            // container is its own cgroup, so it reads a file of its own with nothing
-            // killed in it yet.
-            testCaseAsync "a container reads its own memory counters, with nothing killed yet" (async {
-                let! _, sandbox = startOrFail alpineSpec
-                let! counters = sandbox.MemoryEvents ()
-                Expect.equal (counters |> Option.map (fun c -> c.OomKill)) (Some 0L) "its own cgroup, read by a bare exec"
-                do! sandbox.Dispose ()
-            })
-
             testCaseAsync "lifecycle: create, stream stdout, dispose, container is gone" (async {
                 let! name, sandbox = startOrFail alpineSpec
                 let! run, out, _ = runInSandbox sandbox "echo" [ "streamed-out" ] Map.empty None
@@ -148,7 +138,7 @@ let tests =
                 let spec = alpineSpec |> withContainer (fun c -> { c with Memory = Some (ContainerMemory.parse "64m" |> expect) })
                 let! _, sandbox = startOrFail spec
                 let! overrun, _, _ = runInSandbox sandbox "sh" [ "-c"; "head -c 512m /dev/zero | tail" ] Map.empty None
-                Expect.equal overrun (SandboxExited 137) "the overrun was SIGKILLed by the kernel"
+                Expect.isTrue (List.contains overrun [ SandboxExited 137; SandboxKilledForMemory SandboxLimit ]) (sprintf "the overrun was SIGKILLed by the kernel, not %A" overrun)
                 let! after, out, _ = runInSandbox sandbox "echo" [ "still-here" ] Map.empty None
                 Expect.equal (after, out.Trim ()) (SandboxExited 0, "still-here") "and the container runs the next command"
                 do! sandbox.Dispose ()
@@ -157,15 +147,14 @@ let tests =
             // What the counters say about that overrun: the kernel counted the kill AND the
             // container reaching its own limit, which `MemoryEvents.killed` reads as case (a).
             // The same 64m container and the same overrun as the case above, so the only
-            // memory it can take is its own.
+            // memory it can take is its own. A process that ends as a bare exit 137 here is
+            // one whose counters could not be read, and the backend printed why, as a
+            // `[sandbox …]` line just above this case's verdict.
             testCaseAsync "an overrun at the container's own limit reads as its own limit" (async {
                 let spec = alpineSpec |> withContainer (fun c -> { c with Memory = Some (ContainerMemory.parse "64m" |> expect) })
                 let! _, sandbox = startOrFail spec
-                let! before = sandbox.MemoryEvents ()
-                let! _ = runInSandbox sandbox "sh" [ "-c"; "head -c 512m /dev/zero | tail" ] Map.empty None
-                let! after = sandbox.MemoryEvents ()
-                let said = Option.map2 MemoryEvents.killed before after |> Option.flatten
-                Expect.equal said (Some SandboxLimit) (sprintf "the counters went from %A to %A" before after)
+                let! overrun, _, err = runInSandbox sandbox "sh" [ "-c"; "head -c 512m /dev/zero | tail" ] Map.empty None
+                Expect.equal overrun (SandboxKilledForMemory SandboxLimit) (sprintf "the overrun said why it died: %s" err)
                 do! sandbox.Dispose ()
             })
 

@@ -767,6 +767,7 @@ let create
                     | SandboxExited code -> return Ok (code, out.ToString (), err.ToString ())
                     | SandboxSignalled signal -> return Error (sprintf "it was ended by %s" signal)
                     | SandboxRunFailed reason -> return Error reason
+                    | SandboxKilledForMemory kill -> return Error (sprintf "it was %s" (MemoryKill.described kill))
         }
 
     /// How big the file the caller named is, asked BEFORE anything is copied: a refusal that

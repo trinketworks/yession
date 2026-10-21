@@ -128,8 +128,7 @@ let private withTappedShellTerminal
                   Stop = fun () -> async { return () }
                   CurrentRef = fun () -> Some "host"
                   Shell = fun () -> None
-                  Realisation = fun () -> []
-                  MemoryEvents = fun () -> async { return None } }
+                  Realisation = fun () -> [] }
             // The shell is real and its I/O takes the time it takes; the manager's windows —
             // the detector's, the open-probe's, an idle lease's — are the clock's, and the
             // clock is this test's to turn. A window that has to pass is `advance`, not a

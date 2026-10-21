@@ -123,6 +123,7 @@ module SessionFiles =
                         | SandboxExited code -> return Ok { Said.Code = code; Said.Out = out.ToString (); Said.Err = err.ToString () }
                         | SandboxSignalled signal -> return Error (sprintf "it was ended by %s" signal)
                         | SandboxRunFailed reason -> return Error reason
+                        | SandboxKilledForMemory kill -> return Error (sprintf "it was %s" (MemoryKill.described kill))
             }
 
         /// The tool's own words for its failure — minus its own name, which says nothing to

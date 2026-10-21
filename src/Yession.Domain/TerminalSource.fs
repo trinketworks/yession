@@ -207,6 +207,7 @@ module Source =
         | SandboxExited _ -> "the stream ended"
         | SandboxSignalled signal -> sprintf "the stream was ended by %s" signal
         | SandboxRunFailed reason -> reason
+        | SandboxKilledForMemory kill -> sprintf "the stream was %s" (MemoryKill.described kill)
 
     /// The same thing said about a SHELL, which is the other way a source ends. Apart from
     /// `endedReason` because a shell is not a stream: it always has an exit code, nothing
@@ -218,6 +219,7 @@ module Source =
         | SandboxExited code -> sprintf "the shell exited with code %d" code
         | SandboxSignalled signal -> sprintf "the shell was ended by %s" signal
         | SandboxRunFailed reason -> sprintf "the shell stopped: %s" reason
+        | SandboxKilledForMemory kill -> sprintf "the shell was %s" (MemoryKill.described kill)
 
     /// How a command the shell was running ENDED, when the shell's own end is the only
     /// word on it. A command that ends its shell — `exit`, `exit 3`, an `exec` that
@@ -232,6 +234,7 @@ module Source =
         match ending with
         | SandboxExited 0 -> Some (CommandSucceeded 0)
         | SandboxExited code -> Some (CommandFailed code)
+        | SandboxKilledForMemory kill -> Some (CommandKilledForMemory kill)
         | SandboxSignalled _
         | SandboxRunFailed _ -> None
 
