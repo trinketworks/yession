@@ -402,7 +402,15 @@ module ConfigFile =
                             "declared twice: %s"
                             (dupes |> List.map (fst >> SandboxName.value) |> List.sort |> String.concat ", ")))
 
-    let private fileKeys = [ "version"; "sandboxes" ]
+    /// `session:` — what the repo asks of the session itself. A path in it is a path inside
+    /// the checkout, refused where it is written like every other (`inCheckout`).
+    let private session : Decoder<SessionDecl> =
+        noUnknownKeys [ "shell-profile" ]
+        |> Decode.andThen (fun () ->
+            Decode.object (fun get ->
+                { ShellProfile = get.Optional.Field "shell-profile" (inCheckout "shell-profile") }))
+
+    let private fileKeys = [ "version"; "sandboxes"; "session" ]
 
     let decoder : Decoder<ConfigFile> =
         noUnknownKeys fileKeys
@@ -415,7 +423,8 @@ module ConfigFile =
                     (Decode.object (fun get ->
                         { Version = version
                           Sandboxes =
-                            get.Optional.Field "sandboxes" sandboxes |> Option.defaultValue Map.empty }))))
+                            get.Optional.Field "sandboxes" sandboxes |> Option.defaultValue Map.empty
+                          Session = get.Optional.Field "session" session |> Option.defaultValue SessionDecl.empty }))))
 
     /// A `sandboxes:` block on its own, from JSON text — how the operator's profile, which
     /// is decoded with a different JSON library on .NET, hands its block to the one decoder.

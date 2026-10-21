@@ -740,7 +740,7 @@ let private servicesRecording (held: HeldRepos) : Commands.CommandServices =
             fun () ->
                 { SessionTerminals.unavailable with
                     SetProfile =
-                        fun authority sandbox cwd ->
+                        fun authority _ sandbox cwd ->
                             async {
                                 held.Calls.Add (
                                     sprintf "set_shell_profile %s %s" (SandboxRef.render sandbox) (defaultArg cwd "(cleared)"),
@@ -812,16 +812,18 @@ let private launchTests =
                     "a branch other than the clone's is switched to, as the person"
             }
 
-        testCaseAsync "terminals start in the checkout afterwards" <|
+        // Where terminals start is the repo's file to say (`session.shell-profile`), applied
+        // by the fold as that repo's. The launch used to set it as the person, recording a
+        // default it chose as a choice they made.
+        testCaseAsync "the launch leaves where terminals start to the repo's file" <|
             async {
                 let held = reposHolding [] (cloned "main")
                 let session = openToolSession (servicesRecording held)
                 let! outcome = launched session hello None
                 expect outcome
-                Expect.equal
-                    (held.Calls |> Seq.last)
-                    ("set_shell_profile default repos/octo/hello", adaActor)
-                    "the default sandbox's profile points at the path the clone answered with"
+                Expect.isFalse
+                    (held.Calls |> Seq.exists (fun (call, _) -> call.StartsWith "set_shell_profile"))
+                    "no profile is set in the person's name"
             }
 
         // A turn's `add_repo` YIELDS at the process deadline and the model picks it up; a
@@ -845,7 +847,7 @@ let private launchTests =
                 let session = openToolSession (servicesRecording held)
                 let! work =
                     async {
-                        match! session.Launch adaActs hello None with
+                        match! session.Launch adaActs hello (Some "feature/x") with
                         | Error reason -> return failwithf "not admitted: %s" reason
                         | Ok work -> return work
                     }
@@ -855,7 +857,7 @@ let private launchTests =
                 do! session.Armed ()
                 session.Advance (TimeSpan.FromSeconds 600.0)
                 Expect.isFalse
-                    (held.Calls |> Seq.exists (fun (call, _) -> call.StartsWith "set_shell_profile"))
+                    (held.Calls |> Seq.exists (fun (call, _) -> call.StartsWith "switch_branch"))
                     "two deadlines on, the clone is still the thing being waited for"
                 finish ()
                 do! session.Armed ()
@@ -863,7 +865,7 @@ let private launchTests =
                 let! outcome = running
                 expect outcome
                 Expect.isTrue
-                    (held.Calls |> Seq.exists (fun (call, _) -> call.StartsWith "set_shell_profile"))
+                    (held.Calls |> Seq.exists (fun (call, _) -> call.StartsWith "switch_branch"))
                     "and once it lands, the rest follows"
             }
 
@@ -902,7 +904,6 @@ let private launchTests =
                 Expect.equal (parentOf launch) None "the launch's work is a root"
                 Expect.equal (parentOf (named "gate add_repo")) (idOf launch) "the gated clone is the launch's child"
                 Expect.equal (parentOf (named "repo.add")) (idOf (named "gate add_repo")) "and the verb runs inside the call that gated it"
-                Expect.equal (parentOf (named "gate set_shell_profile")) (idOf launch) "the profile call is the launch's child too"
                 Expect.isSome (Array.tryFind (fun (s: Fable.OpenTelemetry.ReadableSpan) -> s.name = "repo.launch.admit") spans) "admission is measured"
             }
 
@@ -910,7 +911,7 @@ let private launchTests =
             async {
                 let held = reposHolding [] (fun _ -> Error "github says not found")
                 let session = openToolSession (servicesRecording held)
-                match! session.Launch adaActs hello None with
+                match! session.Launch adaActs hello (Some "feature/x") with
                 | Error reason -> failwithf "not admitted: %s" reason
                 | Ok work ->
                     match! work with
@@ -920,7 +921,7 @@ let private launchTests =
                         Expect.equal failure.Summary "add_repo octo/hello" "as the record will show it"
                         Expect.equal failure.Reason "github says not found" "and why"
                 Expect.isFalse
-                    (held.Calls |> Seq.exists (fun (call, _) -> call.StartsWith "set_shell_profile"))
+                    (held.Calls |> Seq.exists (fun (call, _) -> call.StartsWith "switch_branch"))
                     "nothing after the failed step ran"
             }
     ]

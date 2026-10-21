@@ -607,7 +607,7 @@ module ConversationProjection =
         // Where new terminals start (Plan 25) folds in for the repo notes' reason: it is a
         // session-shaping act everyone is affected by — the next terminal a PERSON opens
         // lands there too — and the timeline is the only place they would learn it.
-        | SessionEvent.ShellProfileSet p -> proj |> noted p.MessageId p.Actor (Act.ShellProfileSet p) envelope
+        | SessionEvent.ShellProfileSet p -> proj |> causedNote p.MessageId p.CausedBy p.Actor (Act.ShellProfileSet p) envelope
         // A file changed (the file verbs): the act the whole feature exists to put here — what
         // the agent used to leave as a `head`/`tail`/`mv` line, as a fact with a diff.
         | SessionEvent.FileChanged f -> proj |> noted f.MessageId f.Actor (Act.FileChanged f) envelope

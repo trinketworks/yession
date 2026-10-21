@@ -491,12 +491,12 @@ let private frameSerializationTests =
                     { MessageId = messageId
                       Sandbox = SandboxRef.defaultRef
                       WorkingDirectory = Some "/repos/octo/hello"
-                      Actor = ActorRef.Agent; OnBehalfOf = None }
+                      Actor = ActorRef.Agent; OnBehalfOf = None; CausedBy = Some (Cause.Item messageId) }
                   ShellProfileSet
                     { MessageId = messageId
                       Sandbox = SandboxRef.parse "test" |> expect
                       WorkingDirectory = None
-                      Actor = PeerRef peerId; OnBehalfOf = None }
+                      Actor = PeerRef peerId; OnBehalfOf = None; CausedBy = None }
                   // Tool use (Plan 16): both argument cases, because they are different
                   // facts — recorded-with-secrets-gone, and a foreign tool whose arguments
                   // are not recorded at all.
@@ -764,9 +764,15 @@ let private shellProfileTests =
             { MessageId = MessageId.create "msg-1" |> expect
               Sandbox = sandbox
               WorkingDirectory = cwd
-              Actor = ActorRef.Agent; OnBehalfOf = None }
+              Actor = ActorRef.Agent; OnBehalfOf = None; CausedBy = None }
     let fold events =
         events |> List.fold ShellProfileProjection.applyEvent ShellProfileProjection.empty
+    let one, two = RepoRef.create "octo/one" |> expect, RepoRef.create "octo/two" |> expect
+    let setBy actor cwd : ShellProfileSet =
+        { MessageId = MessageId.create "msg-0" |> expect
+          Sandbox = SandboxRef.defaultRef
+          WorkingDirectory = cwd
+          Actor = actor; OnBehalfOf = None; CausedBy = None }
     testList "Shell profile (Plan 25)" [
         testCase "the newest set for a sandbox wins" <| fun () ->
             let folded =
@@ -864,6 +870,73 @@ let private shellProfileTests =
                 (Codec.fromString Events.sessionEvent pinned |> expect)
                 (profileSet SandboxRef.defaultRef None)
                 "an absent directory decodes as None rather than failing the log open"
+
+        testCase "a profile a repo's file set keeps what caused it on the wire" <| fun () ->
+            let caused : SessionEvent =
+                ShellProfileSet
+                    { MessageId = MessageId.create "msg-1" |> expect
+                      Sandbox = SandboxRef.defaultRef
+                      WorkingDirectory = Some "repos/octo/one"
+                      Actor = ActorRef.Configured one; OnBehalfOf = None
+                      CausedBy = Some (Cause.Item (MessageId.create "added" |> expect)) }
+            Expect.equal
+                (Codec.toString Events.sessionEvent caused |> Codec.fromString Events.sessionEvent |> expect)
+                caused
+                "the cause round-trips, so the line still points at the repo added"
+
+        // The rule is a function of WHICH repos declare one and who set the profile last —
+        // never of the order the repos arrived in.
+        testCase "one declaring repo applies its directory, as itself" <| fun () ->
+            Expect.equal
+                (ConfiguredProfile.decide [ one, "repos/octo/one" ] None)
+                (ConfiguredProfile.Apply (one, "repos/octo/one"))
+                "nothing set yet: the file's directory"
+            Expect.equal
+                (ConfiguredProfile.decide [ one, "repos/octo/one" ] (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one/"))))
+                ConfiguredProfile.Leave
+                "already applied: nothing to do, however a directory is spelled"
+            Expect.equal
+                (ConfiguredProfile.decide [ one, "repos/octo/one/src" ] (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one"))))
+                (ConfiguredProfile.Apply (one, "repos/octo/one/src"))
+                "a file that moved its directory moves the profile"
+
+        testCase "a profile somebody set is theirs, whatever the files say" <| fun () ->
+            for actor in [ ActorRef.Agent; ActorRef.PeerRef (PeerId.create "ada" |> expect) ] do
+                for cwd in [ Some "elsewhere"; None ] do
+                    Expect.equal
+                        (ConfiguredProfile.decide [ one, "repos/octo/one" ] (Some (setBy actor cwd)))
+                        ConfiguredProfile.Leave
+                        "a set or a clear by a person, or the agent for one, is not moved"
+
+        testCase "two declaring repos apply neither, and the one that had applied withdraws" <| fun () ->
+            let both = [ one, "repos/octo/one"; two, "repos/octo/two" ]
+            Expect.equal (ConfiguredProfile.decide both None) ConfiguredProfile.Leave "nothing set: nothing to set"
+            Expect.equal
+                (ConfiguredProfile.decide both (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one"))))
+                (ConfiguredProfile.Withdraw one)
+                "the profile one's file set is cleared, as one's"
+            Expect.equal
+                (ConfiguredProfile.decide (List.rev both) (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one"))))
+                (ConfiguredProfile.Withdraw one)
+                "and in whichever order they are listed"
+            Expect.equal
+                (ConfiguredProfile.decide both (Some (setBy (ActorRef.Configured one) None)))
+                ConfiguredProfile.Leave
+                "already withdrawn: nothing to do"
+
+        testCase "a file that stops declaring withdraws what it set" <| fun () ->
+            Expect.equal
+                (ConfiguredProfile.decide [] (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one"))))
+                (ConfiguredProfile.Withdraw one)
+                "nobody declares one now"
+            Expect.equal (ConfiguredProfile.decide [] None) ConfiguredProfile.Leave "and nothing is nothing"
+
+        testCase "each of several declaring repos is told who else declares" <| fun () ->
+            let three = RepoRef.create "octo/three" |> expect
+            let told = ConfiguredProfile.conflicts [ one, "a"; two, "b"; three, "c" ] |> Map.ofList
+            Expect.equal (Map.count told) 3 "every one of them"
+            Expect.stringContains (told |> Map.find one) "octo/three, octo/two also declare" "the others, by name"
+            Expect.isEmpty (ConfiguredProfile.conflicts [ one, "a" ]) "one alone conflicts with nobody"
     ]
 
 let private repoTests =
@@ -2686,6 +2759,21 @@ let private configTests =
             Expect.isTrue ((refusal "/etc").Contains "absolute") "an absolute path names another machine's tree"
             Expect.isTrue ((refusal "../elsewhere").Contains "climbs out") "and a relative one can mean the same thing"
             Expect.isTrue ((refusal "app/../../elsewhere").Contains "climbs out") "wherever the segment sits"
+
+        testCase "a session shell profile is read as written, inside the checkout" <| fun () ->
+            let file = ConfigFile.parse """{ "version": 2, "session": { "shell-profile": "src" } }""" |> expect
+            Expect.equal file.Session.ShellProfile (Some "src") "the directory, relative to the checkout"
+            let silent = ConfigFile.parse """{ "version": 2, "sandboxes": {} }""" |> expect
+            Expect.equal silent.Session.ShellProfile None "a file that says nothing asks for nothing"
+
+        testCase "a session shell profile that leaves the checkout, or a key the block lacks, is refused" <| fun () ->
+            let refusal (session: string) =
+                match ConfigFile.parse (sprintf """{ "version": 2, "session": %s }""" session) with
+                | Ok _ -> failwithf "expected a refusal for %s" session
+                | Error e -> e
+            Expect.stringContains (refusal """{ "shell-profile": "/etc" }""") "absolute" "another machine's tree"
+            Expect.stringContains (refusal """{ "shell-profile": "../x" }""") "climbs out" "and climbing to it"
+            Expect.stringContains (refusal """{ "shell-proflie": "." }""") "unknown key" "a typo is not silence"
 
         // A seeded file is the one thing a repo writes that is not a name, and it is safe
         // ONLY while it cannot leave the home this session made for that sandbox. So

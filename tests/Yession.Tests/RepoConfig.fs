@@ -1239,6 +1239,53 @@ let foldTests =
                 [ r, [ "!net:anywhere"; "path:/etc:ro" ] ]
                 "the old yes does not cover the new ask"
 
+        // Where the session's terminals start is the one thing a file asks of the session,
+        // and it is asked the way a sandbox is: through the gate, as the file, on the
+        // authority of whoever triggered the fold, pointing back at the add that caused it.
+        testCaseAsync "a repo's session.shell-profile reaches the gate as that repo, caused by its add" <|
+            async {
+                let r = repo "octo/hello"
+                let dir = checkout r (Some "version: 2\nsession:\n  shell-profile: src\n")
+                let seen = ResizeArray<GatedCall> ()
+                let folded =
+                    RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
+                let ada = Principal.User (UserId.create "ada" |> expect)
+                let added = MessageId.create "added" |> expect
+                do! folded.Fold (FoldCause.Changed (r, Some added)) (CredentialFor.Person ada)
+                match List.ofSeq seen with
+                | [ call ] ->
+                    Expect.equal call.Tool "set_shell_profile" "the verb a person would use"
+                    Expect.equal call.Summary (sprintf "set_shell_profile default -> %s/octo/hello/src" dir) "the default sandbox, at the checkout's src"
+                    Expect.equal (Authority.author call.Authority) (ActorRef.Configured r) "authored by the file"
+                    Expect.equal (Authority.credential call.Authority) (CredentialFor.Person ada) "on the authority of whoever added it"
+                    Expect.stringContains call.Args "added" "and caused by the add"
+                | other -> failwithf "expected one call, got %A" (other |> List.map (fun c -> c.Summary))
+            }
+
+        testCaseAsync "two repos that both declare a shell profile get neither, and are each told why" <|
+            async {
+                let one, two = repo "octo/one", repo "octo/two"
+                let dir = TestFiles.tempDir "yession-config-"
+                for r in [ one; two ] do
+                    TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
+                    TestFiles.write (RepoConfig.pathIn dir r) "version: 2\nsession:\n  shell-profile: .\n"
+                let seen = ResizeArray<GatedCall> ()
+                let log = foldLog ()
+                let folded =
+                    RepoSandboxes.create dir (cell (Some (reposOver dir [ one; two ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) log noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                Expect.isEmpty (List.ofSeq seen) "no profile is set: neither file wins"
+                let! page = log.Read None System.Int32.MaxValue
+                let warned =
+                    page.Events
+                    |> List.choose (fun e ->
+                        match e.Event with
+                        | SessionEvent.RepoConfigWarned w when w.Where = "session.shell-profile" -> Some (RepoRef.value w.Repo)
+                        | _ -> None)
+                Expect.equal (List.sort warned) [ "octo/one"; "octo/two" ] "each is told, once, however often it folds"
+            }
+
         testCaseAsync "a session with no repos service folds nothing rather than failing" <|
             async {
                 let folded =

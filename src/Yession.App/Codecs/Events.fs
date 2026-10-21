@@ -1336,7 +1336,8 @@ module Events =
                       // right answer for both: no profile.
                       "workingDirectory", Encode.option Encode.string p.WorkingDirectory
                       "actor", Codec.actor.Encode p.Actor
-                      "onBehalfOf", Encode.option Codec.principal.Encode p.OnBehalfOf ]
+                      "onBehalfOf", Encode.option Codec.principal.Encode p.OnBehalfOf
+                      "causedBy", Encode.option Codec.cause.Encode p.CausedBy ]
           Decode =
             Decode.object (fun get ->
                 { ShellProfileSet.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
@@ -1345,7 +1346,10 @@ module Events =
                   ShellProfileSet.Actor = get.Required.Field "actor" Codec.actor.Decode
                   // Optional in, as on a start: an older line named nobody behind its actor.
                   ShellProfileSet.OnBehalfOf =
-                    get.Optional.Field "onBehalfOf" (Decode.option Codec.principal.Decode) |> Option.flatten }) }
+                    get.Optional.Field "onBehalfOf" (Decode.option Codec.principal.Decode) |> Option.flatten
+                  // Optional in: a set recorded before causes were names none.
+                  ShellProfileSet.CausedBy =
+                    get.Optional.Field "causedBy" (Decode.option Codec.cause.Decode) |> Option.flatten }) }
 
     let private fileChanged : Codec<FileChanged> =
         let change : Codec<FileChange> =

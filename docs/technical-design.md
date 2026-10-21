@@ -397,13 +397,20 @@ start wrapper in the nix-darwin config makes `/yession` at every boot, with memo
 RAM - 768 MiB. When the parent is missing, Docker (cgroupfs) or systemd makes it with no limit,
 and an OOM can again reach the daemon.
 
-The file has two top-level keys, and one is a version. **The whole file is sandboxes**,
-because a sandbox is the only scope where "two repos both said something" has a total answer.
-Each sandbox has a name, and its repo scopes that name. So `config(session) = ⋃ over repos r of
-{ (r, name) ↦ spec }` is disjoint by construction. There is no precedence rule, and nothing
-shadows anything. The session refuses a clash inside one file, where it was written. Anything
-session-wide has no honest tie-break and stays the operator's. See [GAPS.md](GAPS.md).
-`src/Yession.Domain/Config.fs` holds the design.
+The file has three top-level keys, and one is a version. **The file is almost all
+sandboxes**, because a sandbox is the scope where "two repos both said something" has a total
+answer. Each sandbox has a name, and its repo scopes that name. So `config(session) = ⋃ over
+repos r of { (r, name) ↦ spec }` is disjoint by construction. There is no precedence rule, and
+nothing shadows anything. The session refuses a clash inside one file, where it was written.
+
+The one session-wide key is `session.shell-profile`: where the `default` sandbox's terminals
+start, relative to the checkout. Its answer to two repos is a refusal, not precedence. It
+applies only while exactly one repo declares it. When several declare it, none applies and
+each repo gets a warning. A profile that a person or the agent set is never moved by a file.
+`ConfiguredProfile` in `src/Yession.Domain/ShellProfile.fs` computes this from which repos
+declare it, never from the order they arrived. Anything else session-wide has no honest
+tie-break and stays the operator's. See [GAPS.md](GAPS.md). `src/Yession.Domain/Config.fs`
+holds the design.
 
 Three properties make the file safe to read from code a session just cloned:
 

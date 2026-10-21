@@ -65,6 +65,9 @@ let read (reposDir: string) (repo: RepoRef) : Result<ConfigRead option, string> 
 [<RequireQualifiedAccess>]
 type ReadAll =
     { Declared : Map<SandboxRef, SandboxDecl>
+      /// Every readable file's `session.shell-profile`, as written (relative to its checkout).
+      /// All of them, not a winner: which one applies, if any, is `ConfiguredProfile`'s.
+      ShellProfiles : (RepoRef * string) list
       Refused : (RepoRef * string) list
       Findings : (RepoRef * LocatedFinding) list }
 
@@ -77,6 +80,8 @@ let readAll (reposDir: string) (repos: RepoRef list) : ReadAll =
             | Ok (Some file) -> Some (repo, file)
             | _ -> None)
     { ReadAll.Declared = ConfigFile.union (read |> List.map (fun (repo, file) -> repo, file.File))
+      ReadAll.ShellProfiles =
+        read |> List.choose (fun (repo, file) -> file.File.Session.ShellProfile |> Option.map (fun path -> repo, path))
       ReadAll.Refused =
         results
         |> List.choose (fun (repo, result) ->

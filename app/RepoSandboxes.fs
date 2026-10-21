@@ -290,6 +290,75 @@ let create
                                               RepoCapabilitiesChanged.Sensitive = capabilities.Sensitive
                                               RepoCapabilitiesChanged.Actor = actor
                                               RepoCapabilitiesChanged.CausedBy = FoldCause.causeFor repo cause })
+                    // Where the session's own terminals start, as the files say it
+                    // (`session.shell-profile`). Before the starts, because it waits on
+                    // nothing they bring up: the default sandbox is the session's own. Which
+                    // file applies, if any, is `ConfiguredProfile`'s to decide; this only
+                    // resolves each path to where the default sandbox reaches it and carries
+                    // the decision out through the same gate as everything else here.
+                    let profileKey = "session.shell-profile"
+                    let declaredProfiles =
+                        read.ShellProfiles
+                        |> List.choose (fun (repo, path) ->
+                            listings
+                            |> List.tryFind (fun listing -> RepoRef.value listing.Repo = RepoRef.value repo)
+                            |> Option.map (fun listing -> repo, CheckoutPath.under listing.Path path))
+                    let lastProfile =
+                        told
+                        |> List.choose (fun event ->
+                            match event with
+                            | SessionEvent.ShellProfileSet p when
+                                SandboxRef.render p.Sandbox = SandboxRef.render SandboxRef.defaultRef -> Some p
+                            | _ -> None)
+                        |> List.tryLast
+                    let warn (repo: RepoRef) (warning: string) =
+                        async {
+                            if not (alreadyNoted told repo profileKey warning) then
+                                let actor = ActorRef.Configured repo
+                                do!
+                                    append
+                                        actor
+                                        (SessionEvent.RepoConfigWarned
+                                            { RepoConfigWarned.MessageId = mintMessageId ()
+                                              RepoConfigWarned.Repo = repo
+                                              RepoConfigWarned.Sandbox = None
+                                              RepoConfigWarned.Where = profileKey
+                                              RepoConfigWarned.Warning = warning
+                                              RepoConfigWarned.Actor = actor
+                                              RepoConfigWarned.CausedBy = FoldCause.causeFor repo cause })
+                        }
+                    for repo, warning in ConfiguredProfile.conflicts declaredProfiles do
+                        do! warn repo warning
+                    let change =
+                        match ConfiguredProfile.decide declaredProfiles lastProfile with
+                        | ConfiguredProfile.Leave -> None
+                        | ConfiguredProfile.Apply (repo, path) -> Some (repo, Some path)
+                        | ConfiguredProfile.Withdraw repo -> Some (repo, None)
+                    match change with
+                    | None -> ()
+                    | Some (repo, cwd) ->
+                        let call =
+                            Commands.setShellProfileCall
+                                (Authority.configuredBy repo onBehalfOf)
+                                (FoldCause.causeFor repo cause)
+                                SandboxRef.defaultRef
+                                cwd
+                        // A profile that could not be set is the file's to hear about, said
+                        // once, like an analyzer's note: the session carries on where it was.
+                        let failed =
+                            async {
+                                match! run call with
+                                | Error reason -> return Some reason
+                                | Ok outcome ->
+                                    match outcome.Status with
+                                    | CommandRefusedBy (_, reason) -> return Some (defaultArg reason "refused")
+                                    | CommandRan text when text.StartsWith "failed: " -> return Some (text.Substring 8)
+                                    | CommandRan _
+                                    | CommandRunning -> return None
+                            }
+                        match! failed with
+                        | Some reason -> do! warn repo (sprintf "the shell profile could not be set: %s" reason)
+                        | None -> ()
                     // Which repos are waiting on somebody. Only a SENSITIVE set waits: a
                     // repo asking for a cache and a store is not a decision anybody wants to
                     // be asked to make, and a prompt that appears for everything is a prompt

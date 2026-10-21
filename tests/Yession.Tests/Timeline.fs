@@ -2815,7 +2815,7 @@ let private toolTests =
                     { ShellProfileSet.MessageId = MessageId.create "p-1" |> expect
                       ShellProfileSet.Sandbox = SandboxRef.defaultRef
                       ShellProfileSet.WorkingDirectory = Some "/repos/x"
-                      ShellProfileSet.Actor = PeerRef ada; OnBehalfOf = None }
+                      ShellProfileSet.Actor = PeerRef ada; OnBehalfOf = None; CausedBy = None }
             let events =
                 [ at 1L 0.0 agentWrote
                   at 2L 1.0 (used "1" "a" "read_file")
