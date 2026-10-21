@@ -1313,17 +1313,12 @@ module View =
     /// all merged, gets no strip rather than an empty one: silence is what makes a line that
     /// IS there worth looking at.
     let private prStrip (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
-        let standings = ClientModel.prStandings model
-        match PrStatus.summarize standings with
-        | "" -> Lit.nothing
-        | line ->
-            // The worst live word's tone — `PrStatus.tone`, the same volume the table
-            // behind this strip says that word at.
-            let worst = standings |> List.map snd |> List.filter PrStatus.live
-            let tone = worst |> List.fold PrStatus.worse "closed" |> PrStatus.tone |> ink
+        match PrStatus.summary (ClientModel.prStandings model) with
+        | None -> Lit.nothing
+        | Some standing ->
             html $"""
-                <button type="button" class="{Style.prStripIn tone}" aria-label="Pull requests"
-                        data-pr-strip @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>{line}</button>"""
+                <button type="button" class="{Style.prStripIn (ink standing.Tone)}" aria-label="Pull requests"
+                        data-pr-strip @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>{standing.Word}</button>"""
 
     /// The way back into the content column once it is shut. Present only while it IS
     /// shut, so there are never two controls for the one column on screen at once.

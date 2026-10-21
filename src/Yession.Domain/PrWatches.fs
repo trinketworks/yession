@@ -2,6 +2,7 @@ namespace Yession.Domain.Prs
 
 open System
 open Yession.Domain
+open Yession.Domain.Standings
 open Yession.Domain.Tools
 
 /// The session's watched pull requests, projected from events — `ReposProjection`'s
@@ -165,6 +166,18 @@ module PrStatus =
         | several ->
             let worst = several |> List.map snd |> List.reduce worse
             sprintf "%d PRs · %d %s" (List.length several) (several |> List.filter (snd >> (=) worst) |> List.length) worst
+
+    /// The facet a session's pull requests are reported under.
+    let facet = "prs"
+
+    /// The summary as a standing: the line, said as loudly as its worst live word. `None`
+    /// exactly when the summary is silent.
+    let summary (standings: (string * string) list) : Standing option =
+        match summarize standings with
+        | "" -> None
+        | line ->
+            let worst = standings |> List.map snd |> List.filter live |> List.reduce worse
+            Some { Facet = facet; Word = line; Tone = tone worst }
 
     /// How a pull request is named in a one-line summary: its number, because the surface
     /// showing it belongs to one session and a session's watches are rarely spread over

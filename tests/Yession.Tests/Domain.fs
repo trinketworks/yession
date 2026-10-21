@@ -1915,6 +1915,47 @@ let private prWatchTests =
                 (Some ("#12", PrStatus.unreachable))
                 "but one that cannot be read is, whether or not it was ever read"
 
+        // The summary as a standing is the line the roster already said, at the volume the
+        // strip already said it — one rule, so the two cannot drift.
+        testCase "a pull request summary is a standing only when it says something" <| fun () ->
+            let at n word = PrStatus.label (PrRef.create repo n |> expect), word
+            Expect.equal (PrStatus.summary [ at 1 "merged" ]) None "silence is no standing"
+            let said = PrStatus.summary [ at 1 "queued"; at 2 "conflicted"; at 3 "merged" ] |> Option.get
+            Expect.equal said.Word "2 PRs · 1 conflicted" "the summary's own line"
+            Expect.equal said.Tone ToneBad "at its worst live word's volume"
+            Expect.equal said.Facet PrStatus.facet "under the pull requests' facet"
+
+        testCase "the standing shown alone is the one that wants a person most" <| fun () ->
+            let at facet tone : Standings.Standing = { Facet = facet; Word = facet; Tone = tone }
+            let fine, busy, bad = at "a" ToneOk, at "b" ToneBusy, at "c" ToneBad
+            Expect.equal (Standings.Standing.worst []) None "nothing reported is nothing to show"
+            Expect.equal (Standings.Standing.worst [ fine; busy; bad ]) (Some bad) "bad over busy over ok"
+            Expect.equal (Standings.Standing.worst [ fine; busy ]) (Some busy) "busy over ok"
+            Expect.equal (Standings.Standing.worst [ at "x" ToneOk; fine ]) (Some (at "x" ToneOk)) "a tie goes to the earlier"
+            Expect.equal (Standings.Standing.byConcern [ fine; bad; busy ]) [ bad; busy; fine ] "all of them, worst first"
+
+        testCase "what the agent is doing is said in one word" <| fun () ->
+            let idle : Standings.AgentSituation =
+                { TurnRunning = false; BusyTerminals = []; QueuedWithoutAgent = false; SignInRequired = false }
+            let say situation =
+                let s = Standings.AgentStatus.standing situation
+                Expect.equal s.Facet Standings.AgentStatus.facet "always under the agent's facet"
+                s.Word, s.Tone
+            Expect.equal (say idle) ("waiting", ToneOk) "idle is the ball with the people, and that is fine"
+            Expect.equal (say { idle with TurnRunning = true }) ("working", ToneBusy) "a turn is work"
+            Expect.equal (say { idle with BusyTerminals = [ "build" ] }) ("running build", ToneBusy) "a command owes a wake"
+            Expect.equal (say { idle with BusyTerminals = [ "a"; "b" ] }) ("running 2 commands", ToneBusy) "several are counted"
+            Expect.equal (say { idle with QueuedWithoutAgent = true }) ("no agent", ToneBad) "a message nobody can answer"
+            Expect.equal (say { idle with SignInRequired = true }) ("sign in needed", ToneBad) "an agent that cannot run"
+            Expect.equal
+                (say { idle with SignInRequired = true; BusyTerminals = [ "build" ] })
+                ("sign in needed", ToneBad)
+                "what needs a person outranks what is under way"
+            Expect.equal
+                (say { idle with TurnRunning = true; QueuedWithoutAgent = true; SignInRequired = true })
+                ("working", ToneBusy)
+                "a running turn proves an agent is there"
+
         testCase "a watch cannot be built on the deployment's own credential" <| fun () ->
             // The rule lives on the event, where every construction goes through it: the
             // verb refuses before it looks, and the decoder refuses a stored line that says

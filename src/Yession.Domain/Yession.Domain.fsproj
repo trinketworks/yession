@@ -119,6 +119,9 @@
          System: a query is a declaration, and what it declares about is somebody else's.
          Before PrWatches.fs, whose status words say how loudly they are said in its tones. -->
     <Compile Include="Queries.fs" />
+    <!-- What a session says about itself to whoever lists it, in the query vocabulary's
+         tones. Before PrWatches.fs, whose summary is one. -->
+    <Compile Include="Standings.fs" />
     <!-- Watched pull requests (the projection and the transition algebra). After
          Events.fs like every projection; beside Repos.fs, whose shape it mirrors. -->
     <Compile Include="PrWatches.fs" />
