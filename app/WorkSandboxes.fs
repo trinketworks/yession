@@ -301,8 +301,7 @@ let private missing (reason: string) : SessionEnvironment.SessionEnvironment =
       Stop = fun () -> async { return () }
       CurrentRef = fun () -> None
       Shell = fun () -> None
-      Realisation = fun () -> []
-      MemoryEvents = fun () -> async { return None } }
+      Realisation = fun () -> [] }
 
 let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
     async {

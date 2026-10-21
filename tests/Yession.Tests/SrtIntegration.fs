@@ -101,6 +101,7 @@ let private exitCode (run: SandboxRun) =
     | SandboxExited code -> code
     | SandboxSignalled signal -> failwithf "the sandboxed process was ended by %s" signal
     | SandboxRunFailed reason -> failwithf "the sandboxed process did not run: %s" reason
+    | SandboxKilledForMemory kill -> failwithf "the sandboxed process was %s" (MemoryKill.described kill)
 
 // --- The agent CLI's spawner, driven directly ----------------------------------------------
 

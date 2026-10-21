@@ -32,7 +32,6 @@ let private sandboxAnswering (answer: (OutputStream * string -> unit) -> Async<R
       Spawn = fun _ onChunk -> answer onChunk
       SpawnPty = None
       Shell = None
-      MemoryEvents = fun () -> async { return None }
       Dispose = fun () -> async { return () } }
 
 /// A sandbox whose verification program reports the check at `index` as the first failure —

@@ -703,63 +703,6 @@ module SessionTerminals =
                     if fired then cont () else waiting <- (fun () -> cont ()) :: waiting)
             settle, settled
 
-    /// The memory counters read around one block (`MemoryEvents`), so a block the kernel
-    /// killed for memory says so instead of a bare exit 137.
-    module internal MemoryWatch =
-
-        /// How long a read of the counters may take before the block completes without it.
-        /// A read is one exec, and a docker daemon under memory pressure is exactly when one
-        /// is slow. A late read only loses the cause; it must never hold the block open.
-        let window = TimeSpan.FromSeconds 5.0
-
-        /// Start `work` now, and answer what it answered, at most `window` later. A read that
-        /// is late answers `None`.
-        let started (clock: Clock) (work: Async<MemoryEvents option>) : Async<MemoryEvents option> =
-            let mutable answer : MemoryEvents option option = None
-            let mutable waiting : (MemoryEvents option -> unit) list = []
-            let settle (value: MemoryEvents option) =
-                if answer.IsNone then
-                    answer <- Some value
-                    let held = waiting
-                    waiting <- []
-                    held |> List.iter (fun resume -> resume value)
-            Async.StartImmediate (
-                async {
-                    let! value = work
-                    settle value
-                })
-            Async.StartImmediate (
-                async {
-                    do! clock.After window
-                    settle None
-                })
-            Async.FromContinuations (fun (cont, _, _) ->
-                match answer with
-                | Some value -> cont value
-                | None -> waiting <- cont :: waiting)
-
-        /// The block's result, with the cause added when the counters show an OOM kill.
-        ///
-        /// The first read starts BEFORE the command is typed and is not waited for, so it
-        /// adds no time to a block. If it lands after an OOM kill, the kill is missed, and the
-        /// block reads as exit 137 as it did before: a late read can lose a cause, never invent
-        /// one. The second read happens only for a SIGKILL exit (`CommandResult.mayBeMemoryKill`).
-        let around
-            (clock: Clock)
-            (read: unit -> Async<MemoryEvents option>)
-            (run: Async<CommandResult>)
-            : Async<CommandResult> =
-            async {
-                let before = started clock (read ())
-                let! result = run
-                if CommandResult.mayBeMemoryKill result then
-                    let! before = before
-                    let! after = started clock (read ())
-                    return CommandResult.withMemory before after result
-                else
-                    return result
-            }
-
     let internal writeFor (command: string) : string =
         let kept =
             command
@@ -1776,6 +1719,7 @@ module SessionTerminals =
                                         | SandboxExited code -> sprintf "exited with code %d" code
                                         | SandboxSignalled signal -> sprintf "was ended by %s" signal
                                         | SandboxRunFailed reason -> sprintf "could not run: %s" reason
+                                        | SandboxKilledForMemory kill -> sprintf "was %s" (MemoryKill.described kill)
                                     emit
                                         id
                                         terminal
@@ -2425,10 +2369,9 @@ module SessionTerminals =
                                         | SandboxExited code -> return CommandFailed code
                                         | SandboxSignalled signal -> return CommandExecutionFailed (sprintf "it was ended by %s" signal)
                                         | SandboxRunFailed reason -> return CommandExecutionFailed reason
+                                        | SandboxKilledForMemory kill -> return CommandKilledForMemory kill
                                 }
-                        // The sandbox's memory counters around the run: what tells a command the
-                        // kernel killed for memory from one killed for any other reason.
-                        let! result = MemoryWatch.around clock (environmentOf terminalId).MemoryEvents run
+                        let! result = run
                         if dropped > 0 then
                             do!
                                 append
@@ -2946,6 +2889,8 @@ module SessionTerminals =
                                                 name)
                                 | SandboxSignalled signal ->
                                     return Error (sprintf "the %s sandbox's shell was ended by %s, so nothing was set." name signal)
+                                | SandboxKilledForMemory kill ->
+                                    return Error (sprintf "the %s sandbox's shell was %s, so nothing was set." name (MemoryKill.described kill))
                                 | SandboxRunFailed reason -> return Error reason
                         }
                 match checked' with

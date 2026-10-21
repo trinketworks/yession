@@ -336,6 +336,11 @@ type SandboxRun =
     | SandboxSignalled of signal: string
     /// The process could not run, or its streams failed, for this reason.
     | SandboxRunFailed of reason: string
+    /// The kernel's OOM killer ended the process, which a shell or docker reports as exit
+    /// 137, and the sandbox's own memory counters say why (`MemoryWatch`). Only a backend
+    /// whose processes share a memory cgroup of their own can tell; every other one
+    /// reports the same death as `SandboxExited 137`.
+    | SandboxKilledForMemory of kill: MemoryKill
 
 /// A live sandboxed process. Stdin is piped from day one — the agent CLI's stdio
 /// transport and interactive work both ride this same handle.
@@ -347,6 +352,108 @@ type SandboxProcessHandle =
       Kill : unit -> unit
       /// Resolves exactly once, when the process ends.
       Exited : Async<SandboxRun> }
+
+/// Start one process: what to run, and where each chunk of its output goes.
+type SandboxSpawn = SandboxExec -> (OutputStream * string -> unit) -> Async<Result<SandboxProcessHandle, string>>
+
+/// Telling a process the kernel killed for memory from one killed for any other reason.
+///
+/// Both end in SIGKILL, exit 137. What tells them apart is the memory cgroup the sandbox's
+/// processes share: its counters (`MemoryEvents`) read before the process started and after
+/// it ended. So the watch belongs to the backend that has that cgroup, around its own spawn,
+/// and every process it starts is watched: a git clone the kernel killed is as worth
+/// explaining as a build.
+[<RequireQualifiedAccess>]
+module MemoryWatch =
+
+    /// How long a read of the counters may take before the process's ending is answered
+    /// without it. A read is one exec, and a container under memory pressure is exactly
+    /// when one is slow. A late read only loses the cause; it must never hold an ending.
+    let window = System.TimeSpan.FromSeconds 5.0
+
+    /// Start every one of `works` now, and answer whichever finishes first, however many
+    /// times it is awaited. An `Async` is cold: awaited twice, it runs twice, and an ending
+    /// that is read twice must not read the counters twice.
+    let private first (works: Async<'T> list) : Async<'T> =
+        let mutable answer : 'T option = None
+        let mutable waiting : ('T -> unit) list = []
+        let settle (value: 'T) =
+            if answer.IsNone then
+                answer <- Some value
+                let held = waiting
+                waiting <- []
+                held |> List.iter (fun resume -> resume value)
+        for work in works do
+            Async.StartImmediate (
+                async {
+                    let! value = work
+                    settle value
+                })
+        Async.FromContinuations (fun (cont, _, _) ->
+            match answer with
+            | Some value -> cont value
+            | None -> waiting <- cont :: waiting)
+
+    /// Start `work` now, and answer what it answered, or that it was late, at most
+    /// `window` later.
+    let private within (clock: Clock) (work: Async<Result<MemoryEvents, string>>) : Async<Result<MemoryEvents, string>> =
+        first
+            [ work
+              async {
+                  do! clock.After window
+                  return Error (sprintf "no answer within %.0fs" window.TotalSeconds)
+              } ]
+
+    /// How a process ended, given the counters read around it. Only exit 137 changes, and
+    /// only when both readings show an OOM kill in the window. `Error` is an exit 137 whose
+    /// readings were missing, with why: a missing reading loses the cause and never
+    /// invents one, and the backend says which reading went missing.
+    let ended
+        (before: Result<MemoryEvents, string>)
+        (after: Result<MemoryEvents, string>)
+        (run: SandboxRun)
+        : Result<SandboxRun, string> =
+        match run, before, after with
+        | SandboxExited code, Ok before, Ok after when code = CommandResult.sigkillExit ->
+            match MemoryEvents.killed before after with
+            | Some kill -> Ok (SandboxKilledForMemory kill)
+            | None -> Ok run
+        | SandboxExited code, Error reason, _ when code = CommandResult.sigkillExit ->
+            Error (sprintf "exit %d, and the counters before it could not be read: %s" code reason)
+        | SandboxExited code, _, Error reason when code = CommandResult.sigkillExit ->
+            Error (sprintf "exit %d, and the counters after it could not be read: %s" code reason)
+        | _ -> Ok run
+
+    /// `spawn`, with every process it starts watched. The first read starts before the
+    /// process does and is not waited for, so it adds no time to a spawn. The second
+    /// happens only after an exit 137. `unread` hears why an exit 137 could not be told.
+    let watched
+        (clock: Clock)
+        (read: unit -> Async<Result<MemoryEvents, string>>)
+        (unread: string -> unit)
+        (spawn: SandboxSpawn)
+        : SandboxSpawn =
+        fun exec onChunk ->
+            async {
+                let before = within clock (read ())
+                match! spawn exec onChunk with
+                | Error reason -> return Error reason
+                | Ok handle ->
+                    let exited =
+                        async {
+                            match! handle.Exited with
+                            | SandboxExited code as run when code = CommandResult.sigkillExit ->
+                                let! before = before
+                                let! after = within clock (read ())
+                                match ended before after run with
+                                | Ok told -> return told
+                                | Error reason ->
+                                    unread reason
+                                    return run
+                            | run -> return run
+                        }
+                    return Ok { handle with Exited = first [ exited ] }
+            }
 
 /// A live process on a PSEUDO-TERMINAL (Plan 13, stage 2c).
 ///
@@ -517,7 +624,7 @@ type Sandbox =
       /// what lifecycle events record.
       Ref : string
       /// Spawn a process, streaming its output through the callback in order.
-      Spawn : SandboxExec -> (OutputStream * string -> unit) -> Async<Result<SandboxProcessHandle, string>>
+      Spawn : SandboxSpawn
       /// Spawn a process on a pty of the given size, streaming everything the terminal
       /// emits through the callback (Plan 13, stage 2c).
       ///
@@ -534,11 +641,6 @@ type Sandbox =
       /// for the dialects it can instrument and says which it found. `None` is the host
       /// and srt backends — the session's own `/bin/sh` is the right answer there.
       Shell : TerminalShell option
-      /// Read the OOM counters of the sandbox's own memory cgroup (`MemoryEvents`), so that a
-      /// command the kernel killed for memory can be told from one killed for another
-      /// reason. `None` when this backend has no cgroup of its own to read (the host and
-      /// srt), or the read failed. A container reads `MemoryEvents.path` with a bare exec.
-      MemoryEvents : unit -> Async<MemoryEvents option>
       Dispose : unit -> Async<unit> }
 
 /// Create a sandbox under a policy. The policy is assembled fresh per creation —

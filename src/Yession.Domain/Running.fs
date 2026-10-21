@@ -55,6 +55,9 @@ module MemoryKill =
         | SandboxLimit -> "the sandbox reached its memory limit"
         | MachineOutOfMemory -> "the machine ran out of memory, and the kernel picked this process"
 
+    /// How it ended, said after "was": "the shell was killed for memory (…)".
+    let described (kill: MemoryKill) : string = sprintf "killed for memory (%s)" (cause kill)
+
     /// What the agent can do about it. The two causes ask for opposite things: use less, or
     /// try again when the other work is done.
     let advice (kill: MemoryKill) : string =
@@ -119,21 +122,3 @@ module CommandResult =
     /// The exit status that a shell (and docker, for an exec) reports for a process that
     /// SIGKILL ended: 128 + 9.
     let sigkillExit = 137
-
-    /// A result, with the memory counters read before and after the command. Only a
-    /// SIGKILL exit is ever changed, and only when the counters show an OOM kill in the
-    /// window. Any other result, or a missing reading, is returned as it was.
-    let withMemory (before: MemoryEvents option) (after: MemoryEvents option) (result: CommandResult) : CommandResult =
-        match result, before, after with
-        | CommandFailed code, Some before, Some after when code = sigkillExit ->
-            match MemoryEvents.killed before after with
-            | Some kill -> CommandKilledForMemory kill
-            | None -> result
-        | _ -> result
-
-    /// Whether this result is worth reading the counters for after the command. Only a
-    /// SIGKILL exit can become a memory kill, so every other result skips the second read.
-    let mayBeMemoryKill (result: CommandResult) : bool =
-        match result with
-        | CommandFailed code -> code = sigkillExit
-        | _ -> false

@@ -48,10 +48,7 @@ module SessionEnvironment =
           /// something would otherwise be asked to report on itself. Empty while nothing is
           /// running, because a sandbox that does not exist holds nothing — never the last
           /// one's answer.
-          Realisation : unit -> string list
-          /// The running sandbox's memory counters (`Sandbox.MemoryEvents`). `None` while
-          /// nothing runs, and for a backend that has none.
-          MemoryEvents : unit -> Async<MemoryEvents option> }
+          Realisation : unit -> string list }
 
     /// A session with no environment: needs are recorded as unavailable without any
     /// sandbox existing in the Process.
@@ -62,8 +59,7 @@ module SessionEnvironment =
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> None
           Shell = fun () -> None
-          Realisation = fun () -> []
-          MemoryEvents = fun () -> async { return None } }
+          Realisation = fun () -> [] }
 
     /// Run this sandbox's own checks in it, once, before anybody else can reach it.
     ///
@@ -157,6 +153,8 @@ module SessionEnvironment =
                                         else Unnamed explained)
                             | SandboxSignalled signal ->
                                 return Error (Named (sprintf "this sandbox's start-up check was ended by %s" signal))
+                            | SandboxKilledForMemory kill ->
+                                return Error (Named (sprintf "this sandbox's start-up check was %s" (MemoryKill.described kill)))
                             | SandboxRunFailed reason ->
                                 return Error (Named (sprintf "this sandbox cannot run a command at all: %s" reason))
                     }
@@ -337,9 +335,4 @@ module SessionEnvironment =
           Stop = stop
           CurrentRef = fun () -> running |> Option.map (fun (sandbox, _) -> sandbox.Ref)
           Shell = fun () -> running |> Option.bind (fun (sandbox, _) -> sandbox.Shell)
-          Realisation = fun () -> running |> Option.map snd |> Option.defaultValue []
-          MemoryEvents =
-            fun () ->
-                match running with
-                | Some (sandbox, _) -> sandbox.MemoryEvents ()
-                | None -> async { return None } }
+          Realisation = fun () -> running |> Option.map snd |> Option.defaultValue [] }
