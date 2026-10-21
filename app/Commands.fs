@@ -37,6 +37,12 @@ open Yession.Domain.Repos
 open Yession.Session
 open Yession.Domain.Prs
 
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
+
 /// What the commands need from the session around them, as getters — the services are
 /// composed during boot and the table is built once, so a value read here would be the one
 /// that existed before the session did.
@@ -206,6 +212,47 @@ let private readStartArgs (values: string list) : Result<string * string * Cause
         Error (
             sprintf
                 "start_work_sandbox takes a sandbox, a declaration and an optional cause, got %d arguments"
+                (List.length other))
+
+/// The directory a CAUSED `set_shell_profile` carries: present or absent as a value, because
+/// the caused form has a fixed arity and its absence cannot be a shorter list.
+let private profileDirectory : Codec<string option> =
+    { Encode = Encode.option Encode.string; Decode = Decode.option Decode.string }
+
+/// One `set_shell_profile` call, built where the dispatch entry that reads it lives — for
+/// the agent's capability and for the fold applying a repo's `session.shell-profile`.
+///
+/// An uncaused call is the shape it always was: one argument clears, two set. A caused one
+/// is three — the sandbox, the directory as a value, the cause — so the arity alone says
+/// which reading applies and a directory can never be read as a cause.
+let setShellProfileCall (authority: Authority) (causedBy: Cause option) (sandbox: SandboxRef) (cwd: string option) : GatedCall =
+    let name = SandboxRef.render sandbox
+    { Tool = setShellProfileTool
+      Args =
+        encodeArgs (
+            match causedBy with
+            | None -> name :: Option.toList cwd
+            | Some cause -> [ name; Codec.toString profileDirectory cwd; Codec.toString Codec.cause cause ])
+      Summary =
+        match cwd with
+        | Some cwd -> sprintf "set_shell_profile %s -> %s" name cwd
+        | None -> sprintf "set_shell_profile %s -> wherever the sandbox puts them" name
+      Authority = authority }
+
+/// `setShellProfileCall`'s arguments read back: the sandbox, the directory, and the cause.
+let private readProfileArgs (values: string list) : Result<string * string option * Cause option, string> =
+    match values with
+    | [ name ] -> Ok (name, None, None)
+    | [ name; cwd ] -> Ok (name, Some cwd, None)
+    | [ name; cwd; cause ] ->
+        match Codec.fromString profileDirectory cwd, Codec.fromString Codec.cause cause with
+        | Ok cwd, Ok cause -> Ok (name, cwd, Some cause)
+        | Error e, _ -> Error (sprintf "not a directory: %s" e)
+        | _, Error e -> Error (sprintf "not a cause: %s" e)
+    | other ->
+        Error (
+            sprintf
+                "set_shell_profile takes a sandbox name and an optional directory, got %d arguments"
                 (List.length other))
 
 /// How each gated command is actually carried out, by tool name (Plan 15, stage 3b).
@@ -629,29 +676,17 @@ let dispatch (services: CommandServices) : CommandDispatch =
           setShellProfileTool,
           fun (invocation: GatedInvocation) (args: string list) ->
             async {
-                // A directory is present or it is not, and the ARITY carries that — one arg
-                // clears the profile, two sets it. The absence is a shorter list, never an
-                // empty string standing in for a value; both halves of this gated command
-                // live in one file so the encode above and this decode stay the one shape.
-                let parsed =
-                    match args with
-                    | [ name ] -> Ok (name, None)
-                    | [ name; cwd ] -> Ok (name, Some cwd)
-                    | other -> Error other
-                match parsed with
-                | Error other ->
-                    return
-                        Error (
-                            sprintf
-                                "set_shell_profile takes a sandbox name and an optional directory, got %d arguments"
-                                (List.length other))
-                | Ok (rawName, cwd) ->
+                // Both halves of this gated command live in one file (`setShellProfileCall`,
+                // `readProfileArgs`) so the encode and this decode stay the one shape.
+                match readProfileArgs args with
+                | Error e -> return Error e
+                | Ok (rawName, cwd, causedBy) ->
                     match SandboxRef.parse rawName with
                     | Error e -> return Error (sprintf "not a sandbox: %s" e)
                     | Ok name ->
                         return!
                             andPublish services ShellProfile.queryName (
-                                (services.Terminals ()).SetProfile invocation.Authority name cwd)
+                                (services.Terminals ()).SetProfile invocation.Authority causedBy name cwd)
             }
 
           // The two file commands (the file verbs). Acts on the shared checkout, so they
@@ -760,12 +795,14 @@ let dispatch (services: CommandServices) : CommandDispatch =
 /// Two stages, and the split is the point: ADMISSION answers at once (a peer's command
 /// pump is held for the answer, and a clone is not something to hold it for), and the WORK
 /// is handed back for the caller to run wherever it can wait — the Host in the background,
-/// a test in line. The work is three gated calls in sequence, each waited out past the
-/// gate's deadline because the next depends on it: `add_repo`, then `switch_branch` when a
-/// branch other than the clone's was chosen, then `set_shell_profile` so the terminals
-/// everyone opens start in the checkout. That last one is the default the agent's
-/// `add_repo` leaves to a following call, made here because a person who chose a repo did
-/// not choose to `cd` into it forty times.
+/// a test in line. The work is two gated calls in sequence, each waited out past the gate's
+/// deadline because the next depends on it: `add_repo`, then `switch_branch` when a branch
+/// other than the clone's was chosen. Both are the person's choices, so both are theirs.
+///
+/// Where terminals start is NOT set here. It was, as the person, which recorded a default
+/// the launch chose as a choice they made. A repo that wants its checkout as the shell's
+/// home says so in its `yession.yaml` (`session.shell-profile`), and the fold applies it as
+/// that repo's — the one place a file's effects are authored.
 [<RequireQualifiedAccess>]
 type LaunchFailure =
     { /// Which of the launch's calls did not succeed, as the gate knew it.
@@ -868,16 +905,7 @@ let launchRepo
                                                 | _ -> async { return Ok "" }
                                             match switched with
                                             | Error e -> return Error e
-                                            | Ok _ ->
-                                                let sandbox = SandboxRef.render SandboxRef.defaultRef
-                                                match!
-                                                    gated
-                                                        setShellProfileTool
-                                                        [ sandbox; listing.Path ]
-                                                        (sprintf "set_shell_profile %s %s" sandbox listing.Path)
-                                                with
-                                                | Error e -> return Error e
-                                                | Ok _ -> return Ok ()
+                                            | Ok _ -> return Ok ()
                             })
         }
 
@@ -1104,12 +1132,7 @@ let private sandboxCapabilitiesFor
                       [ SandboxRef.render name ]
                       (sprintf "stop_work_sandbox %s" (SandboxRef.render name))
               SetShellProfile =
-                fun name cwd ->
-                  let summary =
-                      match cwd with
-                      | Some cwd -> sprintf "set_shell_profile %s -> %s" (SandboxRef.render name) cwd
-                      | None -> sprintf "set_shell_profile %s -> wherever the sandbox puts them" (SandboxRef.render name)
-                  gated setShellProfileTool (SandboxRef.render name :: Option.toList cwd) summary } }
+                fun name cwd -> capabilities.RunGated (setShellProfileCall (Authority.agentFor turnActor) None name cwd) } }
 
 /// Every command verb bound to ONE turn's actor: the acting party on the events is the agent,
 /// the credential is the turn human's (Plan 08). The Host leaves these as denials because

@@ -161,8 +161,12 @@ and ShellProfileSet =
       /// sandbox's own default, which is what every terminal did before this plan.
       WorkingDirectory : string option
       Actor : ActorRef
-      /// The person behind the agent that set it. `None` when a person set it themselves.
-      OnBehalfOf : Principal option }
+      /// The person behind the agent that set it, or behind the fold that applied a repo's
+      /// `session.shell-profile`. `None` when a person set it themselves.
+      OnBehalfOf : Principal option
+      /// What made it change, as `WorkSandboxStarting` says it: the repo added whose file
+      /// declared it. `None` on a set somebody asked for directly.
+      CausedBy : Cause option }
 
 /// The prose a start writes into the timeline - the headline a screen lands on, and the
 /// particulars beneath it. It lives HERE, beside the event, for the same reason

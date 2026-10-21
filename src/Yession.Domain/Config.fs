@@ -4,15 +4,40 @@ open Yession.Domain
 
 // What a repo asks a session for (`yession.yaml`, Plan 27).
 //
-// The whole file is SANDBOXES, and that is the design rather than a starting point. The
-// constraint is a complete algebra: every key needs a defined answer for "two repos both
-// said something", and a sandbox is the only scope where that answer is TOTAL — it is
-// named, and the name is scoped to its repo (`SandboxScope`), so the union of two files is
-// disjoint by construction. No precedence rule, nothing shadows anything.
+// The file is almost entirely SANDBOXES, and that is the design rather than a starting
+// point. The constraint is a complete algebra: every key needs a defined answer for "two
+// repos both said something", and a sandbox is the scope where that answer is TOTAL — it
+// is named, and the name is scoped to its repo (`SandboxScope`), so the union of two files
+// is disjoint by construction. No precedence rule, nothing shadows anything.
 //
-// So the rule for every future key: a key belongs here only if its scope is a sandbox.
-// Anything session-wide (approval gates, MCP servers, a dependency on another repo) has no
-// honest tie-break between two repos that disagree, and stays the operator's.
+// So the rule for every future key: a key belongs here only if its scope is a sandbox, OR
+// if "two repos said it" has an answer that is not precedence. `session.shell-profile` is
+// the one key of the second kind: two repos that both declare it get NEITHER, and a
+// warning each (`ConfiguredProfile`) — a refusal is an answer, and it does not depend on
+// which repo arrived first. Anything session-wide without such an answer (approval gates,
+// MCP servers, a dependency on another repo) stays the operator's.
+
+/// A path a file wrote, resolved under a checkout and CLAMPED there. The decoder already
+/// refuses a path that climbs out — that is the upstream fix, made where a person can
+/// correct their file — and this is the downstream guard: a path reaching here some other
+/// way still cannot name a directory above the checkout, because there is no arithmetic
+/// here that could produce one.
+module CheckoutPath =
+
+    let under (checkout: string) (dir: string) : string =
+        let resolved =
+            dir.Split ([| '/'; '\\' |])
+            |> Array.fold
+                (fun acc segment ->
+                    match segment with
+                    | "" | "." -> acc
+                    | ".." -> (match acc with [] -> [] | _ :: rest -> rest)
+                    | segment -> segment :: acc)
+                []
+            |> List.rev
+        match resolved with
+        | [] -> checkout.TrimEnd '/'
+        | segments -> checkout.TrimEnd '/' + "/" + String.concat "/" segments
 //
 // This file is the MODEL: what a declaration is. Reading one from the file is the
 // Session's (`Yession.Session.ConfigFile`), because the Session is what reads a checkout.
@@ -142,29 +167,11 @@ module SandboxDecl =
     /// docker starts its defaults, srt and host confine. `Sandboxes.forBackend` is where the
     /// two authors meet.
     let toRequest (checkout: CheckoutViews option) (decl: SandboxDecl) : Result<SandboxRequest, string> =
-        // Resolved rather than concatenated, and CLAMPED at the checkout. The decoder
-        // already refuses a path that climbs out — that is the upstream fix, made where a
-        // person can correct their file — and this is the downstream guard: a declaration
-        // reaching here some other way still cannot name a directory above the checkout,
-        // because there is no arithmetic here that could produce one.
-        let under (checkout: string) (dir: string) =
-            let resolved =
-                dir.Split ([| '/'; '\\' |])
-                |> Array.fold
-                    (fun acc segment ->
-                        match segment with
-                        | "" | "." -> acc
-                        | ".." -> (match acc with [] -> [] | _ :: rest -> rest)
-                        | segment -> segment :: acc)
-                    []
-                |> List.rev
-            match resolved with
-            | [] -> checkout.TrimEnd '/'
-            | segments -> checkout.TrimEnd '/' + "/" + String.concat "/" segments
+        // Resolved rather than concatenated, and clamped at the checkout (`CheckoutPath`).
         let workingDirectory =
             match decl.WorkingDirectory, checkout with
             | None, _ -> Ok None
-            | Some dir, Some views -> Ok (Some (under views.InSandbox dir))
+            | Some dir, Some views -> Ok (Some (CheckoutPath.under views.InSandbox dir))
             | Some dir, None ->
                 Error (
                     sprintf
@@ -183,7 +190,7 @@ module SandboxDecl =
                     Ok (
                         Container
                             { container with
-                                Build = Some { build with ContextPath = under views.OnHost build.ContextPath } })
+                                Build = Some { build with ContextPath = CheckoutPath.under views.OnHost build.ContextPath } })
                 | Some build, None ->
                     Error (
                         sprintf
@@ -204,9 +211,21 @@ module SandboxDecl =
                       Setup = decl.Setup
                       ReposAt = decl.Repos } }
 
+/// What a repo asks of the SESSION rather than of one of its own sandboxes (`session:`).
+type SessionDecl =
+    { /// Where the session's own `default` sandbox's terminals start, relative to THIS
+      /// repo's checkout. Applied only while this is the one repo that declares it, and
+      /// never over a profile a person chose (`ConfiguredProfile`).
+      ShellProfile : string option }
+
+module SessionDecl =
+
+    let empty : SessionDecl = { ShellProfile = None }
+
 /// One repo's whole file.
 type ConfigFile =
     { /// Refused if it is not a version this build speaks. A file from the future says so
       /// rather than losing half its meaning to a decoder that skips what it cannot read.
       Version : int
-      Sandboxes : Map<SandboxName, SandboxDecl> }
+      Sandboxes : Map<SandboxName, SandboxDecl>
+      Session : SessionDecl }

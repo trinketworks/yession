@@ -18,8 +18,15 @@
 # to carry them would be copied into every repo and outlive the daemon that needed them.
 #
 # The session's own `default` sandbox is srt (light confinement for the checkout and
-# small edits) and declares nothing here — no file may configure it.
+# small edits) and declares nothing here — no file may configure what it is. The one thing
+# a file may ask of it is where its terminals start (`session:` below).
 version: 2
+
+# Where the session's own terminals start once this repo is added, relative to this
+# checkout. Applied as this repo's only while no other repo in the session declares one,
+# and never over a profile somebody set with `set_shell_profile`.
+session:
+  shell-profile: .
 
 sandboxes:
   dev:

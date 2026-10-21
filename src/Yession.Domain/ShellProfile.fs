@@ -85,3 +85,61 @@ module ShellProfileProjection =
     /// The sandboxes that have one, in name order — the query's rows.
     let listed (proj: ShellProfileProjection) : (SandboxRef * ShellProfile) list =
         proj.Profiles |> Map.toList |> List.sortBy (fst >> SandboxRef.render)
+
+/// What the repos' files make of the `default` sandbox's profile (`session.shell-profile`).
+///
+/// COMPUTED from which repos declare one, never from the order they arrived in: exactly one
+/// declaring repo applies, none or several apply nothing, and a profile a person (or the
+/// agent for one) set is theirs and no file moves it. A "first repo wins" rule would make
+/// the outcome depend on history nobody chose; this one a test can state from its inputs.
+[<RequireQualifiedAccess>]
+type ConfiguredProfile =
+    /// The profile already is what the files make of it, or a person chose it.
+    | Leave
+    /// Point it at this directory, as this repo's file.
+    | Apply of RepoRef * string
+    /// Clear the profile this repo's file set: no single file declares one any more.
+    | Withdraw of RepoRef
+
+module ConfiguredProfile =
+
+    let private sameRepo (a: RepoRef) (b: RepoRef) = RepoRef.value a = RepoRef.value b
+
+    /// `declared` is every repo whose file has the key, its directory already resolved to
+    /// where the default sandbox's terminals reach it. `last` is the newest
+    /// `ShellProfileSet` for that sandbox.
+    let decide (declared: (RepoRef * string) list) (last: ShellProfileSet option) : ConfiguredProfile =
+        let configured =
+            last
+            |> Option.bind (fun set ->
+                match set.Actor with
+                | Configured repo -> Some (repo, set.WorkingDirectory)
+                | _ -> None)
+        match last, configured with
+        | Some _, None -> ConfiguredProfile.Leave
+        | _ ->
+            match declared, configured with
+            | [ repo, path ], Some (setBy, Some current) when
+                sameRepo repo setBy && current.TrimEnd '/' = path.TrimEnd '/' -> ConfiguredProfile.Leave
+            | [ repo, path ], _ -> ConfiguredProfile.Apply (repo, path)
+            | _, Some (setBy, Some _) -> ConfiguredProfile.Withdraw setBy
+            | _ -> ConfiguredProfile.Leave
+
+    /// What each declaring repo is told when more than one declares: the others' names, and
+    /// that none of them applies. Empty for one or none.
+    let conflicts (declared: (RepoRef * string) list) : (RepoRef * string) list =
+        match declared with
+        | [] | [ _ ] -> []
+        | _ ->
+            declared
+            |> List.map (fun (repo, _) ->
+                let others =
+                    declared
+                    |> List.map fst
+                    |> List.filter (fun other -> not (sameRepo other repo))
+                    |> List.map RepoRef.value
+                    |> List.sort
+                repo,
+                sprintf
+                    "%s also declare session.shell-profile, so none of them applies and new terminals in default start where the sandbox puts them; set_shell_profile chooses"
+                    (String.concat ", " others))

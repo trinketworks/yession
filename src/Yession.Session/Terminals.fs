@@ -919,7 +919,10 @@ module SessionTerminals =
           /// The directory arrives, and is stored, in the vocabulary the rest of the session
           /// speaks (`SandboxPath`): as a terminal in that sandbox reaches it. What the
           /// sandbox resolves it to is the sandbox's own business and stays there.
-          SetProfile : Authority -> SandboxRef -> string option -> Async<Result<string, string>>
+          ///
+          /// The cause is what made it change when that was not its author's own idea — a
+          /// repo's `session.shell-profile`, applied when the repo was added.
+          SetProfile : Authority -> Cause option -> SandboxRef -> string option -> Async<Result<string, string>>
           /// Clear every profile whose directory is inside this tree, because the tree is
           /// about to stop existing (Plan 26; Plan 25's upstream half). Answers with the
           /// sandboxes it cleared, so the caller can say so.
@@ -985,7 +988,7 @@ module SessionTerminals =
           AwayFromPrompt = fun () -> Set.empty
           Interactive = fun _ -> false
           Activity = fun _ _ -> None
-          SetProfile = fun _ _ _ -> async { return Error "this session has no terminals" }
+          SetProfile = fun _ _ _ _ -> async { return Error "this session has no terminals" }
           ClearProfilesUnder = fun _ _ -> async { return [] }
           Profiles = fun () -> ShellProfileProjection.empty
           ReclaimIdle = fun _ -> async { return () }
@@ -2862,7 +2865,7 @@ module SessionTerminals =
         /// Validate, append, apply, answer — one verb, because a caller that could do the
         /// second without the first is a caller that can point every future terminal at a
         /// directory that is not there.
-        let setProfile (authority: Authority) (sandbox: SandboxRef) (cwd: string option) : Async<Result<string, string>> =
+        let setProfile (authority: Authority) (causedBy: Cause option) (sandbox: SandboxRef) (cwd: string option) : Async<Result<string, string>> =
             let actor = Authority.author authority
             async {
                 let name = SandboxRef.render sandbox
@@ -2962,7 +2965,8 @@ module SessionTerminals =
                               // reaches it — never what the caller typed.
                               WorkingDirectory = resolved
                               Actor = actor
-                              OnBehalfOf = Authority.onBehalfOf authority }
+                              OnBehalfOf = Authority.onBehalfOf authority
+                              CausedBy = causedBy }
                     do! appendAs actor event
                     profiles <- ShellProfileProjection.applyEvent profiles event
                     // The agent's GENERAL-PURPOSE terminal in this sandbox is retired, and
@@ -3032,7 +3036,8 @@ module SessionTerminals =
                               Sandbox = sandbox
                               WorkingDirectory = None
                               Actor = actor
-                              OnBehalfOf = Authority.onBehalfOf authority }
+                              OnBehalfOf = Authority.onBehalfOf authority
+                              CausedBy = None }
                     do! appendAs actor event
                     profiles <- ShellProfileProjection.applyEvent profiles event
                 return affected
