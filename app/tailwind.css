@@ -390,6 +390,32 @@
   }
 }
 
+/* The conversation arriving. The first time a page load shows it — this device's kept copy,
+   or the end of the log once it has been read through — it was on the screen in one frame,
+   after a moment of nothing. Now each row the reader can see rises into place, the way
+   everything that arrives in this product does (`rise`, at the pace), a lane after the row
+   above it, so the screen fills in the order it is read.
+
+   Four lanes and no more (`Arrival.lanes`): a phone of short rows would otherwise still be
+   filling in when somebody began to read it. With four, the screen has settled by 380ms
+   whatever is on it. A row out of view takes no lane and does not move; on a long session
+   that is almost every row.
+
+   `backwards`, so a row in a later lane waits clear and low for its turn instead of
+   showing for its delay and then jumping back to rise. The hook's value IS the lane.
+   `Arrival` puts it on, and takes it off once the row has landed, so a row the renderer
+   later moves does not rise a second time. Only the first appearance: what arrives after
+   it is news, and news lands as it always has.
+
+   `prefers-reduced-motion`: the rows are simply there. */
+[data-arrive] { animation: var(--animate-arrive); }
+[data-arrive="1"] { animation-delay: 60ms; }
+[data-arrive="2"] { animation-delay: 120ms; }
+[data-arrive="3"] { animation-delay: 180ms; }
+@media (prefers-reduced-motion: reduce) {
+  [data-arrive] { animation: none; }
+}
+
 /* The document ground. Both shells mount their own black surface (`Style.app`), but the
    CANVAS behind them is the browser's, and its default is WHITE — which is what shows in the
    couple of pixels a phone leaves over when its toolbars animate, and in the rubber band at

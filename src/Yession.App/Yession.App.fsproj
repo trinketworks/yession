@@ -68,6 +68,7 @@
          browser. Below the view, which is the only thing that holds a key event. -->
     <Compile Include="Keystroke.fs" />
     <Compile Include="Glide.fs" />
+    <Compile Include="Arrival.fs" />
     <Compile Include="View.fs" />
     <Compile Include="Client.fs" />
   </ItemGroup>
