@@ -5,174 +5,146 @@ description: How a change gets from asked-for to merged and green. Split the req
 
 # Contributing changes
 
-A change is not contributed until it is merged and the master pipeline is green. The process
-starts before the first edit, because the split into PRs is decided there. This skill defines how
-to cut up a request, the gate for proceeding autonomously, and the loop that drives each piece
-through.
-
-Write no plan document. Say the shape of the work to the user and build it (AGENTS.md, "Plans are
-not artifacts", has the reason).
+A change is contributed only when master contains it and the master pipeline is green. Write no
+plan document ([AGENTS.md, "Plans are not artifacts"](../../../AGENTS.md#contributing-changes)).
 
 ## Step 0: Split the request before writing any code
 
-Split the request as stated, first. Most requests worth making are several changes in one
-sentence. The split is cheap only now. Once the code exists, separating it takes branch surgery,
-so nobody does it.
+Split the request first, as the user stated it. Most requests are several changes in one
+sentence. The split is cheap only now. After the code exists, it needs branch surgery.
 
-Not splitting costs rebase tax, and the tax compounds. The merge queue pays the mechanical half: a
-green check no longer goes stale because master moved. It does not pay conflict reconciliation.
-Five PRs landed under Plan 17's single four-step branch. Reconciling the branch against them took
-longer than writing all four features, though each step would have merged in minutes on its own.
-The tax is superlinear: twice the branch against twice the drift is four times the conflict.
+A long branch pays rebase tax, and the queue does not reconcile conflicts. The tax is
+superlinear: twice the branch against twice the drift gives four times the conflict. Plan 17's
+one four-step branch took longer to reconcile than all four features took to write.
 
-Cut the request into the smallest pieces that each stand alone. Ship each as its own PR. Finish the
-first, run this process end to end, then start the second from the merged master.
+Cut the request into the smallest pieces that each stand alone. Ship each piece as its own PR.
+Finish the first piece and run this process end to end. Then start the second from the merged
+master.
 
-- **A piece stands alone when it builds, `check` passes, and it breaks nothing merged.** The
-  feature it belongs to may be incomplete. These are all mergeable: a capability behind an unset
-  flag, a domain type nothing calls yet, an engine with no provider on top.
-- **Keep pieces together only when splitting would land something broken.** Examples: a protocol
-  change and the only caller that speaks it, a rename and its call sites.
-- **Bump the version once, on the piece that earns it.** Four PRs is still one feature. Put the
+- **A piece stands alone when it builds, `check` passes, and it breaks nothing in master.** Its
+  feature can be incomplete. These pieces can all merge: a capability behind an unset flag, a
+  domain type that nothing calls yet, an engine with no provider on top.
+- **Keep pieces together only when a split would land something broken.** Example: a rename and
+  its call sites.
+- **Bump the version once, on the piece that earns it.** Four PRs are still one feature. Put the
   marker on the commit that moves the contract, not on each slice.
-- **Say the split before you start**, in a sentence or two: what lands first, what follows, and
-  what each is good for alone. State it and proceed. It is a routine judgement call, not a
-  question. A split that DROPS or defers something the user asked for is a scope change. It goes
-  through the Step 1 gate: say so and wait.
+- **Tell the user the split before you start**, in one or two sentences: what lands first, what
+  follows, and what each piece is good for alone. Then continue without asking. A split that DROPS or defers an item the user asked for is a scope change. It
+  goes through the Step 1 gate: tell the user and wait.
 
-**Run independent pieces in parallel.** When pieces touch disjoint code with no ordering between
-them, put each on its own branch off master. Enable auto-merge on all of them at once. The queue
-re-tests each against real master, so none waits for another. Keep a strict order only where a
-piece would break without another already in. Examples: a rule and the sites it would reject, a
-protocol change and its only caller, an analyzer and the tree it judges. Serialising independent
-PRs behind one branch buys nothing the queue does not give, and costs a merge cycle apiece.
+**Run independent pieces in parallel.** Pieces are independent when they touch disjoint code and
+need no order. Put each on its own branch off master and enable auto-merge on all at once. Keep a
+strict order only where a piece breaks without another in master first. Examples: a rule and the
+sites it rejects, a protocol change and its only caller. Independent PRs in series behind one
+branch each cost a merge cycle for nothing.
 
-If you find several finished pieces on one branch anyway, do not bundle them out of sympathy for
-the work done. Open the PR for what is there, and split the NEXT request properly.
+If you find several finished pieces on one branch, open the PR for what is there. Split the NEXT
+request correctly.
 
 ## Merge semantics: the queue
 
 `master` merges through a **merge queue**, not directly. Squash is the only method.
 
-- **A moving master costs nothing.** Branches need not be up to date. A green check does not go
-  stale when someone else lands first, because the queue re-tests your change against real master.
-  Rebase only for a genuine conflict.
-- **Enabling auto-merge enqueues. It does not merge.** The queue builds base+PR on a temporary ref
-  and runs `test` there through `pr.yaml`'s `merge_group` trigger.
-- **Never infer merged-ness from a check conclusion, in either direction.** Grouping is
-  `HEADGREEN`, so a batch can merge on its LAST entry's checks and carry a red one in with it. An
-  entry that fails, or never reports inside 60 minutes, drops from the queue, and its PR quietly
-  returns to open with auto-merge off. Read
-  `gh pr view <n> --json state,mergedAt,mergeStateStatus` and believe that instead.
-- **A stuck PR has a reason, and `mergeStateStatus` names it. Read it before you act.** A PR that
-  sits queued without merging is not automatically an ejection to re-enqueue. Check the status:
+- **A moving master costs nothing.** The queue tests your change against real master, so a green
+  check does not go stale. Rebase only for a real conflict.
+- **Auto-merge enqueues. It does not merge.** The queue builds base+PR on a temporary ref, where
+  `pr.yaml`'s `merge_group` trigger runs `test`.
+- **Never infer the merge state from a check conclusion, in either direction.** Grouping is
+  `HEADGREEN`, so a batch can merge on its LAST entry's checks and carry a red entry with it. The
+  queue drops an entry that fails, or that does not report in 60 minutes. Its PR then becomes open
+  again with auto-merge off, and no event tells you. Read
+  `gh pr view <n> --json state,mergedAt,mergeStateStatus` and believe that.
+- **A stuck PR has a reason, and `mergeStateStatus` names it. Read it before you act.**
   - `DIRTY` (or `CONFLICTING`): a real conflict with master. Rebase onto origin/master and
-    force-push. You can do this yourself. Re-enqueueing a DIRTY PR never lands it.
-  - `BEHIND`: the queue brings it up to date for you. Leave it.
-  - `BLOCKED`: a required check or review is still owed. Find it.
-  - `CLEAN`/`UNSTABLE` on a PR that is OUT of the queue: the ejection case below.
+    force-push. A DIRTY PR never lands from the queue.
+  - `BEHIND`: the queue updates it for you. Do nothing.
+  - `BLOCKED`: a required check or review is not complete. Find it.
+  - Anything else (`CLEAN`/`UNSTABLE`) on a PR that is neither merged nor in the queue: it was
+    ejected. Enqueue it again.
 
-  The trap: a queued PR that went DIRTY looks identical to one still on its way in. One sat
-  conflicted-but-queued for two days, because its watcher read "queued" as "will land".
-- **Silence is not progress.** A dropped entry produces no failure event. If a PR has neither
-  merged nor failed by your next check-in, and its `mergeStateStatus` is not DIRTY/BEHIND/BLOCKED
-  per above, assume ejection and re-enqueue.
-- **`autoMergeRequest` reads `null` while a PR is IN the queue.** It does not prove the PR left it.
-  Read the queue: `gh api graphql -f query='{ repository(owner:"trinketworks",
+  A queued PR that went DIRTY looks the same as one on its way in. Do not read "queued" as "will
+  land".
+- **`autoMergeRequest` reads `null` while a PR is IN the queue.** It does not prove that the PR
+  left the queue. Read the queue: `gh api graphql -f query='{ repository(owner:"trinketworks",
   name:"yession"){ mergeQueue(branch:"master"){ entries(first:10){ nodes{
-  pullRequest{number} state position } } } } }'`. An entry whose run failed sticks as
-  `UNMERGEABLE`, and `gh pr merge --auto` answers "already queued". Clear it with the
-  `dequeuePullRequest` then `enqueuePullRequest` mutations on the PR's node id.
-- **One push can carry several PRs.** So the `release` run in Step 4 may be a batch head that
-  contains your commit, not a run named for it.
-- **A stacked PR (B branched from A, both targeting master) goes DIRTY when the one under it
-  squash-merges.** B's history holds A's original commit, which conflicts with A's squash. Run
-  `git rebase --onto origin/master <A-sha>` and force-push. Arm B's auto-merge only after A lands,
-  or B's squash carries A's diff. If B already entered the queue, its branch is locked (push
-  refused, GH006) and it merges as-is. Leave it.
-- **PR CI checks out master+PR.** A branch that builds locally can fail CI on a file master added
-  after you branched. Run `git fetch` and rebase before diagnosing.
+  pullRequest{number} state position } } } } }'`. An entry whose run failed stays as
+  `UNMERGEABLE`, and `gh pr merge --auto` answers "already queued". To clear it, run the
+  `dequeuePullRequest` mutation and then the `enqueuePullRequest` mutation on the PR's node id.
+- **One push can carry several PRs.** So the `release` run in Step 4 can be a batch head that
+  contains your commit, not a run with its name.
+- **A stacked PR goes DIRTY when the PR under it squash-merges.** Stacked means B branched from A,
+  and both target master. Run `git rebase --onto origin/master <A-sha>` and force-push. Arm B's auto-merge only after A
+  lands. If you arm it earlier, B's squash carries A's diff. If B is already in the queue, GitHub
+  locks its branch (push refused, GH006) and B merges as it is. Do not change it.
+- **PR CI checks out master+PR.** A branch that builds locally can fail CI on a file that master
+  added after you branched. Run `git fetch` and rebase before you diagnose.
 
 ## Step 1: Compare what you built to what was asked
 
-Re-read the request: the user's own words, plus the shape you told them in Step 0. Diff it against
-what exists. Look for **interesting deviations**, anything the person who asked would be surprised
-by:
+Compare what exists with the request (the user's own words, and the shape you gave in Step 0).
+Look for **interesting deviations**: anything that would surprise the person who asked.
 
-- Approach changed (different design, files, or mechanism than you said)
-- Scope changed (asked-for items dropped, unasked-for behaviour added)
-- Blockers hit, or work that turned out uncompletable
-- Public behaviour differs from what was promised
+- The approach changed (a design, files or mechanism different from what you said).
+- The scope changed (you dropped items they asked for, or added behaviour they did not ask for).
+- You hit a blocker, or some work is not possible to complete.
+- Public behaviour differs from what you promised.
 
-NOT interesting (proceed without asking): mechanical differences. Examples: renames, small
-refactors the code forced, a correction of a mistaken assumption in the request, test scaffolding
-nobody enumerated in advance.
+NOT interesting (continue without asking): mechanical differences. Examples: renames, small
+refactors that the code forced, a correction of a wrong assumption in the request, test
+scaffolding that nobody listed in advance.
 
-**If there are interesting deviations, blockers, or uncompletable work: STOP.** Report them to the
-user and wait. Do not open a PR. The user decides whether the deviation is acceptable. Autonomous
-integration is only for work that matches what was asked for.
-
-If the work is consistent, proceed. No need to ask.
+**If you find interesting deviations, blockers or work you cannot complete: STOP.** Report them to
+the user and wait. Do not open a PR. The user decides. If the work matches, continue. Do not ask.
 
 ## Step 2: Run the checks locally, then open the PR
 
-1. Run the checks this box can run before you push, at minimum `check` inside devenv (AGENTS.md,
-   Testing, lists the capability tiers). Do not leave the first failure to CI.
+1. Before you push, run the checks this box can run, at minimum `check` inside devenv
+   ([AGENTS.md, "Testing"](../../../AGENTS.md#testing)).
 2. Commit on the session's designated feature branch. Push with `git push -u origin <branch>`.
-3. Open a PR against `master` (`mcp__github__create_pull_request`). Its description becomes the
-   squashed commit body, so write it as one. Say what this piece does and, where it is one of
-   several, what it stands alone as and what follows it. A `+semver:` marker, if the change earns
-   one, goes here on a line of its own. Branch commit messages are discarded at merge and never
-   reach master. Wrap the description at 72 columns. GitHub re-wraps anything wider.
-4. Enable auto-merge: `mcp__github__enable_pr_auto_merge` (squash). Under the queue this enqueues
-   the PR when it is otherwise ready (see Merge semantics). There is no manual-merge fallback:
-   the ruleset blocks direct merges to `master`.
+3. Open a PR against `master` (`mcp__github__create_pull_request`). Write the description as the
+   squash commit message, by the rules in [AGENTS.md, "Versioning"](../../../AGENTS.md#versioning).
+   Say what this piece does. If it is one of several, say what it is alone and what follows it.
+4. Enable auto-merge: `mcp__github__enable_pr_auto_merge` (squash). The ruleset blocks direct
+   merges to `master`.
 5. Subscribe to the PR with `subscribe_pr_activity`. Then end the turn. Events wake the session.
    Never poll with sleep.
 
 ## Step 3: Watch PR CI through to merge
 
-The PR pipeline is `.github/workflows/pr.yaml`. **Read the tier out of that file, not from here.**
-It is one line in the workflow, and it grows as capabilities become cheap enough to gate every PR
-on. A copy of it in this skill went stale within two features. A local run at a SMALLER tier than
-CI's is not "what CI runs". Suites are gated on the capabilities they need, so the suites CI
-declares and you did not are the ones you did not run.
+The PR pipeline is `.github/workflows/pr.yaml`. **Read the tier from that file, not from here**,
+because it grows. A local run at a SMALLER tier than CI's skips the suites that CI declares and
+you did not.
 
-- **CI green + auto-merge fires →** enqueued, then merged. Go to Step 4.
-- **Ejected from the queue →** not a CI failure, and it raises no event. Diagnose the queue entry's
-  own `test` run, fix it if the cause was yours, and re-enqueue.
-- **CI fails →** diagnose from the logs (`mcp__github__get_job_logs`). Reproduce locally where the
-  capability tiers allow. Fix it, then repeat this process from Step 1. The fix is itself a
-  change, so re-compare it to what was asked. A mechanical fix (lint, missed test update, flaky
-  infra) is not an interesting deviation: push it and keep going. A fix that would change the
-  approach or scope IS one: stop and report instead.
-- Keep looping until merged. One fix round is not the task. Give each new failure the same
-  treatment.
+- **CI green and auto-merge fires:** the PR enters the queue, then merges. Go to Step 4.
+- **The queue ejects the PR:** this is not a CI failure, and it gives no event. Diagnose the queue
+  entry's own `test` run. If the cause was yours, fix it. Then enqueue the PR again.
+- **CI fails:** diagnose from the logs (`mcp__github__get_job_logs`). Reproduce locally where the
+  capability tiers allow. Fix it, then do this process again from Step 1: the fix is a change too.
+  A mechanical fix (lint, a missed test update, flaky infra) continues. A fix that changes the
+  approach or scope stops for the user.
+- Continue the loop until the PR merges. Treat each new failure the same way.
 
 ## Step 4: Watch the master pipeline
 
-Merging is not the finish line. `.github/workflows/release.yml` runs the full `verify` gate (plus
-Docker/LiveAgent tiers PRs cannot run) on every master push, and that publishes the release. Your
-merge can break master in ways PR CI could not see.
-
-PR webhooks stop at merge, so watch master actively:
+`.github/workflows/release.yml` runs the full `verify` gate on every master push, including
+Docker and LiveAgent tiers that PRs cannot run, and publishes the release. PR webhooks stop at the
+merge, so watch master yourself:
 
 1. Find the `release` workflow run for the merge commit (`mcp__github__actions_list` /
    `actions_get`).
-2. If it is still running, schedule a `send_later` check-in (~15–30 min) and end the turn. On
-   wake, re-check and re-arm until it concludes. Never busy-wait.
-3. **Success →** done. Unsubscribe from the PR if still subscribed. Tell the user the change is
-   merged and released.
-4. **Failure →** treat it as yours until proven otherwise. Diagnose. Fix on a fresh branch
-   restarted from latest master. Repeat the whole process from Step 1 for the fix. The same
-   deviation gate applies: mechanical fixes flow through autonomously, and anything needing an
-   interesting deviation from the original request stops, and you report it. If the failure
-   demonstrably predates the merge (it reproduces on the parent commit), report that to the user
-   instead of blind-fixing.
+2. If it still runs, schedule a `send_later` check-in (~15–30 min) and end the turn. On wake,
+   check again and schedule again until it concludes. Never busy-wait.
+3. **Success:** done. If you are still subscribed to the PR, unsubscribe. Tell the user the change
+   is merged and released.
+4. **Failure:** treat it as yours until you prove otherwise. Fix it on a new branch from the
+   latest master, through the whole process from Step 1, with the same deviation gate. If the
+   failure reproduces on the parent commit, it predates the merge: report it to the user. Do not
+   fix it blind.
 
 ## Definition of done
 
-Both must hold: the PR is merged to master, read from the PR's merge state and not from a
-green check, AND the master `release` pipeline is green for (or after) the merge commit. Until
-then the loop is still running. Arm an event subscription or a scheduled check-in before you end
+- The PR is merged to master. Read this from the PR's merge state, not from a green check.
+- The master `release` pipeline is green for the merge commit, or for a later commit.
+
+Until then, the loop continues. Arm an event subscription or a scheduled check-in before you end
 the turn.
