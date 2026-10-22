@@ -1300,11 +1300,12 @@ module Dom =
         /// have the column, and a session says its own build at the foot of its own sidebar
         /// (`Hooks.build`).
         let managerBuild = "data-manager-build"
-        /// The one line a session says about ITSELF, rendered beside its status word. The
-        /// Manager stores and shows the string without learning what it means, so this hook
-        /// marks the place rather than the content — a test asserts that what the session
-        /// said is what the row shows, never what a session ought to say.
-        let summary = "data-session-summary"
+        /// One standing a session says about ITSELF, rendered beside its status word, and
+        /// valued with the standing's facet. The Manager shows the standing without learning
+        /// what it means, so this hook marks the place rather than the content — a test
+        /// asserts that what the session said is what the row shows, never what a session
+        /// ought to say.
+        let standing = "data-session-standing"
         /// A filter or sort control. Carries a STABLE name (`show-archived`, `sort`) rather
         /// than the query it links to, so a swap can put focus back on the control that was
         /// pressed even though its href just changed.

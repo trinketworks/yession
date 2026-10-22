@@ -596,6 +596,9 @@ let private controlRpcTests =
 // real child processes is verify tier.
 // -----------------------------------------------------------------------------
 
+let private stalled : Yession.Domain.Standings.Standing = { Facet = "prs"; Word = "3 PRs · 1 stalled"; Tone = ToneBad }
+let private working : Yession.Domain.Standings.Standing = { Facet = "agent"; Word = "working"; Tone = ToneBusy }
+
 let private uiRecord : SessionRecord =
     { SessionId = SessionId.create "ui-render" |> expect
       DisplayName = "UI <Render>"
@@ -606,10 +609,10 @@ let private uiRecord : SessionRecord =
 /// One active session and one archived, for the filter cases: a table with one of each is
 /// what lets a chip's count and a chip's link be told apart from a chip that has nothing.
 let private oneOfEach =
-    [ { ProcessManager.Record = uiRecord; ProcessManager.Status = ProcessManager.NotRunning; ProcessManager.Summary = None }
+    [ { ProcessManager.Record = uiRecord; ProcessManager.Status = ProcessManager.NotRunning; ProcessManager.Standings = [] }
       { ProcessManager.Record = { uiRecord with ArchivedAt = Some archivedAt }
         ProcessManager.Status = ProcessManager.NotRunning
-        ProcessManager.Summary = None } ]
+        ProcessManager.Standings = [] } ]
 
 let private uiRenderTests =
     testList "Management UI rendering (Step 25)" [
@@ -618,15 +621,15 @@ let private uiRenderTests =
         // does not change when the session is relaunched under it.
         testCase "a session's name links to its stable open route whether it is stopped, running or exited" <| fun () ->
             let openRoute = ManagerRoute.path (ManagerRoute.OpenSession uiRecord.SessionId)
-            let stopped = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None }
+            let stopped = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] }
             Expect.isTrue (stopped.Contains Dom.Manager.openLink) "a stopped session is opened by its name"
             Expect.isTrue (stopped.Contains (sprintf "href=\"%s\"" openRoute)) "at the route that launches it on the way in"
             Expect.isTrue (stopped.Contains "UI &lt;Render&gt;") "display names are escaped"
-            let running = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Running (8199, 42, Some "1.2.3-beta.4"); Summary = None }
+            let running = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Running (8199, 42, Some "1.2.3-beta.4"); Standings = [] }
             Expect.isTrue (running.Contains (sprintf "href=\"%s\"" openRoute)) "a running one at the same route"
             Expect.isFalse (running.Contains "127.0.0.1:8199") "and never at the port it happens to answer on"
             Expect.isTrue (running.Contains (Dom.attr Dom.Manager.session "ui-render")) "the row is a poll unit keyed by session id"
-            let crashed = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Exited (Some 1); Summary = None }
+            let crashed = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Exited (Some 1); Standings = [] }
             Expect.isTrue (crashed.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusExited)) "a crash is visible"
             Expect.isTrue (crashed.Contains (sprintf "href=\"%s\"" openRoute)) "and a crashed session is relaunched by its name"
 
@@ -638,7 +641,7 @@ let private uiRenderTests =
             let id = SessionId.value uiRecord.SessionId
             let unnamed =
                 ManagerUi.sessionRow
-                    { Record = { uiRecord with DisplayName = id }; Status = ProcessManager.NotRunning; Summary = None }
+                    { Record = { uiRecord with DisplayName = id }; Status = ProcessManager.NotRunning; Standings = [] }
             let text = System.Text.RegularExpressions.Regex.Replace (unnamed, "<[^>]*>", " ")
             let stated = System.Text.RegularExpressions.Regex.Matches (text, System.Text.RegularExpressions.Regex.Escape id)
             Expect.equal stated.Count 1 "the id is on the row once, not once per column"
@@ -646,7 +649,7 @@ let private uiRenderTests =
         // The discriminating half: once the session has a name, the name and the id are two
         // facts, and the row carries both — so the case above cannot pass by dropping the id.
         testCase "a named session's row states its name and its id" <| fun () ->
-            let named = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None }
+            let named = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] }
             let text = System.Text.RegularExpressions.Regex.Replace (named, "<[^>]*>", " ")
             Expect.isTrue (text.Contains "UI &lt;Render&gt;") "the name"
             Expect.isTrue (text.Contains (SessionId.value uiRecord.SessionId)) "and the id beside it"
@@ -656,12 +659,12 @@ let private uiRenderTests =
         // the row's one act, and a stopped row that offered it had its way in split across
         // two acts (press Launch, then find the link that appeared).
         testCase "a running row offers Stop; a stopped or exited row offers no lifecycle verb" <| fun () ->
-            let running = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Running (8199, 42, None); Summary = None }
+            let running = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Running (8199, 42, None); Standings = [] }
             Expect.isTrue (running.Contains (Dom.attr Dom.Manager.stop "ui-render")) "running rows can stop"
-            let stopped = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None }
+            let stopped = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] }
             Expect.isFalse (stopped.Contains Dom.Manager.stop) "a stopped row has nothing to stop"
             Expect.isFalse (stopped.Contains "data-launch") "and no Launch — its name launches it"
-            let crashed = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Exited (Some 1); Summary = None }
+            let crashed = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Exited (Some 1); Standings = [] }
             Expect.isFalse (crashed.Contains Dom.Manager.stop) "nor has an exited one"
             Expect.isFalse (crashed.Contains "data-launch") "and it too relaunches by its name"
 
@@ -690,7 +693,7 @@ let private uiRenderTests =
                 let inner = row.Substring (bodyAt, shut - bodyAt)
                 System.Text.RegularExpressions.Regex.Replace(inner, "<[^>]*>", "").Trim ()
             let row status record =
-                ManagerUi.sessionRow { Record = record; Status = status; Summary = None } |> saidInWords
+                ManagerUi.sessionRow { Record = record; Status = status; Standings = [] } |> saidInWords
             let archivedAt = System.DateTimeOffset (2026, 2, 3, 4, 5, 6, System.TimeSpan.Zero)
             let states =
                 [ "stopped", row ProcessManager.NotRunning uiRecord
@@ -708,28 +711,54 @@ let private uiRenderTests =
 
         // Which of six sessions wants me is the roster's whole job, and until a session could
         // say something about itself the answer was always "open them and see".
-        testCase "a running session's row shows the line it said about itself" <| fun () ->
+        testCase "a running session's row shows what it said about itself" <| fun () ->
             let running =
                 ManagerUi.sessionRow
                     { Record = uiRecord
                       Status = ProcessManager.Running (8199, 42, None)
-                      Summary = Some "3 PRs · 1 stalled" }
-            Expect.isTrue (running.Contains Dom.Manager.summary) "the row carries the hook that marks it"
-            Expect.isTrue (running.Contains "3 PRs · 1 stalled") "wearing the line the session reported"
+                      Standings = [ stalled ] }
+            Expect.isTrue (running.Contains (sprintf "%s=\"prs\"" Dom.Manager.standing)) "the row carries the hook that marks it"
+            Expect.isTrue (running.Contains "3 PRs · 1 stalled") "wearing the word the session reported"
+            Expect.isTrue (running.Contains Style.toneBad) "in the tone the session gave it"
 
-        // A summary describes work in FLIGHT. A row that went on showing one after its
+        // The Manager cannot rank what it does not understand, but it can rank tones, and a
+        // line clipped at its end should lose the least urgent standing, not the most.
+        testCase "a running session's standings are said worst first" <| fun () ->
+            let running =
+                ManagerUi.sessionRow
+                    { Record = uiRecord
+                      Status = ProcessManager.Running (8199, 42, None)
+                      Standings = [ working; stalled ] }
+            let bad = running.IndexOf "3 PRs · 1 stalled"
+            let busy = running.IndexOf "working"
+            Expect.isTrue (bad >= 0 && busy > bad) "the bad standing before the busy one"
+
+        testCase "a session's standings cross the control channel as they were said" <| fun () ->
+            let said = [ stalled; working ]
+            Expect.equal
+                (ControlWire.toString ControlWire.sessionStatusReport said
+                 |> ControlWire.fromString ControlWire.sessionStatusReport)
+                (Ok said)
+                "every facet, word and tone, in order"
+            Expect.isError
+                (ControlWire.fromString
+                    ControlWire.sessionStatusReport
+                    """{"standings":[{"facet":"prs","word":"#1 open","tone":"loud"}]}""")
+                "a tone the Manager has no ink for is refused, not guessed"
+
+        // A standing describes work in FLIGHT. A row that went on showing one after its
         // session stopped would be claiming something no process is doing.
-        testCase "a session with nothing to say carries no summary at all" <| fun () ->
+        testCase "a session with nothing to say carries no standing at all" <| fun () ->
             let quiet =
                 ManagerUi.sessionRow
-                    { Record = uiRecord; Status = ProcessManager.Running (8199, 42, None); Summary = None }
-            Expect.isFalse (quiet.Contains Dom.Manager.summary) "no line, no element standing in for one"
+                    { Record = uiRecord; Status = ProcessManager.Running (8199, 42, None); Standings = [] }
+            Expect.isFalse (quiet.Contains Dom.Manager.standing) "no standing, no element standing in for one"
             let stopped =
                 ManagerUi.sessionRow
-                    { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = Some "3 PRs · 1 stalled" }
-            Expect.isFalse (stopped.Contains Dom.Manager.summary) "and a stopped session claims nothing"
+                    { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [ stalled ] }
+            Expect.isFalse (stopped.Contains Dom.Manager.standing) "and a stopped session claims nothing"
 
-        // The status cell holds the word and the summary, and nothing else. `port · pid ·
+        // The status cell holds the word and the standings, and nothing else. `port · pid ·
         // build` was here and was cut so the summary could have the column; this is what
         // says it stayed cut, because a diagnostic creeping back beside the answer is
         // exactly how the cell overflowed the first time.
@@ -738,7 +767,7 @@ let private uiRenderTests =
                 ManagerUi.sessionRow
                     { Record = uiRecord
                       Status = ProcessManager.Running (8199, 42, Some "0.0.0-gf1ce52b")
-                      Summary = Some "3 PRs · 1 stalled" }
+                      Standings = [ stalled ] }
             Expect.isTrue (running.Contains "3 PRs · 1 stalled") "the line the session said"
             Expect.isFalse (running.Contains "port 8199") "and not which port it answers on"
             Expect.isFalse (running.Contains "pid 42") "nor which process it is"
@@ -754,7 +783,7 @@ let private uiRenderTests =
                     "manager-page.js"
                     PublicAccess.Loopback
                     SessionQuery.defaults
-                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
+                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] } ]
                     []
                     []
             Expect.isTrue (html.Contains Dom.Manager.managerBuild) "the footer carries its own hook, distinct from a row's"
@@ -775,7 +804,7 @@ let private uiRenderTests =
                     "manager-page.js"
                     (PublicAccess.create "https://yession.example.com" "https://{id}.example.com" |> expect)
                     SessionQuery.defaults
-                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
+                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] } ]
                     []
                     endpoints
             Expect.isTrue (html.Contains secret) "the secret is readable, not hidden behind a reveal"
@@ -790,7 +819,7 @@ let private uiRenderTests =
                     "manager-page.js"
                     PublicAccess.Loopback
                     SessionQuery.defaults
-                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
+                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] } ]
                     []
                     []
             Expect.isFalse (html.Contains "data-hooks") "an empty table would imply there is something to fill in"
@@ -806,7 +835,7 @@ let private uiRenderTests =
                     "manager-page.js"
                     PublicAccess.Loopback
                     SessionQuery.defaults
-                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
+                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] } ]
                     []
                     []
             let scripts =
@@ -823,13 +852,13 @@ let private uiRenderTests =
         // caught here, on the cheap tier, rather than by pressing it.
         testCase "every address the page emits is a route the server claims" <| fun () ->
             let views =
-                [ { ProcessManager.Record = uiRecord; ProcessManager.Status = ProcessManager.NotRunning; ProcessManager.Summary = None }
+                [ { ProcessManager.Record = uiRecord; ProcessManager.Status = ProcessManager.NotRunning; ProcessManager.Standings = [] }
                   { ProcessManager.Record = uiRecord
                     ProcessManager.Status = ProcessManager.Running (8199, 42, Some "1.2.3-beta.4")
-                    ProcessManager.Summary = None }
+                    ProcessManager.Standings = [] }
                   { ProcessManager.Record = { uiRecord with ArchivedAt = Some archivedAt }
                     ProcessManager.Status = ProcessManager.NotRunning
-                    ProcessManager.Summary = None } ]
+                    ProcessManager.Standings = [] } ]
             let html =
                 ManagerUi.page
                     "app.css"
@@ -862,7 +891,7 @@ let private uiRenderTests =
         testCase "an archived session's row offers Unarchive and no way to open it" <| fun () ->
             let archived =
                 ManagerUi.sessionRow
-                    { Record = { uiRecord with ArchivedAt = Some archivedAt }; Status = ProcessManager.NotRunning; Summary = None }
+                    { Record = { uiRecord with ArchivedAt = Some archivedAt }; Status = ProcessManager.NotRunning; Standings = [] }
             Expect.isTrue (archived.Contains (Dom.attr Dom.Manager.unarchive "ui-render")) "the way back is offered"
             Expect.isFalse
                 (archived.Contains Dom.Manager.openLink)
@@ -871,7 +900,7 @@ let private uiRenderTests =
         testCase "an archived session says archived rather than stopped" <| fun () ->
             let archived =
                 ManagerUi.sessionRow
-                    { Record = { uiRecord with ArchivedAt = Some archivedAt }; Status = ProcessManager.NotRunning; Summary = None }
+                    { Record = { uiRecord with ArchivedAt = Some archivedAt }; Status = ProcessManager.NotRunning; Standings = [] }
             Expect.isTrue
                 (archived.Contains (Dom.attr Dom.Manager.status Dom.Manager.statusArchived))
                 "the cell answers the question a reader is actually asking"
@@ -884,7 +913,7 @@ let private uiRenderTests =
             let both =
                 ManagerUi.sessionRow
                     { Record = { uiRecord with ArchivedAt = Some archivedAt }
-                      Status = ProcessManager.Running (8199, 42, Some "1.2.3-beta.4"); Summary = None }
+                      Status = ProcessManager.Running (8199, 42, Some "1.2.3-beta.4"); Standings = [] }
             // The address is the discriminating assertion: the case above pins that a RUNNING
             // row carries exactly this href, so its absence here cannot pass vacuously.
             Expect.isFalse
@@ -893,7 +922,7 @@ let private uiRenderTests =
             Expect.isFalse (both.Contains Dom.Manager.openLink) "and nothing marked as the way in"
 
         testCase "an active session can be archived, by a control with a name" <| fun () ->
-            let active = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None }
+            let active = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] }
             Expect.isTrue (active.Contains (Dom.attr Dom.Manager.archive "ui-render")) "the row can be archived"
             // WCAG: an icon-only control carries an accessible name, and it names WHICH
             // session — a column of "Archive" says nothing about which row you are on.
@@ -941,13 +970,13 @@ let private uiRenderTests =
             let newest =
                 ManagerUi.sessionsTable
                     SessionQuery.defaults
-                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
+                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] } ]
             Expect.isTrue (newest.Contains "aria-sort=\"descending\"") "the header states the sort"
             Expect.isTrue (newest.Contains "sort=created-asc") "and links to the other direction"
             let oldest =
                 ManagerUi.sessionsTable
                     { SessionQuery.defaults with Order = OldestFirst }
-                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
+                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] } ]
             Expect.isTrue (oldest.Contains "aria-sort=\"ascending\"") "and the other way round"
 
         // Saying "no sessions yet" over a registry that has three would send somebody
@@ -956,7 +985,7 @@ let private uiRenderTests =
             let hidden =
                 ManagerUi.sessionsTable
                     { SessionQuery.defaults with Show = ArchivedOnly }
-                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
+                    [ { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] } ]
             Expect.isFalse (hidden.Contains "no sessions yet") "the registry is not empty"
             Expect.isTrue (hidden.Contains "1 hidden") "it says what it is hiding"
             let empty = ManagerUi.sessionsTable SessionQuery.defaults []
@@ -968,7 +997,7 @@ let private uiRenderTests =
             let views =
                 [ { ProcessManager.Record = uiRecord
                     ProcessManager.Status = ProcessManager.NotRunning
-                    ProcessManager.Summary = None } ]
+                    ProcessManager.Standings = [] } ]
             let empty = ManagerUi.mcpSection views []
             Expect.isTrue (empty.Contains "no MCP servers") "an empty registry says so rather than showing a bare table"
             Expect.isTrue (empty.Contains "data-declare-mcp") "and still offers the form"
@@ -3355,9 +3384,9 @@ let private registryTests =
         // retained-hub mechanics it rides on are pinned once, with the MCP list.
         testCase "the registry frame is the Running sessions only, with the port and pid to reach them" <| fun () ->
             let views : ProcessManager.SessionView list =
-                [ { Record = record "alpha" "Alpha work"; Status = ProcessManager.Running (54321, 4242, Some "1.2.3-beta.4"); Summary = None }
-                  { Record = record "beta" "Beta work"; Status = ProcessManager.NotRunning; Summary = None }
-                  { Record = record "gamma" "Gamma work"; Status = ProcessManager.Exited (Some 1); Summary = None } ]
+                [ { Record = record "alpha" "Alpha work"; Status = ProcessManager.Running (54321, 4242, Some "1.2.3-beta.4"); Standings = [] }
+                  { Record = record "beta" "Beta work"; Status = ProcessManager.NotRunning; Standings = [] }
+                  { Record = record "gamma" "Gamma work"; Status = ProcessManager.Exited (Some 1); Standings = [] } ]
             Expect.equal
                 (ProcessManager.registryFrameOf views)
                 { Sessions = [ registryEntry "alpha" "Alpha work" 54321 4242 ] }
@@ -3372,8 +3401,8 @@ let private registryTests =
         // running" is a question asked by scripts as much as by people.
         testCase "the registry announces each running session's build" <| fun () ->
             let views : ProcessManager.SessionView list =
-                [ { Record = record "alpha" "Alpha work"; Status = ProcessManager.Running (54321, 4242, Some "0.0.0-gf1ce52b"); Summary = None }
-                  { Record = record "beta" "Beta work"; Status = ProcessManager.Running (54322, 4243, None); Summary = None } ]
+                [ { Record = record "alpha" "Alpha work"; Status = ProcessManager.Running (54321, 4242, Some "0.0.0-gf1ce52b"); Standings = [] }
+                  { Record = record "beta" "Beta work"; Status = ProcessManager.Running (54322, 4243, None); Standings = [] } ]
             Expect.equal
                 (ProcessManager.registryFrameOf views |> fun f -> f.Sessions |> List.map (fun e -> e.Build))
                 [ Some "0.0.0-gf1ce52b"; None ]

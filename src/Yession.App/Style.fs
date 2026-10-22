@@ -723,7 +723,7 @@ module Style =
     /// on it.
     let recordRowWord = "phone:sr-only"
 
-    /// The tail after a state word: a running session's own summary. Shown where there is
+    /// The tail after a state word: a running session's own standings. Shown where there is
     /// width for it, and dropped on a phone, where it would spend the name's room on a
     /// nicety.
     ///
@@ -1552,6 +1552,14 @@ module Style =
     let toneBusy = "text-ink-dim"
     let toneBad = "text-err"
     let toneMuted = "text-ink-faint"
+
+    /// The ink a tone asks for, once, for every surface that is handed one.
+    let toneInk (tone: Yession.Domain.Tools.QueryTone) : string =
+        match tone with
+        | Yession.Domain.Tools.ToneOk -> toneOk
+        | Yession.Domain.Tools.ToneBusy -> toneBusy
+        | Yession.Domain.Tools.ToneBad -> toneBad
+        | Yession.Domain.Tools.ToneMuted -> toneMuted
 
     /// A value, with no colour of its own. A base that carried one could not be recoloured
     /// by appending: two Tailwind text utilities on one element resolve by stylesheet order
