@@ -8040,14 +8040,13 @@ let mountedTests =
                     // tell you. Hit-test the centre and ask what is painted there.
                     let atMostOne (what: string) =
                         Wait.until what (fun () -> Probe.visible page (Sel.hook Yession.App.Dom.Hooks.degraded)) (fun n -> n <= 1)
-                    // And not zero everywhere: the column may be showing the reconnect card
-                    // INSTEAD of the status, so what must always hold is that something on
-                    // screen says the session is gone. Without this the case above passes on a
-                    // client that reports nothing at all.
+                    // And not zero everywhere: what must always hold is that something on screen
+                    // says the session is gone. Without this the case above passes on a client
+                    // that reports nothing at all.
                     let saidSomewhere (what: string) =
                         Wait.until
                             what
-                            (fun () -> Probe.visible page (Sel.hook Yession.App.Dom.Hooks.degraded + ", [data-session-gone]"))
+                            (fun () -> Probe.visible page (Sel.hook Yession.App.Dom.Hooks.degraded))
                             (fun n -> n >= 1)
                     do! Wait.until "the client to notice the session is gone"
                             (fun () -> Read.count page (Sel.hook Yession.App.Dom.Hooks.degraded)) (fun n -> n > 0)
@@ -8080,7 +8079,9 @@ let mountedTests =
                     do! awaitU (page.RouteAsync ("**/sessions/*/open", fun route ->
                             route.FulfillAsync (RouteFulfillOptions (Status = 200, ContentType = "text/html", Body = "<title>opening</title>"))
                             |> ignore))
-                    // Whichever mount is on screen; a hidden one cannot be pressed.
+                    // Whichever mount is on screen; a hidden one cannot be pressed. The way back is
+                    // behind the line's disclosure, beside the reason it answers.
+                    do! awaitU (page.Locator("[data-degraded]:visible [data-detail] summary").First.ClickAsync ())
                     do! awaitU (page.Locator("[data-session-reopen]:visible").First.ClickAsync ())
                     do! Wait.until "the browser to have left for the Manager" (fun () -> Read.url page) (fun url -> url.AbsolutePath.EndsWith "/open")
                     Expect.equal asked.Count 1 (sprintf "one press, one request: %A" (List.ofSeq asked))
