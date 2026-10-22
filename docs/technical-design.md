@@ -1,9 +1,7 @@
 # Yession — Design & System Fundamentals
 
-This document states the durable principles and system design of Yession. It is the
-canonical reference for *why* the runtime has its shape.
-
-For the product framing, see the [root README](../README.md).
+This document states *why* the Yession runtime has its shape. For the product framing, see
+the [root README](../README.md).
 
 ---
 
@@ -13,11 +11,11 @@ These are architectural constraints, not preferences.
 
 ### Local first
 
-A session runs on a local node. The first implementation assumes one node. Central
-discovery, placement, and remote directories are deferred.
+A session runs on a local node. The first implementation assumes one node. The design defers
+central discovery, placement, and remote directories.
 
-Clients connect to the local Session over WebRTC. HTTP may be used for static
-app bootstrap and signalling, but **not** as the main session API.
+Clients connect to the local Session over WebRTC. HTTP may serve static app bootstrap and
+signalling, but it is **not** the main session API.
 
 ### Reactive
 
@@ -62,7 +60,8 @@ The Session is the only event writer.
 ### Composition at the top
 
 Capabilities are small and function-shaped. The application boundary composes concrete
-infrastructure. Concrete infrastructure does not spread through domain code.
+infrastructure. Concrete infrastructure does not spread through domain code. The root
+[AGENTS.md](../AGENTS.md#colocation) ("Colocation") states the other half of this rule.
 
 ### High-signal automated verification
 
@@ -99,7 +98,7 @@ App
 Manager (Phase 2)
   - launches Sessions
   - owns launch, identity, and secret custody
-  - declares what a session may reach; holds no environment authority itself
+  - declares what a session may reach, and holds no environment authority itself
 ```
 
 ### 2.2 State split
@@ -123,81 +122,58 @@ control/presence frames
 agent progress notifications (hints only)
 ```
 
-The design allows HTTP only for serving the web app, initial local bootstrap, and temporary
+The design allows HTTP only for the web app, initial local bootstrap, and temporary
 signalling. **HTTP is not the session API.**
 
-One read path is the exception the rule permits. It is read-only. HTTP also serves the
-durable HISTORY by CURSOR: the event log and each terminal's transcript, on identical terms.
-A client sends the position it has folded through (`GET /events/after/{n}`,
-`GET /terminals/{t}/after/{n}`, or the bare path from the beginning). The server redirects to
-the range it chose (`GET /events/{first}-{last}`, `GET /terminals/{t}/{first}-{last}`). It
-answers `204` when that client is already current. The bounds of a range do not move, so its
-bytes stay the same for ever. This holds for the growing tail too, which a fixed chunk index
-could never manage. That stability makes an answer worth keeping.
+One read-only exception: HTTP serves the durable HISTORY by CURSOR, the event log and each
+terminal's transcript on identical terms. A client sends the position it folded through
+(`GET /events/after/{n}`, `GET /terminals/{t}/after/{n}`, or the bare path from the
+beginning). The server redirects to the range it chose (`GET /events/{first}-{last}`,
+`GET /terminals/{t}/{first}-{last}`), or answers `204` when that client is already current.
+The bounds of a range do not move, so its bytes never change, the growing tail included. That
+makes an answer worth keeping. `app/Signalling.fs` states the cursor and range contract.
 
-The client keeps the answers in a store that it can enumerate and ask to persist. That store
-is the Cache API, with one store named for the session's events and one per terminal. Every
-response on this surface is `no-store`, because the copy that matters is the client's. A
-second copy in the HTTP cache would be a spare nobody reads. `app/Signalling.fs` states the
-cursor and range contract.
+The client keeps the answers in the Cache API (a store it can enumerate and ask to persist):
+one store for the session's events and one for each terminal. Every response on this surface
+is `no-store`, because the copy that matters is the client's. A second copy in the HTTP cache
+would be a spare nobody reads. The client computes no address. It stores each answer under the
+address it received, and takes where an answer starts from what it ASKED: the answer to
+`after n` starts at `n + 1`. `TranscriptCache` in `src/Yession.App/Client.fs` says why
+transcripts depend on that server contract, which has a test of its own.
 
-The client computes no address. It holds a position and stores each answer under the address
-it received. The one number it computes is where an answer starts. That number comes from
-what the client ASKED, not from where the answer lives: the answer to `after n` starts at
-`n + 1`. Events carry their own offsets. Transcript lines cannot, because the file is an
-asciicast and a private index field would stop it being one (`TranscriptCache` in
-`src/Yession.App/Client.fs`). So the start of the cursor is a server contract with a test of
-its own.
-
-The durable history feed is therefore a second leg that can fail independently. The design
-treats it as one:
+The history feed is therefore a second leg that can fail independently, and the design treats
+it as one:
 
 - A read is `EventOffset option -> Async<Result<EventPage, FeedFault>>`. A dead feed is
   distinguishable from an empty one. An empty page never stands in for a failure.
-- Transient-fault handling is a `Resilience.Policy` (`Yession.Domain/Resilience.fs`): retry,
-  backoff, and jitter as values, with the clock injected. The application boundary
-  (`app/browser/Browser.fs`) composes it *with the transport*, per "composition at the top".
-  `App.connect` receives a feed that has already settled, so no application code holds a
-  notion of retrying. `Resilience.fs` also holds `Verdict`, `Policy.deadline`, `Breaker`,
-  `Quota`, and `Resilience.Http.verdict`. Its comments say what each one decides and how to
-  compose it.
-- The feed's health is model state, part of the page's link (`SessionLink`): a read that
-  fails is a fact about the fetch, and reads that gave up are `Stalled`. The UI renders it on
-  the status line. A stalled feed disables nothing. Collaborative state is CRDT state in the local
-  doc, so reading, writing, and sending continue. Per "local first", a lost history feed
-  costs history and nothing else.
+- The feed's health is model state, part of the page's link (`SessionLink`). A read that fails
+  is a fact about the fetch, and reads that gave up are `Stalled`. The UI shows it on the status
+  line. A stalled feed disables nothing: collaborative state is CRDT state in the local doc, so
+  reading, writing, and sending continue. A lost history feed costs history and nothing else.
 
-The session leg can also fail independently, so the design supervises it on the same terms.
-A WebRTC data channel can die without saying so, for example on a backgrounded phone or a
-WiFi-to-cellular switch. `readyState` stays `open`, sends go into nothing, and no `close`
-event fires. So `Link.supervise` (`Yession.Domain/Link.fs`) wraps every channel that carries
-a session before anything else holds it. Any inbound frame is proof of life. A quiet link is
-probed once a second, and three quiet ticks make it dead. Supervision is symmetric: the
-Session holds every peer to the heartbeat it answers. This is also how a silently-dead peer
-stops holding a terminal lease.
-
-Death has exactly one expression: the channel CLOSES. Nothing above the wrapper learns about
-liveness through a second channel, so no second state needs to stay consistent with the
-first. Both pumps already handle a close. The client reconnects and re-pushes its full doc
-state. The Session runs the cleanup it already ran. `LinkPolicy` takes its clock as a port,
-as `Resilience.Policy` does, so a cheap-tier test asserts the whole quiet-tick sequence in
-zero real time. The [ADR](decisions/2026-08-20-session-link-liveness.md) holds the reasoning.
+The session leg can also fail independently, and silently: a WebRTC data channel can keep
+`readyState` `open` while sends go into nothing. `Link.supervise` (`Yession.Domain/Link.fs`)
+wraps every channel that carries a session before anything else holds it. It probes a quiet
+link once a second and closes it after three quiet ticks, so death has one expression, a
+close, which both pumps already handle. Supervision is symmetric, which is also how a
+silently-dead peer stops holding a terminal lease. `LinkPolicy` takes its clock as a port, as
+`Resilience.Policy` does. The header of `Link.fs` and the
+[ADR](decisions/2026-08-20-session-link-liveness.md) hold the reasoning.
 
 ---
 
 ## 3. Authority model (Phase 2)
 
-The Manager owns launch, identity, and secret custody. It does not own environment
-authority. A Session spawns its own sandboxes through the `CreateSandbox` seam. It confines
-them with the `SandboxBackend` it boots with (`Yession.Domain/Sandbox.fs`). The sandbox
-seam confines the agent's own CLI as well as the work it runs. A Session cannot mint
-secrets. They cross from the Manager only at sandbox spawn, over the authenticated control
-channel.
+The Manager owns launch, identity, and secret custody, but not environment authority. A
+Session spawns its own sandboxes through the `CreateSandbox` seam and confines them, the
+agent's own CLI included, with the `SandboxBackend` it boots with (`Yession.Domain/Sandbox.fs`).
+A Session cannot mint secrets. They cross from the Manager only at sandbox spawn, over the
+authenticated control channel.
 
 ```text
 Manager               owns launch, identity, and secret custody.
-Session               owns orchestration; spawns and confines its own sandboxes.
-Session Environment   a sandbox associated with exactly one SessionId; started lazily.
+Session               owns orchestration. Spawns and confines its own sandboxes.
+Session Environment   a sandbox associated with exactly one SessionId. Started lazily.
 ```
 
 Environments start **lazily**, only when the agent determines work requires one. A
@@ -213,18 +189,13 @@ Command-to-container encryption is designed for but not implemented yet.
 ```
 
 The Manager authorizes user access to a session as an OIDC provider (authorization code +
-PKCE). Each Session registers as a client with its per-launch control secret. Three
-authentication strategies ship. The `--auth` argument selects one at Manager start:
-
-- `none` (the default): nothing authenticates until the operator chooses a trust rule.
-- `localhost`: any loopback request is the single unattributed `local` subject, which
-  matches this threat model.
-- `trusted-headers`: an operator-run authenticating proxy (for example Tailscale plus a
-  header-rewriting proxy) asserts the user in canonical `x-yession-*` headers. The proxy
-  must be the only non-local path in. The proxy must strip those headers from client
-  requests.
-
-Further schemes are strategy swaps, not redesigns.
+PKCE). Each Session registers as a client with its per-launch control secret. The `--auth`
+argument selects one of three authentication strategies at Manager start: `none` (the
+default), `localhost` or `trusted-headers`. [deployment.md](deployment.md#authorizing) says
+what each one does. `localhost` matches this threat model. Under `trusted-headers`, the
+operator's authenticating proxy must be the only non-local path in, and it must strip the
+`x-yession-*` headers from client requests. Further schemes are strategy swaps, not
+redesigns.
 
 Secrets are Manager-owned authority:
 
@@ -243,26 +214,25 @@ Secrets are Manager-owned authority:
   - `/control/connections/resolve` releases a connection credential for one agent turn.
 - Refresh tokens never leave the Manager. No agent tool wraps either route.
 
-That refresh is one of the resilience policies (`Broker.resilient` in `app/Broker.fs`,
-composed in `ProcessManager`). It runs where nobody is looking, inside a turn or a git verb.
-Without a policy, a provider's bad minute reads as a broken credential. A provider that
-calls the grant dead still stops the refresh at once. That answer differs from a failed one.
+That refresh runs under a resilience policy (`grantPolicy` and `Broker.resilient` in
+`app/Broker.fs`, composed in `ProcessManager`), whose comments say why. A provider that calls
+the grant dead still stops the refresh at once. That answer differs from a failed one.
 
-MCP servers are Manager-owned authority in the same way. A declaration names a url and who
-reaches it. The declaration lives in `ManagerState`, and every session it names connects
-itself over the reverse control leg. The Manager never becomes an MCP client. Neither an
-agent nor a peer can name a url, because what a session talks to is the operator's decision.
+MCP servers are Manager-owned authority in the same way. A declaration in `ManagerState`
+names a url and who reaches it, and every session it names connects itself over the reverse
+control leg. The Manager never becomes an MCP client. Neither an agent nor a peer can name a
+url: what a session talks to is the operator's decision.
 A session admits a stream that a tool result offers only on the host the operator already
-declared. The tool descriptions that come back are the one untrusted text the model must
-read. See [GAPS.md](GAPS.md).
+declared ([streams.md](streams.md#admission)). The tool descriptions that come back are the
+one untrusted text the model must read. See [GAPS.md](GAPS.md).
 
 ---
 
 ## 4. Repo-local configuration
 
 A checkout may carry a `yession.yaml` at its root. A session folds every such file it holds
-into the commands it already has (Plan 27). The name is undotted, matching the other files a
-repo means people to read.
+into the commands it already has (Plan 27). The name has no leading dot, matching the other
+files a repo means people to read.
 
 ```yaml
 version: 2
@@ -282,24 +252,24 @@ sandboxes:
     wants: [ github ]                     # the operator's `{ connection: { github: [git, api] } }`, where offered
 ```
 
+### Connections and references
+
 A connection is a resource like any other. It lets `git push` and `gh` in a sandbox act as
 whoever each command runs for. The operator offers it (`github: { connection: { github: [git,
-api] } }`). A sandbox selects it under `uses` or `wants`. What the sandbox forwards is what
-that selection reaches (`ForwardedConnections`, `WorkSandboxes.provisionSelection`). The
-operator names the ROUTES that forward it (`ConnectionRoute`). Each route is its own grant
-(`conn:github/git`). `git` is the git gateway and `api` is the credential proxy. A sandbox
-that holds `git` alone is lent nothing its API client could spend. The session refuses a route
-that the provider does not offer, where a sandbox needs it.
+api] } }`), and a sandbox selects it under `uses` or `wants`. The sandbox forwards what that
+selection reaches (`ForwardedConnections`, `WorkSandboxes.provisionSelection`). The operator
+names the ROUTES that forward it, each its own grant (`conn:github/git`): `git` is the git
+gateway and `api` is the credential proxy (`ConnectionRoute`). The session refuses a sandbox
+that needs a route the provider does not offer.
 
-`${env.NAME}` in a value is what NAME would be in this sandbox without that line. Under docker
-it is the image's own `ENV`, which is known only after the image is pulled or built. So the
-backend resolves it (`Sandboxes.environment`). `EnvTemplate.fs` holds the grammar.
+`${env.NAME}` in a value is what NAME would be in this sandbox without that line (under
+docker, the image's own `ENV`). The backend resolves it (`Sandboxes.environment`).
+`EnvTemplate.fs` holds the grammar.
 
 `${proxy.https}`, `${proxy.ca-file}` and `${proxy.ca-dir}` ask the session's credential proxy
-for three things: its URL (this sandbox's own, which admits it), a whole trust bundle, and a
-directory that holds its authority alone. Each value is as the sandbox sees it, so a container
-is told mounted paths (`CredentialProxy.provide`). The proxy provides values only for a
-sandbox that names one. These references compose like any value:
+for its URL (this sandbox's own, which admits it), a whole trust bundle, and a directory that
+holds its authority alone, each as the sandbox sees it (`CredentialProxy.provide`). The proxy
+provides values only for a sandbox that names one. They compose like any value:
 
 ```yaml
     env:
@@ -307,28 +277,24 @@ sandbox that names one. These references compose like any value:
       SSL_CERT_DIR: ${env.SSL_CERT_DIR}:${proxy.ca-dir}
 ```
 
-An srt sandbox is never given a connection's `api` route. `CredentialProxy.forwardApi` says
-why. An srt sandbox is the session's `default`, a minimal place to check a repo out and commit,
-and it takes a connection by `git` alone. The API (`gh`, Actions, releases) belongs to a
-container. So under srt:
+An srt sandbox (the session's `default`) takes a connection by `git` alone and never gets
+its `api` route. `CredentialProxy.forwardApi` says why. So under srt:
 
 - A `uses:` of an `api` route refuses the start.
 - A `wants:` goes without that route.
 - A `${<connection>.token}` or `${proxy.…}` named there refuses, as it does wherever nothing
   forwards that connection by `api`.
 
-`${github.token}` (any connection's `.token`) is a variable's whole value and nothing else.
-It is a stand-in. The credential proxy swaps it for the credential of whoever each command runs
-for. The session lends the stand-in per command and returns it with the command
-(`EnvironmentVariableRef.Lent`). The sandbox must forward that connection by `api`, or it
-refuses to start. Why the stand-in rotates, and whether that is worth it, is an open question
-in docs/GAPS.md.
+`${github.token}` (any connection's `.token`) is a variable's whole value and nothing else: a
+stand-in that the credential proxy swaps for the credential of whoever each command runs for,
+lent per command (`EnvironmentVariableRef.Lent`). The sandbox must forward that connection by
+`api`, or it refuses to start. Whether the rotation is worth it is open in
+[GAPS.md](GAPS.md#security--trust).
 
-`${session.version}` is the build of Yession that runs this session. It is what `--version`
-says and what the UI's footer shows. The session answers it itself
-(`WorkSandboxes.answerSession`), so it needs nothing selected and works under every backend.
-Nothing sets it unasked. An operator who wants the agent to know what it is talking to threads
-it through a resource:
+`${session.version}` is the build of Yession that runs this session, as `--version` and the
+UI's footer show it. The session answers it itself (`WorkSandboxes.answerSession`), so it
+needs nothing selected and works under every backend. Nothing sets it unasked. An operator
+who wants the agent to know it threads it through a resource:
 
 ```yaml
 yession-version:
@@ -336,8 +302,8 @@ yession-version:
     YESSION_SESSION_VERSION: ${session.version}
 ```
 
-An operator may bind the same references in a resource's `env:`. A sandbox that selects the
-resource receives them, and its repo does not write them (`VariableValue`, `SelectionGrant`):
+An operator may bind the same references in a resource's `env:`, for every sandbox that
+selects it (`VariableValue`, `SelectionGrant`):
 
 ```yaml
 resources:
@@ -348,88 +314,78 @@ resources:
       GH_TOKEN: ${github.token}
 ```
 
-They join the sandbox's declaration under its own lines. A repo's line for the same variable
-wins. The session provides and lends them exactly as it does a repo's. The session refuses a
-resource that lends a token it does not itself forward by `api`, where it reads the file.
+A repo's line for the same variable wins. The session supplies them as it does a repo's, and
+refuses, where it reads the file, a resource that lends a token it does not itself forward by
+`api`.
 
-The session reads a container's `entrypoint` the way compose does: a list of words, or one
-string split as a shell would split it, with nothing expanded. It governs what compose says it
-governs, and one thing more. The container's own `command` runs behind it, as in compose. So
-does every piece of **work** the session starts in the container: a terminal's shell, a block,
-and `setup:`.
+### Entrypoint and shell
 
-The session's own housekeeping runs bare, the way `docker exec` bypasses an entrypoint.
-Housekeeping means its start-up checks, `git` run by path, and the probe behind
-`set_shell_profile`. The rule adopts the line that compose drew (`ProcessEntry`). Work is what
-a repo's toolchain is for, and a devshell that assembles the toolchain is exactly what a repo
-puts here. Housekeeping needs no toolchain and must not pay for one.
+The session reads a container's `entrypoint` as compose does: a list of words, or one string
+split as a shell would split it, with nothing expanded. The container's own `command` and
+every piece of **work** (a terminal's shell, a block, `setup:`) run behind it. The session's
+housekeeping (start-up checks, `git` by path, the probe behind `set_shell_profile`) runs bare,
+as `docker exec` does. `ProcessEntry` in `src/Yession.Domain/Sandbox.fs` says why.
 
-The backend finds the shell that a terminal opens. It does not assume one. At start the
-backend runs one `command -v` behind the entrypoint. It looks for the dialects a terminal can
-instrument, most capable first (`bash`, `zsh`, `sh`). A terminal opens the first dialect found.
-This also warms a devshell, once, off the first terminal. `dialect:` names a dialect instead.
-A container that does not have that dialect refuses to start, naming what the backend looked
-for.
+The backend finds the shell that a terminal opens. At start it runs one `command -v` behind
+the entrypoint for the dialects a terminal can instrument, most capable first (`bash`, `zsh`,
+`sh`), and a terminal opens the first one found. This also warms a devshell, once, off the
+first terminal. `dialect:` names a dialect instead. A container without that dialect refuses
+to start, and names what the backend looked for.
 
-Every container gets a memory ceiling, its cgroup's `memory.max`, with no swap beyond it. All
-containers on a daemon share its memory, and on a Mac that means one Colima VM. Without a
-ceiling, a container that overruns pushes the whole VM into the kernel's global OOM killer.
-That killer picks its victim from every container on the VM, so one session's build kills
-another session's work. With a ceiling, the container that overran is the one the kernel
-kills. `memory:` declares the ceiling in compose's grammar (`4g`). With nothing declared, the
-backend takes three quarters of what the daemon reports (`ContainerMemory`). A declaration
-above the daemon's total refuses the sandbox, because a ceiling the host never reaches contains
-nothing. A ceiling bounds one container. It does not make the host bigger: containers that
-each stay under theirs can still add up to more than the VM has.
+### Container limits
 
-When they do, the kernel's global killer chooses from every process on the VM, the daemon's
-included. So every container also gets an OOM score adjustment of 500 (`oom-score-adj:`, 0 to
-1000). The daemon's processes are below zero, so the kernel kills a sandbox process first.
-Every container also gets a process limit of 4096 (`pids-limit:`), so a fork bomb uses up its
-own container and not the host. `cgroup-parent:` puts the container's cgroup under a parent,
-the pool, that the host's operator gives a memory limit below the VM's total. An OOM then
-stays inside that parent. With no parent declared, the daemon's own is used. The spelling
-depends on the daemon's cgroup driver, so a bare name (`yession`) is spelled for it:
-`/yession` under cgroupfs and `yession.slice` under systemd (`CgroupParent.forDriver`). A path
-(`/yession`) or a slice name (`yession.slice`) is passed as written, and a path is refused
-under systemd. One `yession.yaml` is read by both: the operator's Colima VM uses cgroupfs and
-CI's docker uses systemd. Yession does not make the parent. On this repo's host, the Colima
-start wrapper in the nix-darwin config makes `/yession` at every boot, with memory.max = VM
-RAM - 768 MiB. When the parent is missing, Docker (cgroupfs) or systemd makes it with no limit,
-and an OOM can again reach the daemon.
+All containers on a daemon (on a Mac, one Colima VM) share its memory, so one session's build
+can make the global OOM killer take another session's work. Every container therefore gets
+four limits. The doc comment of each type in `src/Yession.Domain/Environment.fs` gives its
+reasoning.
+
+| key | when nothing is declared | what it does |
+|---|---|---|
+| `memory:` (`ContainerMemory`) | three quarters of what the daemon reports | The cgroup's `memory.max`, no swap beyond it, in compose's grammar (`4g`). The kernel kills inside the container that overran. A declaration above the daemon's total refuses the sandbox. |
+| `oom-score-adj:` (`OomScoreAdj`) | 500 | From 0 to 1000. The daemon's processes are below zero, so the global killer takes a sandbox process first. |
+| `pids-limit:` (`PidsLimit`) | 4096 | A fork bomb uses up its own container and not the host. |
+| `cgroup-parent:` (`CgroupParent`) | the daemon's own parent | Puts the container under a pool that the host's operator limits below the VM's total, so an OOM stays inside it. |
+
+Containers that each stay under their ceiling can still add up to more than the VM has. The
+OOM score and the parent cgroup cover that case.
+
+Write `cgroup-parent:` as a bare name (`yession`), so that daemons of both cgroup drivers can
+read one `yession.yaml`. The backend spells it for the driver (`CgroupParent.forDriver`). Under
+systemd the backend refuses a path. `CgroupParent` lists the spellings.
+
+Yession does not make the parent. Docker (cgroupfs) or systemd makes a missing one with no
+limit, and an OOM can again reach the daemon. [GAPS.md](GAPS.md#agent) ("A `cgroup-parent` is
+the repo's to name, and the host's to make") says how this repo's host makes it.
+
+### Scope of the file
 
 The file has three top-level keys, and one is a version. **The file is almost all
-sandboxes**, because a sandbox is the scope where "two repos both said something" has a total
-answer. Each sandbox has a name, and its repo scopes that name. So `config(session) = ⋃ over
-repos r of { (r, name) ↦ spec }` is disjoint by construction. There is no precedence rule, and
-nothing shadows anything. The session refuses a clash inside one file, where it was written.
+sandboxes.** A sandbox name is scoped to its repo, so the union of the files is disjoint: no
+precedence rule, nothing shadows anything. The session refuses a clash inside one file, where
+its author wrote it.
 
 The one session-wide key is `session.shell-profile`: where the `default` sandbox's terminals
-start, relative to the checkout. Its answer to two repos is a refusal, not precedence. It
-applies only while exactly one repo declares it. When several declare it, none applies and
-each repo gets a warning. A profile that a person or the agent set is never moved by a file.
-`ConfiguredProfile` in `src/Yession.Domain/ShellProfile.fs` computes this from which repos
-declare it, never from the order they arrived. Anything else session-wide has no honest
-tie-break and stays the operator's. See [GAPS.md](GAPS.md). `src/Yession.Domain/Config.fs`
-holds the design.
+start, relative to the checkout. It applies only while exactly one repo declares it, and no
+file moves a profile that a person or the agent set (`ConfiguredProfile` in
+`src/Yession.Domain/ShellProfile.fs`). Anything else session-wide stays the operator's (see
+[GAPS.md](GAPS.md)). The header of `src/Yession.Domain/Config.fs` holds the design and the
+rule for every future key.
 
 Three properties make the file safe to read from code a session just cloned:
 
-- **It is a fold, not an executor.** Every mutating command is ensure-shaped. A declaration is
-  one `start_work_sandbox` through the same gate as the agent's. Asking twice changes nothing
-  and records nothing, so the fold can re-run at boot and after every verb that changes a
-  checkout.
+- **It is a fold, not an executor.** A declaration is one ensure-shaped `start_work_sandbox`
+  through the same gate as the agent's. Asking twice changes nothing and records nothing, so
+  the fold can re-run at boot and after every verb that changes a checkout.
 - **The operator's environment is a ceiling, not a default.** Narrowing takes effect at once.
   The session refuses an ask that exceeds the ceiling and names what exceeded it. A file that
   says nothing gets the operator's list whole.
 - **Whoever can push to the repo authors the file**, and that person is neither the operator
-  nor anybody in the session. So the session attributes the file's acts to
-  `ActorRef.Configured`. The file owns no credential of its own. The schema refuses what a
-  repo may not name: the whole `YESSION_` prefix in `env:`, a host path as a volume source, and
-  a `workdir` outside the checkout.
+  nor anybody in the session. So the file's acts are `ActorRef.Configured`, and it owns no
+  credential. The schema refuses what a repo may not name: the whole `YESSION_` prefix in
+  `env:`, a host path as a volume source, and a `workdir` outside the checkout.
 
-This repository carries its own `yession.yaml`. It is the schema's acceptance test: what
-yession needs to maintain yession measures whether the file can say anything real.
+This repository's own `yession.yaml` is the schema's acceptance test: what yession needs to
+maintain yession measures whether the file can say anything real.
 
 ---
 
@@ -455,25 +411,17 @@ Capabilities are scoped, not ambient.
 Verification is automated end-to-end, not manual.
 ```
 
-`Ylmish is the encoding/sync boundary` has one deliberate exception. It is narrow enough to
-name. Message bodies and terminal command lines are top-level Yjs roots that the app
-co-manages directly (`src/Yession.App/Collab/Bodies.fs`). The Ylmish schema cannot hold a
-body: a custom nested in a keyed `Encode.map` cannot round-trip Ylmish's structural decode, so
-the value would never decode. The app keys these roots by `BodyKey`. It never nests them in the
-encoded tree, and the structural reader skips them. The header of `Bodies.fs` gives the full
-reason.
-
-Everything else still crosses through the codec. Folding a body back into the Ylmish schema
-leaves a value that never decodes, for every peer.
+`Ylmish is the encoding/sync boundary` has one named exception. Message bodies and terminal
+command lines are top-level Yjs roots, keyed by `BodyKey`, that the app co-manages outside the
+encoded tree, and the structural reader skips them. The header of
+`src/Yession.App/Collab/Bodies.fs` says why. Everything else crosses through the codec.
 
 ---
 
 ## 6. Cross-cutting type vocabulary
 
-Nearly every step shares the identity and envelope types. `Yession.Domain/Identity.fs`
-declares them, and the code references them throughout.
-
-The actor glossary:
+`Yession.Domain/Identity.fs` declares the identity and envelope types that nearly every step
+shares. The actor glossary:
 
 - **User** (`UserId`) — a durable, Manager-verified human identity: the OIDC `sub` that the
   Manager itself issued. It exists only when a real authentication strategy attributed one.
