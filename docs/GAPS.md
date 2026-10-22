@@ -134,11 +134,11 @@ The last section holds trust boundaries as sharp as the first section's.
     does not have them. The session then fails when it creates its sandbox, and does not start
     unconfined. That is the intended trade: install the tools or choose `host` deliberately.
   - **srt reports a probe it could not RUN as a tool that is not there**, so a bad minute makes
-    srt refuse every sandbox in a run. Yession checks the refusal against this process's own stat
-    and retries a start that settled nothing (three times, 250ms apart), then forgets it.
-    `StartFailure` in `app/Sandboxes.fs` says how. What Yession reports contradicts srt's
-    sentence instead of repeating it. Undo this when srt stats an absolute path (still `which` in
-    0.0.73) or at least surfaces the spawn's errno.
+    srt refuse every sandbox in a run. Yession checks the refusal against this process's own
+    stat and retries a start that settled nothing a few times, then forgets it (`StartFailure`,
+    `startAttempts` and `startBackoffMs` in `app/Sandboxes.fs`). What Yession reports
+    contradicts srt's sentence instead of repeating it. Undo this when srt stats an absolute
+    path (still `which` in 0.0.73) or at least surfaces the spawn's errno.
   - **An srt sandbox reads what its policy names and nothing else** (Plan 24). srt's read model is
     permissive by default. Before Plan 24, Yession denied only the invoking user's home, and every
     agent-issued command could read `/etc`, a checkout the session never got, and (with the
@@ -146,8 +146,8 @@ The last section holds trust boundaries as sharp as the first section's.
     which srt re-expands from the children of `/` at each spawn. It has three holes: the policy's
     read paths, everything the policy may write, and the host runtime.
   - **The host runtime is the half of that scope this code cannot derive.** The allow-back is a
-    platform list (`SrtTools.Runtime`) plus the install prefix of `process.execPath`, srt's own
-    package, `YESSION_BIN_CLAUDE` and `YESSION_BIN_GIT`. The comment that opens `SrtSandbox` in
+    platform list (`SrtTools.Runtime`) plus the install prefixes of what is already running
+    (`runtimeReadPaths` names them). The comment that opens `SrtSandbox` in
     `app/Sandboxes.fs` says why, and `runtimeReadPaths` says why `YESSION_SESSION_READ` is not
     folded in. A path that nothing names fails loudly and locally: a command cannot find its
     interpreter.
@@ -161,9 +161,9 @@ The last section holds trust boundaries as sharp as the first section's.
       as a broken Xcode install and is not one. The fix was to name git (below), not to widen
       the scope for a shim.
   - **Every binary a confined spawn execs is NAMED. Git was the last exception.**
-    `YESSION_BIN_GIT` joins `YESSION_BIN_BWRAP`, `YESSION_BIN_SOCAT`, `YESSION_BIN_RIPGREP`,
-    `YESSION_BIN_SETSID` and `YESSION_BIN_CLAUDE`. The installable sets it on both platforms,
-    unlike the Linux-only srt tools. Unset, the verbs fall back to PATH, and the git sandbox
+    `YESSION_BIN_GIT` joins the other `YESSION_BIN_*` variables (`SrtTools` in
+    `app/Sandboxes.fs`). The installable sets it on both platforms, unlike the Linux-only srt
+    tools. Unset, the verbs fall back to PATH, and the git sandbox
     proves `git --version` first
     ([ADR](decisions/2026-08-28-one-function-builds-every-git-spawn.md) has the refusal and the
     fault it once caused).
@@ -259,7 +259,7 @@ The last section holds trust boundaries as sharp as the first section's.
   `weak` does not help where neither profile runs:
   - A root caller without `CAP_SETFCAP` in its bounding set. The kernel refuses each namespace's
     uid map: "bwrap: setting up uid map: Operation not permitted". The Docker backend's work
-    container, run as root, is one: it adds back only `CHOWN`, `FOWNER` and `DAC_OVERRIDE`. A
+    container, run as root, is one: it adds back only a few file-ownership capabilities. A
     non-root caller does not need the capability.
   - A host that strips capabilities from a new user namespace. srt's README names Ubuntu 24.04's
     default (`kernel.apparmor_restrict_unprivileged_userns=1`), and `pr.yaml` clears it.
@@ -273,7 +273,7 @@ The last section holds trust boundaries as sharp as the first section's.
   per-sandbox named workspace volume. The backend interprets all of `EnvironmentSpec`:
   image/build, mounts (including the workspace volume), working directory, env-var refs, and
   secret refs (resolved at sandbox spawn). The container drops all capabilities, adds back
-  `CHOWN`, `FOWNER` and `DAC_OVERRIDE` (the comment at that `CapAdd` in `app/Sandboxes.fs` says
+  the file-ownership ones a real build needs (`CapAdd` in `app/Sandboxes.fs` names them and says
   why), and sets `no-new-privileges`.
 
   The container runs the image's default (usually root) user, by DECISION. With
@@ -361,7 +361,7 @@ The last section holds trust boundaries as sharp as the first section's.
     inbound at the next restart.
 - **The Manager is practically a singleton.** Data directories are per-instance and session ports
   are OS-assigned. But two Managers over the SAME data directory are not supported: there is no
-  lock until the SQLite move. The UI's fixed default port (8321) means a second instance must
+  lock until the SQLite move. The UI's fixed default port means a second instance must
   configure its own.
 - **Session ports are OS-assigned and change on every launch.** A session has one stable URL,
   `/sessions/{id}/open`. Its target address is stable only where `YESSION_SESSION_URL` derives it
@@ -431,12 +431,13 @@ The last section holds trust boundaries as sharp as the first section's.
   leg on HTTP instead of the data channel, so it fails on its own. It once failed silently, as a
   timeline that never filled while drafts, title and presence kept syncing. Now a read returns
   `Result<EventPage, FeedFault>`. A resilience policy (`Yession.Domain.Resilience`, composed in
-  `app/browser/Browser.fs`) retries only transient faults: five times, exponential backoff from
-  250ms to a 10s ceiling, with jitter. A settled failure parks the loop and shows as
-  `FeedHealth` (a sidebar line, a banner and a header status). Writing stays enabled, because it
-  is CRDT state in the local doc. One supervised loop drives the session leg, capped at a minute
-  (Plan 20). The browser's `online` event and a *Try again* control on the status line poke it.
-  A REFUSED peer parks until somebody asks, because a schedule would send the same refused token.
+  `app/browser/Browser.fs`) retries only transient faults, with capped exponential backoff and
+  jitter (`Client.EventFetch.policy` holds the numbers). A settled failure parks the loop and
+  shows as `FeedHealth` (a sidebar line, a banner and a header status). Writing stays enabled,
+  because it is CRDT state in the local doc. One supervised loop drives the session leg, capped
+  at a minute (Plan 20). The browser's `online` event and a *Try again* control on the status
+  line poke it. A REFUSED peer parks until somebody asks, because a schedule would send the same
+  refused token.
 
 ## Browser client
 
@@ -447,13 +448,12 @@ The last section holds trust boundaries as sharp as the first section's.
 - **Sending a draft still bypasses the Elmish loop, and moving it in needs Ylmish to change.**
   Every other control dispatches a message: `ClientModel.update` answers with `ClientEffect`
   values, and `Client.Ports` runs them after their model. The read cursor, the reads out and
-  presence work this way too (`ClientModel.reads`, `presenceToSend`). The drafts remain: the
-  composer's Send (`ViewActions.SendDraft`), the terminal composer's Send (`SendTerminalDraft`),
-  and the editors' keyboard send (`Links.SendDraft`, `SendTerminalDraft` in `Render.fs`). Each
-  calls a verb on `Client.Connection` that, inside one `doc.transact`, copies a body root the
-  app owns beside the synced model (a draft's `Y.XmlFragment`, a terminal slot's `Y.Text`) into
-  the queued entry and dispatches `SendDraftMsg` / `SendTerminalDraftMsg`. That one transaction
-  is the invariant, and the comments at the verbs in `Client.connect` give both reasons.
+  presence work this way too (`ClientModel.reads`, `presenceToSend`). The drafts remain: every
+  Send of a draft or a terminal draft, by button or by key, calls a verb on `Client.Connection`
+  (`SendDraft`, `SendTerminalDraft`). Inside one `doc.transact`, the verb copies a body root the
+  app owns beside the synced model into the queued entry and dispatches the send message. That
+  one transaction is the invariant, and the comments at the verbs in `Client.connect` give both
+  reasons.
 
   It holds today only because a dispatch from a click handler runs synchronously, and
   `withYlmish` wraps each update in a `Y.transact` that nests inside the open one. As an Elmish
@@ -501,12 +501,12 @@ however wide), plus static passes over `Style.fs` and every class literal outsid
 groups them by the part of the code that owns the fix, then by the doctrine's "Deciding" order:
 floor, honesty, one verb, vocabulary, grid, less.
 
-The list dates from that audit, against a doctrine that has since moved. A finding's name, not a line
-number, identifies it. Check each against today's code AND doctrine before you fix it. #1276
-rewrote principle 2: chrome may now show grouping, nesting and selection, and the rule that only
-a field or a button carries a border is gone. Close a finding that no longer reproduces, or that
-cites a rule that no longer exists. Do not edit the list one line per fix. After the fixes land,
-one pass rewrites it to what still reproduces.
+The list dates from that audit, against a doctrine that has since moved. A finding's name, not a
+line number, identifies it. Check each against today's code AND doctrine before you fix it.
+#1276 rewrote principle 2: chrome may now show grouping, nesting and selection, and the rule
+that only a field or a button carries a border is gone. Close a finding that no longer
+reproduces, or that cites a rule that no longer exists. Do not edit the list one line per fix.
+After the fixes land, one pass rewrites it to what still reproduces.
 
 ### The marks and voices (Strokes, Motion, Typography, Statuses)
 
@@ -823,14 +823,16 @@ one pass rewrites it to what still reproduces.
   ([ADR](decisions/2026-08-27-pr-state-by-polling.md) gives the reasons and the cost of each
   cadence). A repo webhook needs admin on the repo, and inbound delivery needs a deployment
   github.com can reach, which the loopback default is not. Accepted:
-  - **Up to fifteen seconds of latency while a suite is in flight, and up to a minute otherwise.**
+  - **Polling latency: a short interval while a suite is in flight, a longer one otherwise**
+    (`PendingIntervalMs`, `SettledIntervalMs` in `app/PrWatches.fs`).
     A declared hook endpoint with the App's webhook pointed at it (deployment.md §Webhooks) drops
-    this to seconds. Otherwise, only an edit to the two constants in `PrWatches` lowers it. The
+    this to seconds. Otherwise, only an edit to those constants lowers it. The
     hosted dispatching service the ADR names as the exit does not exist.
   - **Check runs only.** Yession does not read the legacy commit-status API. A repo whose CI
     reports only statuses reads as having no checks, not as failing: the safe direction, and
     invisible.
-  - **The first 100 check runs on a commit.** No pagination exists. The rollup of a commit with
+  - **One page of check runs per commit** (the `per_page` in `app/GitHubPrs.fs`). No pagination
+    exists. The rollup of a commit with
     more comes from a prefix, biased toward pending.
   - **Only rollup FLIPS make an announcement.** A push that resets checks to pending and ends
     green again says nothing. Entering pending is the ordinary rhythm of work, and a
@@ -868,8 +870,8 @@ one pass rewrites it to what still reproduces.
     a confined git gets a proxy error that names the host. A `Provision` carries the host it
     needs as a `Domains` entry, and the composition widens a filtering backend's allowlist by it.
   - **Under `YESSION_SESSION_AGENT_BACKEND=host` the git verbs run unconfined**, the operator's
-    explicitly lax choice. The per-invocation hardening (hooks/fsmonitor/ext off, no global
-    config, protocol pinned) still applies. The filesystem and egress boundaries do not.
+    explicitly lax choice. The per-invocation hardening (`hardenedEnv` in `app/Repos.fs`) still
+    applies. The filesystem and egress boundaries do not.
   - **Every srt sandbox may write a checkout's `.git/config`** (`AllowGitConfig` in
     `app/Sandboxes.fs` says why, and that scoping it to the git sandbox is not done yet). So the
     WorkSandbox and the agent can plant a `core.fsmonitor`, an alias, or a pager that runs when
@@ -1059,8 +1061,8 @@ one pass rewrites it to what still reproduces.
   model ids, never message content. Every process is a **direct OTel emitter**, with no
   Manager-side collector (the header of `app/Telemetry.fs` gives the `OTEL_*` variables and how
   they reach each child). The Manager also emits `yession.*` **audit records** for the
-  secrets/ABAC surface (ops, denies, injection, KEK/store lifecycle, user↔launch bindings,
-  control 401s, see Plan 06 § Telemetry), each one greppable stdout line. Missing:
+  secrets/ABAC surface (`Audit` in `app/SecretStore.fs` and Plan 06 § Telemetry list them), each
+  one greppable stdout line. Missing:
   - a **metrics pipeline** and **traces** (the emitter path generalises to both, with the same
     env selection and no collector to touch)
   - **forwarding of audit records to a collector**
