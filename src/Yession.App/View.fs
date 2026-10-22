@@ -97,11 +97,6 @@ module View =
         | SessionLink.Current -> Dom.Text.connected
         | SessionLink.Refused _ -> Dom.Text.disconnected
 
-    let private offsetText =
-        function
-        | Some offset -> string (EventOffset.value offset)
-        | None -> Dom.Text.offsetNone
-
     let private feedToken =
         function
         | SessionLink.Fetching (_, { Failed = Some _ }, _) -> Dom.Text.feedRetrying
@@ -354,9 +349,7 @@ module View =
     /// still speaks while everything works — and only while the log is being fetched, once the
     /// fetch has lasted long enough to be something somebody is waiting on (`Effort`'s `Slow`),
     /// toward the end the session has named, since a bar needs a whole to be part of. Not
-    /// linked, there is no fetch, and nothing is said. One rule for its two faces, the
-    /// sidebar's line and the header's bar, so they cannot disagree about whether there is a
-    /// catch-up to show.
+    /// linked, there is no fetch, and nothing is said.
     let private showsCatchUp (model: ClientModel) : bool =
         match model.Link with
         | SessionLink.Fetching (_, { Slow = true }, _) -> true
@@ -369,8 +362,7 @@ module View =
 
     /// The catch-up as a bar along the header's bottom rule (`Style.catchUpBar`): how much of
     /// the log this client has folded, of what it knows the log holds. A `progressbar` with
-    /// its numbers on it, because a bar with no value is decoration to a screen reader; the
-    /// sidebar's line carries the same numbers as text.
+    /// its numbers on it, because a bar with no value is decoration to a screen reader.
     let private catchUpBar (model: ClientModel) : TemplateResult =
         if not (showsCatchUp model) then Lit.nothing
         else
@@ -384,13 +376,10 @@ module View =
                           aria-valuemin="0" aria-valuemax="{string known}" aria-valuenow="{string folded}"
                           data-catch-up-bar style="{width}"></div>"""
 
+    /// The nav column's mount of the status line. Catching up is not said here: fetching is
+    /// progress, not the link's health, and the header's bar says how far it has got on every
+    /// width (`catchUpBar`), where a line here said it a second time, beside the timeline's.
     let private connectionSection (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
-        let consumer = model.EventConsumer
-        let showsCatchUp = showsCatchUp model
-        let catchUp =
-            if not showsCatchUp then Lit.nothing
-            else
-                html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}" data-catch-up>{Dom.Text.catchingUp}</span><span class="{Style.label} tabular-nums"><b class="text-ink-dim" data-last-processed-offset>{offsetText consumer.LastProcessedOffset}</b> / <b class="text-ink-dim" data-latest-known-offset>{offsetText (SessionLink.target consumer.LastProcessedOffset model.Link)}</b></span></span>"""
         let report = connectionReport model
         // ONE mount of one report, wearing one hook and one visibility rule: the browser suite
         // counts the mounts a person can see. The word on the column's rail with its dot hung
@@ -420,14 +409,12 @@ module View =
         // them, the section's own box: a section with nothing in it still costs its padding,
         // which on a healthy client is a band of empty panel under the wordmark that reads as
         // something that failed to load.
-        let quiet = report.IsNone && not showsCatchUp
         let shape =
-            if quiet then Style.navLane1 else Style.cls [ Style.sideSection; Style.navLane1 ]
+            if report.IsNone then Style.navLane1 else Style.cls [ Style.sideSection; Style.navLane1 ]
         html $"""
             <section class="{shape}"
                      data-feed="{feedToken model.Link}" data-connection="{connectionLabel model.Link}">
               {body}
-              {catchUp}
             </section>"""
 
     /// Where a peer is, as the roster says it: a stable field token for the markup contract,
@@ -3496,37 +3483,46 @@ module View =
         // that starts in the middle. The gate is the link's own (`SessionLink.cutOff`) — an
         // attempt that FAILED, or reads that gave up — so a client still on its first try says
         // nothing.
+        let reasonLine (words: string) =
+            html $"""
+                <p class="{Style.historyGap}" data-history-gap>
+                  <span class="{Style.historyGapText}">{words}</span>
+                </p>"""
         let missing =
             match model.LocalCopy with
-            | LocalCopy.Kept (Some _) when SessionLink.cutOff model.Link ->
-                Some (
-                    html $"""
-                        <p class="{Style.historyGap}" data-history-gap>
-                          <span class="{Style.historyGapText}">{Dom.Text.historyMissingLocally}</span>
-                        </p>""")
+            | LocalCopy.Kept (Some _) when SessionLink.cutOff model.Link -> Some (reasonLine Dom.Text.historyMissingLocally)
             | LocalCopy.Reading
             | LocalCopy.Kept _
             | LocalCopy.NoneKept
             | LocalCopy.Unkeepable -> None
-        // This client has not yet read the log through, so a message may still be a round
-        // trip from landing. Shaped like the row it may become: an author line of the same
-        // height as a real one, `invisible` so it reserves the room without drawing a blank
-        // avatar, over the one body line the status itself stands on, both on the rail. When
-        // a real message supersedes this, it lands in the box this was already holding,
-        // rather than pushing it down.
+        // The same case with nothing kept at all: a page that has not read the log through, has
+        // no copy of it, and cannot reach the session to read it. Not the idle caret, which says
+        // the session is EMPTY — nobody here knows that. A store that has not answered yet says
+        // nothing either way; it may yet answer with the conversation.
+        let absent =
+            match model.LocalCopy, SessionLink.phase model.Link with
+            | (LocalCopy.NoneKept | LocalCopy.Unkeepable), Phase.Opening when SessionLink.cutOff model.Link ->
+                Some (reasonLine Dom.Text.historyNotOnDevice)
+            | (LocalCopy.Reading | LocalCopy.Kept _ | LocalCopy.NoneKept | LocalCopy.Unkeepable), _ -> None
+        // This client is fetching the log and has not read it through, so a message may still be
+        // a round trip from landing. Shaped like the row that will take its place — an author
+        // line: the beating dot where an avatar stands, the words where a name does, on the
+        // conversation's rail. When the conversation arrives, the first author line lands in
+        // the box this was holding, rather than the screen trading a sentence for it. It was a
+        // sentence in the caps voice, its dot pushing it off the rail, on a line of its own.
         //
         // Not the agent's blue caret either (docs/visual-design.md, Colour: blue is never a
-        // status) — it is `statusWait` with a beating dot, the same vocabulary "queued" and
-        // "catching up" already wear elsewhere. `role="status"` because it is a state, and the
-        // text is visible rather than only `srOnly`: a dot alone reaches nobody who cannot see
-        // it beat.
+        // status) — it is `statusWait` with a beating dot, the vocabulary every wait wears,
+        // and the one name catching up has wherever it is said (`Dom.Text.catchingUp`).
+        // `role="status"` because it is a state, and the words are visible rather than only
+        // `srOnly`: a dot alone reaches nobody who cannot see it beat.
         let reading =
             html $"""
                 <section class="{Style.messageGroup}" role="status" data-history-loading>
-                  <header class="{Style.messageGroupHead} invisible" aria-hidden="true"><span class="{Style.avatar}"></span></header>
-                  <p class="{Style.messageBody}">
-                    <span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{Dom.Text.readingHistory}</span>
-                  </p>
+                  <header class="{Style.messageGroupHead}">
+                    <span class="{Style.readingMark}" aria-hidden="true"><span class="{Style.statusLineMarkWait}"></span></span>
+                    <span class="{Style.statusWait}">{Dom.Text.catchingUp}</span>
+                  </header>
                 </section>"""
         // Fetching the history, and for long enough to say so. Not while the session is still
         // being reached: nothing is being caught up on then, and the status line is saying what
@@ -3553,11 +3549,13 @@ module View =
             // Shown, and there is genuinely nothing: the caret only ever means what it has
             // always said, which is why it can stay wordless and decorative. Unless what is
             // known is that history is missing — then the timeline is truncated rather than
-            // empty, and the line saying so stands where the caret would have.
+            // empty, and the line saying so stands where the caret would have. And a page that
+            // has not read the log through knows neither: it says nothing.
             | true, [], [] ->
-                match missing with
-                | Some line -> [ line ]
-                | None ->
+                match Option.orElse absent missing, SessionLink.phase model.Link with
+                | Some line, _ -> [ line ]
+                | None, Phase.Opening -> []
+                | None, Phase.ReadThrough ->
                     // Hooked like the reading row, and for the same reason: what a mark MEANS
                     // is not readable from the mark, and these two mean opposite things.
                     [ html $"""<div class="{Style.timelineIdle}" data-timeline-empty aria-hidden="true"><span class="{Style.caretIdle}"></span></div>""" ]

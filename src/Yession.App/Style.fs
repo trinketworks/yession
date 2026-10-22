@@ -2154,6 +2154,10 @@ module Style =
     let messageGroupHead =
         "sticky top-0 z-10 bg-bg flex items-center gap-3 pb-2 -mb-1 max-md:-mx-4 max-md:px-4"
 
+    /// Catching up, drawn as the author line that will take its place (`View.chat`): its dot
+    /// centred in the box an avatar fills, so the words stand where a name will.
+    let readingMark = cls [ avatar; "grid place-items-center" ]
+
     /// THE GROUND one item stands on — the rectangle that lights under the pointer, and that
     /// a jump from the rail flashes (`animate-reveal`). Shared by a message and an act note,
     /// because "mark any of it" is the promise and a surface that only some of the timeline
@@ -3313,11 +3317,12 @@ module Style =
     /// The closing line when the excerpt was cut ("… 12 more lines").
     let actNoteDiffNote = "text-ink-faint"
 
-    /// History this device does not hold, standing at the top of the timeline where it would
-    /// have been. An act note's voice and column, because it is the same kind of line — a
-    /// thing that happened to this conversation rather than a thing anyone said.
+    /// History this device does not hold, standing where it would have been. An act note's
+    /// voice and column, because it is the same kind of line — a thing that happened to this
+    /// conversation rather than a thing anyone said. Its words name their column: a row is a
+    /// grid, and words that did not were set in the gutter, a word to a line.
     let historyGap = actNote
-    let historyGapText = actNoteText
+    let historyGapText = cls [ foldContent; actNoteText ]
 
     /// Read-only rendered Markdown in the timeline (the mirror of the composer's live
     /// formatting). Preflight strips heading/list defaults, so each rendered element carries

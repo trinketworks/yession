@@ -743,9 +743,11 @@ let private uiChecklistTests =
                   "agent streaming response", Dom.attr Dom.Hooks.messageStatus Dom.Text.streaming
                   "agent stream indicator", Dom.Hooks.agentStream
                   "a way to stop the turn that is running", Dom.attr Dom.Hooks.interruptTurn "turn-ui"
-                  "last processed event offset", Dom.hookText Dom.Hooks.lastProcessedOffset "5"
-                  "latest known event offset", Dom.hookText Dom.Hooks.latestKnownOffset "7"
-                  "catch-up status", Dom.hookText Dom.Hooks.catchUp Dom.Text.catchingUp
+                  // A catch-up worth waiting on, with how far it has got of how much: offsets
+                  // count from zero, so five folded of seven is six of eight.
+                  "catch-up progress", Dom.Hooks.catchUpBar
+                  "how far the catch-up has got", "aria-valuenow=\"6\""
+                  "of how much", "aria-valuemax=\"8\""
                   "environment status (Phase 2)", Dom.Hooks.environment
                   "message queue (Phase 3)", Dom.Hooks.messageQueue
                   "queued message editor", Dom.attr Dom.Hooks.queueInput "queue-ui"
@@ -993,7 +995,7 @@ let private uiChecklistTests =
 
         testCase "the reading state says it in words" <| fun () ->
             Expect.isTrue
-                ((Support.render (emptyAt (fetchingOpening true))).Contains Dom.Text.readingHistory)
+                ((Support.render (emptyAt (fetchingOpening true))).Contains Dom.Text.catchingUp)
                 "the pulse alone reaches nobody who cannot see it"
 
         // Nothing is being caught up on while the session is still being reached, and the
@@ -1016,6 +1018,24 @@ let private uiChecklistTests =
             Expect.isFalse
                 ((Support.render (emptyAt (fetchingOpening false))).Contains "data-timeline-empty")
                 "nothing is said at all"
+
+        // Cut off with nothing of the session on this device: what is known is that its history
+        // is not here, which the idle caret — "nothing was ever said" — got backwards.
+        testCase "a page with nothing kept that cannot reach its session says its history is not here" <| fun () ->
+            let cut = emptyAt (SessionLink.Connecting { Effort.fresh with Failed = Some { Reason = "HTTP 502"; Count = 3 } })
+            Expect.isTrue ((Support.render cut).Contains Dom.Text.historyNotOnDevice) "the history is somewhere else"
+
+        testCase "a page with nothing kept that cannot reach its session does not claim it is empty" <| fun () ->
+            let cut = emptyAt (SessionLink.Connecting { Effort.fresh with Failed = Some { Reason = "HTTP 502"; Count = 3 } })
+            Expect.isFalse ((Support.render cut).Contains "data-timeline-empty") "nobody here knows it is empty"
+
+        // Its store may yet answer with the conversation, so it says nothing either way.
+        testCase "a page whose store has not answered says nothing of its history, cut off or not" <| fun () ->
+            let cut =
+                { emptyAt (SessionLink.Connecting { Effort.fresh with Failed = Some { Reason = "HTTP 502"; Count = 3 } }) with
+                    LocalCopy = LocalCopy.Reading }
+            let html = Support.render cut
+            Expect.isFalse (html.Contains Dom.Text.historyNotOnDevice || html.Contains "data-timeline-empty") "neither here nor empty"
 
         testCase "an empty timeline read through says it is empty" <| fun () ->
             Expect.isTrue
@@ -3269,18 +3289,18 @@ let private syncStatusTests =
                 Support.render
                     { representativeModel with
                         Link = SessionLink.Fetching (EventOffset.create 7L |> expect, Effort.fresh, Phase.ReadThrough) }
-            Expect.isFalse (html.Contains Dom.Hooks.catchUp) "the sidebar line stays put"
+            Expect.isFalse (html.Contains Dom.Hooks.catchUpBar) "the header's bar stays put"
             Expect.isFalse (html.Contains "Catching up") "and nothing anywhere else says it either"
 
-        testCase "a catch-up worth waiting on is reported, with its progress" <| fun () ->
+        // Catching up is progress, not the link's health, so it never takes the status line.
+        // The sidebar said it a second time, beside the header's bar, on a desktop.
+        testCase "a catch-up is not said in the status line" <| fun () ->
             let html = Support.render representativeModel
-            Expect.isTrue (html.Contains (Dom.hookText Dom.Hooks.catchUp Dom.Text.catchingUp)) "the sidebar names it"
-            Expect.isTrue (html.Contains Dom.Hooks.lastProcessedOffset) "with how far it has got"
+            Expect.isFalse (html.Contains Dom.Hooks.degraded) "no status line for a fetch"
 
-        // The sidebar's line is behind a drawer on a phone, which is where a long catch-up is
-        // waited through. The header's bottom rule is on every screen, so the same catch-up
-        // is drawn along it — as a progress bar with its value, not a line changing colour,
-        // because a bar with no value is decoration to a screen reader.
+        // The header's bottom rule is on every screen, so a catch-up is drawn along it — as a
+        // progress bar with its value, not a line changing colour, because a bar with no value
+        // is decoration to a screen reader.
         testCase "a catch-up worth waiting on is drawn along the header's edge, with its value" <| fun () ->
             let html = Support.render representativeModel
             Expect.isTrue (html.Contains Dom.Hooks.catchUpBar) "the header carries the bar"
@@ -3293,7 +3313,7 @@ let private syncStatusTests =
         testCase "'slow' cannot be claimed once there is nothing left to catch up on" <| fun () ->
             let model = Support.step EffortSlowMsg settled
             Expect.equal model.Link SessionLink.Current "a late timer is refused, not stored"
-            Expect.isFalse ((Support.render model).Contains Dom.Hooks.catchUp) "and nothing is shown"
+            Expect.isFalse ((Support.render model).Contains Dom.Hooks.catchUpBar) "and nothing is shown"
     ]
 
 // --- every document a bin can serve --------------------------------------------------------
