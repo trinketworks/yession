@@ -74,7 +74,11 @@ let private offeredModels =
 let private representativeModel : ClientModel =
     let turnId = AgentTurnId.create "turn-ui" |> expect
     { Peer = { PeerId = ada; DisplayName = "swift-heron" }
-      Connection = Connected
+      // Read through once, so the timeline it renders is the session's — and fetching news
+      // again, for long enough to be worth saying, so the catch-up status and its offsets are
+      // on screen for the checklist. A brief one is deliberately silent.
+      Link = SessionLink.Fetching (EventOffset.create 7L |> expect, { Effort.fresh with Slow = true }, Phase.ReadThrough)
+      Waited = true
       Session = Some sessionId
       Approvals = RepoApprovals.empty
       Launch = Launch.empty
@@ -144,12 +148,6 @@ let private representativeModel : ClientModel =
             TerminalItems = [ TimelineBlock (EventOffset.create 2L |> expect, terminalId, blockId) ] }
       EventConsumer =
         { LastProcessedOffset = Some (EventOffset.create 5L |> expect)
-          // A representative client has read the log through once — the timeline it renders
-          // is the session's, not a placeholder for one it has not read — and is behind it
-          // again, for long enough to be worth saying, so the catch-up status and its offsets
-          // are on screen for the checklist. A brief one is deliberately silent.
-          Sync = Behind (EventOffset.create 7L |> expect, true)
-          Feed = FeedLive
           Reading = None }
       Agent = { ActiveTurn = Some turnId; Quiet = None; Interrupting = None }
       Presence =
@@ -602,14 +600,19 @@ let private themedGreen () : string =
 
 /// The representative session with nothing in it — no conversation, no terminal items, nothing
 /// queued (a command waiting to run is something ON the screen) — standing at `sync`.
-let private emptyAt (sync: HistorySync) : ClientModel =
+/// Opening, fetching towards the end the session named, and — `slow` — waited on long enough
+/// to say so.
+let private fetchingOpening (slow: bool) : SessionLink =
+    SessionLink.Fetching (EventOffset.create 7L |> expect, { Effort.fresh with Slow = slow }, Phase.Opening)
+
+let private emptyAt (link: SessionLink) : ClientModel =
     { representativeModel with
         Conversation = ConversationProjection.empty
         Timeline = TimelineProjection.empty
         Synced = { representativeModel.Synced with Pending = Map.empty }
         // Nothing on screen because nothing was kept: the store answered with nothing.
         LocalCopy = LocalCopy.NoneKept
-        EventConsumer = { representativeModel.EventConsumer with Sync = sync } }
+        Link = link }
 
 let private uiChecklistTests =
     testList "UI checklist" [
@@ -964,7 +967,7 @@ let private uiChecklistTests =
         testCase "nothing is offered while the session cannot be reached" <| fun () ->
             let offline =
                 { private' "github" "github rejected this credential" with
-                    Connection = Disconnected (Some "transport closed") }
+                    Link = SessionLink.Refused ("transport closed", Phase.ReadThrough) }
             let html = Support.render offline
             Expect.isFalse (html.Contains Dom.Hooks.signInRequired) "no sign-in prompt while offline"
             Expect.isTrue
@@ -982,44 +985,46 @@ let private uiChecklistTests =
         // catch-up that can still follow it (a message never kept on this device, a round
         // trip from landing). So the caret was telling most people the opposite of the truth,
         // and neither state could be told from the other on screen.
-        testCase "an empty timeline not yet read through, for long enough to say, says it is reading" <| fun () ->
-            let looking = Support.render (emptyAt (Opening (None, true)))
+        testCase "an empty timeline being fetched, for long enough to say, says it is reading" <| fun () ->
+            let looking = Support.render (emptyAt (fetchingOpening true))
             Expect.isTrue
                 (looking.Contains "data-history-loading")
-                "a client the session has not yet told where its log ends says it is reading, rather than claiming emptiness"
+                "a client still short of where the session says its log ends says it is reading, rather than claiming emptiness"
 
         testCase "the reading state says it in words" <| fun () ->
             Expect.isTrue
-                ((Support.render (emptyAt (Opening (None, true)))).Contains Dom.Text.readingHistory)
+                ((Support.render (emptyAt (fetchingOpening true))).Contains Dom.Text.readingHistory)
                 "the pulse alone reaches nobody who cannot see it"
 
-        testCase "an empty timeline told where the log ends, and still short of it, is still reading" <| fun () ->
-            // A message never kept on this device may still be a round trip from landing, so
-            // the wait is SUSTAINED rather than giving way to the caret.
-            let stillBehind = Support.render (emptyAt (Opening (Some (EventOffset.create 7L |> expect), true)))
-            Expect.isTrue (stillBehind.Contains "data-history-loading") "still behind the session's own log is still reading"
+        // Nothing is being caught up on while the session is still being reached, and the
+        // status line is the one saying what is happening. It used to say "catching up" here,
+        // from the server's page on, before anything had been asked for.
+        testCase "a client still reaching its session does not say it is catching up" <| fun () ->
+            Expect.isFalse
+                ((Support.render (emptyAt (SessionLink.Connecting { Effort.fresh with Slow = true }))).Contains "data-history-loading")
+                "reaching is not reading"
 
         // A reload's own store answers in a few hundred milliseconds; "catching up" for that
         // long, over a conversation already on this device, was a flash of a state nobody
         // was in.
         testCase "a brief wait says nothing yet" <| fun () ->
             Expect.isFalse
-                ((Support.render (emptyAt (Opening (None, false)))).Contains "data-history-loading")
+                ((Support.render (emptyAt (fetchingOpening false))).Contains "data-history-loading")
                 "no reading line before the wait is worth saying"
 
         testCase "a brief wait does not claim the session is empty either" <| fun () ->
             Expect.isFalse
-                ((Support.render (emptyAt (Opening (None, false)))).Contains "data-timeline-empty")
+                ((Support.render (emptyAt (fetchingOpening false))).Contains "data-timeline-empty")
                 "nothing is said at all"
 
         testCase "an empty timeline read through says it is empty" <| fun () ->
             Expect.isTrue
-                ((Support.render (emptyAt Current)).Contains "data-timeline-empty")
+                ((Support.render (emptyAt SessionLink.Current)).Contains "data-timeline-empty")
                 "a client that has read through and found nothing says so"
 
         testCase "an empty timeline read through is not still reading" <| fun () ->
             Expect.isFalse
-                ((Support.render (emptyAt Current)).Contains "data-history-loading")
+                ((Support.render (emptyAt SessionLink.Current)).Contains "data-history-loading")
                 "a client that has read through and found nothing is not still reading"
 
         testCase "a timeline read through with messages in it shows no reading state" <| fun () ->
@@ -1035,9 +1040,7 @@ let private uiChecklistTests =
                 Support.render
                     { representativeModel with
                         LocalCopy = LocalCopy.NoneKept
-                        EventConsumer =
-                            { representativeModel.EventConsumer with
-                                Sync = Opening (Some (EventOffset.create 7L |> expect), true) } }
+                        Link = fetchingOpening true }
             Expect.isTrue (opening.Contains "data-history-loading") "it says it is reading instead"
 
         testCase "history this client kept is drawn before read through" <| fun () ->
@@ -1045,16 +1048,14 @@ let private uiChecklistTests =
                 Support.render
                     { representativeModel with
                         LocalCopy = LocalCopy.Kept None
-                        EventConsumer =
-                            { representativeModel.EventConsumer with
-                                Sync = Opening (Some (EventOffset.create 7L |> expect), false) } }
+                        Link = fetchingOpening false }
             Expect.isFalse (kept.Contains "data-history-loading") "the reader's own last picture is shown at once"
 
         testCase "a session whose only act is queued shows it and not the empty caret" <| fun () ->
             // Nothing is FOLDED in this session — its first command is still queued — so a
             // caret keyed on the fold would stand over the one thing on the screen and say the
             // session was empty.
-            let queuedOnly = Support.render { emptyAt Current with Synced = representativeModel.Synced }
+            let queuedOnly = Support.render { emptyAt SessionLink.Current with Synced = representativeModel.Synced }
             Expect.isTrue (queuedOnly.Contains Dom.Hooks.chatPending) "a session whose first act is queued shows it"
             Expect.isFalse (queuedOnly.Contains "data-timeline-empty") "and does not also say it is empty"
 
@@ -2784,7 +2785,7 @@ let private reconnectOfferTests =
     testList "The reconnect offer" [
         let stopped (manager: string option) (session: SessionId option) =
             { representativeModel with
-                Connection = Disconnected (Some "the session did not answer")
+                Link = SessionLink.Refused ("the session did not answer", Phase.ReadThrough)
                 Manager = manager
                 Session = session }
 
@@ -2843,7 +2844,7 @@ let private reconnectOfferTests =
             let html =
                 Support.render
                     { representativeModel with
-                        Connection = Reconnecting
+                        Link = SessionLink.Reconnecting ({ Effort.fresh with Slow = true }, Phase.ReadThrough)
                         Manager = Some "http://127.0.0.1:8321" }
             Expect.isFalse (html.Contains Dom.Hooks.sessionGone) "reconnecting is not stopped"
 
@@ -3239,10 +3240,7 @@ let private presenceTests =
 // every send (a client is behind its own event for one round trip).
 let private syncStatusTests =
     testList "Sync status" [
-        let settled =
-            { representativeModel with
-                EventConsumer =
-                    { representativeModel.EventConsumer with Sync = Current } }
+        let settled = { representativeModel with Link = SessionLink.Current }
 
         // It used to be said once, having been said three times before that. Now it is said
         // nowhere: "everything is fine" is the least actionable thing a screen can carry, and
@@ -3257,7 +3255,10 @@ let private syncStatusTests =
                 "but the state is still on the attribute a test reads"
 
         testCase "a brief catch-up says nothing at all" <| fun () ->
-            let html = Support.render { representativeModel with EventConsumer = { representativeModel.EventConsumer with Sync = Behind (EventOffset.create 7L |> expect, false) } }
+            let html =
+                Support.render
+                    { representativeModel with
+                        Link = SessionLink.Fetching (EventOffset.create 7L |> expect, Effort.fresh, Phase.ReadThrough) }
             Expect.isFalse (html.Contains Dom.Hooks.catchUp) "the sidebar line stays put"
             Expect.isFalse (html.Contains "Catching up") "and nothing anywhere else says it either"
 
@@ -3277,11 +3278,11 @@ let private syncStatusTests =
             let folded = representativeModel.EventConsumer.LastProcessedOffset |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
             Expect.isTrue (html.Contains (sprintf "aria-valuenow=\"%d\"" folded)) "carrying how far it has got"
 
-        // Slow describes a catch-up that is RUNNING (`HistorySync` keeps it inside the cases
-        // that wait), so a timer that fires just as the page lands has nothing to land on.
+        // Slow describes a wait that is RUNNING (`Effort` lives inside the cases that wait), so
+        // a timer that fires just as the page lands has nothing to land on.
         testCase "'slow' cannot be claimed once there is nothing left to catch up on" <| fun () ->
-            let model = Support.step (CatchUpSlowMsg true) settled
-            Expect.isFalse (HistorySync.slow model.EventConsumer.Sync) "a late timer is refused, not stored"
+            let model = Support.step EffortSlowMsg settled
+            Expect.equal model.Link SessionLink.Current "a late timer is refused, not stored"
             Expect.isFalse ((Support.render model).Contains Dom.Hooks.catchUp) "and nothing is shown"
     ]
 
@@ -3425,7 +3426,7 @@ let private chromeTests =
         // feed is only ever reported over a session that is otherwise fine.
         let stoppedShell =
             { representativeModel with
-                Connection = Disconnected (Some "the session did not answer")
+                Link = SessionLink.Refused ("the session did not answer", Phase.ReadThrough)
                 Manager = Some "http://127.0.0.1:8321"
                 LocalCopy = LocalCopy.Unkeepable
                 EphemeralStorage = true }
@@ -3437,8 +3438,7 @@ let private chromeTests =
         let stalledShell =
             Support.render
                 { representativeModel with
-                    Connection = Connected
-                    EventConsumer = { representativeModel.EventConsumer with Feed = FeedStalled "ECONNREFUSED" } }
+                    Link = SessionLink.Stalled (EventOffset.create 7L |> expect, "ECONNREFUSED", Phase.ReadThrough) }
         let noticeShell = stoppedShell + stalledShell
 
         // The surfaces whose controls none of the renders above reach, each shown in the state

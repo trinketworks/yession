@@ -949,9 +949,9 @@ module Client =
         /// next ordinary request repairs it.
         ///
         /// A gap is reported as what it is — history this DEVICE does not hold — and never as
-        /// the feed's health. Nothing has been read from the network at this point, so a
-        /// `FeedStalled` here says the read loop gave up before it had started, which is how a
-        /// cold open flashed a red "history paused" at everyone whose store was out of order.
+        /// the feed's health. Nothing has been read from the network at this point, so a stall
+        /// here says the read loop gave up before it had started, which is how a cold open
+        /// flashed a red "history paused" at everyone whose store was out of order.
         ///
         /// **The whole contiguous run is ONE page**, whatever it was kept as — the transcript
         /// replay's rule (`TranscriptFetch.replay`), for the same reason: every message is a
@@ -1037,13 +1037,13 @@ module Client =
               Sleep = sleep
               Observe = observe }
 
-        /// The health a failed attempt implies WHILE the policy is still trying. A final
+        /// The failure a failed attempt reports WHILE the policy is still trying. A final
         /// failure is deliberately absent here: that reaches the model from the read loop,
         /// the one place that knows the read is over — so the two never race to describe the
-        /// same fact. Composition site: `policy … (retrying >> Option.iter (EventFeedMsg >> dispatch))`.
-        let retrying (attempt: Resilience.Attempt<FeedFault>) : FeedHealth option =
+        /// same fact. Composition site: `policy … (retrying >> Option.iter (ReadRetryingMsg >> dispatch))`.
+        let retrying (attempt: Resilience.Attempt<FeedFault>) : Failure option =
             attempt.Retrying
-            |> Option.map (fun _ -> FeedRetrying (attempt.Number, FeedFault.describe attempt.Error))
+            |> Option.map (fun _ -> { Reason = FeedFault.describe attempt.Error; Count = attempt.Number })
 
     /// What a client does with what it already holds, before the network has answered — the
     /// local-first half of opening a session, and everything a page shows between its first
@@ -1056,7 +1056,7 @@ module Client =
     /// page did, so the order here and the messages it dispatches are measured, not just
     /// read.
     ///
-    /// `Connecting` FIRST. The model starts `Disconnected None`, which renders as "not
+    /// `Connecting` FIRST. The model used to start disconnected, which rendered as "not
     /// connected" with no reason and nothing to press, and that is what a page wore from its
     /// first paint until the network was asked — which used to be after the replay, so a
     /// phone opening a long session wore it for seconds (measured: three, on 97 items) and

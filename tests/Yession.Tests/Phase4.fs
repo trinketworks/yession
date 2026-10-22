@@ -455,7 +455,7 @@ let private processTests =
                 let! reopened = OidcHttp.openSession (sprintf "http://127.0.0.1:%d" resumedPort)
                 let! b = connectClient (sprintf "http://127.0.0.1:%d/signal" resumedPort) reopened.PeerToken "grace" "Grace"
                 do! b.Runner.WaitFor (fun m ->
-                        not (HistorySync.behind m.EventConsumer.Sync)
+                        not (fetching m)
                         && (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "hello from another process")))
                 do! b.Channel.Close ()
 
@@ -2382,7 +2382,7 @@ let private compositionTests =
                 let! openedB = OidcHttp.openSession (sprintf "http://127.0.0.1:%d" resumedPort)
                 let! b = connectClient (sprintf "http://127.0.0.1:%d/signal" resumedPort) openedB.PeerToken "grace" "Grace"
                 do! b.Runner.WaitFor (fun m ->
-                        not (HistorySync.behind m.EventConsumer.Sync)
+                        not (fetching m)
                         && (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "built binaries talking")))
                 do! b.Channel.Close ()
 
@@ -2398,7 +2398,7 @@ let private compositionTests =
                 let! openedC = OidcHttp.openSession (sprintf "http://127.0.0.1:%d" relaunchedPort)
                 let! c = connectClient (sprintf "http://127.0.0.1:%d/signal" relaunchedPort) openedC.PeerToken "carol" "Carol"
                 do! c.Runner.WaitFor (fun m ->
-                        not (HistorySync.behind m.EventConsumer.Sync)
+                        not (fetching m)
                         && (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "built binaries talking")))
                 do! c.Channel.Close ()
                 do! manager2.Shutdown ()

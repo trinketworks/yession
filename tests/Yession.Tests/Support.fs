@@ -273,6 +273,18 @@ let saidOn (model: ClientModel) : string list =
 
 let render (model: ClientModel) : string = Ssr.renderModel model
 
+/// Whether the client is fetching the log: the session has said it runs past what is folded,
+/// and the client is reading towards it. What a case waiting for a catch-up to finish waits on
+/// the end of.
+let fetching (model: ClientModel) : bool =
+    match model.Link with
+    | SessionLink.Fetching _ -> true
+    | SessionLink.Connecting _
+    | SessionLink.Reconnecting _
+    | SessionLink.Stalled _
+    | SessionLink.Current
+    | SessionLink.Refused _ -> false
+
 /// The model after one message, for a case that asserts on state. What the message asked of
 /// the world outside the model is `ClientModel.update`'s other half, and a case about that
 /// reads it there.
@@ -701,7 +713,7 @@ let connectInMemoryClientVia
         let connection = Client.connect (makeOptions dispatch) doc registry texts hello dispatch clientEnd
         wired.Value <- Some connection
         Async.StartImmediate connection.Run
-        do! runner.WaitFor (fun m -> m.Connection = Connected)
+        do! runner.WaitFor (fun m -> SessionLink.live m.Link)
         return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = clientEnd; Doc = doc; Hello = hello; Wire = fun c -> wired.Value <- Some c }
     }
 
@@ -724,7 +736,7 @@ let reconnectClient (signalUrl: string) (client: Client) : Async<Client> =
         // catch it up first among them.
         client.Wire connection
         Async.StartImmediate connection.Run
-        do! client.Runner.WaitFor (fun m -> m.Connection = Connected)
+        do! client.Runner.WaitFor (fun m -> SessionLink.live m.Link)
         return { client with Connection = connection; Channel = channel }
     }
 

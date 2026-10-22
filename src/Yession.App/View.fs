@@ -88,11 +88,14 @@ module View =
 
     let private connectionLabel =
         function
-        | Disconnected _ -> Dom.Text.disconnected
-        | Connecting _ -> Dom.Text.connecting
-        | Connected -> Dom.Text.connected
-        | Reconnecting -> Dom.Text.reconnecting
-        | Retrying _ -> Dom.Text.retrying
+        | SessionLink.Connecting { Failed = Some _ }
+        | SessionLink.Reconnecting ({ Failed = Some _ }, _) -> Dom.Text.retrying
+        | SessionLink.Connecting _ -> Dom.Text.connecting
+        | SessionLink.Reconnecting _ -> Dom.Text.reconnecting
+        | SessionLink.Fetching _
+        | SessionLink.Stalled _
+        | SessionLink.Current -> Dom.Text.connected
+        | SessionLink.Refused _ -> Dom.Text.disconnected
 
     let private offsetText =
         function
@@ -101,9 +104,13 @@ module View =
 
     let private feedToken =
         function
-        | FeedLive -> Dom.Text.feedLive
-        | FeedRetrying _ -> Dom.Text.feedRetrying
-        | FeedStalled _ -> Dom.Text.feedPaused
+        | SessionLink.Fetching (_, { Failed = Some _ }, _) -> Dom.Text.feedRetrying
+        | SessionLink.Stalled _ -> Dom.Text.feedPaused
+        | SessionLink.Fetching _
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _
+        | SessionLink.Current
+        | SessionLink.Refused _ -> Dom.Text.feedLive
 
     /// The mechanism behind a notice, folded away under one word.
     ///
@@ -179,8 +186,18 @@ module View =
     /// whichever registration had won, and the page ended on a bare `authorization failed`.
     /// The navigation IS the mechanism, and a link performs it once.
     let private reopenAction (model: ClientModel) (extra: string) : TemplateResult option =
-        match model.Connection, model.Manager, model.Session with
-        | (Disconnected (Some _) | Retrying _), Some origin, Some sessionId ->
+        let away =
+            match model.Link with
+            | SessionLink.Refused _
+            | SessionLink.Connecting { Failed = Some _ }
+            | SessionLink.Reconnecting ({ Failed = Some _ }, _) -> true
+            | SessionLink.Connecting _
+            | SessionLink.Reconnecting _
+            | SessionLink.Fetching _
+            | SessionLink.Stalled _
+            | SessionLink.Current -> false
+        match away, model.Manager, model.Session with
+        | true, Some origin, Some sessionId ->
             let target = ManagerRoute.at origin (ManagerRoute.OpenSession sessionId)
             Some (
                 html $"""
@@ -195,16 +212,21 @@ module View =
         // one thing a person can do about both, but the word should not say "stopped" over a
         // loop that is still at work.
         let settled =
-            match model.Connection with
-            | Disconnected (Some reason) ->
+            match model.Link with
+            | SessionLink.Refused (reason, _) ->
                 Some (
                     reason,
                     html $"""<span class="{Style.syncRow}"><span class="{Style.syncDot} bg-err"></span><span class="{Style.statusErr}">session stopped</span></span>""")
-            | Retrying (reason, failures) ->
+            | SessionLink.Connecting { Failed = Some failure }
+            | SessionLink.Reconnecting ({ Failed = Some failure }, _) ->
                 Some (
-                    Dom.Text.retryingWhy reason failures,
+                    Dom.Text.retryingWhy failure.Reason failure.Count,
                     html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{Dom.Text.retryingStatus}</span></span>""")
-            | _ -> None
+            | SessionLink.Connecting _
+            | SessionLink.Reconnecting _
+            | SessionLink.Fetching _
+            | SessionLink.Stalled _
+            | SessionLink.Current -> None
         match settled, reopenAction model Style.noAgentAction with
         | Some (reason, status), Some action ->
             // What reopening actually costs. Under a `{id}` template the session returns to
@@ -272,42 +294,56 @@ module View =
         let running (word: string) =
             html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{word}</span>"""
         let stopped (word: string) = html $"""<span class="{Style.statusErr}">{word}</span>"""
-        match model.Connection, model.EventConsumer.Feed with
-        // The session leg subsumes the history leg: a Process that cannot be reached cannot
-        // serve its feed either, and one report is the honest account of one problem.
-        | Disconnected reason, _ ->
-            Some (Dom.Text.degradedOffline, stopped "not connected", promise :: (Option.toList reason @ why))
-        | Reconnecting, _ -> Some (Dom.Text.degradedReconnecting, running "reconnecting", promise :: why)
-        // A connect that has run past `ClientModel.connectingQuietMs`. Every client starts
-        // connecting, and one that lands inside the window says nothing, so this is never a
-        // flash on a healthy load — but one that does not land is news, and a page that said
-        // nothing through it looked exactly like a page that had loaded and had nothing in it.
-        | Connecting true, _ -> Some (Dom.Text.degradedConnecting, running Dom.Text.connectingStatus, promise :: why)
-        | Retrying (reason, failures), _ ->
+        // One state, so one report: a page that cannot reach its session is not reading its
+        // history either, and is not said to be.
+        match model.Link with
+        | SessionLink.Refused (reason, _) ->
+            Some (Dom.Text.degradedOffline, stopped "not connected", promise :: reason :: why)
+        | SessionLink.Connecting { Failed = Some failure }
+        | SessionLink.Reconnecting ({ Failed = Some failure }, _) ->
             Some (
                 Dom.Text.degradedRetrying,
                 running Dom.Text.retryingStatus,
-                promise :: Dom.Text.retryingWhy reason failures :: why)
-        | _, FeedRetrying (attempt, reason) ->
-            Some (Dom.Text.feedRetrying, running "history retrying", promise :: sprintf "%s · attempt %d" reason attempt :: why)
-        | _, FeedStalled reason -> Some (Dom.Text.feedPaused, stopped "history paused", promise :: reason :: why)
-        // Connecting is the state every client starts in, so until it has lasted it is not a
-        // degradation and says nothing — a strip that flashed on every load would be chrome,
-        // not news.
-        | Connecting false, FeedLive
-        | Connected, FeedLive -> None
+                promise :: Dom.Text.retryingWhy failure.Reason failure.Count :: why)
+        // An attempt that has run past `ClientModel.connectingQuietMs`. Every client starts
+        // connecting, and one that lands inside the window says nothing, so this is never a
+        // flash on a healthy load — but one that does not land is news, and a page that said
+        // nothing through it looked exactly like a page that had loaded and had nothing in it.
+        // A link lost and found again inside the same window is the same: a phone drops its
+        // link each time it leaves the app, and has it back as it returns.
+        | SessionLink.Connecting { Slow = true } ->
+            Some (Dom.Text.degradedConnecting, running Dom.Text.connectingStatus, promise :: why)
+        | SessionLink.Reconnecting ({ Slow = true }, _) ->
+            Some (Dom.Text.degradedReconnecting, running "reconnecting", promise :: why)
+        | SessionLink.Fetching (_, { Failed = Some failure }, _) ->
+            Some (
+                Dom.Text.feedRetrying,
+                running "history retrying",
+                promise :: sprintf "%s · attempt %d" failure.Reason failure.Count :: why)
+        | SessionLink.Stalled (_, reason, _) -> Some (Dom.Text.feedPaused, stopped "history paused", promise :: reason :: why)
+        // A wait inside its quiet window is not a degradation and says nothing — a strip that
+        // flashed on every load would be chrome, not news.
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _
+        | SessionLink.Fetching _
+        | SessionLink.Current -> None
 
     /// Whether a catch-up is worth showing: PROGRESS, not health, so it is the one thing that
-    /// still speaks while everything works — and only once it has lasted long enough to be
-    /// something somebody is waiting on (`HistorySync`'s `slow`), and only toward an end the
-    /// session has named, since a bar needs a whole to be part of. Offline, freshness is
-    /// unknowable and nothing is said. One rule for its two faces, the sidebar's line and the
-    /// header's bar, so they cannot disagree about whether there is a catch-up to show.
+    /// still speaks while everything works — and only while the log is being fetched, once the
+    /// fetch has lasted long enough to be something somebody is waiting on (`Effort`'s `Slow`),
+    /// toward the end the session has named, since a bar needs a whole to be part of. Not
+    /// linked, there is no fetch, and nothing is said. One rule for its two faces, the
+    /// sidebar's line and the header's bar, so they cannot disagree about whether there is a
+    /// catch-up to show.
     let private showsCatchUp (model: ClientModel) : bool =
-        match model.Connection with
-        | Disconnected _
-        | Retrying _ -> false
-        | _ -> HistorySync.behind model.EventConsumer.Sync && HistorySync.slow model.EventConsumer.Sync
+        match model.Link with
+        | SessionLink.Fetching (_, { Slow = true }, _) -> true
+        | SessionLink.Fetching _
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _
+        | SessionLink.Stalled _
+        | SessionLink.Current
+        | SessionLink.Refused _ -> false
 
     /// The catch-up as a bar along the header's bottom rule (`Style.catchUpBar`): how much of
     /// the log this client has folded, of what it knows the log holds. A `progressbar` with
@@ -319,7 +355,7 @@ module View =
             let consumer = model.EventConsumer
             // Offsets count from zero, so the count folded is one past the last folded.
             let folded = consumer.LastProcessedOffset |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
-            let known = HistorySync.target consumer.LastProcessedOffset consumer.Sync |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
+            let known = SessionLink.target consumer.LastProcessedOffset model.Link |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
             let percent = if known <= 0L then 0.0 else 100.0 * float (min folded known) / float known
             let width = sprintf "width: %.1f%%" percent
             html $"""<div class="{Style.catchUpBar}" role="progressbar" aria-label="{Dom.Text.catchingUp}"
@@ -332,14 +368,15 @@ module View =
         let catchUp =
             if not showsCatchUp then Lit.nothing
             else
-                html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}" data-catch-up>{Dom.Text.catchingUp}</span><span class="{Style.label} tabular-nums"><b class="text-ink-dim" data-last-processed-offset>{offsetText consumer.LastProcessedOffset}</b> / <b class="text-ink-dim" data-latest-known-offset>{offsetText (HistorySync.target consumer.LastProcessedOffset consumer.Sync)}</b></span></span>"""
+                html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}" data-catch-up>{Dom.Text.catchingUp}</span><span class="{Style.label} tabular-nums"><b class="text-ink-dim" data-last-processed-offset>{offsetText consumer.LastProcessedOffset}</b> / <b class="text-ink-dim" data-latest-known-offset>{offsetText (SessionLink.target consumer.LastProcessedOffset model.Link)}</b></span></span>"""
         // The one thing a person can do about a settled disconnection. The supervised loop is
         // already trying; this is for the client it will not carry — a refused peer parks
         // until asked — and for anyone who would rather not wait out a backoff.
         let retry =
-            match model.Connection with
-            | Disconnected _
-            | Retrying _ ->
+            match model.Link with
+            | SessionLink.Refused _
+            | SessionLink.Connecting { Failed = Some _ }
+            | SessionLink.Reconnecting ({ Failed = Some _ }, _) ->
                 html $"""
                   <button type="button" class="{Style.btn}" data-retry-now
                           @click={Ev(fun _ -> dispatch RetryNowMsg)}>{Dom.Text.retryNow}</button>"""
@@ -384,7 +421,7 @@ module View =
             if quiet then Style.navLane1 else Style.cls [ Style.sideSection; Style.navLane1 ]
         html $"""
             <section class="{shape}"
-                     data-feed="{feedToken consumer.Feed}" data-connection="{connectionLabel model.Connection}">
+                     data-feed="{feedToken model.Link}" data-connection="{connectionLabel model.Link}">
               {body}
               {catchUp}
             </section>"""
@@ -1119,9 +1156,10 @@ module View =
     /// session is offering a button that cannot work. The degraded strip owns that moment,
     /// and one strip at a time is what it has always promised.
     let private signInPrompt (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
-        match model.Connection, ClientModel.signInRequired model with
-        | Disconnected _, _
-        | Retrying _, _
+        match model.Link, ClientModel.signInRequired model with
+        | SessionLink.Refused _, _
+        | SessionLink.Connecting { Failed = Some _ }, _
+        | SessionLink.Reconnecting ({ Failed = Some _ }, _), _
         | _, [] -> Lit.nothing
         // Whichever came first in the derivation's settled order. A second row would be the
         // same instruction twice, and the panel it opens shows every provider anyway.
@@ -3454,19 +3492,21 @@ module View =
         // that appeared on every cold open and vanished a round trip later would be the red
         // "history paused" this replaced, one voice quieter. What is left is the case nobody
         // can fix from here: a client that cannot reach its session, holding a conversation
-        // that starts in the middle. The gate is the degradation strip's own — a settled,
-        // REASONED disconnection — so a client that has not yet asked `/me` says nothing.
+        // that starts in the middle. The gate is the link's own (`SessionLink.cutOff`) — an
+        // attempt that FAILED, or reads that gave up — so a client still on its first try says
+        // nothing.
         let missing =
-            match model.LocalCopy, model.Connection, model.EventConsumer.Feed with
-            | LocalCopy.Kept (Some _), Disconnected (Some _), _
-            | LocalCopy.Kept (Some _), Retrying _, _
-            | LocalCopy.Kept (Some _), _, FeedStalled _ ->
+            match model.LocalCopy with
+            | LocalCopy.Kept (Some _) when SessionLink.cutOff model.Link ->
                 Some (
                     html $"""
                         <p class="{Style.historyGap}" data-history-gap>
                           <span class="{Style.historyGapText}">{Dom.Text.historyMissingLocally}</span>
                         </p>""")
-            | (LocalCopy.Reading | LocalCopy.Kept _ | LocalCopy.NoneKept | LocalCopy.Unkeepable), _, _ -> None
+            | LocalCopy.Reading
+            | LocalCopy.Kept _
+            | LocalCopy.NoneKept
+            | LocalCopy.Unkeepable -> None
         // This client has not yet read the log through, so a message may still be a round
         // trip from landing. Shaped like the row it may become: an author line of the same
         // height as a real one, `invisible` so it reserves the room without drawing a blank
@@ -3487,15 +3527,27 @@ module View =
                     <span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{Dom.Text.readingHistory}</span>
                   </p>
                 </section>"""
+        // Fetching the history, and for long enough to say so. Not while the session is still
+        // being reached: nothing is being caught up on then, and the status line is saying what
+        // is happening.
+        let catchingUp =
+            match model.Link with
+            | SessionLink.Fetching (_, { Slow = true }, _) -> true
+            | SessionLink.Fetching _
+            | SessionLink.Connecting _
+            | SessionLink.Reconnecting _
+            | SessionLink.Stalled _
+            | SessionLink.Current
+            | SessionLink.Refused _ -> false
         let body =
             match showsFolded, rows, items with
             // Still reading. The line saying so waits as the header's catch-up bar does,
-            // until the wait has lasted long enough to be worth saying (`HistorySync.slow`):
+            // until the wait has lasted long enough to be worth saying (`Effort`'s `Slow`):
             // a reload's own store answers in a few hundred milliseconds, and "catching up"
             // over a conversation already on this device, for that long, is a flash of a
             // state nobody is in. Anything of this client's own on the screen regardless — a
             // command it queued, an add the session refused — stays, under it.
-            | false, _, _ when HistorySync.slow model.EventConsumer.Sync -> reading :: items
+            | false, _, _ when catchingUp -> reading :: items
             | false, _, _ -> items
             // Shown, and there is genuinely nothing: the caret only ever means what it has
             // always said, which is why it can stay wordless and decorative. Unless what is
