@@ -1,11 +1,14 @@
 # UI baseline
 
-Rules for UI surfaces: this project, `app/tokens.css` and the pages `app/` renders.
+Rules for UI surfaces: this project, `app/tokens.css` and the pages that `app/` renders.
 
-Read `docs/visual-design.md` BEFORE you change a surface. It states what the product looks like,
-why, and the order to settle a disagreement in. Its values are `app/tokens.css`, short on purpose.
+Read [`docs/visual-design.md`](../../docs/visual-design.md) BEFORE you change a surface. WCAG 2.0
+AA is the floor for every surface ([`AGENTS.md`, "UI baseline"](../../AGENTS.md#ui-baseline)).
 
-WCAG 2.0 AA is the floor for every surface, not a follow-up. "Chrome consistency" pins the
-structure (labels, `th scope`, `lang`, title). No central test pins the keyboard: every action is a
-real `<a>`, `<button>` or `<input>`, with no click-only elements. Tab, Enter and Space operate it.
-A DOM swap that replaces the focused element must refocus its replacement. Never strand focus.
+The "Chrome consistency" suite pins the structure: labels, `th scope`, `lang` and title
+([`tests/AGENTS.md`](../../tests/AGENTS.md#ui-tests-pin-an-invariant-never-a-design)). No central
+test pins the keyboard. You hold it:
+
+- Make every action a real `<a>`, `<button>` or `<input>`. Use no click-only element.
+- Tab, Enter and Space operate every action.
+- When a DOM swap replaces the focused element, focus the replacement. Never strand focus.
