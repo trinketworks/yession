@@ -4,8 +4,8 @@ This file records why the yession mark looks as it does. Part one describes the 
 what it is, how the generator builds it, the constraints it meets, and the rules for using it.
 Part two lists the directions that lost, and why. Git history holds the full pass-by-pass log.
 
-`assets/logo/gen.py` generates the mark and every file derived from it. `assets/logo/README.md`
-lists each file and the surface it serves. The study files that part two names are the SVG
+`assets/logo/gen.py` generates the mark and every file derived from it.
+[`assets/logo/README.md`](../../assets/logo/README.md) lists each file and the surface it serves. The study files that part two names are the SVG
 files in the directories of this folder, one directory per pass.
 
 ## The current mark
@@ -173,18 +173,19 @@ discretely. This is safe, because a face only turns over when it is edge-on.
   visible and flat where it is not.
 - **Filters.** SVG filters are slow at scale. They render differently across engines, and
   several icon and email pipelines drop them. The mark depends on filters. The 16px cut has none.
-- **One lit object.** The brand mark is the one lit object in the product. Nothing else may
-  look lit. `docs/visual-design.md` (Form) states the rule.
+- **One lit object.** The brand mark is the one lit object in the product.
+  [`docs/visual-design.md`, Form](../visual-design.md#form) owns the rule.
 
 ### Type
 
-Sans is the machine: the chrome, and the agent, which is part of it. Serif is the person. Noto
+[`docs/visual-design.md`, Type](../visual-design.md#type) owns the rule: sans is the machine,
+serif is the person. The agent is part of the machine. This section records the faces. Noto
 Sans sets the chrome and the agent. Source Serif 4 sets a person's words: messages, drafts, and
 the composer. It uses 15px at weight 350. The terminal keeps Monaspace Neon.
 
-The typeface says who is speaking before a reader reaches the author line. Source Serif 4 is the
-companion of Source Sans, so the difference between the two registers is one of class alone. A
-conversation then reads as one voice in two registers, not two typefaces arguing.
+Source Serif 4 is the companion of Source Sans, so the difference between the two registers is
+one of class alone. A conversation then reads as one voice in two registers, not two typefaces
+arguing.
 
 The 350 is an instance cut from the variable font and weighted by eye against Noto Sans 300 on
 black. `app/tailwind.css` declares the face (`@font-face 'Source Serif 4'`). `app/tokens.css`
@@ -202,7 +203,8 @@ declarations in `app/tailwind.css` holds the full face story.
    read that preference.
 5. Do not make anything else in the product look lit.
 6. Set the agent and the chrome in the sans. Set a person's words in the serif.
-7. For file sizes, the wordmark and the icon, read `assets/logo/README.md`.
+7. For file sizes, the wordmark and the icon, read
+   [`assets/logo/README.md`](../../assets/logo/README.md).
 
 ## Rejected directions
 
@@ -224,8 +226,8 @@ generator for them.
   seam. Curvature is the loudest lever: four degrees of bow turns a rendering of a solid into
   something with a temperament. Lost: `petal` and `draw` collapse into a blob and a star at
   16px. The straight seam keeps the set consistent. `hold` shrank the agent's face inside the
-  human ones. That changes the argument, not the mood: authority is scoped, and the small thing
-  is held.
+  human ones. That changes the argument, not the mood: authority has a scope, and something
+  larger holds the small thing.
 - **Pass 4, `fold/`.** A crease in each hexagon face gives six triangles. Three interior edges
   are the Y and three are folds, which show only as a step in value. Lost: `stemmed` and
   `offaxis` read as a letter, but the cube stops being geometrically true. Six flats survive

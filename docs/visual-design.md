@@ -5,8 +5,9 @@ rule a test, so a visual question has a derivation and not a taste.
 
 [`app/tokens.css`](../app/tokens.css) defines, once, every value the rules name — a colour, a
 step on the type ramp, a length. That file is short on purpose. Read it with this one.
-`src/Yession.App/Style.fs` composes what each surface wears. The architecture is
-[`technical-design.md`](technical-design.md).
+[`src/Yession.App/Style.fs`](../src/Yession.App/Style.fs) composes what each surface wears.
+[`technical-design.md`](technical-design.md) owns the architecture. The brand mark has its own
+record in [`brand/README.md`](brand/README.md).
 
 ## Stance
 
@@ -18,8 +19,8 @@ flat: sharp rectangles on black, and nothing that does no job.
 
 Each principle has a test. Apply the test before you change a surface.
 
-1. **Content is the interface.** Chrome frames content: it shows where things belong and
-   which one is selected, then gets out of the way.
+1. **Content is the interface.** Chrome frames content. It shows where things belong and
+   which thing is the selection. It does nothing more.
    *Test: remove the element. If the content, its groups and the selection are no harder to
    see, the element goes.*
 
@@ -94,7 +95,7 @@ word.
 *Test: count the red words on a surface. The count is one or zero. Count a repeated row by
 itself.*
 
-People are told apart by square display pics, never by a name colour.
+A reader tells people apart by their square avatars, never by a name colour.
 
 The blue→green gradient exists exactly once, on the composer's focus edge. It marks the one
 place where the person and the agent meet.
@@ -138,7 +139,8 @@ follow the same geometry: square caps, no curves, no fills, and a stroke weight 
 the type it sits beside.
 
 The brand mark (`Brand.mark`) is the one lit object. It is a picture, not a surface. The
-"Honest materials" rule does not govern it. The exemption is that object, not that one
+"Honest materials" rule does not govern it. [`brand/README.md`](brand/README.md) records how
+the mark is lit. The exemption is that object, not that one
 value. A picture of the mark's object may carry the mark's shading in any place. The
 agent's thinking cube (`Style.agentThinking`) is the mark's cube as it turns, so the cube
 keeps its shaded faces. A picture holds no words and takes no press. Nothing else may look
@@ -308,5 +310,5 @@ right*. Ask both questions, in that order.
 Copy. Which element marks an empty state. The layout of one surface. Whether a thing is
 worth building. These are the design changing, which is what a design is for.
 
-"The layout of one surface" is which arrangement a surface chooses, not whether its text
-stands on a rail. Space governs the rail in every column, a table's columns included.
+"The layout of one surface" does not exempt a column of text from its rail. See
+[Space](#space).
