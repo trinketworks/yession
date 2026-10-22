@@ -904,9 +904,10 @@ After the fixes land, one pass rewrites it to what still reproduces.
       the `container:` block, so under `srt` or `host` there is nowhere to write one. The
       exception is `dialect`, which a sandbox with no container refuses because it reads as if
       it would apply.
-    - **Only a block that died from SIGKILL can say "killed: out of memory".** A terminal block
-      reads its container's `memory.events` before and after it runs (`MemoryWatch` in
-      `Terminals.fs`). When `oom_kill` went up and the block exited 137, it says so, and whether
+    - **Only a block that died from SIGKILL can say "killed: out of memory".** The Docker
+      backend reads its container's `memory.events` around every process it starts
+      (`MemoryWatch` in `src/Yession.Domain/Sandbox.fs`). When `oom_kill` went up and the
+      process exited 137, it says so, and whether
       the container hit its own limit (`oom` went up too) or the machine ran out (`oom` did
       not). What it cannot say:
       - A block whose CHILD died and which then exited with its own code reports that code (a
