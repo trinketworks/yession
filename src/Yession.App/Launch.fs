@@ -228,7 +228,7 @@ module Launch =
 
     /// The live question `anchor` asks, once, on the way to deciding: this client is
     /// connected and has read the log through to where the session says it ends
-    /// (`readThrough`, which `ClientModel` answers from `HistorySync`), and the
+    /// (`readThrough`, which `ClientModel` answers from `SessionLink.Current`), and the
     /// session has not BEGUN - no repo in it and nothing said. A session that has begun is
     /// the agent's to add a repo to (Plan 15).
     ///

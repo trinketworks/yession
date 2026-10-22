@@ -20,51 +20,14 @@ open Yession.App.Codecs
 /// collaborative state, the conversation projection, the event-consumer read position,
 /// and the agent view state. See docs/technical-design.md §2.1, §2.3.
 
-type ConnectionState =
-    /// Not connected and not trying. Carries WHY whenever the client knows — a rejected
-    /// token — because a bare "disconnected" is the same dead end the event feed used to
-    /// be: a true statement that helps nobody. A session that could not be reached is never
-    /// this: it is `Retrying`, because it is being tried again.
-    | Disconnected of reason: string option
-    /// About to have, or opening, a transport. `slow` is whether the attempt has run long
-    /// enough to be worth SAYING (`ClientModel.connectingQuietMs`): every client starts here,
-    /// and a connect that lands inside the window says nothing, so a healthy load never
-    /// flashes a status. One that does not land is reported, on every width, rather than
-    /// leaving a person looking at a page that might be working or might be stuck. Only the
-    /// timer `ClientModel.timers` declares sets it, and only while connecting.
-    | Connecting of slow: bool
-    | Connected
-    | Reconnecting
-    /// Not connected, and still trying: the last attempt to reach the session (`/me`, or
-    /// opening the transport) failed for `reason`, and `failures` attempts have failed in a row. Distinct from `Disconnected`
-    /// because what a person should take from it differs — not "this is broken" but "this is
-    /// being worked on" — and from `Connecting` because it has news: why, and how long.
-    | Retrying of reason: string * failures: int
-
 type PeerState = { PeerId : PeerId; DisplayName : string }
-
-/// The durable event feed's health — the leg that carries HISTORY, which in the browser is
-/// HTTP by cursor — immutable ranges kept in the client's own store — rather than the data
-/// channel. Deliberately separate from `ConnectionState`: either leg can be down while the
-/// other works, and neither takes the client with it. Collaborative state is CRDT state in a
-/// local doc, so a dead feed costs history, not the ability to read, write, or send
-/// (docs/technical-design.md §1, local-first).
-type FeedHealth =
-    /// The last read succeeded — history is current.
-    | FeedLive
-    /// A read failed and the resilience policy is still trying. `attempt` is how many have
-    /// failed so far; `reason` is the fault, for the degraded banner.
-    | FeedRetrying of attempt: int * reason: string
-    /// The policy gave up. History is whatever is already local, and stays that way until
-    /// the next availability hint or reconnect re-arms the read — editing keeps working.
-    | FeedStalled of reason: string
 
 /// What this device holds of the session's history (Plan 20): the reader's own last picture,
 /// kept in this client's store and replayed before the network is asked. Its own union, beside
-/// `HistorySync` rather than inside it, because the two are answered by different things and
+/// `SessionLink` rather than inside it, because the two are answered by different things and
 /// either can come first: the store answers once per page load, and the session answers as
 /// often as it is asked. A network that beats a slow store leaves this `Reading` while the
-/// history is read through; a store that answers first leaves the history `Opening`.
+/// history is read through; a store that answers first leaves the page still opening.
 ///
 /// It replaces three facts that each said part of it: a `kept` flag inside `HistorySync`'s
 /// opening, a `MissingBefore` offset on the consumer, and whether the page could keep history
@@ -116,7 +79,7 @@ module LocalCopy =
 
     /// A page off the NETWORK: it resumes at the cursor and runs unbroken from it, so whatever
     /// the store was missing before it is being filled, and what is left to arrive is ordinary
-    /// catch-up, which `HistorySync` already says.
+    /// catch-up, which `SessionLink` already says.
     let fetched (local: LocalCopy) : LocalCopy =
         match local with
         | LocalCopy.Kept (Some _) -> LocalCopy.Kept None
@@ -125,103 +88,250 @@ module LocalCopy =
         | LocalCopy.NoneKept
         | LocalCopy.Unkeepable -> local
 
-/// Where this client's picture of the log stands against where the session says the log
-/// ends. One union rather than the flags it replaced (`HistoryRead`, `IsCatchingUp`,
-/// `CatchUpIsSlow`, an optional latest offset and the `HeardThrough` latch), because those
-/// spelled sixteen states and four of them were real — and the others were what the screen
-/// showed: an idle caret saying "nothing was ever said here" over a session whose history was
-/// a round trip away, because "looked at my own store" read as "read the log".
+/// An attempt that failed: why, and how many have failed in a row.
+type Failure = { Reason : string; Count : int }
+
+/// How a wait is going. `Slow` is whether it has lasted long enough to be worth SAYING, which
+/// only the timer the model declares for it sets (`ClientModel.timers`): a link that lands, or
+/// a page that comes back, inside the quiet window says nothing, so a healthy load never
+/// flashes a status and a send — which puts a client one event behind itself for a round
+/// trip — never lights one. `Failed` is the last attempt's failure, while the wait goes on:
+/// not "this is broken" but "this is being worked on, and here is why".
+type Effort = { Slow : bool; Failed : Failure option }
+
+module Effort =
+
+    /// A wait just begun: nothing to say yet, and nothing has failed.
+    let fresh : Effort = { Slow = false; Failed = None }
+
+/// Whether this page has read the log through since it loaded. Before, whatever is folded is a
+/// replay of the past — this device's kept copy, the first pages off the network — and not
+/// news; after, what a page brings IS news. Once read through, a page never opens again: a
+/// reconnect, or the round trip after any send, is news being fetched.
+[<RequireQualifiedAccess>]
+type Phase =
+    | Opening
+    | ReadThrough
+
+/// This page's session: reaching it, and reading its log, as ONE state.
 ///
-/// `slow` lives inside the two cases that wait, so "slow but not waiting" cannot be written,
-/// and is set only by the timer the model declares while waiting (`ClientModel.timers`):
-/// sending a message puts a client one event behind itself for a round trip, and a status
-/// that flipped on every send would be a flicker, not information.
-type HistorySync =
-    /// Has not yet been current since this page loaded: whatever is folded is a replay of the
-    /// past (the local store, the first pages), not news. `target` is where the session said
-    /// the log ends, `None` until it has said. Whether any of what is folded came out of this
-    /// client's own store is `LocalCopy`'s to say, not this.
-    | Opening of target: EventOffset option * slow: bool
-    /// Was current, and the session has since said its log runs past what is folded.
-    | Behind of target: EventOffset * slow: bool
-    /// Has folded everything the session has said its log holds — including the case where it
-    /// said the log is empty, which "not yet told" can no longer be confused with.
+/// It replaces three that each said part of it — the transport's (`ConnectionState`), the
+/// history's against the end of the log (`HistorySync`), and the history feed's health
+/// (`FeedHealth`) — which could be combined in ways no page is ever in, and which the screen
+/// then showed: "reconnecting" with the catch-up bar running beside it, a history read failing
+/// on a page with no link to read over, a link up with no word of where the log ends. Here a
+/// page that is fetching is linked, a page that is reaching is not fetching, and a read that
+/// fails is a fact about the fetch.
+///
+/// `Phase` rides the cases where either is possible. A first reach is always opening, and a
+/// page that is current has read the log through.
+[<RequireQualifiedAccess>]
+type SessionLink =
+    /// Reaching the session for the first time since this page loaded — the state every page
+    /// starts in, and the server-rendered shell is this state too.
+    | Connecting of Effort
+    /// Reaching it again: the link was lost, or this page was let back in to try again.
+    | Reconnecting of Effort * Phase
+    /// Linked, and reading the log towards `target`, where the session says it ends. A
+    /// `target` is never moved backwards: a hint can be older than a page already folded.
+    | Fetching of target: EventOffset * Effort * Phase
+    /// Linked, and the reads gave up short of `target` (`reason`). The feed's resilience
+    /// policy had already spent its retries, so nothing more is asked until the session says
+    /// there is news, or the link comes back. History is whatever is folded, and editing keeps
+    /// working.
+    | Stalled of target: EventOffset * reason: string * Phase
+    /// Linked, and everything the session has said its log holds is folded — including the
+    /// case where it said the log is empty.
     | Current
+    /// The session heard this page and would not have it (`reason`): a stale token. Nothing
+    /// is tried until a person does something, because the same token would be refused again.
+    | Refused of reason: string * Phase
 
-module HistorySync =
+module SessionLink =
 
-    /// Whether the read has lasted long enough to be worth saying.
-    let slow (sync: HistorySync) : bool =
-        match sync with
-        | Opening (_, slow)
-        | Behind (_, slow) -> slow
-        | Current -> false
+    /// Whether this page has read the log through since it loaded.
+    let phase (link: SessionLink) : Phase =
+        match link with
+        | SessionLink.Connecting _ -> Phase.Opening
+        | SessionLink.Reconnecting (_, phase)
+        | SessionLink.Fetching (_, _, phase)
+        | SessionLink.Stalled (_, _, phase)
+        | SessionLink.Refused (_, phase) -> phase
+        | SessionLink.Current -> Phase.ReadThrough
 
-    /// Where the log ends, as far as this client knows: the target it is reading towards, or,
-    /// once current, what it has folded.
-    let target (folded: EventOffset option) (sync: HistorySync) : EventOffset option =
-        match sync with
-        | Opening (target, _) -> target
-        | Behind (target, _) -> Some target
-        | Current -> folded
+    /// Whether the page has a link to its session: one it can send over and read over.
+    let live (link: SessionLink) : bool =
+        match link with
+        | SessionLink.Fetching _
+        | SessionLink.Stalled _
+        | SessionLink.Current -> true
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _
+        | SessionLink.Refused _ -> false
 
-    /// Whether there is a known end this client has not folded to — the one state in which a
-    /// read is owed.
-    let behind (sync: HistorySync) : bool =
-        match sync with
-        | Opening (Some _, _)
-        | Behind _ -> true
-        | Opening (None, _)
-        | Current -> false
+    /// Whether nothing more is coming to this page's picture of the log for now: it cannot
+    /// reach its session, or its reads have stopped getting through. What it has is then all
+    /// it will have, and waiting to show it would be waiting for nothing.
+    let cutOff (link: SessionLink) : bool =
+        match link with
+        | SessionLink.Connecting { Failed = Some _ }
+        | SessionLink.Reconnecting ({ Failed = Some _ }, _)
+        | SessionLink.Stalled _
+        | SessionLink.Refused _ -> true
+        | SessionLink.Connecting { Failed = None }
+        | SessionLink.Reconnecting ({ Failed = None }, _)
+        | SessionLink.Fetching _
+        | SessionLink.Current -> false
 
-    /// Whether this client has, once, been current since the page loaded — after which what a
-    /// page brings is NEWS, and before which it is history being replayed. A later catch-up
-    /// (a reconnect, the round trip after any send) is `Behind`, never `Opening` again.
-    let heardThrough (sync: HistorySync) : bool =
-        match sync with
-        | Opening _ -> false
-        | Behind _
-        | Current -> true
+    /// Where the log ends, as far as this page knows: the end it is reading towards, or, once
+    /// current, what it has folded. Nothing while it is not linked.
+    let target (folded: EventOffset option) (link: SessionLink) : EventOffset option =
+        match link with
+        | SessionLink.Fetching (target, _, _)
+        | SessionLink.Stalled (target, _, _) -> Some target
+        | SessionLink.Current -> folded
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _
+        | SessionLink.Refused _ -> None
 
-    /// The session said its log ends at `latest` (`None`: the log is empty). An end is never
-    /// moved backwards — a hint can be older than a page already folded.
-    let told (folded: EventOffset option) (latest: EventOffset option) (sync: HistorySync) : HistorySync =
-        let latest = EventOffset.maxOption (target folded sync) latest
-        let reached =
-            match latest, folded with
-            | None, _ -> true
-            | Some _, None -> false
-            | Some latest, Some folded -> EventOffset.value folded >= EventOffset.value latest
-        match sync, latest with
-        | _, _ when reached -> Current
-        | Opening (_, slow), _ -> Opening (latest, slow)
-        | _, Some latest -> Behind (latest, slow sync)
-        | _, None -> Current
+    let private reached (folded: EventOffset option) (target: EventOffset) : bool =
+        match folded with
+        | Some folded -> EventOffset.value folded >= EventOffset.value target
+        | None -> false
 
-    /// `folded` moved and nothing new was said about the end. Before the session has said
-    /// anything there is nothing to have reached: a page out of this client's own store says
-    /// what it kept, never where the log ends.
-    let folded (folded: EventOffset option) (sync: HistorySync) : HistorySync =
-        match sync with
-        | Opening (None, _) -> sync
-        | _ -> told folded None sync
+    /// A fetch towards `target` begun now. An opening one has been waited on since the page
+    /// loaded, so it is already slow if the page has waited (`waited`); news is a wait of its
+    /// own, from now.
+    let private fetching (waited: bool) (target: EventOffset) (phase: Phase) : SessionLink =
+        let slow =
+            match phase with
+            | Phase.Opening -> waited
+            | Phase.ReadThrough -> false
+        SessionLink.Fetching (target, { Effort.fresh with Slow = slow }, phase)
 
-    /// The timer's verdict. Nothing to say once current.
-    let withSlow (slow: bool) (sync: HistorySync) : HistorySync =
-        match sync with
-        | Opening (target, _) -> Opening (target, slow)
-        | Behind (target, _) -> Behind (target, slow)
-        | Current -> Current
+    /// An attempt to reach the session is under way (`ConnectingMsg`). Said again as the
+    /// channel comes up, inside the same attempt, which it leaves alone: restarting it would
+    /// take a status that is showing off the screen and put it back a moment later. A page
+    /// let back in after a refusal, or one whose link has gone, is reaching again.
+    let connecting (link: SessionLink) : SessionLink =
+        match link with
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _ -> link
+        | SessionLink.Fetching (_, _, phase)
+        | SessionLink.Stalled (_, _, phase)
+        | SessionLink.Refused (_, phase) ->
+            match phase with
+            | Phase.Opening -> SessionLink.Connecting Effort.fresh
+            | Phase.ReadThrough -> SessionLink.Reconnecting (Effort.fresh, phase)
+        | SessionLink.Current -> SessionLink.Reconnecting (Effort.fresh, Phase.ReadThrough)
+
+    /// An attempt to reach the session failed, and it will be tried again (`RetryingMsg`).
+    let failed (failure: Failure) (link: SessionLink) : SessionLink =
+        match link with
+        | SessionLink.Connecting effort -> SessionLink.Connecting { effort with Failed = Some failure }
+        | SessionLink.Reconnecting (effort, phase) -> SessionLink.Reconnecting ({ effort with Failed = Some failure }, phase)
+        | SessionLink.Fetching (_, _, phase)
+        | SessionLink.Stalled (_, _, phase) -> SessionLink.Reconnecting ({ Effort.fresh with Failed = Some failure }, phase)
+        | SessionLink.Current -> SessionLink.Reconnecting ({ Effort.fresh with Failed = Some failure }, Phase.ReadThrough)
+        | SessionLink.Refused _ -> link
+
+    /// The session took this page, and said its log ends at `latest` (`None`: it is empty).
+    let accepted (waited: bool) (folded: EventOffset option) (latest: EventOffset option) (link: SessionLink) : SessionLink =
+        match latest with
+        | Some latest when not (reached folded latest) -> fetching waited latest (phase link)
+        | Some _
+        | None -> SessionLink.Current
+
+    /// The session would not have this page.
+    let refused (reason: string) (link: SessionLink) : SessionLink = SessionLink.Refused (reason, phase link)
+
+    /// The link closed. Whatever was being fetched resumes from where the fold got to once a
+    /// link is back, which the model already says; a refusal stays what it was.
+    let dropped (link: SessionLink) : SessionLink =
+        match link with
+        | SessionLink.Refused _ -> link
+        | SessionLink.Connecting _ -> SessionLink.Reconnecting (Effort.fresh, Phase.Opening)
+        | SessionLink.Reconnecting (_, phase)
+        | SessionLink.Fetching (_, _, phase)
+        | SessionLink.Stalled (_, _, phase) -> SessionLink.Reconnecting (Effort.fresh, phase)
+        | SessionLink.Current -> SessionLink.Reconnecting (Effort.fresh, Phase.ReadThrough)
+
+    /// The session said its log now ends at `latest`. A page that is not linked heard it on a
+    /// link that has gone, and it says nothing about the next one.
+    let told (waited: bool) (folded: EventOffset option) (latest: EventOffset) (link: SessionLink) : SessionLink =
+        let further (target: EventOffset) =
+            if EventOffset.value latest > EventOffset.value target then latest else target
+        match link with
+        | SessionLink.Current when reached folded latest -> SessionLink.Current
+        | SessionLink.Current -> fetching waited latest Phase.ReadThrough
+        | SessionLink.Fetching (target, effort, phase) -> SessionLink.Fetching (further target, effort, phase)
+        // News is what re-arms a read that gave up.
+        | SessionLink.Stalled (target, _, phase) -> fetching waited (further target) phase
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _
+        | SessionLink.Refused _ -> link
+
+    /// What is folded moved to `folded`, from this device's store or off the network. Reaching
+    /// the end being read towards makes a page current, whichever brought it.
+    let folded (folded: EventOffset option) (link: SessionLink) : SessionLink =
+        match link with
+        | SessionLink.Fetching (target, _, _)
+        | SessionLink.Stalled (target, _, _) when reached folded target -> SessionLink.Current
+        | _ -> link
+
+    /// A page arrived off the NETWORK, which is proof the reads work: a failure the fetch was
+    /// carrying is over, and a fetch that had given up is fetching again.
+    let read (waited: bool) (link: SessionLink) : SessionLink =
+        match link with
+        | SessionLink.Fetching (target, effort, phase) -> SessionLink.Fetching (target, { effort with Failed = None }, phase)
+        | SessionLink.Stalled (target, _, phase) -> fetching waited target phase
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _
+        | SessionLink.Current
+        | SessionLink.Refused _ -> link
+
+    /// A read failed, and the feed's resilience policy is trying it again (`ReadRetryingMsg`).
+    let readFailing (failure: Failure) (link: SessionLink) : SessionLink =
+        match link with
+        | SessionLink.Fetching (target, effort, phase) -> SessionLink.Fetching (target, { effort with Failed = Some failure }, phase)
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _
+        | SessionLink.Stalled _
+        | SessionLink.Current
+        | SessionLink.Refused _ -> link
+
+    /// The reads gave up (`reason`): the policy has spent its retries.
+    let gaveUp (reason: string) (link: SessionLink) : SessionLink =
+        match link with
+        | SessionLink.Fetching (target, _, phase) -> SessionLink.Stalled (target, reason, phase)
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _
+        | SessionLink.Stalled _
+        | SessionLink.Current
+        | SessionLink.Refused _ -> link
+
+    /// The wait the model timed has lasted long enough to say (`EffortSlowMsg`). Nothing to
+    /// land on once the wait it timed has ended.
+    let slowed (link: SessionLink) : SessionLink =
+        match link with
+        | SessionLink.Connecting effort -> SessionLink.Connecting { effort with Slow = true }
+        | SessionLink.Reconnecting (effort, phase) -> SessionLink.Reconnecting ({ effort with Slow = true }, phase)
+        | SessionLink.Fetching (target, effort, Phase.ReadThrough) -> SessionLink.Fetching (target, { effort with Slow = true }, Phase.ReadThrough)
+        | SessionLink.Fetching (_, _, Phase.Opening)
+        | SessionLink.Stalled _
+        | SessionLink.Current
+        | SessionLink.Refused _ -> link
+
+    /// The page has been open long enough for its wait to be worth saying (`PageWaitedMsg`):
+    /// an opening fetch, which has been waited on since the page loaded, is now slow.
+    let waited (link: SessionLink) : SessionLink =
+        match link with
+        | SessionLink.Fetching (target, effort, Phase.Opening) -> SessionLink.Fetching (target, { effort with Slow = true }, Phase.Opening)
+        | _ -> link
 
 /// How far the client has consumed the event log versus what it knows exists.
 type EventConsumerState =
     { LastProcessedOffset : EventOffset option
-      /// Where that stands against the end of the log (`HistorySync`).
-      Sync                : HistorySync
-      /// Whether reads are getting through at all. `Sync` says there is more to
-      /// read; this says whether reading is possible — the distinction the old design had
-      /// no way to express, because a failed fetch was reported as an empty final page.
-      Feed                : FeedHealth
       /// The event read this client has out, by its number (`ClientModel.ReadsAsked`), or
       /// `None` when nothing is out. At most one at a time (`ClientModel.reads`), and only the
       /// answer that carries this number settles it — so an answer from a connection that has
@@ -554,8 +664,8 @@ type RemotePresence =
 type TerminalFeed =
     { Records : Map<int, TranscriptRecord>
       /// The transcript length this client believes the session has, from availability
-      /// hints and from the records it has seen. Drives catch-up the way
-      /// `HistorySync`'s target drives the event feed.
+      /// hints and from the records it has seen. Drives catch-up the way the target of a
+      /// `SessionLink.Fetching` drives the event feed.
       KnownLength : int
       /// How far a contiguous prefix has been read. Fetching resumes here.
       ReadThrough : int
@@ -1447,7 +1557,14 @@ type UploadAnswer =
 
 type ClientModel =
     { Peer          : PeerState
-      Connection    : ConnectionState
+      /// This page's session: reaching it, and reading its log (`SessionLink`).
+      Link          : SessionLink
+      /// Whether this page has been open long enough that a wait for its conversation is worth
+      /// saying (`ClientModel.catchUpQuietMs`, from load). The reader's clock rather than any
+      /// one attempt's: they have been looking at the page since it loaded, so a slow store and
+      /// then a slow fetch are one wait to them, not two quiet ones. Set once, for good, by the
+      /// timer the model declares for it (`ClientModel.timers`).
+      Waited        : bool
       /// The serving session's id: seeded from the shell (so it is known before — and
       /// without — any connection) and re-learned from `PeerAccepted`. Shown as the
       /// header's secondary identifier beside the editable title, and it names the session
@@ -1993,7 +2110,7 @@ type DomMove =
 
 /// Messages that drive the client model. Connection-lifecycle messages are produced by
 /// the connection driver (Connection.fs); the suffix avoids clashing with the
-/// `ConnectionState` cases and the transport frame DU cases. Draft and queue messages
+/// `SessionLink` cases and the transport frame DU cases. Draft and queue messages
 /// mutate only the synced collaborative state; the Ylmish binding turns those model
 /// changes into CRDT deltas — sending needs no command round-trip (Phase 3).
 type ClientMsg =
@@ -2033,20 +2150,20 @@ type ClientMsg =
     /// flashed a red "history paused" over every cold open with an out-of-order store,
     /// moments before the first page fixed it.
     | LocalHistoryMsg of kept: EventPage<SessionEvent> * gapAt: EventOffset option
-    /// The event feed's health changed: a read failed and is being retried (reported by the
-    /// resilience policy composed with the transport), or it failed for good (reported by
-    /// the read loop, which is the one place that knows a read is over). A successful page
-    /// needs no message — `EventsPageMsg` itself proves the feed is live.
-    | EventFeedMsg of FeedHealth
-    /// Catch-up has been running long enough to be worth saying (or has stopped being).
-    /// The client arms a timer when catch-up begins; this is what the timer reports, and
-    /// it is the ONLY thing that lights the "catching up" status — see
-    /// `HistorySync` for why the truth alone is too noisy to show.
-    | CatchUpSlowMsg of bool
-    /// The attempt to connect has run for `ClientModel.connectingQuietMs` — fired by the timer
-    /// `ClientModel.timers` declares while the model is `Connecting false`, never by anything
-    /// else. It is what makes the connecting status visible (`ConnectionState.Connecting`).
-    | ConnectingSlowMsg
+    /// A read of the log failed and is being tried again: reported by the resilience policy
+    /// composed with the transport, which is the one place that knows a retry is under way.
+    /// A read that fails for good is its answer's to say (`EventsReadMsg`), and a page that
+    /// arrives needs no message at all — it proves the reads work.
+    | ReadRetryingMsg of Failure
+    /// The wait the model is timing — an attempt to reach the session, or news being fetched
+    /// — has lasted long enough to be worth saying (`ClientModel.connectingQuietMs`,
+    /// `ClientModel.catchUpQuietMs`). Fired by the timer `ClientModel.timers` declares for it,
+    /// never by anything else, and the ONLY thing that makes a wait speak: the truth alone
+    /// flickers, because a send puts a client one event behind itself for a round trip.
+    | EffortSlowMsg
+    /// The page has been open for `ClientModel.catchUpQuietMs` (`ClientModel.Waited`) —
+    /// fired once, by the timer `ClientModel.timers` declares from load.
+    | PageWaitedMsg
     /// The agent's writing sat still at this stamp for `ClientModel.writingQuietMs` — fired
     /// by the timer `ClientModel.timers` declares for it, never by anything else.
     | AgentQuietMsg of WritingStamp
@@ -2659,10 +2776,13 @@ module ClientModel =
     /// so the first paint says `Connecting` — which the report keeps silent until it has lasted
     /// `connectingQuietMs` — rather than wearing the "not connected" strip for the ~75ms until
     /// the transport is asked and then reflowing the panes under it up by the strip's height. A
-    /// genuine failure replaces this with `Disconnected reason` and earns the strip.
+    /// genuine failure is said as one, and earns the strip.
     let init (peer: PeerState) : ClientModel =
         { Peer = peer
-          Connection = Connecting false
+          // Nothing said yet about where the log ends, and the server-rendered shell is this
+          // state too: at first paint nobody has read anything.
+          Link = SessionLink.Connecting Effort.fresh
+          Waited = false
           Session = None
           Manager = None
           EphemeralStorage = false
@@ -2676,14 +2796,7 @@ module ClientModel =
           Launch = Launch.empty
           Repos = Repos.ReposProjection.empty
           Timeline = TimelineProjection.empty
-          EventConsumer =
-            { LastProcessedOffset = None
-              // Nothing said yet about where the log ends, and the server-rendered shell
-              // is this state too: at first paint nobody has read anything.
-              Sync = Opening (None, false)
-              // Nothing has failed yet; the first read decides.
-              Feed = FeedLive
-              Reading = None }
+          EventConsumer = { LastProcessedOffset = None; Reading = None }
           Agent = { ActiveTurn = None; Quiet = None; Interrupting = None }
           Presence = Map.empty
           Caret = None
@@ -2744,36 +2857,20 @@ module ClientModel =
               Polling = PollWaiting 0 }
           Queries = { Declared = []; Values = Map.empty } }
 
-    /// The session said where its log ends (`None`: it is empty).
-    let private told (latest: EventOffset option) (consumer: EventConsumerState) : EventConsumerState =
-        { consumer with Sync = HistorySync.told consumer.LastProcessedOffset latest consumer.Sync }
-
     /// Whether this client has, once, read the log through since the page loaded
-    /// (`HistorySync.heardThrough`).
+    /// (`SessionLink.phase`).
     let heardThrough (model: ClientModel) : bool =
-        HistorySync.heardThrough model.EventConsumer.Sync
-
-    /// Whether nothing more is coming to this client's picture of the log for now, whatever
-    /// it has read: it cannot reach the session, or its reads have stopped getting through.
-    /// What it has is then all it will have, and waiting to show it would be waiting for
-    /// nothing.
-    let private cutOff (model: ClientModel) : bool =
-        match model.Connection, model.EventConsumer.Feed with
-        | Disconnected (Some _), _
-        | Retrying _, _
-        | _, FeedStalled _ -> true
-        | (Disconnected None | Connecting _ | Connected | Reconnecting), (FeedLive | FeedRetrying _) -> false
+        SessionLink.phase model.Link = Phase.ReadThrough
 
     /// Whether the timeline draws what is folded, or says it is still reading. Read through
     /// once, it is the session's; before that, it is drawn only when it is the reader's own
-    /// picture (`LocalCopy.Kept`) or all there is (`cutOff`). Otherwise what is folded is the
-    /// oldest end of the log, a page at a time, and drawing it pinned to its foot was a screen
-    /// of somebody else's history swapped for the real end of it a moment later.
+    /// picture (`LocalCopy.Kept`) or all there is (`SessionLink.cutOff`). Otherwise what is
+    /// folded is the oldest end of the log, a page at a time, and drawing it pinned to its foot
+    /// was a screen of somebody else's history swapped for the real end of it a moment later.
     let showsFolded (model: ClientModel) : bool =
-        match model.EventConsumer.Sync with
-        | Behind _
-        | Current -> true
-        | Opening _ -> LocalCopy.kept model.LocalCopy || cutOff model
+        match SessionLink.phase model.Link with
+        | Phase.ReadThrough -> true
+        | Phase.Opening -> LocalCopy.kept model.LocalCopy || SessionLink.cutOff model.Link
 
     /// Whether the timeline is drawing the conversation: what is folded is shown, and there
     /// is some of it. The moment this first holds on a page load is the conversation ARRIVING,
@@ -2782,20 +2879,23 @@ module ClientModel =
         showsFolded model && not (List.isEmpty model.Conversation.Items)
 
     /// Whether a model is worth putting on the screen, or should be held for the one that
-    /// follows it. A client waiting on the log is held — a page is at most a round trip away,
+    /// follows it. A client fetching the log is held — a page is at most a round trip away,
     /// and every page drawn on the way is a picture the next one replaces — until it is read
-    /// through, or the wait has lasted long enough to be worth saying (`slow`), or nothing
-    /// is coming (`cutOff`). Opening on its own store before the session has said where the
-    /// log ends is not waiting on anything yet: that picture is drawn at once.
+    /// through, or the fetch has lasted long enough to be worth saying, or a read has failed.
+    /// Nothing else waits on a page: a client still reaching its session is waiting on none,
+    /// and one cut off from it has everything it will have.
     ///
     /// Every change of this is a message (a page, the slow timer, a disconnect), so whoever
     /// draws needs no clock of its own to honour it.
     let presentable (model: ClientModel) : bool =
-        match model.EventConsumer.Sync with
-        | Current -> true
-        | Behind (_, slow) -> slow || cutOff model
-        | Opening (target, slow) ->
-            slow || cutOff model || (LocalCopy.kept model.LocalCopy && Option.isNone target)
+        match model.Link with
+        | SessionLink.Fetching (_, { Slow = false; Failed = None }, _) -> false
+        | SessionLink.Fetching _
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _
+        | SessionLink.Stalled _
+        | SessionLink.Current
+        | SessionLink.Refused _ -> true
 
     let private withSynced (synced: SyncedSessionState<Ylmish.Text>) (model: ClientModel) : ClientModel =
         { model with Synced = synced }
@@ -2820,14 +2920,10 @@ module ClientModel =
 
     /// Whether this client has read the log through to where the session says it ends — the
     /// moment a remembered strip can be checked against what the session has, and the launch
-    /// card can be decided. Connected, because only the session knows where its log ends, and
-    /// current against what it said (`HistorySync.Current`).
+    /// card can be decided. Linked, because only the session knows where its log ends, and
+    /// current against what it said (`SessionLink.Current`).
     let private readThrough (model: ClientModel) : bool =
-        model.Connection = Connected
-        && (match model.EventConsumer.Sync with
-            | Current -> true
-            | Opening _
-            | Behind _ -> false)
+        model.Link = SessionLink.Current
 
     /// Keeps `model.Launch.Anchored` decided. Run after every message (`update`, below,
     /// pipes its whole result through this), so whichever one first carries the client past
@@ -4159,8 +4255,8 @@ module ClientModel =
     /// collaborator nothing. Presence is relayed last-write-wins with no keepalive, so a repeat
     /// buys nothing.
     ///
-    /// Nothing while the connection is anything but `Connected`, because the first frame on a
-    /// channel has to be the hello (`Connection.run`): the Session reads an unannounced peer's
+    /// Nothing while the page is anything but linked (`SessionLink.live`), because the first
+    /// frame on a channel has to be the hello (`Connection.run`): the Session reads an unannounced peer's
     /// frame as a peer it does not know. What changed meanwhile is not dropped — it is in the
     /// model — and is RESTATED on acceptance, as is whatever was told to a channel that has
     /// since gone (a reconnect passes through `Reconnecting`): a peer that opened a pane while
@@ -4170,11 +4266,11 @@ module ClientModel =
     /// everywhere when it went.
     let presenceToSend (before: ClientModel) (after: ClientModel) : (Focus option * ViewRef option) option =
         let caret, view = after.Caret, viewing after
-        match before.Connection, after.Connection with
-        | Connected, Connected when before.Caret <> caret || viewing before <> view -> Some (caret, view)
-        | Connected, _ -> None
-        | _, Connected when caret.IsSome || view.IsSome -> Some (caret, view)
-        | _ -> None
+        match SessionLink.live before.Link, SessionLink.live after.Link with
+        | true, true when before.Caret <> caret || viewing before <> view -> Some (caret, view)
+        | true, _ -> None
+        | false, true when caret.IsSome || view.IsSome -> Some (caret, view)
+        | false, _ -> None
 
     /// What this browser writes down of the pane after a message (P0-4), or `None` when the
     /// pane it would write is the one already kept. Read off the model either side of the
@@ -4458,17 +4554,19 @@ module ClientModel =
     /// pause to reason — or to reach for a tool — shows as one within a breath.
     let writingQuietMs = 700
 
-    /// How long catch-up must run before it is worth SAYING (`HistorySync`'s `slow`).
-    /// Long enough that a send — which puts this client one event behind itself for a round
-    /// trip — never lights it; short enough that a real wait is reported rather than sat
+    /// How long catching up must run before it is worth SAYING: from the page's load while it
+    /// opens (`Waited`), and from the news while it is read through (`SessionLink.Fetching`'s
+    /// `Slow`). Long enough that a send — which puts this client one event behind itself for a
+    /// round trip — never lights it; short enough that a real wait is reported rather than sat
     /// through in silence.
     let catchUpQuietMs = 500
 
-    /// How long an attempt to connect must run before it is worth SAYING
-    /// (`ConnectionState.Connecting`). Long enough that a session on the same machine or the
-    /// same network, which connects in a few hundred milliseconds, never lights it; short
-    /// enough that a cold session, or one whose answer is slow, is reported well before a
-    /// person decides the page is dead.
+    /// How long an attempt to reach the session must run before it is worth SAYING
+    /// (`SessionLink.Connecting` and `SessionLink.Reconnecting`, each from its own start).
+    /// Long enough that a session on the same machine or the same network, which connects in a
+    /// few hundred milliseconds, never lights it — nor a phone that drops its link each time it
+    /// leaves the app and has it back as it returns; short enough that a cold session, or one
+    /// whose answer is slow, is reported well before a person decides the page is dead.
     let connectingQuietMs = 1500
 
     /// How long a copy says so for. Long enough to be read as an answer to the press, short
@@ -4511,6 +4609,9 @@ module ClientModel =
     /// "catching up" → "up to date" on every message sent. One key for the whole episode:
     /// the pages that arrive while it runs leave the wait alone rather than pushing it out,
     /// which would mean a long catch-up was never reported; the episode ending takes it away.
+    /// An OPENING fetch has no wait of its own: the reader has been waiting since the page
+    /// loaded, which is the page's own wait (`Waited`), one key from load whatever is being
+    /// waited on meanwhile.
     ///
     /// A copy's confirmation is an expiry, keyed by the copy itself: a copy of another box, or
     /// the same box again, is a new key and a fresh wait, so no earlier deadline can take a
@@ -4528,21 +4629,25 @@ module ClientModel =
     /// fact is recorded, and a wait for it again would be asking a settled question.
     let timers (model: ClientModel) : Timer<ClientMsg> list =
         // One key for the whole episode. A `ConnectingMsg` said again inside it (the channel
-        // coming up after the probe) leaves the state, and so the wait, alone; a failure ends
-        // the episode (`Retrying`), and the next attempt starts a fresh one.
-        let connecting =
-            match model.Connection with
-            | Connecting false ->
-                [ { Key = [ "connecting-slow" ]; After = connectingQuietMs; Fire = ConnectingSlowMsg } ]
-            | Connecting true | Disconnected _ | Connected | Reconnecting | Retrying _ -> []
-        let catchUp =
-            match model.EventConsumer.Sync with
-            | Opening (_, false)
-            | Behind (_, false) ->
-                [ { Key = [ "catch-up-slow" ]; After = catchUpQuietMs; Fire = CatchUpSlowMsg true } ]
-            | Opening (_, true)
-            | Behind (_, true)
-            | Current -> []
+        // coming up after the probe) leaves the state, and so the wait, alone; a link that is
+        // lost and sought again is a new episode, keyed apart.
+        let effort =
+            match model.Link with
+            | SessionLink.Connecting { Slow = false } ->
+                [ { Key = [ "slow"; "connecting" ]; After = connectingQuietMs; Fire = EffortSlowMsg } ]
+            | SessionLink.Reconnecting ({ Slow = false }, _) ->
+                [ { Key = [ "slow"; "reconnecting" ]; After = connectingQuietMs; Fire = EffortSlowMsg } ]
+            | SessionLink.Fetching (_, { Slow = false }, Phase.ReadThrough) ->
+                [ { Key = [ "slow"; "fetching" ]; After = catchUpQuietMs; Fire = EffortSlowMsg } ]
+            | SessionLink.Connecting _
+            | SessionLink.Reconnecting _
+            | SessionLink.Fetching _
+            | SessionLink.Stalled _
+            | SessionLink.Current
+            | SessionLink.Refused _ -> []
+        let waited =
+            if model.Waited then []
+            else [ { Key = [ "page-waited" ]; After = catchUpQuietMs; Fire = PageWaitedMsg } ]
         let quiet =
             model.Conversation.Items
             |> List.choose writingStamp
@@ -4580,7 +4685,7 @@ module ClientModel =
                           After = int Pending.deadlineMillis
                           Fire = PendingWaitedMsg (since + Pending.deadlineMillis) }
                 | Pending.Ready | Pending.Sending | Pending.Refused _ -> None)
-        connecting @ catchUp @ copied @ queueDeleteArmed @ killArmed @ pending @ quiet @ GitHubPoll.timer model.GitHub
+        effort @ waited @ copied @ queueDeleteArmed @ killArmed @ pending @ quiet @ GitHubPoll.timer model.GitHub
 
     /// Fold a message into the model — the state half of `update`, its only caller.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
@@ -4632,37 +4737,34 @@ module ClientModel =
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
         holdList (notice model (reconcileLaunch (landsWhenHeard model (openOfItself model (settle (recall (
         match msg with
-        | ConnectingMsg ->
-            (match model.Connection with
-             // Already connecting: said again as the channel comes up, and the same attempt.
-             // Restarting it would take a status that is showing off the screen and put it
-             // back a moment later.
-             | Connecting _ -> model
-             | Disconnected _ | Connected | Reconnecting | Retrying _ -> { model with Connection = Connecting false })
-        | ConnectingSlowMsg ->
-            (match model.Connection with
-             | Connecting false -> { model with Connection = Connecting true }
-             // Late: the attempt it timed has already ended, and slow describes only a running one.
-             | Connecting true | Disconnected _ | Connected | Reconnecting | Retrying _ -> model)
+        | ConnectingMsg -> { model with Link = SessionLink.connecting model.Link }
+        // Late: the wait it timed has already ended, and slow describes only a running one.
+        | EffortSlowMsg -> { model with Link = SessionLink.slowed model.Link }
+        | PageWaitedMsg -> { model with Waited = true; Link = SessionLink.waited model.Link }
         | ConnectedMsg accepted ->
             { model with
-                Connection = Connected
+                Link =
+                    SessionLink.accepted
+                        model.Waited
+                        model.EventConsumer.LastProcessedOffset
+                        accepted.LatestOffset
+                        model.Link
                 Session = Some accepted.SessionId
-                Peer = { model.Peer with DisplayName = accepted.AssignedDisplayName }
-                EventConsumer = told accepted.LatestOffset model.EventConsumer }
-        | RejectedMsg reason ->
-            { model with Connection = Disconnected (Some reason) }
+                Peer = { model.Peer with DisplayName = accepted.AssignedDisplayName } }
+        | RejectedMsg reason -> { model with Link = SessionLink.refused reason model.Link }
         | RetryingMsg (reason, failures) ->
-            { model with Connection = Retrying (reason, failures) }
+            { model with Link = SessionLink.failed { Reason = reason; Count = failures } model.Link }
         | EventsAvailableMsg latest ->
-            { model with EventConsumer = told (Some latest) model.EventConsumer }
+            { model with
+                Link = SessionLink.told model.Waited model.EventConsumer.LastProcessedOffset latest model.Link }
+        | ReadRetryingMsg failure -> { model with Link = SessionLink.readFailing failure model.Link }
         // An answer is folded whichever read it answers — the fold is offset-gated, so a late
         // one costs nothing — and what it settles is `reads`' to decide, below.
         | EventsReadMsg (_, Ok page) -> fold (EventsPageMsg page) model
-        | EventsReadMsg (_, Error reason) -> fold (EventFeedMsg (FeedStalled reason)) model
+        | EventsReadMsg (_, Error reason) -> { model with Link = SessionLink.gaveUp reason model.Link }
         // One fold, reached by two messages. The events are the same events and the
         // projection is the same projection; what differs is what arriving PROVED, and that
-        // is `Feed`, decided below rather than in here.
+        // is the link's, decided below rather than in here.
         | EventsPageMsg page | LocalHistoryMsg (page, _) ->
             // The offset-gated projection fold makes overlapping/duplicate pages
             // idempotent: events at or below the processed offset are skipped.
@@ -4953,36 +5055,26 @@ module ClientModel =
                     | LocalHistoryMsg (_, gapAt) ->
                         LocalCopy.answered (not (List.isEmpty freshEvents)) gapAt model.LocalCopy
                     | _ -> LocalCopy.fetched model.LocalCopy
+                // A page says what this client kept or was sent, never where the log ends —
+                // so one off the local store cannot make a client current that the session has
+                // not yet spoken to. A page off the NETWORK is also proof the reads work, so
+                // recovery from a failed read needs no separate signal. A page off the local
+                // store proves only that this client kept it: whatever the link was doing, it
+                // still is, which offline is exactly the truth the strip is showing.
+                Link =
+                    let link = SessionLink.folded highWater model.Link
+                    match msg with
+                    | EventsPageMsg _ -> SessionLink.read model.Waited link
+                    | _ -> link
                 EventConsumer =
                     { LastProcessedOffset = highWater
-                      // A page says what this client kept or was sent, never where the log
-                      // ends — so one off the local store cannot make a client current that
-                      // the session has not yet spoken to.
-                      Sync = HistorySync.folded highWater model.EventConsumer.Sync
-                      // A page off the NETWORK is proof the feed works, so recovery from a
-                      // stall needs no separate signal. A page off the local store proves
-                      // only that this client kept it — the feed is whatever it already
-                      // was, which offline is exactly the truth the strip is showing.
-                      Feed =
-                        match msg with
-                        | EventsPageMsg _ -> FeedLive
-                        | _ -> model.EventConsumer.Feed
                       // What the read loop has out is `reads`' to settle, not a page's.
                       Reading = model.EventConsumer.Reading } }
-        | EventFeedMsg health ->
-            { model with EventConsumer = { model.EventConsumer with Feed = health } }
-        | CatchUpSlowMsg slow ->
-            // Slow is a property of a wait that is running; a late timer over a client that
-            // is current has nothing to land on (`HistorySync.withSlow`).
-            { model with
-                EventConsumer =
-                    { model.EventConsumer with
-                        Sync = HistorySync.withSlow slow model.EventConsumer.Sync } }
         | AgentQuietMsg stamp -> { model with Agent = { model.Agent with Quiet = Some stamp } }
         | DisconnectedMsg ->
             // What was asked over the channel that just died will never be answered over it:
             // a response belongs to the connection that carried its request.
-            { model with Connection = Reconnecting; Asked = Map.empty }
+            { model with Link = SessionLink.dropped model.Link; Asked = Map.empty }
         | EditTitleMsg title ->
             model |> withSynced { model.Synced with Title = title }
         | RemotePresenceMsg payload ->
@@ -5635,8 +5727,8 @@ module ClientModel =
     /// source of truth. One read is out at a time; a non-final page immediately asks for the
     /// next, and a final one asks again only while the model is still behind. A read that
     /// FAILS (only possible over an HTTP feed, which has already exhausted its resilience
-    /// policy) parks the loop and reports `FeedStalled` — it never masquerades as an empty
-    /// page.
+    /// policy) parks the loop, and the link says so (`SessionLink.Stalled`) — it never
+    /// masquerades as an empty page.
     ///
     /// Where each read starts is the model's read position, taken as the read is asked — the
     /// event log's `LastProcessedOffset`, a terminal's `ReadThrough` — and nothing else: the
@@ -5663,11 +5755,17 @@ module ClientModel =
             let read, model = numbered model
             { model with EventConsumer = { model.EventConsumer with Reading = Some read } },
             [ ClientEffect.ReadEvents (read, model.EventConsumer.LastProcessedOffset) ]
-        // Behind, and nothing out: the one state in which a hint is worth a read.
+        // Fetching, and nothing out: the one state in which a hint is worth a read.
         let askEventsIfBehind (model: ClientModel) =
-            if model.EventConsumer.Reading.IsNone
-               && HistorySync.behind model.EventConsumer.Sync then
-                askEvents model
+            let fetching =
+                match model.Link with
+                | SessionLink.Fetching _ -> true
+                | SessionLink.Connecting _
+                | SessionLink.Reconnecting _
+                | SessionLink.Stalled _
+                | SessionLink.Current
+                | SessionLink.Refused _ -> false
+            if model.EventConsumer.Reading.IsNone && fetching then askEvents model
             else model, []
         let askTranscript (terminal: TerminalId) (fromSeq: int) (owed: bool) (model: ClientModel) =
             let read, model = numbered model
@@ -5719,7 +5817,7 @@ module ClientModel =
         let unheard ((model: ClientModel), (effects: ClientEffect list)) =
             model.Terminals.Terminals
             |> List.filter (fun view ->
-                model.Connection = Connected
+                SessionLink.live model.Link
                 && not view.IsOpen
                 && recordingOf view.TerminalId model = RecordingKnown.NotYetKnown
                 && not (Map.containsKey view.TerminalId model.TranscriptReads))

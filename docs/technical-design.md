@@ -161,8 +161,9 @@ treats it as one:
   notion of retrying. `Resilience.fs` also holds `Verdict`, `Policy.deadline`, `Breaker`,
   `Quota`, and `Resilience.Http.verdict`. Its comments say what each one decides and how to
   compose it.
-- The feed's health (`FeedHealth`) is model state. The UI renders it as a status and a
-  banner. A stalled feed disables nothing. Collaborative state is CRDT state in the local
+- The feed's health is model state, part of the page's link (`SessionLink`): a read that
+  fails is a fact about the fetch, and reads that gave up are `Stalled`. The UI renders it on
+  the status line. A stalled feed disables nothing. Collaborative state is CRDT state in the local
   doc, so reading, writing, and sending continue. Per "local first", a lost history feed
   costs history and nothing else.
 

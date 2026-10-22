@@ -127,6 +127,19 @@ let private running () =
 
 let private available (offset: int64) : ClientMsg = EventsAvailableMsg (EventOffset.create offset |> expect)
 
+/// The session taking the page, its log ending at `latest`.
+let private accepted (latest: int64 option) : ClientMsg =
+    ConnectedMsg
+        { SessionId = sessionId
+          AssignedDisplayName = "Ada"
+          LatestOffset = latest |> Option.map (fun o -> EventOffset.create o |> expect) }
+
+/// Fetching, for long enough to say so.
+let private fetchingSlow (link: SessionLink) : bool =
+    match link with
+    | SessionLink.Fetching (_, { Slow = true }, _) -> true
+    | _ -> false
+
 let tests =
     testList "Timers" [
         // "4m ago" is told against this, so a page that has not been told the time says how
@@ -197,28 +210,46 @@ let tests =
 
         testCase "catch-up that runs past its quiet interval is reported as slow" <| fun () ->
             let clock, send, model = program ()
+            send (accepted None)
             send (available 2L)
             clock.Advance ClientModel.catchUpQuietMs
-            Expect.isTrue (HistorySync.slow (model ()).EventConsumer.Sync) "a wait that lasted is a wait worth saying"
+            Expect.isTrue (fetchingSlow (model ()).Link) "a wait that lasted is a wait worth saying"
 
         testCase "catch-up that ends inside its quiet interval is never reported" <| fun () ->
             let clock, send, model = program ()
+            send (accepted None)
             send (available 2L)
             clock.Advance (ClientModel.catchUpQuietMs / 2)
             send opened
             clock.Advance ClientModel.catchUpQuietMs
-            Expect.isFalse (HistorySync.slow (model ()).EventConsumer.Sync) "a send's round trip is not news"
+            Expect.equal (model ()).Link SessionLink.Current "a send's round trip is not news"
 
         // One wait for the whole episode: a page that lands while more is still to come is
         // progress, and restarting the wait on each would keep a long catch-up from ever
         // being reported.
         testCase "pages landing during catch-up do not push its report out" <| fun () ->
             let clock, send, model = program ()
+            send (accepted None)
             send (available 4L)
             clock.Advance (ClientModel.catchUpQuietMs / 2)
             send opened
             clock.Advance (ClientModel.catchUpQuietMs / 2)
-            Expect.isTrue (HistorySync.slow (model ()).EventConsumer.Sync) "still behind at the interval, however many pages came"
+            Expect.isTrue (fetchingSlow (model ()).Link) "still behind at the interval, however many pages came"
+
+        // The reader has been waiting since the page loaded, not since the session answered: a
+        // slow connect and then a slow fetch are one wait to them, not two quiet ones.
+        testCase "an opening fetch begun after the page has waited is said at once" <| fun () ->
+            let clock, send, model = program ()
+            clock.Advance ClientModel.catchUpQuietMs
+            send (accepted (Some 2L))
+            Expect.isTrue (fetchingSlow (model ()).Link) "the wait began when the page loaded"
+
+        testCase "an opening fetch begun early is said when the page has waited, not its own interval later" <| fun () ->
+            let clock, send, model = program ()
+            clock.Advance (ClientModel.catchUpQuietMs / 5)
+            send (accepted (Some 2L))
+            clock.Advance (ClientModel.catchUpQuietMs - ClientModel.catchUpQuietMs / 5)
+            Expect.isTrue (fetchingSlow (model ()).Link) "timed from the load"
 
         // The connect's status follows the catch-up's rule: every client starts connecting, so
         // only a connect that has LASTED is said. A cold session that takes a minute used to
@@ -226,14 +257,14 @@ let tests =
         testCase "a connect that runs past its quiet interval is reported" <| fun () ->
             let clock, _, model = program ()
             clock.Advance ClientModel.connectingQuietMs
-            Expect.equal (model ()).Connection (Connecting true) "a connect that lasted is a connect worth saying"
+            Expect.equal (model ()).Link (SessionLink.Connecting { Effort.fresh with Slow = true }) "a connect that lasted is a connect worth saying"
 
         testCase "a connect that lands inside its quiet interval is never reported" <| fun () ->
             let clock, send, model = program ()
             clock.Advance (ClientModel.connectingQuietMs / 2)
-            send (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "Ada"; LatestOffset = None })
+            send (accepted None)
             clock.Advance ClientModel.connectingQuietMs
-            Expect.equal (model ()).Connection Connected "a quick connect is not news"
+            Expect.equal (model ()).Link SessionLink.Current "a quick connect is not news"
 
         // The channel coming up says `Connecting` again, inside the same attempt.
         testCase "the channel coming up does not push a connect's report out" <| fun () ->
@@ -241,15 +272,39 @@ let tests =
             clock.Advance (ClientModel.connectingQuietMs / 2)
             send ConnectingMsg
             clock.Advance (ClientModel.connectingQuietMs / 2)
-            Expect.equal (model ()).Connection (Connecting true) "still connecting at the interval, however often it was said"
+            Expect.equal (model ()).Link (SessionLink.Connecting { Effort.fresh with Slow = true }) "still connecting at the interval, however often it was said"
 
-        testCase "a connect that follows a failure is timed afresh" <| fun () ->
-            let clock, send, model = program ()
-            clock.Advance (ClientModel.connectingQuietMs / 2)
+        // A failure is news the moment it happens, quiet window or not: the person watching
+        // should see that the page is still at it rather than that it broke.
+        testCase "a failed attempt is said at once" <| fun () ->
+            let _, send, model = program ()
             send (RetryingMsg ("the session did not answer", 1))
-            send ConnectingMsg
+            Expect.isTrue
+                (match (model ()).Link with
+                 | SessionLink.Connecting { Failed = Some _ } -> true
+                 | _ -> false)
+                "the failure is on the link before any interval has run"
+
+        // A phone drops its link each time it leaves the app and has it back as it returns.
+        // That used to flash "reconnecting" on every return; it is a connect like any other.
+        testCase "a reconnect that lands inside its quiet interval is never reported" <| fun () ->
+            let clock, send, model = program ()
+            send (accepted None)
+            send DisconnectedMsg
             clock.Advance (ClientModel.connectingQuietMs / 2)
-            Expect.equal (model ()).Connection (Connecting false) "the failed attempt's time is not the new one's"
+            send (accepted None)
+            clock.Advance ClientModel.connectingQuietMs
+            Expect.equal (model ()).Link SessionLink.Current "a quick reconnect is not news"
+
+        testCase "a reconnect that runs past its quiet interval is reported" <| fun () ->
+            let clock, send, model = program ()
+            send (accepted None)
+            send DisconnectedMsg
+            clock.Advance ClientModel.connectingQuietMs
+            Expect.equal
+                (model ()).Link
+                (SessionLink.Reconnecting ({ Effort.fresh with Slow = true }, Phase.ReadThrough))
+                "a reconnect that lasted is worth saying"
 
         testCase "a copy's confirmation is taken back after its moment" <| fun () ->
             let clock, send, model = program ()
