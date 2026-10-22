@@ -1576,8 +1576,7 @@ let private surfaceTests =
                 Support.render
                     { model with
                         Connection = Disconnected (Some "session unreachable")
-                        EventConsumer =
-                            { model.EventConsumer with MissingBefore = Some (EventOffset.create 22L |> expect) } }
+                        LocalCopy = LocalCopy.Kept (Some (EventOffset.create 22L |> expect)) }
             Expect.isTrue (html.Contains "data-history-gap") "the timeline says its earlier half is not here"
 
         testCase "a gap the feed is already filling says nothing" <| fun () ->
@@ -1591,8 +1590,7 @@ let private surfaceTests =
                 Support.render
                     { model with
                         Connection = Connected
-                        EventConsumer =
-                            { model.EventConsumer with MissingBefore = Some (EventOffset.create 22L |> expect) } }
+                        LocalCopy = LocalCopy.Kept (Some (EventOffset.create 22L |> expect)) }
             Expect.isFalse (html.Contains "data-history-gap") "a hole being filled is catch-up, not a fact worth a line"
             Expect.isFalse (html.Contains Dom.Hooks.degraded) "and nothing about it is a degradation"
 

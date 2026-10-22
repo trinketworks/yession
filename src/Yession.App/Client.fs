@@ -1002,15 +1002,18 @@ module Client =
                                 if fresh then
                                     page.Add envelope
                                     folded <- Some envelope.Offset
-                if page.Count > 0 then
-                    dispatch (
-                        LocalHistoryMsg
-                            { Events = List.ofSeq page
-                              LastOffset = folded
-                              // The end of what is KEPT, never a claim about the log: the
-                              // cursor decides that, and it has not been asked yet.
-                              IsEnd = true })
-                gap |> Option.iter (fun at -> dispatch (LocalHistoryGapMsg at))
+                // One answer, whatever the store held — nothing included, because that the
+                // store has answered is itself what a page with nothing kept is waiting on.
+                dispatch (
+                    LocalHistoryMsg (
+                        { Events = List.ofSeq page
+                          LastOffset = folded
+                          // The end of what is KEPT, never a claim about the log: the cursor
+                          // decides that, and it has not been asked yet.
+                          IsEnd = true },
+                        gap
+                    )
+                )
             }
 
         /// The shipped resilience policy for the HTTP feed: five retries, exponentially

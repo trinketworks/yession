@@ -59,6 +59,72 @@ type FeedHealth =
     /// the next availability hint or reconnect re-arms the read — editing keeps working.
     | FeedStalled of reason: string
 
+/// What this device holds of the session's history (Plan 20): the reader's own last picture,
+/// kept in this client's store and replayed before the network is asked. Its own union, beside
+/// `HistorySync` rather than inside it, because the two are answered by different things and
+/// either can come first: the store answers once per page load, and the session answers as
+/// often as it is asked. A network that beats a slow store leaves this `Reading` while the
+/// history is read through; a store that answers first leaves the history `Opening`.
+///
+/// It replaces three facts that each said part of it: a `kept` flag inside `HistorySync`'s
+/// opening, a `MissingBefore` offset on the consumer, and whether the page could keep history
+/// at all. Together those spelled states nobody could be in — a hole in a copy nobody kept,
+/// a kept copy on a page with nowhere to keep one — and could not say the one a page that has
+/// nothing kept is in: that the store has answered, and answered nothing.
+[<RequireQualifiedAccess>]
+type LocalCopy =
+    /// The store has not answered yet. Every page load with a store starts here.
+    | Reading
+    /// The store answered with the start of the log, and it is folded: the reader's own last
+    /// picture of the session, worth drawing at once, where the first pages off the network
+    /// are its OLDEST history, a picture of nothing anybody asked to see.
+    ///
+    /// `gapAt` is where the rest of what it kept resumes, when its run stopped short of it:
+    /// everything after what is folded and before that offset is not on this device. The feed
+    /// repairs it — a read resumes at the cursor, which the replay parked at exactly the offset
+    /// the fill has to start from — so a page off the network takes it away.
+    | Kept of gapAt: EventOffset option
+    /// The store answered, and with nothing it could fold.
+    | NoneKept
+    /// This page keeps nothing, because it has nowhere to keep it: the store is the Cache API,
+    /// which needs a secure context, and a session reached over plain HTTP at a LAN address is
+    /// not one (loopback and every `https://` mount are). The browser says so at boot; a page
+    /// the server renders starts `Reading`, rather than announcing a missing store before the
+    /// client that knows has had a chance to look.
+    | Unkeepable
+
+module LocalCopy =
+
+    /// Whether what is folded is the reader's own picture, drawn at once.
+    let kept (local: LocalCopy) : bool =
+        match local with
+        | LocalCopy.Kept _ -> true
+        | LocalCopy.Reading
+        | LocalCopy.NoneKept
+        | LocalCopy.Unkeepable -> false
+
+    /// What the store answered at boot (`LocalHistoryMsg`): `folded`, whether any of what it
+    /// kept was folded, and `gapAt`, where the rest of it resumes when the run stopped short.
+    /// A page with nowhere to keep history has nothing to answer, whatever the walk over its
+    /// empty store says.
+    let answered (folded: bool) (gapAt: EventOffset option) (local: LocalCopy) : LocalCopy =
+        match local with
+        | LocalCopy.Unkeepable -> LocalCopy.Unkeepable
+        | LocalCopy.Reading
+        | LocalCopy.Kept _
+        | LocalCopy.NoneKept -> if folded then LocalCopy.Kept gapAt else LocalCopy.NoneKept
+
+    /// A page off the NETWORK: it resumes at the cursor and runs unbroken from it, so whatever
+    /// the store was missing before it is being filled, and what is left to arrive is ordinary
+    /// catch-up, which `HistorySync` already says.
+    let fetched (local: LocalCopy) : LocalCopy =
+        match local with
+        | LocalCopy.Kept (Some _) -> LocalCopy.Kept None
+        | LocalCopy.Reading
+        | LocalCopy.Kept None
+        | LocalCopy.NoneKept
+        | LocalCopy.Unkeepable -> local
+
 /// Where this client's picture of the log stands against where the session says the log
 /// ends. One union rather than the flags it replaced (`HistoryRead`, `IsCatchingUp`,
 /// `CatchUpIsSlow`, an optional latest offset and the `HeardThrough` latch), because those
@@ -73,11 +139,9 @@ type FeedHealth =
 type HistorySync =
     /// Has not yet been current since this page loaded: whatever is folded is a replay of the
     /// past (the local store, the first pages), not news. `target` is where the session said
-    /// the log ends, `None` until it has said. `kept` is whether any of what is folded came
-    /// out of this client's own store: that is the reader's own last picture of the session,
-    /// worth showing at once, where the first pages off the network are the session's
-    /// OLDEST history, a picture of nothing anybody asked to see.
-    | Opening of target: EventOffset option * slow: bool * kept: bool
+    /// the log ends, `None` until it has said. Whether any of what is folded came out of this
+    /// client's own store is `LocalCopy`'s to say, not this.
+    | Opening of target: EventOffset option * slow: bool
     /// Was current, and the session has since said its log runs past what is folded.
     | Behind of target: EventOffset * slow: bool
     /// Has folded everything the session has said its log holds — including the case where it
@@ -89,7 +153,7 @@ module HistorySync =
     /// Whether the read has lasted long enough to be worth saying.
     let slow (sync: HistorySync) : bool =
         match sync with
-        | Opening (_, slow, _)
+        | Opening (_, slow)
         | Behind (_, slow) -> slow
         | Current -> false
 
@@ -97,7 +161,7 @@ module HistorySync =
     /// once current, what it has folded.
     let target (folded: EventOffset option) (sync: HistorySync) : EventOffset option =
         match sync with
-        | Opening (target, _, _) -> target
+        | Opening (target, _) -> target
         | Behind (target, _) -> Some target
         | Current -> folded
 
@@ -105,9 +169,9 @@ module HistorySync =
     /// read is owed.
     let behind (sync: HistorySync) : bool =
         match sync with
-        | Opening (Some _, _, _)
+        | Opening (Some _, _)
         | Behind _ -> true
-        | Opening (None, _, _)
+        | Opening (None, _)
         | Current -> false
 
     /// Whether this client has, once, been current since the page loaded — after which what a
@@ -130,7 +194,7 @@ module HistorySync =
             | Some latest, Some folded -> EventOffset.value folded >= EventOffset.value latest
         match sync, latest with
         | _, _ when reached -> Current
-        | Opening (_, slow, kept), _ -> Opening (latest, slow, kept)
+        | Opening (_, slow), _ -> Opening (latest, slow)
         | _, Some latest -> Behind (latest, slow sync)
         | _, None -> Current
 
@@ -139,21 +203,13 @@ module HistorySync =
     /// what it kept, never where the log ends.
     let folded (folded: EventOffset option) (sync: HistorySync) : HistorySync =
         match sync with
-        | Opening (None, _, _) -> sync
+        | Opening (None, _) -> sync
         | _ -> told folded None sync
-
-    /// Folded history out of this client's own store. Only a fact while opening: once the
-    /// log has been read through, where any of it came from no longer matters.
-    let kept (sync: HistorySync) : HistorySync =
-        match sync with
-        | Opening (target, slow, _) -> Opening (target, slow, true)
-        | Behind _
-        | Current -> sync
 
     /// The timer's verdict. Nothing to say once current.
     let withSlow (slow: bool) (sync: HistorySync) : HistorySync =
         match sync with
-        | Opening (target, _, kept) -> Opening (target, slow, kept)
+        | Opening (target, _) -> Opening (target, slow)
         | Behind (target, _) -> Behind (target, slow)
         | Current -> Current
 
@@ -166,18 +222,6 @@ type EventConsumerState =
       /// read; this says whether reading is possible — the distinction the old design had
       /// no way to express, because a failed fetch was reported as an empty final page.
       Feed                : FeedHealth
-      /// Where this client's KEPT history resumes, when the boot replay could not walk to
-      /// it (Plan 20): everything between `LastProcessedOffset` and this offset is not on
-      /// this device. `None` is the ordinary state — nothing kept, or everything kept in
-      /// one unbroken run.
-      ///
-      /// A fact about the STORE, never about the feed: it is settled before a single read
-      /// leaves this client, so it can neither prove nor deny that history is arriving. The
-      /// feed repairs it — a read resumes at the cursor, which the replay parked at exactly
-      /// the offset the fill has to start from — which is why any page off the network
-      /// clears it. Reported as feed health, it flashed a red "history paused" over every
-      /// cold open with an out-of-order store, moments before the first page fixed it.
-      MissingBefore       : EventOffset option
       /// The event read this client has out, by its number (`ClientModel.ReadsAsked`), or
       /// `None` when nothing is out. At most one at a time (`ClientModel.reads`), and only the
       /// answer that carries this number settles it — so an answer from a connection that has
@@ -1434,14 +1478,9 @@ type ClientModel =
       /// assets, so they are the same build, and the server is the one that can say which.
       /// Static for the life of the page, like `Manager`.
       Build : string option
-      /// Whether this client can keep the history it is given (Plan 20). The store is the
-      /// Cache API, which needs a secure context — loopback and every `https://` mount are
-      /// one, a session reached over plain HTTP at a LAN address is not.
-      ///
-      /// Defaults to TRUE, and the browser says otherwise: the server renders this shell too,
-      /// and a default of false would have every server-rendered page announce a missing store
-      /// before the client that knows has had a chance to look.
-      CanKeepHistory : bool
+      /// What this device holds of the session's history, and whether it can hold any
+      /// (`LocalCopy`).
+      LocalCopy : LocalCopy
       Synced        : SyncedSessionState<Ylmish.Text>
       Conversation  : ConversationProjection
       /// The terminal half of the chat (Plan 14, stage 1): block chips and lease-stretch
@@ -1978,23 +2017,22 @@ type ClientMsg =
     /// resilience policy has already spent its retries by the time a failure gets here. What
     /// is read next is decided from it (`ClientModel.reads`).
     | EventsReadMsg of read: int * Result<EventPage<SessionEvent>, string>
-    /// A page this client had already been given and kept (Plan 20): replayed out of its own
-    /// store at boot, before any network read and without a session.
+    /// What this client's own store answered at boot (Plan 20), once per page load, before
+    /// any network read and without a session: the unbroken run of history it kept from the
+    /// start of the log, as a page, and where the rest of what it kept resumes when that run
+    /// stopped short of it (`LocalCopy.Kept`). Said even when the store held nothing, because
+    /// "the store has answered" is a fact of its own (`LocalCopy.NoneKept`).
     ///
-    /// Folded through exactly the same projection as `EventsPageMsg` — the events are the
-    /// same events — and differing in one thing, which is the reason it is a separate case:
-    /// it says NOTHING about the feed. A page off the network proves the feed works; a page
-    /// off the local store proves only that this client kept it, and an offline client
-    /// reporting a live history feed would be lying about the one leg that is down.
-    | LocalHistoryMsg of EventPage<SessionEvent>
-    /// The boot replay could not walk all the way through what this client kept (Plan 20):
-    /// the carried offset is where the kept history resumes, and everything between the read
-    /// cursor and it is not on this device.
-    ///
-    /// Its own message rather than a feed fault, because it is not one: no read has been
-    /// attempted when it is dispatched, and the next one repairs it. See
-    /// `EventConsumerState.MissingBefore`.
-    | LocalHistoryGapMsg of EventOffset
+    /// The page is folded through exactly the same projection as `EventsPageMsg` — the
+    /// events are the same events — and differs in one thing, which is the reason it is a
+    /// separate case: it says NOTHING about the feed. A page off the network proves the feed
+    /// works; a page off the local store proves only that this client kept it, and an
+    /// offline client reporting a live history feed would be lying about the one leg that is
+    /// down. A hole is the same: no read has been attempted when the store answers, so a hole
+    /// can neither prove nor deny that history is arriving. Reported as feed health, it
+    /// flashed a red "history paused" over every cold open with an out-of-order store,
+    /// moments before the first page fixed it.
+    | LocalHistoryMsg of kept: EventPage<SessionEvent> * gapAt: EventOffset option
     /// The event feed's health changed: a read failed and is being retried (reported by the
     /// resilience policy composed with the transport), or it failed for good (reported by
     /// the read loop, which is the one place that knows a read is over). A successful page
@@ -2629,7 +2667,9 @@ module ClientModel =
           Manager = None
           EphemeralStorage = false
           Build = None
-          CanKeepHistory = true
+          // The browser says otherwise when it has nowhere to keep history; the server
+          // renders this shell too, and has no store to read.
+          LocalCopy = LocalCopy.Reading
           Synced = (SyncedSessionState.empty CollabText.ylmish)
           Conversation = ConversationProjection.empty
           Approvals = RepoApprovals.empty
@@ -2640,11 +2680,9 @@ module ClientModel =
             { LastProcessedOffset = None
               // Nothing said yet about where the log ends, and the server-rendered shell
               // is this state too: at first paint nobody has read anything.
-              Sync = Opening (None, false, false)
+              Sync = Opening (None, false)
               // Nothing has failed yet; the first read decides.
               Feed = FeedLive
-              // Nothing has been looked at yet; the replay decides.
-              MissingBefore = None
               Reading = None }
           Agent = { ActiveTurn = None; Quiet = None; Interrupting = None }
           Presence = Map.empty
@@ -2728,14 +2766,14 @@ module ClientModel =
 
     /// Whether the timeline draws what is folded, or says it is still reading. Read through
     /// once, it is the session's; before that, it is drawn only when it is the reader's own
-    /// picture (`kept`) or all there is (`cutOff`). Otherwise what is folded is the oldest
-    /// end of the log, a page at a time, and drawing it pinned to its foot was a screen of
-    /// somebody else's history swapped for the real end of it a moment later.
+    /// picture (`LocalCopy.Kept`) or all there is (`cutOff`). Otherwise what is folded is the
+    /// oldest end of the log, a page at a time, and drawing it pinned to its foot was a screen
+    /// of somebody else's history swapped for the real end of it a moment later.
     let showsFolded (model: ClientModel) : bool =
         match model.EventConsumer.Sync with
         | Behind _
         | Current -> true
-        | Opening (_, _, kept) -> kept || cutOff model
+        | Opening _ -> LocalCopy.kept model.LocalCopy || cutOff model
 
     /// Whether the timeline is drawing the conversation: what is folded is shown, and there
     /// is some of it. The moment this first holds on a page load is the conversation ARRIVING,
@@ -2756,7 +2794,8 @@ module ClientModel =
         match model.EventConsumer.Sync with
         | Current -> true
         | Behind (_, slow) -> slow || cutOff model
-        | Opening (target, slow, kept) -> slow || cutOff model || (kept && Option.isNone target)
+        | Opening (target, slow) ->
+            slow || cutOff model || (LocalCopy.kept model.LocalCopy && Option.isNone target)
 
     let private withSynced (synced: SyncedSessionState<Ylmish.Text>) (model: ClientModel) : ClientModel =
         { model with Synced = synced }
@@ -4498,10 +4537,10 @@ module ClientModel =
             | Connecting true | Disconnected _ | Connected | Reconnecting | Retrying _ -> []
         let catchUp =
             match model.EventConsumer.Sync with
-            | Opening (_, false, _)
+            | Opening (_, false)
             | Behind (_, false) ->
                 [ { Key = [ "catch-up-slow" ]; After = catchUpQuietMs; Fire = CatchUpSlowMsg true } ]
-            | Opening (_, true, _)
+            | Opening (_, true)
             | Behind (_, true)
             | Current -> []
         let quiet =
@@ -4624,7 +4663,7 @@ module ClientModel =
         // One fold, reached by two messages. The events are the same events and the
         // projection is the same projection; what differs is what arriving PROVED, and that
         // is `Feed`, decided below rather than in here.
-        | EventsPageMsg page | LocalHistoryMsg page ->
+        | EventsPageMsg page | LocalHistoryMsg (page, _) ->
             // The offset-gated projection fold makes overlapping/duplicate pages
             // idempotent: events at or below the processed offset are skipped.
             let conversation, highWater =
@@ -4907,16 +4946,19 @@ module ClientModel =
                 Peers = peers
                 Here = here
                 Attribution = attribution
+                // What the store answered, once — or, for a page off the network, a hole in
+                // what it answered being filled (`LocalCopy`).
+                LocalCopy =
+                    match msg with
+                    | LocalHistoryMsg (_, gapAt) ->
+                        LocalCopy.answered (not (List.isEmpty freshEvents)) gapAt model.LocalCopy
+                    | _ -> LocalCopy.fetched model.LocalCopy
                 EventConsumer =
                     { LastProcessedOffset = highWater
                       // A page says what this client kept or was sent, never where the log
                       // ends — so one off the local store cannot make a client current that
                       // the session has not yet spoken to.
-                      Sync =
-                        let sync = HistorySync.folded highWater model.EventConsumer.Sync
-                        match msg with
-                        | LocalHistoryMsg _ when not (List.isEmpty freshEvents) -> HistorySync.kept sync
-                        | _ -> sync
+                      Sync = HistorySync.folded highWater model.EventConsumer.Sync
                       // A page off the NETWORK is proof the feed works, so recovery from a
                       // stall needs no separate signal. A page off the local store proves
                       // only that this client kept it — the feed is whatever it already
@@ -4925,19 +4967,8 @@ module ClientModel =
                         match msg with
                         | EventsPageMsg _ -> FeedLive
                         | _ -> model.EventConsumer.Feed
-                      // A page off the NETWORK resumes at the cursor and runs unbroken from
-                      // it, so whatever the store was missing before it is being filled —
-                      // what is left to arrive is ordinary catch-up, which `Sync` already
-                      // says. A page off the local store is what found the hole in
-                      // the first place and cannot have repaired it.
-                      MissingBefore =
-                        match msg with
-                        | EventsPageMsg _ -> None
-                        | _ -> model.EventConsumer.MissingBefore
                       // What the read loop has out is `reads`' to settle, not a page's.
                       Reading = model.EventConsumer.Reading } }
-        | LocalHistoryGapMsg resumesAt ->
-            { model with EventConsumer = { model.EventConsumer with MissingBefore = Some resumesAt } }
         | EventFeedMsg health ->
             { model with EventConsumer = { model.EventConsumer with Feed = health } }
         | CatchUpSlowMsg slow ->

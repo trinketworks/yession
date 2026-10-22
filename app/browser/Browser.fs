@@ -1046,9 +1046,10 @@ let private start () =
                 // The server's build: this bundle is one of its assets and has no version
                 // of its own to report.
                 Build = metaContent Dom.buildMetaName
-                // The one place that can answer this: the model defaults to true because the
-                // SERVER renders this shell too and has no idea what the browser can do.
-                CanKeepHistory = canKeepHistory ()
+                // The one place that can answer whether there is a store at all: the model
+                // starts `Reading` because the SERVER renders this shell too and has no idea
+                // what the browser can do.
+                LocalCopy = if canKeepHistory () then LocalCopy.Reading else LocalCopy.Unkeepable
                 // Asked of the stylesheet's own breakpoint, once: whether the pane would sit
                 // BESIDE the chat here, which is what makes opening it unasked a courtesy
                 // rather than the conversation taken off the screen (P1-4). The model decides
