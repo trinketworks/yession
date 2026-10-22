@@ -10,7 +10,7 @@ machine.
 This document is the normative contract. [`app/AttachWs.fs`](../app/AttachWs.fs) is the client
 that speaks it. The smallest conforming provider is the hand-written peer in
 [`tests/Yession.Tests/Attach.fs`](../tests/Yession.Tests/Attach.fs). The suite runs that peer on
-every `check Ports`, so it cannot rot while the client is tested against it. Read that file if
+every `check Ports` and tests the client against it, so the peer cannot rot. Read that file if
 you prefer code to prose.
 
 ## The wire
@@ -30,7 +30,7 @@ implement the other end.
    carries the rest of it. So your frames need not align to characters.
 3. **Close the socket when the stream ends.** The close ends the terminal. The frames below
    only say *why*. A provider that sends `exited` and holds the socket open leaves a terminal
-   that nobody can reattach, because nothing has ended yet.
+   that nobody can reattach, because nothing ended.
 
 These three items are the whole of what the wire requires. Everything below them is quality of
 implementation.
@@ -85,8 +85,8 @@ A stream is bytes. You *claim* anything else. Claiming nothing is the honest def
 | flag | default | what it buys |
 |---|---|---|
 | `instrument` | `false` | the OSC 133 bootstrap can be typed in, so output resolves into command blocks with exit codes |
-| `resize` | `false` | you will be sent sizes |
-| `exitCode` | `false` | your `exited` code is reported as one |
+| `resize` | `false` | the client sends you sizes |
+| `exitCode` | `false` | the client reports your `exited` code as one |
 
 A serial line is the honest minimum: all three flags are false. A genuine remote pty is the
 honest maximum: all three flags are true. It then inherits blocks, exit codes and the agent's
@@ -109,7 +109,7 @@ way: an MCP tool result carries it in `_meta`.
 }
 ```
 
-Only `url` is required. Malformed `_meta` is no offer. It never fails the call.
+Only `url` is required. Malformed `_meta` is no offer, and it never fails the call.
 
 The url goes in `_meta` and not in the content, because a ticket is for the **client** and not
 for the model. A url in `structuredContent` lands in the model's context. That gives a prompt
