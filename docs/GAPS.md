@@ -49,7 +49,8 @@ against each other. The last section holds trust boundaries as sharp as the firs
   - The client UI renders a bare `UserId.value`. It shows no names or avatars from verified claims
     yet. `UserClaims` are carried and recorded, not displayed.
 - **BYO authorization is trusted plaintext headers** (Plan 07). `--auth trusted-headers` trusts
-  canonical `x-yession-*` identity headers from an operator-run authenticating proxy. Anyone who
+  canonical `x-yession-*` identity headers from an operator-run authenticating proxy
+  ([deployment.md](deployment.md#the-header-scheme)). Anyone who
   can reach the loopback port directly can forge them. This is the same trust boundary as
   `--auth localhost`. The proxy MUST strip inbound `x-yession-*` headers and be the only non-local
   path in.
@@ -104,9 +105,8 @@ against each other. The last section holds trust boundaries as sharp as the firs
   has to restart to notice. But nothing starts the provider either.
 - **Remote WebRTC has no relay fallback** (Plan 09). Sessions are remotely reachable through an
   operator's proxy. The `/sessions/stream` registry drives the serving binding.
-  `YESSION_SESSION_URL` is a template over `{id}`/`{port}` (Plan 10). It threads the public
-  address into open links and redirect URIs. This works whether the operator mirrors ports, gives
-  each session a subdomain, or mounts each under a path. Two limits remain:
+  `YESSION_SESSION_URL` (Plan 10) threads the public address into open links and redirect URIs
+  ([deployment.md](deployment.md#sessions) shows each shape). Two limits remain:
   - The data channel still connects peer-to-peer on host candidates only (no STUN/TURN). Remote
     use needs a network where the session host's addresses route directly. An example is an
     overlay like a tailnet, verified per deployment.
@@ -152,17 +152,14 @@ against each other. The last section holds trust boundaries as sharp as the firs
     does not have them. The session then fails when it creates its sandbox, and does not start
     unconfined. That is the intended trade. To proceed, install the tools or choose `host`
     deliberately.
-  - **srt reports a probe it could not RUN as a tool that is not there.** srt's dependency check
-    is not a stat. It forks `which` under a one-second timeout, and reports every way that fork
-    can fail as `<tool> not found`. So a bad minute makes srt refuse every sandbox in a run, on
-    one line, about a file that sits right there, executable. The comment on `StartFailure` in
-    `app/Sandboxes.fs` holds the cause.
+  - **srt reports a probe it could not RUN as a tool that is not there.** So a bad minute makes
+    srt refuse every sandbox in a run. `StartFailure` in `app/Sandboxes.fs` holds the cause.
 
-    Yession therefore reads a refusal against this process's own stat before it believes the
-    refusal. A start that settled nothing is asked again (three times, 250ms apart) and is then
-    forgotten, not memoized into every later sandbox. What Yession reports contradicts srt's
-    sentence instead of repeating it. Undo this when srt stats an absolute path (still `which` in
-    0.0.73) or at least surfaces the spawn's errno.
+    Yession reads a refusal against this process's own stat before it believes it. A start that
+    settled nothing is asked again (three times, 250ms apart) and is then forgotten, not memoized
+    into every later sandbox. What Yession reports contradicts srt's sentence instead of repeating
+    it. Undo this when srt stats an absolute path (still `which` in 0.0.73) or at least surfaces
+    the spawn's errno.
   - **An srt sandbox reads what its policy names and nothing else** (Plan 24). srt's read model is
     permissive by default. Until Plan 24, Yession denied only the invoking user's home. That left
     every region nobody had thought to name readable by every agent-issued command: `/etc`, a
@@ -171,17 +168,16 @@ against each other. The last section holds trust boundaries as sharp as the firs
 
     The deny is now `/`, which srt re-expands from the children of `/` at each spawn. It has three
     holes: the policy's read paths, everything the policy may write, and the host runtime.
-  - **The host runtime is the half of that scope this code cannot derive.** An interpreter can be
-    anywhere. So the allow-back is a platform list (`SrtTools.Runtime`) plus the install prefix of
-    whatever is already running:
+  - **The host runtime is the half of that scope this code cannot derive.** The allow-back is a
+    platform list (`SrtTools.Runtime`) plus the install prefix of whatever is already running:
     - `process.execPath`
     - srt's own package (its wrapped argv execs a vendored helper from inside the sandbox)
     - `YESSION_BIN_CLAUDE` and `YESSION_BIN_GIT`
 
-    A toolchain that none of these finds is now a RESOURCE. An operator declares it and a sandbox
-    selects it. It arrives through the policy, not through this list. `runtimeReadPaths` in
-    `app/Sandboxes.fs` says why `YESSION_SESSION_READ` is no longer folded in here. A path that
-    nothing names fails loudly and locally: a command cannot find its interpreter.
+    The comment that opens `SrtSandbox` in `app/Sandboxes.fs` says why, and why a toolchain that
+    none of these finds is a resource that arrives through the policy. `runtimeReadPaths` says why
+    `YESSION_SESSION_READ` is no longer folded in here. A path that nothing names fails loudly
+    and locally: a command cannot find its interpreter.
     - **The darwin list is unverified.** No job here runs a suite on darwin. The `Srt` tier pins
       `linuxRuntimePaths`. `darwinRuntimePaths` is what a Seatbelt profile conventionally allows
       back, checked against srt's implementation and nothing else.
@@ -236,18 +232,16 @@ against each other. The last section holds trust boundaries as sharp as the firs
       [2026-08-28 ADR](decisions/2026-08-28-no-srt-fork-for-symlink-metadata.md) argues this, and
       its argument stands.
     - **A `Socket` grant is path-scoped on macOS and widens to every socket on Linux.** #335 gave
-      a socket its own axis. srt honours it as `network.allowUnixSockets`. That is a list of paths,
-      which the Seatbelt profile turns into `network-outbound` rules. On Linux, srt filters unix
-      sockets with seccomp-bpf, which cannot read a socket path out of user-space memory. So
-      `wrapCommandWithSandboxLinux` takes `allowAllUnixSockets` and never reads the path list at
-      all. Every `AF_UNIX` socket is blocked, or none is.
+      a socket its own axis. `limitsFor` in `app/Sandboxes.fs` says why srt scopes it by path only
+      on macOS. On Linux, `wrapCommandWithSandboxLinux` takes `allowAllUnixSockets` and never reads
+      the path list at all. Every `AF_UNIX` socket is blocked, or none is.
 
-      Yession lets every socket through when a policy grants one, and says so. `limitsFor` records
-      that srt on Linux cannot scope a socket by path, so the host realises a `Socket` leaf as
-      `Coarsened "sock:*"`. The policy carries that in `Realisation`. `SrtSandbox.configFor` reads
-      it and sets `allowAllUnixSockets`, and only for a policy that reported the widening. The
-      grant therefore works on Linux, but the sandbox holds every unix socket and not only the one
-      the operator named. The report reaches three places:
+      Yession lets every socket through when a policy grants one, and says so. The host realises a
+      `Socket` leaf as `Coarsened "sock:*"`, and the policy carries that in `Realisation`.
+      `SrtSandbox.configFor` sets `allowAllUnixSockets` only for a policy that reported the
+      widening (`SrtConfig.AllowAllUnixSockets`). The grant therefore works on Linux, but the
+      sandbox holds every unix socket and not only the one the operator named. The report reaches
+      three places:
       - The approval prompt shows `sock:<path> ~> sock:*` (`RealisedClosure.describeOn`).
       - The `WorkSandboxStarted` event records the lines, and the start note shows them as
         "adjusted".
@@ -287,9 +281,7 @@ against each other. The last section holds trust boundaries as sharp as the firs
     decision.** `YESSION_SESSION_AGENT_BACKEND=srt` confines the CLI and is the answer this wants.
     It is not the default because it does not yet work.
 
-    The variable used to be read TWICE, with two defaults: `srt` in `SessionMain` and `host` in
-    `Agent.fs`. A deployment that set nothing therefore ran the CLI unconfined while every
-    statement the session made about itself said otherwise
+    The variable used to have two readers with two defaults
     ([`EnvReaders.fs`](../analyzers/Yession.Analyzers/EnvReaders.fs) records that fault). #364
     made it one reader. Making that reader say `srt` turned the release gate's live turn red. The
     turn stalled the whole 90s and streamed nothing.
@@ -509,17 +501,15 @@ against each other. The last section holds trust boundaries as sharp as the firs
 - **A second reverse leg, the MCP server set, is shipped end to end** (Plan 17). The child
   subscribes to `GET /control/mcp` (SSE). It gets its session's resolved set immediately and a
   fresh set on every change. `ProcessManager.publishMcpServers` is the producer. It publishes from
-  the operator's durable declarations, on every registry write and at boot.
-
-  The leg is per SESSION, not Manager-global. The hub is keyed (`KeyedRetainedHub`), so a session
-  that is not up yet finds its set waiting. The child holds the set (`app/SessionMain.fs`) and
-  `McpClient` connects it, so a declared server's tools reach agent turns.
+  the operator's durable declarations, on every registry write and at boot. The leg is per
+  SESSION, not Manager-global (`app/KeyedRetainedHub.fs` says why). The child holds the set
+  (`app/SessionMain.fs`) and `McpClient` connects it, so a declared server's tools reach agent
+  turns.
 - **A third reverse leg, connection statuses, has a real producer** (Plan 08).
   `GET /control/connections` streams each launch its readable connection metadata: a snapshot on
   subscribe, and a fresh list on every credential change or new binding. The session's agent gate
-  and `/claude` status surface consume it. The hub mechanism is generic. `NotificationHub<'n>`
-  serves this leg and the notification one. The MCP leg uses `KeyedRetainedHub`, because it
-  retains a value per session.
+  and `/claude` status surface consume it. `NotificationHub<'n>` serves this leg and the
+  notification one.
 - **Peer-to-peer is star-shaped through the Process.** Clients sync Yjs state via the Session
   relay, not directly with each other. y-webrtc-style meshes are not used.
 
@@ -530,14 +520,9 @@ against each other. The last section holds trust boundaries as sharp as the firs
   clients keep the document in IndexedDB (`y-indexeddb`), keyed by the session id embedded in the
   bootstrap page.
 
-  The event log's browser-side cache is the client's own, not the browser's HTTP cache:
-  - A client asks from the position it has folded through (`GET /events/after/{n}`).
-  - The server redirects to the range it minted (`GET /events/{first}-{last}`). The bounds of that
-    range never move, so its bytes are the same for ever.
-  - Every response is `no-store`, because a second copy in the HTTP cache would be a spare nobody
-    reads.
-  - The client keeps the ranges it was given in the Cache API, under a name derived from the
-    session id. A cold load replays what it kept, and only the tail reaches the network.
+  The event log's browser-side cache is the client's own Cache API store, not the browser's HTTP
+  cache ([technical-design.md §2.3](technical-design.md#23-transport)). A cold load replays what
+  it kept, and only the tail reaches the network.
 - **The JSONL event log loads fully into memory.** It has no compaction, rotation or
   checksumming. A corrupt line fails the whole open, which is loud by design. The doc store
   compacts only at open, so a very long-lived Process grows its sidecar until restart.
@@ -671,8 +656,8 @@ against each other. The last section holds trust boundaries as sharp as the firs
 
 ## Visual design
 
-`docs/visual-design.md` is the doctrine. This section is what the doctrine says and the code
-does not yet do.
+[visual-design.md](visual-design.md) is the doctrine. This section is what the doctrine says
+and the code does not yet do.
 
 A full audit ran on 2026-10-06 against the master of that day. Eleven reviewers read the
 doctrine, then read the product: every surface pictured at three anchors (1440x900, 390x844
@@ -681,23 +666,23 @@ plus two static passes over `Style.fs` and over every class literal written outs
 found 203 defects. They are listed below, by the part of the code that owns the fix, then by
 the doctrine's own "Deciding" order: floor, honesty, one verb, vocabulary, grid, less.
 
-Read this list as DATED, and dated against a doctrine that has since moved. The line numbers
-the audit recorded are not reproduced here, because they are already wrong; what identifies a
-defect is the value's name. Verify a finding against today's code AND against today's doctrine
+Read this list as DATED, and dated against a doctrine that has since moved. The audit's line
+numbers are left out, because they are already wrong. The value's name identifies a defect.
+Verify a finding against today's code AND against today's doctrine
 before you fix it. Some are fixed. Some are no longer defects: #1276 rewrote principle 2, so
 chrome may now show grouping, nesting and selection, and it deleted the rule that nothing but
 a field or a button carries a border. An entry that no longer reproduces, or that cites a rule
 that no longer exists, is closed and not forced.
 
-The list is a snapshot, not a worklog: it is not edited one line per fix. One pass rewrites it
-to whatever still reproduces once the fixes have landed.
+The list is a snapshot, not a worklog. Nobody edits it one line per fix. After the fixes land,
+one pass rewrites it to whatever still reproduces.
 
 ### The marks and voices (Strokes, Motion, Typography, Statuses)
 
 - **C-19** (honesty) — Waiting statuses wear the colour that means interactive
 - **C-4** (honesty) — Two red marks on one screen when a credential is lost
 - **H-17** (honesty) — A ring means "ended" on a terminal and "watching" on a person
-- **X-3** (honesty) — "Running" wears three colours; "queued" wears live green
+- **X-3** (honesty) — "Running" wears three colours. "Queued" wears live green
 - **C-11** (vocabulary) — Settings: a section label and a field label are one face, 24px
   apart
 - **G-2** (vocabulary) — Green and blue mean the opposite of the doctrine on commands
@@ -795,7 +780,7 @@ to whatever still reproduces once the fixes have landed.
 - **S1-2** (floor) — Collapsed composer row hidden by opacity, still focusable
 - **S1-3** (floor) — Controls without a phone growth, left under 44px
 - **B-12** (honesty) — At 390 the composer's Send is not on the screen
-- **F-1** (honesty) — On a phone Send leaves the screen; it does not wait
+- **F-1** (honesty) — On a phone Send leaves the screen. It does not wait
 - **F-10** (honesty) — Draft summary text is cut mid-letter with no ellipsis
 - **H-3** (honesty) — The queue's ↑ ↓ × are not there at all on a phone turned sideways
 - **S1-5** (honesty) — Hover-only reveal of queue reorder and delete
@@ -803,7 +788,7 @@ to whatever still reproduces once the fixes have landed.
   the same way
 - **B-9** (vocabulary) — The absent agent's mark is dimmed with opacity, and its row is
   written with raw utilities
-- **D-5** (vocabulary) — Chapter and break are drawn rules; type alone does not divide
+- **D-5** (vocabulary) — Chapter and break are drawn rules. Type alone does not divide
 - **F-6** (vocabulary) — A joined draft names its author with a faint label only
 - **H-18** (vocabulary) — A person's presence is a coloured round dot with the name in a
   tooltip
@@ -908,21 +893,21 @@ to whatever still reproduces once the fixes have landed.
 - **B-1** (floor) — Unrouted browser paths get a bare text/plain 404, not a page
 - **B-4** (floor) — The way back is a text-height inline link with no focus ring and no
   touch target
-- **A-2** (honesty) — Resolves M0-3: camera seeded wrong; unnamed row is the designed state
+- **A-2** (honesty) — Resolves M0-3: camera seeded wrong. The unnamed row is the designed state
 - **A-24** (honesty) — On a phone the MCP row loses its address
 - **A-25** (honesty) — REACHES draws a scope word and a session's name in the same face
 - **A-3** (honesty) — Live is not green: running and stopped are the same faint word
 - **A-4** (honesty) — Archive is a bare glyph with only a tooltip, beside a word verb
 - **A-5** (honesty) — The sort control is gone on a phone
 - **A-9** (honesty) — The lit last chip is a span wearing a pressable face
-- **B-3** (honesty) — The refusal page wears nothing wrong; the opening screen's failure
+- **B-3** (honesty) — The refusal page wears nothing wrong. The opening screen's failure
   does
 - **B-6** (honesty) — The starting screen's status does not change when the state does
 - **H-8** (honesty) — The Manager's open mark vanishes under truncation on a phone, and its
   arrows are outside the shipped font subsets
 - **M0-3** (honesty) — Rows show the id where a name goes while the ID column stays blank
 - **S1-10** (honesty) — Sort header and record link show they are controls only on hover
-- **A-6** (one verb) — Create and Declare are the same blue-bordered primary; neither is
+- **A-6** (one verb) — Create and Declare are the same blue-bordered primary. Neither is
   filled
 - **A-10** (vocabulary) — Raw `border-*` and row hover written outside Stroke / rowLift
 - **A-11** (vocabulary) — The MCP/hook count is a hand-written copy of the label voice
@@ -930,7 +915,7 @@ to whatever still reproduces once the fixes have landed.
   icon
 - **A-13** (vocabulary) — Faint mono is spelled out six times instead of one Style value
 - **A-14** (vocabulary) — The header band is a raw 88px literal
-- **A-7** (vocabulary) — Withdraw is a bordered 128x32 button on a row; Stop and Archive are
+- **A-7** (vocabulary) — Withdraw is a bordered 128x32 button on a row. Stop and Archive are
   bare
 - **B-5** (vocabulary) — The opening screen's failure sentence is set in the caps label
   voice
@@ -1020,11 +1005,10 @@ to whatever still reproduces once the fixes have landed.
     this to seconds. Otherwise polling cannot give less, short of editing the two constants in
     `PrWatches`.
 
-    Only the pending cadence costs anything. A settled watch is two conditional requests that both
-    answer 304, which GitHub does not charge for. The pending cadence puts the ceiling around ten
-    pull requests with live suites at once per credential. Lowering it again buys latency at that
-    ceiling's expense. That is the argument for a pushed transport instead. The hosted dispatching
-    service that the ADR describes is the exit, and it does not exist.
+    The ADR gives the cost of each cadence: the pending one puts the ceiling around ten pull
+    requests with live suites at once per credential. That is the argument for a pushed transport
+    instead. The hosted dispatching service that the ADR describes is the exit, and it does not
+    exist.
   - **Check runs only.** The legacy commit-status API is not read. A repo whose CI reports only
     statuses (no check runs) therefore reads as having no checks, not as failing. That is the safe
     direction, and it is invisible.
@@ -1090,22 +1074,18 @@ to whatever still reproduces once the fixes have landed.
     - OUTSIDE the session, a human who runs git in the checkout on their own host is not immune.
 
     `.git/hooks`, the other half of the same vector, stays denied.
-  - **The clone verb runs with no filesystem confinement.** srt refuses writes to certain names
-    WHEREVER they appear, and no allow-path outranks that refusal. So a confined process cannot
-    materialize a checkout that contains any of them. srt scopes the exemption per SPAWN, never
-    per path. The comment on `FilesystemConfinement` in `src/Yession.Domain/Sandbox.fs` lists the
-    names and says why the exemption applies on Linux too.
+  - **The clone verb runs with no filesystem confinement.** A confined process cannot materialize
+    a checkout that contains a name srt refuses, and srt scopes the exemption per SPAWN, never per
+    path. The comment on `FilesystemConfinement` in `src/Yession.Domain/Sandbox.fs` lists the
+    names, says why the exemption applies on Linux too, and says when to undo it.
 
     So `add_repo`'s clone has its own sandbox with srt's filesystem rules off. For that one
     command, git can read and write whatever the session's user can, including the credential
     files srt would otherwise mask. `filesystem.disabled` drops the READ policy together with the
     write one, so the read scope above does not reach this spawn either. Egress stays pinned to
     github.com, the env stays the hardened one, and every other verb keeps the confined policy.
-    None of them writes a path that srt objects to.
-
-    The exemption goes away the day srt can exempt a subtree instead of a spawn, or reads
-    `allowGitConfig` per spawn. The clone then takes the ordinary confined policy again, and
-    `FilesystemConfinement` loses its only caller.
+    None of them writes a path that srt objects to. The exemption also goes away if srt reads
+    `allowGitConfig` per spawn.
   - **A docker terminal does not open on the checkouts.** Under the host-family backends, the
     repos directory sits inside the workspace a terminal starts in (`Sandboxes.SessionLayout`), so
     the agent's first `ls` shows what it cloned. The docker backend cannot do this. Its workspace
@@ -1121,9 +1101,9 @@ to whatever still reproduces once the fixes have landed.
     - **No inter-sandbox networking.** A `db:` sandbox's process is reachable from inside that
       sandbox only. A compose-like shared network is a design of its own.
     - **A `command` (`cmd`), an `entrypoint`, the limits (`memory`, `oom-score-adj`,
-      `pids-limit`, `cgroup-parent`) and a `dialect` are docker-only.** They
-      live inside or beside the `container:` block. Under `srt` or `host`, there is nowhere to
-      write one, instead of a refusal to explain. The exception is `dialect`, which is refused on a sandbox with no
+      `pids-limit`, `cgroup-parent`) and a `dialect` are docker-only.** They live inside or
+      beside the `container:` block. Under `srt` or `host`, there is nowhere to write one, instead
+      of a refusal to explain. The exception is `dialect`, which is refused on a sandbox with no
       container because it reads as if it would apply.
     - **A memory kill is named only for a block that died from SIGKILL.** A terminal block reads
       its container's `memory.events` before and after it runs (`MemoryWatch` in
@@ -1143,13 +1123,11 @@ to whatever still reproduces once the fixes have landed.
       what the daemon has, not against a share the operator chose. Six sessions that each
       declare most of the VM are each accepted.
     - **A `cgroup-parent` is the repo's to name, and the host's to make.** Nothing in yession
-      creates the parent cgroup or gives it a limit. On this repo's host, the Colima start
-      wrapper in the nix-darwin config makes `/yession` at every boot, with a limit of the VM's
-      RAM less 768 MiB. A bare name (`yession`) is spelled for the daemon's cgroup driver:
-      `/yession` under cgroupfs, `yession.slice` under systemd. A path is refused under
-      systemd. Where the parent is missing, Docker (cgroupfs) or systemd makes it with no
-      limit, which changes nothing. A `memory:` is also not checked against the parent's limit,
-      only against the daemon's total.
+      creates the parent cgroup or gives it a limit.
+      [technical-design.md §4](technical-design.md#4-repo-local-configuration) gives the
+      spelling per cgroup driver and what this repo's host makes. Where the parent is missing,
+      Docker (cgroupfs) or systemd makes it with no limit, which changes nothing. A `memory:` is
+      also not checked against the parent's limit, only against the daemon's total.
     - **No `${VAR}` in an entrypoint.** compose interpolates from the host's environment at parse
       time. That is the wrong environment here: the sandbox's is the one that means something.
       Nothing has needed it. The string form is read into words and nothing else. A value that
@@ -1181,23 +1159,18 @@ to whatever still reproduces once the fixes have landed.
     Manual approval was removed deliberately, not lost. The queue stays visible and editable,
     refusals stay recorded and attributed, and the seam is where the real classifier plugs in.
   - **A forwarded credential is a route, and the route's cap lives in the sandbox's env for that
-    sandbox's lifetime** (Plan 15 stage 2, reshaped by the git gateway). The VALUE no longer
-    enters the sandbox. `github` forwards as one `insteadOf` that names the session's git gateway
-    under a per-sandbox capability. The gateway resolves the credential on every request. So a
-    refresh under Plan 21 reaches a running sandbox, and a revocation at the provider is felt on
-    the next push. `stop_work_sandbox` revokes the route.
-
-    WHOSE credential answers is the block's, not the sandbox's. A per-block loan (`__y_env`) names
-    it, and the gateway answers a request from the loan it carries and from nothing else. The
-    header of `app/GitGateway.fs` describes the loan. A push writes `GitCredentialSpent` to the
-    log, which is where the person whose credential it was finds out.
+    sandbox's lifetime** (Plan 15 stage 2, reshaped by the git gateway). The header of
+    `app/GitGateway.fs` describes the route, the per-sandbox capability and the per-block loan
+    (`__y_env`). The VALUE does not enter the sandbox. The gateway resolves the credential on
+    every request, so a refresh under Plan 21 reaches a running sandbox, and a revocation at the
+    provider is felt on the next push. `stop_work_sandbox` revokes the route. A push writes
+    `GitCredentialSpent` to the log, which is where the person whose credential it was finds out.
 
     What the sandbox holds is the cap and, in each block's environment, that block's loan.
     Everyone in the session and everything running in it can read the loan. A block can read
     another block's live loan out of `/proc`, the same shared trust boundary Plan 14 states. The
     loan is worth exactly "act as this sandbox's git at this session's gateway" for as long as it
-    is live. The gateway holds that bound: a loan answers only on the route of the sandbox it was
-    lent in.
+    is live, because a loan answers only on the route of the sandbox it was lent in.
 
     What is NOT held is the transcript. The loan is in the block's environment. So `env`,
     `printenv`, or a program that dumps its environment on the way down prints the loan into a
@@ -1294,16 +1267,17 @@ to whatever still reproduces once the fixes have landed.
 - **First install downloads the native `claude`** (~240 MB, platform-specific). It is not in the
   300 KB tarball, so npm fetches it. The *first* install therefore needs network and disk. The
   SDK's own resolution finds the binary afterward, so `YESSION_BIN_CLAUDE` is not needed.
-- **Build slots count only this repository's own heavy verbs.** `tasks.fsx` serialises its
-  dotnet/Fable builds and suites across every sandbox on a daemon (`withBuildSlot`, two slots of
-  3 GiB in the ~7 GiB pool of the 8 GiB Colima VM). A `dotnet` or `node` run by hand, another
-  repository's build, or a `dev` watch takes no slot, and can still push the pool into the
-  kernel's OOM killer, which then picks the largest process in ANY session. The slot is
-  admission, not a limit: what bounds one container is a per-container memory limit (#1312), and
-  what keeps the daemon itself out of reach is the pool cgroup, `cgroup-parent: yession`
-  (`/yession` on the VM's cgroupfs driver). The host's Colima start wrapper (in the nix-darwin
-  config) makes that pool at every boot, not yession. Where it is missing, Docker makes
-  `/yession` with no limit, and the daemon is again in reach.
+- **Build slots count only this repository's own heavy verbs.** The slots are described in
+  [AGENTS.md](../AGENTS.md#bootstrap) ("Heavy verbs take a build slot"). The ~7 GiB pool is in an
+  8 GiB Colima VM. A `dotnet` or `node` run by hand, another repository's build, or a `dev` watch
+  takes no slot. It can still push the pool into the kernel's OOM killer, which then picks the
+  largest process in ANY session.
+
+  The slot is admission, not a limit. A per-container memory limit (#1312) bounds one container.
+  The pool cgroup (`cgroup-parent: yession`, `/yession` on the VM's cgroupfs driver) keeps the
+  daemon itself out of reach. The host's Colima start wrapper (in the nix-darwin config) makes
+  that pool at every boot, not yession. Where it is missing, Docker makes `/yession` with no
+  limit, and the daemon is again in reach.
 - **The composition E2E and install smoke run on Linux/CI.** Other platforms' npm resolution rides
   npm's own optional-dependency machinery, unverified per-commit.
 - **No per-platform build matrix for the npm route, no code signing.** Release CI ships one
@@ -1321,14 +1295,9 @@ to whatever still reproduces once the fixes have landed.
   npm INSTALL path on darwin, and everything on Windows.
 - **Telemetry is agent-turn usage plus Manager audit records** (Plans 04 + 06). Each completed
   turn emits one OpenTelemetry **log record**: the token and cache counts plus session, turn and
-  model ids, never message content. Every process (the Manager and each session) is a **direct
-  OTel emitter**. There is no Manager-side collector.
-
-  The standard OTEL_* env that the Manager is started with chooses the destination:
-  `OTEL_LOGS_EXPORTER=console|otlp|none` (comma-separated for a stdout+collector tee) and
-  `OTEL_EXPORTER_OTLP_*` for the collector. The Manager passes it through to each child, whose
-  identity the Manager adapts. The default is `console` (stdout). With no collector configured,
-  forwarding is dropped.
+  model ids, never message content. Every process is a **direct OTel emitter**, with no
+  Manager-side collector. The header of `app/Telemetry.fs` lists the standard `OTEL_*` variables
+  that choose the destination, and how the Manager passes them to each child.
 
   Separately, the Manager emits its own in-process `yession.*` **audit records** for the
   secrets/ABAC surface: ops, denies, injection, KEK/store lifecycle, user↔launch bindings, and
