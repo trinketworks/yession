@@ -16,8 +16,8 @@ worked examples that satisfy them.
 ## Options and variables
 
 The Manager takes what it **decides** as an option. What it **passes down** stays in the
-environment, because a child gets it by inheritance. A mistyped setting is therefore refused
-where it is a decision, and `--help` is the list.
+environment, because a child gets it by inheritance. The Manager therefore refuses a mistyped
+decision, and `--help` is the list.
 
 ```sh
 yession-manager --help                # what it accepts
@@ -43,11 +43,11 @@ unrecognised, because the examples use this prefix for their own variables
 | `YESSION_SESSION_*` | you. It is per-session policy, today set once per host | `YESSION_SESSION_WORK_BACKEND`, `YESSION_SESSION_RESOURCES` |
 | `YESSION_LAUNCH` | nobody — the Manager mints it per launch | — |
 
-A variable that moved onto the command line is **refused**, not ignored. A boot whose
-environment still sets one stops and names the option to write instead.
-A setting that nothing reads is the behaviour you asked for, silently not happening. Four
-renames once cost weeks of missing reaping, unfollowed upgrades, and refused sandboxes before
-anybody noticed.
+The Manager **refuses** a variable that moved onto the command line. It does not ignore it.
+If the environment still sets one, the boot stops and names the option to write instead. A
+setting that nothing reads is the behaviour you asked for, silently not happening. Four renames
+once cost weeks of missing reaping, unfollowed upgrades, and refused sandboxes before anybody
+noticed.
 
 `YESSION_LAUNCH` is the launch's control secret. It grants custody of the session's secrets
 and the right to register as an OIDC client. Setting it by hand impersonates a session. It
@@ -56,8 +56,8 @@ never reaches a sandboxed command.
 `YESSION_SESSION_RESOURCES` names a **resources profile**. The profile holds named resources
 that a repo's `yession.yaml` selects by name, so a repo cannot exceed what the operator
 declared. `resources:` is what the host can offer. `always:` is what every sandbox holds
-without asking: no repo has to name it and none can decline it. A resource that is declared
-and not always granted is available and not granted.
+without asking: no repo has to name it and none can decline it. A resource that the profile
+declares, and does not list under `always:`, is available and not granted.
 
 The same file may declare `sandboxes:` in exactly the form a repo's `yession.yaml` uses. One
 decoder reads both (`ConfigFile.parseSandboxes` in `src/Yession.Domain/Config.fs`). The same
@@ -66,8 +66,8 @@ printed at boot.
 
 Each sandbox in the file exists in every session on this host from boot, on the backend
 configured for the session's own sandboxes. These are ALL of a session's own sandboxes
-(`WorkSandboxes.create`). No sandbox is built in. `default` is where a terminal that names no
-sandbox opens, and it exists only if you declare it. A session on a host whose profile
+(`WorkSandboxes.create`). Yession has no built-in sandbox. `default` is where a terminal that
+names no sandbox opens, and it exists only if you declare it. A session on a host whose profile
 declares none has nowhere to run a command until a repo's sandbox starts. Declare `default`
 with what it should hold: `wants: [ github ]` for `git push` from a terminal.
 
@@ -77,7 +77,8 @@ never replaces that prompt. The prompt describes the build's tools and sandboxes
 in your file would describe the build you wrote it against. Write only what this host knows:
 its conventions, what is slow here, and what must never be pushed to which place.
 
-`agent.prompt` picks how that prompt is put together, from the strategies the build has:
+`agent.prompt` picks the strategy that assembles that prompt, from the strategies the build
+has:
 
 - `static`, the default: the product's sections and your guidance as one system prompt, and
   the turn's context (the time, the conversation, terminal activity, repo notes) as one
@@ -89,8 +90,8 @@ its conventions, what is slow here, and what must never be pushed to which place
   context arrives as `<system-reminder>` blocks beside the message the turn answers.
 
 A session reads the file at boot and reports on its stderr which strategy it chose. To say
-nothing about the agent, leave the block out. A block that says nothing is refused, and so is
-a strategy that the build does not have.
+nothing about the agent, leave the block out. Yession refuses a block that says nothing. It
+also refuses a strategy that the build does not have.
 
 ---
 
@@ -184,25 +185,28 @@ yession-manager --idle-timeout 30m       # or 90s, 2h; absent means never
 
 The Manager stops sessions that nobody uses. A session reports busy or idle over its control
 channel (a connected peer, a running turn, a command, a non-empty queue). The Manager reaps on
-**silence**, so no single report has to arrive. Absent means never.
+**silence**, so no single report has to arrive.
 
 Reaping has two costs:
 
 - A reaped launch loses its OAuth client registration and user bindings, so the next visitor
   signs in again. This is invisible under `localhost` and a repeat redirect under
   `trusted-headers`.
-- A session that wedges after readiness is stopped as `NeverReported` and not diagnosed.
+- The Manager stops a session that wedges after readiness as `NeverReported`. It does not
+  diagnose it.
 
 Reaping also gives you rolling upgrades. Point `--spawn-bin` at a path that floats with your
 builds. Sessions then upgrade as they idle out. The Manager waits until nothing runs, because
-its restart evicts everybody. A MAJOR version difference refuses the launch, since the control
-protocol may disagree. The refusal drains the running set and hands you that moment.
+its restart evicts everybody. A [MAJOR](../AGENTS.md#versioning) version difference refuses
+the launch, since the control protocol may disagree. The refusal drains the running set and
+hands you that moment.
 
 ### Addressing
 
 A deployment is either **loopback** (nothing set, everything on `127.0.0.1`) or **fronted**
-(both set, everything public). A half-set pair is refused at boot, because either half alone
-points somebody at loopback:
+(both set, everything public). The Manager refuses a half-set pair at boot, because either half
+alone points somebody at loopback
+([ADR](decisions/2026-08-28-deployment-fronts-everything-or-nothing.md)):
 
 - Sessions without their issuer bounce remote logins to `127.0.0.1`.
 - A public issuer without fronted sessions registers callbacks that nobody remote can reach.
@@ -235,7 +239,7 @@ YESSION_SESSION_URL=https://{id}.sessions.example.com  # a subdomain per session
 YESSION_SESSION_URL=https://example.com/s/{id}         # a path per session
 ```
 
-A template with no placeholder is refused, since every session would share one address.
+Yession refuses a template with no placeholder, since every session would share one address.
 `{port}` may appear in the authority but never in the **path**. A session must know
 its mount before it binds, because the mount fixes its `<base href>`, its cookie `Path`, and
 the prefix it strips.
@@ -243,8 +247,8 @@ the prefix it strips.
 #### Prefer `{id}`
 
 A `{port}` template gives a session a new origin per launch, and the browser partitions
-storage by origin. Anything written while the session was away is stranded in a database that
-nothing reopens. The shell then emits `<meta name="yession-ephemeral-storage" content="1">`,
+storage by origin. Anything the browser wrote while the session was away stays stranded in a
+database that nothing reopens. The shell then emits `<meta name="yession-ephemeral-storage" content="1">`,
 and the client stops promising a sync that it cannot deliver. Under `{id}`, the tag is absent
 and the promise holds. Everything already sent is on the server either way.
 
@@ -264,7 +268,7 @@ tracker. A caller that does not gets 401s and no frames.
 
 The template is not on the wire. The stream carries `id` and `port`, and the deployment
 applies its template, so the prefix has one home. [`examples/proxy/main.mjs`](../examples/proxy/)
-is a reference reconciler. §Tailscale composes it.
+is a reference reconciler. [§Tailscale](#tailscale) composes it.
 
 ---
 
@@ -280,7 +284,7 @@ Register an App (not an OAuth App), and:
 
 - **Enable device flow** — the session runs this flow. The code exchange needs a client secret
   that the Manager's public-client broker cannot carry.
-- **Set no callback URL that matters, generate no client secret** — neither is used.
+- **Set no callback URL that matters, generate no client secret** — Yession uses neither.
 - **Install it on the repositories it should reach** — a device-flow token sees the
   intersection of the user's access and the App's installations. Nothing in Yession re-checks
   that.
@@ -296,13 +300,13 @@ Register an App (not an OAuth App), and:
     block's git receives comes from the profile. Without this permission, the email is the
     account's `noreply` address and not the one the account publishes.
 
-  A missing permission is not a refusal at sign-in. The token is minted regardless, and the
-  verb that needed the permission fails. GitHub's 403 or 404 is passed through in words.
+  A missing permission is not a refusal at sign-in. GitHub mints the token regardless, and the
+  verb that needed the permission fails. Yession passes GitHub's 403 or 404 through in words.
 - **Leave user-token expiration on** — the Manager holds the refresh token and rotates it
   before each turn. With expiration off, the token is permanent, and nothing tells you which
   setting you registered.
 - **Point its webhook at `<YESSION_MANAGER_URL>/hooks/github`** if you declared a hook
-  endpoint (§Webhooks), with the secret the manager page shows. Polling still works without
+  endpoint ([§Webhooks](#webhooks)), with the secret the manager page shows. Polling still works without
   the hook. A hook only advances its clock.
 
 Then name the client id:
@@ -313,8 +317,8 @@ YESSION_GITHUB_CLIENT_ID=Iv1.0123456789abcdef
 
 If you leave it unset, the sign-in surface says so and offers the paste path. A pasted
 `github_pat_…` or `ghp_…` token works and **bypasses the installation rule** (recorded in
-GAPS.md). A pasted `ghu_…` or `gho_…` token is refused where device flow exists, since it
-expires in hours and cannot rotate.
+[GAPS.md](GAPS.md)). Where device flow exists, Yession refuses a pasted `ghu_…` or `gho_…`
+token, since it expires in hours and cannot rotate.
 
 `YESSION_GITHUB_DEVICE_URL`, `YESSION_GITHUB_TOKEN_URL`, `YESSION_GITHUB_USER_URL` and
 `YESSION_GITHUB_API_URL` override the four endpoints. The test suites use them to drive the
@@ -332,9 +336,9 @@ yession-manager --webhook github --webhook linear
 
 The Manager serves each endpoint at `<YESSION_MANAGER_URL>/hooks/<name>`, so this needs a
 fronted deployment. The manager page shows, for each endpoint, the address and the secret to
-sign with. The secret is derived from the credential manager's key and is not chosen. For this
-reason, endpoints are refused under an ephemeral store: a secret that changed at every restart
-would break deliveries silently.
+sign with. The Manager derives the secret from the credential manager's key. You do not choose
+it. For this reason, the Manager refuses endpoints under an ephemeral store: a secret that
+changed at every restart would break deliveries silently.
 
 To rotate, bump the counter. The Manager accepts both the new secret and the one before it
 until you bump again:
@@ -392,25 +396,23 @@ Tailscale-User-Profile-Pic  avatar URL (empty where the account has none)
 
 `serve` does not touch `x-yession-*`, so a forged `x-yession-user` reaches the proxy intact.
 The translation below is therefore also the strip. `serve` cannot rename headers, so the proxy
-renames them. With Caddy, put this on the Manager's route:
+renames them on the Manager's route. The Caddy form is the `handle` block in
+[`examples/proxy/caddy/Caddyfile`](../examples/proxy/caddy/Caddyfile):
 
-```caddyfile
-reverse_proxy 127.0.0.1:8321 {
-	header_up x-yession-user         {header.Tailscale-User-Login}
-	header_up x-yession-user-name    {header.Tailscale-User-Name}
-	header_up x-yession-user-picture {header.Tailscale-User-Profile-Pic}
-	header_up -x-yession-user-email
-	header_up -x-yession-user-claims
-	header_up -tailscale-*
-}
-```
+| header | the proxy |
+|---|---|
+| `x-yession-user` | sets it from `Tailscale-User-Login` |
+| `x-yession-user-name` | sets it from `Tailscale-User-Name` |
+| `x-yession-user-picture` | sets it from `Tailscale-User-Profile-Pic` |
+| `x-yession-user-email`, `x-yession-user-claims` | deletes it |
+| `tailscale-*` | deletes it |
 
 - **Set what `serve` asserts, delete what it does not** — a set replaces the client's value, so
   the three sets are the strip for those three. Email and claims must be deleted by name, or a
   client chooses its own.
 - **Delete by name, not `-x-yession-*`** — Caddy applies deletions after sets, so the wildcard
-  strips what was just asserted and the Manager sees nobody. This was measured, and the
-  fronted browser case in the suite keeps measuring it.
+  strips what was just asserted and the Manager sees nobody. We measured this, and the fronted
+  browser case in `tests/Yession.Tests/Browser.fs` keeps measuring it.
 - **The Manager is reachable only through the proxy** — under `trusted-headers` the header
   *is* the subject, so on a shared box bind the Manager where only the proxy can dial.
 
@@ -456,16 +458,15 @@ YESSION_SESSION_URL=https://host.example.ts.net:8321/s/{id} \
   yession-manager --auth trusted-headers
 ```
 
-Both URLs name the tailnet origin. The Manager is the issuer that sessions redirect users
-through, and a loopback issuer sends remote logins to this machine only.
+Both URLs name the tailnet origin, for the reason in [§Addressing](#addressing).
 
 The proxy routes `/s/<id>` to the session's port **without stripping the mount**. A session
 serves under its mount: it answers at `/s/<id>/…` and returns 404 at `/`. In Caddy, therefore,
 use `handle`, never `handle_path`, with the bare port upstream.
 
 Use `--https` where the tailnet issues certificates. Derive the scheme in both URLs from one
-variable, or the Manager and its sessions become two origins. `--https` also matters without
-certificates as the reason: a browser withholds the Cache API and service workers outside a
+variable, or the Manager and its sessions become two origins. Apart from certificates,
+`--https` matters for one more reason: a browser withholds the Cache API and service workers outside a
 secure context, so over plain HTTP a session keeps no history on the device and cannot open
 cold offline. Loopback is a secure context, so the default is unaffected.
 
@@ -476,8 +477,7 @@ A session's port is OS-assigned per launch, so a process, not a person, writes i
 the proxy reads. [`examples/proxy`](../examples/proxy/README.md) has the full command, with
 the Caddy template and `--reload` for a proxy that does not watch its config.
 
-Caddy under `--watch` re-adapts every second and re-reads the import. Any reconciler against
-the stream should keep three rules:
+Any reconciler against the stream should keep three rules:
 
 - **Render the whole set, every frame** — a frame is the running set, so a reaped-and-relaunched
   session (same path, new port) can never leave a route aimed at a dead port. Rewrite only on
@@ -501,12 +501,15 @@ the stream should keep three rules:
 
 ### Nix
 
-`packages.<system>.default` is `yession-manager` and `yession-session`. They are wrapped with
-the native WebRTC addon, which is built from source, and with `YESSION_BIN_CLAUDE` and
-`YESSION_BIN_GIT` defaulted to store paths. The module below comes from the deployment that
-the project itself runs: home-manager under nix-darwin, composed with §Tailscale.
+`packages.<system>.default` is `yession-manager` and `yession-session`
+([`nix/packages.nix`](../nix/packages.nix)). The package wraps them with the native WebRTC
+addon, which it builds from source, and defaults `YESSION_BIN_CLAUDE` and `YESSION_BIN_GIT` to
+store paths. The module below comes from the deployment that
+the project itself runs: home-manager under nix-darwin, composed with
+[§Tailscale](#tailscale).
 
-Pin the input and leave its nixpkgs alone, because the addon is built against that pin:
+Pin the input and leave its nixpkgs alone, because the package builds the addon against that
+pin:
 
 ```nix
 inputs.yession.url = "github:trinketworks/yession";
@@ -514,7 +517,7 @@ inputs.yession.url = "github:trinketworks/yession";
 # tested native build for an untested one.
 ```
 
-Three agents make up all of §Tailscale. They use the example's files as they ship:
+Three agents make up all of [§Tailscale](#tailscale). They use the example's files as they ship:
 
 ```nix
 { config, pkgs, inputs, ... }:
@@ -659,7 +662,7 @@ Four choices in it are deliberate:
 - **A plist change restarts the Manager, and that evicts every session.** For frequent
   upgrades, point `--spawn-bin` at a symlink that you promote. The symlink path is a constant
   string, so the agent's `ProgramArguments` do not change when the input does. Sessions then
-  roll onto new builds as they idle (§Session lifetime). The proxy and the map ride out a
+  roll onto new builds as they idle ([§Session lifetime](#session-lifetime)). The proxy and the map ride out a
   Manager restart: the map empties while the Manager is unreachable and refills on the first
   frame after.
 
@@ -681,7 +684,7 @@ nix-container-store:
 ```
 
 Each session runs `pin` in every sandbox that holds the volume: at start, every `every`, and
-once more before the sandbox is removed. The argument is that sandbox's lease directory,
+once more before the session removes the sandbox. The argument is that sandbox's lease directory,
 `/nix/.yession/leases/<sandbox>`. Collecting is yours, on your schedule.
 [examples/nix-store](../examples/nix-store/) has the pair of scripts for a Nix store, and its
 README says how to install them into the volume and run the sweep.
