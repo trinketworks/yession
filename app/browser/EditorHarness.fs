@@ -2066,7 +2066,27 @@ do
           (fun () ->
               show shortModel
               chapterCaret "msg-harness" 0 5)
-          "empty", (fun () -> show emptyModel) ]
+          "empty", (fun () -> show emptyModel)
+          // A cold open fetching the log, for long enough to say so, with nothing of it kept.
+          "catching-up",
+          (fun () ->
+              show
+                  { emptyModel with
+                      LocalCopy = LocalCopy.NoneKept
+                      Link =
+                          SessionLink.Fetching (
+                              EventOffset.create 40L |> expect,
+                              { Effort.fresh with Slow = true },
+                              Phase.Opening) })
+          // Nothing kept, and the session out of reach: nothing folded at all.
+          "history-not-here",
+          (fun () ->
+              show
+                  { emptyModel with
+                      Conversation = ConversationProjection.empty
+                      Timeline = TimelineProjection.empty
+                      LocalCopy = LocalCopy.NoneKept
+                      Link = SessionLink.Connecting (failing "the session did not answer (502 Bad Gateway)" 3) }) ]
     let named = states |> List.map fst
     PageGlobal.set HarnessPage.states (Array.ofList named)
     PageGlobal.set HarnessPage.state (fun name ->

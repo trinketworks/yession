@@ -12,7 +12,7 @@ module Dom =
     let attr (name: string) (value: string) : string = name + "=\"" + value + "\""
 
     /// `hook>text<` — a hook sitting immediately before its text content, the shape a
-    /// checklist assertion looks for (e.g. `data-catch-up>Catching up<`).
+    /// checklist assertion looks for (e.g. `data-display-name>swift-heron<`).
     let hookText (hook: string) (text: string) : string = hook + ">" + text + "<"
 
     /// The client shell mount element id (`<main id="app">`; the browser mounts Lit here).
@@ -92,9 +92,8 @@ module Dom =
         /// Which build served this session, at the column's foot (`ClientModel.Build`); its
         /// value is the build.
         let build = "data-build"
-        let catchUp = "data-catch-up"
-        /// The same catch-up as a bar along the header's bottom edge — the one place every
-        /// screen has, since the sidebar line above is behind a drawer on a phone.
+        /// A catch-up worth waiting on, as a bar along the header's bottom edge — the one place
+        /// every screen has.
         let catchUpBar = "data-catch-up-bar"
         /// The durable event feed's health (sidebar), carrying a `Text.feed*` token.
         let feed = "data-feed"
@@ -106,8 +105,6 @@ module Dom =
         /// VISIBILITY rule, which no markup test can settle: both mounts are in the document
         /// at once by design. The browser suite counts the visible ones.
         let degraded = "data-degraded"
-        let lastProcessedOffset = "data-last-processed-offset"
-        let latestKnownOffset = "data-latest-known-offset"
         /// A roster row for a peer that is here NOW, valued by peer id, and the where-they-are
         /// slot on it — valued by a `Text.at*` field token, with the words for people beside
         /// it. Presence is what makes a collaborator visible from outside the surface they
@@ -838,13 +835,6 @@ module Dom =
         let composerPlaceholder = "write a message"
         /// What a screen reader hears while an @ is hinted: the whole name, and the key.
         let addressHintSpoken (name: string) = sprintf "%s, Tab to complete" name
-        /// The cold-open wait (Plan 20): what is coming, not just that something is. Shown
-        /// while EITHER the local store has not been read yet OR the event consumer is still
-        /// behind the session's own log (`catchingUp` below covers the same network wait once
-        /// there is something on screen already) — so this one stays up until a message that
-        /// was never on this device has had its round trip, not just until the local read
-        /// resolves.
-        let readingHistory = "Catching up on this session's history"
         /// The floating "jump to latest" control's accessible name, since it carries only a down
         /// chevron (`Icon.down`), so this is the whole of what a screen reader says it does.
         let jumpToLatest = "Jump to latest message"
@@ -889,8 +879,9 @@ module Dom =
         /// while nothing is coming to fill it — see `View.chat` — so it is a fact about this
         /// client's own store rather than a complaint about the network.
         let historyMissingLocally = "earlier history is not on this device"
-        // Offset placeholder (em dash) when nothing has been read yet.
-        let offsetNone = "—"
+        /// What stands where a conversation would be on a page that holds none of it and cannot
+        /// reach the session to read it: not that the session is empty, which nobody here knows.
+        let historyNotOnDevice = "this session's history is not on this device yet"
         // Non-human authors.
         let agent = "agent"
         let sessionProcess = "session-process"
