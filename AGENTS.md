@@ -134,9 +134,9 @@ surface, not a follow-up. `src/Yession.App/AGENTS.md` lists what the tests do no
 ## Versioning
 
 The commit history determines the version. No file stores it. Every green master push publishes
-`1.0.0-beta.<n>`. To move the triple, put a marker in the commit message, on a line with nothing
-else on it. The version comment and `bumpOf` in `tasks.fsx` own the markers, their parse rules,
-and the trap of a marker table pasted bare.
+`1.0.0-beta.<n>`. To move the triple, put a marker such as `+semver: minor` in the commit message,
+on a line with nothing else on it. The version comment and `bumpOf` in `tasks.fsx` own the markers,
+their parse rules, and the trap of a marker table pasted bare.
 
 **When to bump.** A breaking change to the Manager ↔ Session API is a major bump. That API is the
 protocol between the `yession-manager` and `yession-session` bins, and the Manager tolerates
@@ -146,9 +146,9 @@ does NOT bump.
 
 **Commit / PR messages.** Subjects follow conventional-commit style (`feat:`, `fix:`, `ci:`,
 `refactor:`, ...). That is a convention for readers, not the version input. A PR squash-merges as
-PR TITLE + PR DESCRIPTION, so the marker goes in the description. Step 2 of
-[contributing-changes](.agents/skills/contributing-changes/SKILL.md) owns how to write it (the
-commit body it becomes, 72 columns). A wider line can re-wrap and fold a marker into prose.
+PR TITLE + PR DESCRIPTION, and branch commit messages are discarded. So put the marker in the
+description. Write the description as the commit message it becomes, wrapped at 72 columns.
+GitHub re-wraps a wider line, and a re-wrap can fold a marker into prose.
 
 What a build reports of itself: `app/Version.fs` lists the values, and `app/Telemetry.fs` states
 why `service.version` is a code default.
