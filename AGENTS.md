@@ -146,7 +146,7 @@ does NOT bump.
 
 **Commit / PR messages.** Subjects follow conventional-commit style (`feat:`, `fix:`, `ci:`,
 `refactor:`, ...). That is a convention for readers, not the version input. A PR squash-merges as
-PR TITLE + PR DESCRIPTION, so the marker goes in the description. Step 3 of
+PR TITLE + PR DESCRIPTION, so the marker goes in the description. Step 2 of
 [contributing-changes](.agents/skills/contributing-changes/SKILL.md) owns how to write it (the
 commit body it becomes, 72 columns). A wider line can re-wrap and fold a marker into prose.
 
