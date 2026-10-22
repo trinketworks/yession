@@ -255,9 +255,16 @@ module View =
               Promise = None
               Why = promise :: (failure |> Option.map (fun f -> Dom.Text.retryingWhy f.Reason f.Count) |> Option.toList) @ why
               Verb = failure |> Option.map (fun _ -> StatusVerb.TryAgain) }
+        // What the line speaks for: what it is saying (`Said`), which may still be the link a
+        // moment ago — a showing stands for its second — or, where nothing has begun to be
+        // said, the link as it is.
+        let link =
+            match model.Said with
+            | Some said -> said.Link
+            | None -> model.Link
         // One state, so one report: a page that cannot reach its session is not reading its
         // history either, and is not said to be.
-        match model.Link with
+        match link with
         // The one state that waits on a person: the session would not have this page. What
         // fixes it is signing in again, which is where the line goes.
         | SessionLink.Refused (reason, _) ->

@@ -147,6 +147,25 @@ type SessionLink =
     /// is tried until a person does something, because the same token would be refused again.
     | Refused of reason: string * Phase
 
+/// What the status line can say, by kind: one for each state of `SessionLink` that a person
+/// is told about. A showing of the line is timed per kind (`Said`), so a failure in an attempt
+/// already being said is the same showing, and a link lost while news was failing to arrive is
+/// a new one.
+[<RequireQualifiedAccess>]
+type StatusKind =
+    | Connecting
+    | Reconnecting
+    | HistoryRetrying
+    | HistoryPaused
+    | SignedOut
+
+/// What the status line is saying: the link as it was when there was something to say about
+/// it, which showing of the line this is, and whether that showing has stood for its second
+/// (`ClientModel.statusDwellMs`). A line that came and went inside a second was a flash a
+/// reader could not read — a quick reconnect said "reconnecting" for a frame — so once said, it
+/// is said for at least that long, and the link it speaks for may have moved on meanwhile.
+type Said = { Link : SessionLink; Showing : int; Dwelt : bool }
+
 module SessionLink =
 
     /// Whether this page has read the log through since it loaded.
@@ -334,6 +353,23 @@ module SessionLink =
         | SessionLink.Fetching _
         | SessionLink.Current
         | SessionLink.Refused _ -> link
+
+    /// What the status line says of this link, by kind (`StatusKind`), when it says anything:
+    /// a refusal, an attempt that has lasted or failed, reads that are failing or gave up. A
+    /// wait inside its quiet window, a fetch, and a page that is current say nothing.
+    let said (link: SessionLink) : StatusKind option =
+        match link with
+        | SessionLink.Refused _ -> Some StatusKind.SignedOut
+        | SessionLink.Connecting { Failed = Some _ }
+        | SessionLink.Connecting { Slow = true } -> Some StatusKind.Connecting
+        | SessionLink.Reconnecting ({ Failed = Some _ }, _)
+        | SessionLink.Reconnecting ({ Slow = true }, _) -> Some StatusKind.Reconnecting
+        | SessionLink.Fetching (_, { Failed = Some _ }, _) -> Some StatusKind.HistoryRetrying
+        | SessionLink.Stalled _ -> Some StatusKind.HistoryPaused
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _
+        | SessionLink.Fetching _
+        | SessionLink.Current -> None
 
     /// The page has been open long enough for its wait to be worth saying (`PageWaitedMsg`):
     /// an opening fetch, which has been waited on since the page loaded, is now slow.
@@ -1578,6 +1614,12 @@ type ClientModel =
       /// then a slow fetch are one wait to them, not two quiet ones. Set once, for good, by the
       /// timer the model declares for it (`ClientModel.timers`).
       Waited        : bool
+      /// What the status line is saying (`Said`), which can outlast the link it speaks for by
+      /// up to a second; `None` while there is nothing to say.
+      Said          : Said option
+      /// How many times the status line has begun saying something on this page: each showing
+      /// is numbered, so its second is timed from when it began (`ClientModel.timers`).
+      Showings      : int
       /// The serving session's id: seeded from the shell (so it is known before — and
       /// without — any connection) and re-learned from `PeerAccepted`. Shown as the
       /// header's secondary identifier beside the editable title, and it names the session
@@ -2177,6 +2219,10 @@ type ClientMsg =
     /// The page has been open for `ClientModel.catchUpQuietMs` (`ClientModel.Waited`) —
     /// fired once, by the timer `ClientModel.timers` declares from load.
     | PageWaitedMsg
+    /// The status line's showing numbered `showing` has stood for `ClientModel.statusDwellMs`
+    /// (`Said`) — fired by the timer `ClientModel.timers` declares for it, never by anything
+    /// else.
+    | StatusDweltMsg of showing: int
     /// The agent's writing sat still at this stamp for `ClientModel.writingQuietMs` — fired
     /// by the timer `ClientModel.timers` declares for it, never by anything else.
     | AgentQuietMsg of WritingStamp
@@ -2796,6 +2842,8 @@ module ClientModel =
           // state too: at first paint nobody has read anything.
           Link = SessionLink.Connecting Effort.fresh
           Waited = false
+          Said = None
+          Showings = 0
           Session = None
           Manager = None
           EphemeralStorage = false
@@ -2953,6 +3001,24 @@ module ClientModel =
                     (launchBegun model)
                     model.Synced.LaunchDismissed
                     model.Launch }
+
+    /// Keeps what the status line says (`Said`) in step with the link, and holds it for its
+    /// second. Run after every message (`fold` pipes its result through this), so whichever
+    /// message first gives the link something to say begins a showing, and none can end one
+    /// early: a link with nothing to say leaves the line saying what it said until its showing
+    /// has stood for `statusDwellMs` (`StatusDweltMsg`). A link with something else to say is
+    /// said at once — a showing gives way to news, never to quiet.
+    let private say (model: ClientModel) : ClientModel =
+        match SessionLink.said model.Link, model.Said with
+        | Some kind, Some said when SessionLink.said said.Link = Some kind ->
+            { model with Said = Some { said with Link = model.Link } }
+        | Some _, _ ->
+            { model with
+                Said = Some { Link = model.Link; Showing = model.Showings + 1; Dwelt = false }
+                Showings = model.Showings + 1 }
+        | None, Some { Dwelt = false } -> model
+        | None, Some { Dwelt = true }
+        | None, None -> { model with Said = None }
 
     /// Whose draft the composer is showing — the resolved answer to `ComposerChoice`, and the
     /// only place the "join what is already being written" default lives.
@@ -4582,6 +4648,11 @@ module ClientModel =
     /// whose answer is slow, is reported well before a person decides the page is dead.
     let connectingQuietMs = 1500
 
+    /// How long the status line, once it says something, says it for at least (`Said`). Long
+    /// enough to be read; short enough that a line still saying "reconnecting" over a link that
+    /// is back is gone before anybody acts on it.
+    let statusDwellMs = 1000
+
     /// How long a copy says so for. Long enough to be read as an answer to the press, short
     /// enough that the code it stands in front of comes back before anybody needs it again.
     let copiedShownMs = 1500
@@ -4661,6 +4732,13 @@ module ClientModel =
         let waited =
             if model.Waited then []
             else [ { Key = [ "page-waited" ]; After = catchUpQuietMs; Fire = PageWaitedMsg } ]
+        // Keyed by the showing, so a line said again after it has gone is timed afresh.
+        let dwell =
+            match model.Said with
+            | Some { Showing = showing; Dwelt = false } ->
+                [ { Key = [ "status-dwell"; string showing ]; After = statusDwellMs; Fire = StatusDweltMsg showing } ]
+            | Some { Dwelt = true }
+            | None -> []
         let quiet =
             model.Conversation.Items
             |> List.choose writingStamp
@@ -4698,7 +4776,7 @@ module ClientModel =
                           After = int Pending.deadlineMillis
                           Fire = PendingWaitedMsg (since + Pending.deadlineMillis) }
                 | Pending.Ready | Pending.Sending | Pending.Refused _ -> None)
-        effort @ waited @ copied @ queueDeleteArmed @ killArmed @ pending @ quiet @ GitHubPoll.timer model.GitHub
+        effort @ waited @ dwell @ copied @ queueDeleteArmed @ killArmed @ pending @ quiet @ GitHubPoll.timer model.GitHub
 
     /// Fold a message into the model — the state half of `update`, its only caller.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
@@ -4711,7 +4789,8 @@ module ClientModel =
     /// and through `landsWhenHeard` after it, so a pane already up when that line is crossed
     /// lands where a pane brought up then would;
     /// and through `notice`, so what this person has looked at is counted from wherever the
-    /// message left the pane; and through `holdList` after it, last, so the
+    /// message left the pane; and through `say` after it, so the status line speaks for the
+    /// link the message left (`Said`); and through `holdList` after that, last, so the
     /// list's sheet holds a terminal by what it is once that has been counted.
     /// The pane put away — and any popover hanging in it, which does not outlive it.
     let private paneHidden (model: ClientModel) : ClientModel =
@@ -4748,12 +4827,17 @@ module ClientModel =
         { model with PaneRoom = { model.PaneRoom with Chosen = Some width } }
 
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
-        holdList (notice model (reconcileLaunch (landsWhenHeard model (openOfItself model (settle (recall (
+        holdList (say (notice model (reconcileLaunch (landsWhenHeard model (openOfItself model (settle (recall (
         match msg with
         | ConnectingMsg -> { model with Link = SessionLink.connecting model.Link }
         // Late: the wait it timed has already ended, and slow describes only a running one.
         | EffortSlowMsg -> { model with Link = SessionLink.slowed model.Link }
         | PageWaitedMsg -> { model with Waited = true; Link = SessionLink.waited model.Link }
+        | StatusDweltMsg showing ->
+            match model.Said with
+            | Some said when said.Showing = showing -> { model with Said = Some { said with Dwelt = true } }
+            | Some _
+            | None -> model
         | ConnectedMsg accepted ->
             { model with
                 Link =
@@ -5727,7 +5811,7 @@ module ClientModel =
                     | Some (Previewing ({ Preview.Subject = PreviewSubject.Content shown }, under)) when shown = file ->
                         under |> Option.map OnTerminal
                     | other -> other }
-        )))))))
+        ))))))))
 
     /// The read loop's decisions: what a message, once folded, asks to be read next — of the
     /// event log and of each terminal's transcript — and what it settles of the reads out.
