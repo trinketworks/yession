@@ -723,7 +723,7 @@ module Style =
     /// on it.
     let recordRowWord = "phone:sr-only"
 
-    /// The tail after a state word: a running session's own summary. Shown where there is
+    /// The tail after a state word: a running session's own standings. Shown where there is
     /// width for it, and dropped on a phone, where it would spend the name's room on a
     /// nicety.
     ///
@@ -1553,6 +1553,14 @@ module Style =
     let toneBad = "text-err"
     let toneMuted = "text-ink-faint"
 
+    /// The ink a tone asks for, once, for every surface that is handed one.
+    let toneInk (tone: Yession.Domain.Tools.QueryTone) : string =
+        match tone with
+        | Yession.Domain.Tools.ToneOk -> toneOk
+        | Yession.Domain.Tools.ToneBusy -> toneBusy
+        | Yession.Domain.Tools.ToneBad -> toneBad
+        | Yession.Domain.Tools.ToneMuted -> toneMuted
+
     /// A value, with no colour of its own. A base that carried one could not be recoloured
     /// by appending: two Tailwind text utilities on one element resolve by stylesheet order
     /// rather than by the order they are written here, so the colour is always the last
@@ -1731,11 +1739,14 @@ module Style =
     /// this holds three short things — a status, a disclosure, and the way back — and its
     /// height is a number the panes reserve, so wrapping is the one thing it must not do.
     let degradedBar =
-        cls [ "flex flex-nowrap items-center gap-3 px-8 py-2 bg-surface"
+        cls [ "relative grid grid-cols-[var(--spacing-rail)_minmax(0,1fr)_auto] items-center px-8 py-2 bg-surface"
               Stroke.dividerBottom
               // Where the column IS on screen, the column says it. Where it is not — a
               // collapsed nav, or any phone — this does. Same rule as `headerNoAgent`.
-              "hidden wide:[.nav-alt_&]:flex phone:flex"
+              "hidden wide:[.nav-alt_&]:grid phone:grid"
+              // Over the header that follows it, so the disclosure's lines, which open below
+              // the bar, are not painted under it.
+              "wide:z-floating"
               // A phone shows one pane at a time and the other two are overlays anchored to
               // the top edge, so this leaves the conversation column's flow and sits over all
               // three. `z-50` clears the overlays (`z-40`) and the scrim between them.
@@ -1744,16 +1755,65 @@ module Style =
               // state has one — the panes reserve this number, so a height that tracked the
               // contents would leave a gap under the bar in some states and overlap the
               // header in others (it did: a wrapped 73px bar against a 36px reservation).
-              // It still GROWS when somebody opens the disclosure, and that growth overlays
-              // the pane rather than moving it — a notice you opened is one you are reading.
+              // The disclosure does not grow it: its lines open BELOW the bar, over the pane
+              // (`degradedBarDetails`) — a notice you opened is one you are reading.
               degradedBarHeight ]
 
-    /// The status word, and the only thing in the row that may be squeezed: an action is
-    /// useless truncated and the disclosure is one word, so the give has to come from here.
-    let degradedBarStatus = "min-w-0 truncate"
-    /// The way back, at the row's end. `ml-auto` rather than a spacer, so the states with no
-    /// action to offer close the gap instead of leaving a hole where one would be.
-    let degradedBarAction = "ml-auto shrink-0"
+    /// The bar's dot, in the gutter's own column: centred on the 20px an avatar takes there, so
+    /// it stands over the conversation's avatars and the word beside it on their rail — the
+    /// title's rail, and every message's under it (docs/visual-design.md, Space).
+    let degradedBarMark = "flex w-5 justify-center"
+    /// The word and its disclosure, on the rail. The only thing in the row that may be
+    /// squeezed: a verb is useless truncated, and the disclosure is one word.
+    let degradedBarWords = "min-w-0 flex items-baseline gap-3"
+    /// The verb, at the row's end.
+    let degradedBarVerb = "flex pl-4"
+    /// Where the disclosure's lines stand once it is open: below the bar and over the pane,
+    /// the bar's width, on the same rail as the word. INSIDE the bar's height they spilled
+    /// over the header under it, because that height is a number the panes reserve.
+    let degradedBarDetails =
+        cls [ "absolute inset-x-0 top-full grid grid-cols-[var(--spacing-rail)_minmax(0,1fr)] px-8 pb-3 bg-surface"
+              "phone:px-4 [&>*]:col-start-2"
+              Stroke.dividerBottom ]
+
+    // --- The status line: what the link is doing, on either mount ---------------------------
+
+    /// A status line's dot, apart from its word: a WAIT beats, in its own ink; a WRONG one is
+    /// red and still (docs/visual-design.md, Colour). Apart, because on both mounts it hangs
+    /// in the gutter and the word starts on the rail — a dot that leads inline pushed every
+    /// status a dot's width off the column it stood in.
+    let statusLineMarkWait = cls [ syncDot; "bg-ink-dim animate-beat-wait motion-reduce:animate-none" ]
+    let statusLineMarkWrong = cls [ syncDot; "bg-err" ]
+    /// The word: one line, and the part of the row that gives way first.
+    let statusLineWord = "min-w-0 truncate whitespace-nowrap"
+    /// The nav column's row: the word on the column's rail and the verb at the row's end.
+    /// `relative`, so the dot can hang to the word's left (`statusLineHung`).
+    let statusLineRow = "relative flex items-baseline gap-3"
+    /// The dot hung in the column's gutter: its 6px centred on the caps line's 16px, 8px clear
+    /// of the word.
+    let statusLineHung = "absolute -left-3.5 top-[5px] flex"
+    /// The verb's place in the column's row.
+    let statusLineVerbSlot = "ml-auto flex"
+    /// Where the disclosure's lines stand in the column: under the summary, in its flow.
+    let statusLineDetailsInColumn = "flex flex-col"
+    /// The way back through the Manager, under the reason it answers (`View.reopenAction`).
+    let statusLineReopen = "flex pt-2"
+
+    /// A status line's verb: a bare word in the caps voice, the size of the line it rides. A
+    /// notice is not a surface's verb, and the filled block it used to be — 44px in a 48px
+    /// bar, the full width of the nav column on a desktop — was the loudest thing on a screen
+    /// that was otherwise working. On a phone its box grows to a thumb and gives the growth
+    /// back in margin, so the bar's height is still the number the panes reserve
+    /// (`degradedBarHeight`).
+    let private statusVerbBase =
+        cls [ caps; bareBox; "inline-flex items-center shrink-0 whitespace-nowrap no-underline transition-colors"
+              "phone:h-touch phone:-my-2.5"
+              focusRing ]
+    /// A verb that acts here and now (`Try again`): ink, because it is the one thing on the
+    /// line to press, and dims under the hand.
+    let statusVerb = cls [ statusVerbBase; "cursor-pointer text-ink hover:text-ink-dim pressed:text-ink-dim" ]
+    /// A verb that goes somewhere (`Sign in again`, `Reopen session`): a link, so it is blue.
+    let statusVerbLink = cls [ statusVerbBase; "text-blue hover:text-blue-up-1" ]
 
     /// The sign-in prompt, in the same slot and the same hairline as the degradation strip:
     /// a notice over the timeline, never a modal and never a blocker. It carries a real

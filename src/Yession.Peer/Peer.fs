@@ -236,8 +236,8 @@ let environmentRefusal (model: ClientModel) : string option =
     | EnvironmentDown -> None
 
 /// Connect one full client with explicit options: WebRTC channel, its own Yjs doc, the
-/// withYlmish program, and the connection driver. Resolves once the model reaches
-/// `Connected`.
+/// withYlmish program, and the connection driver. Resolves once the model is linked
+/// (`SessionLink.live`).
 let connectClientWith (options: Client.ConnectOptions) (signalUrl: string) (token: string) (id: string) (name: string) : Async<Client> =
     async {
         let! channel = WebRtc.connect signalUrl
@@ -256,7 +256,7 @@ let connectClientWith (options: Client.ConnectOptions) (signalUrl: string) (toke
         let connection = Client.connect options doc registry texts hello (user >> runner.Dispatch) channel
         wired.Value <- Some connection
         Async.StartImmediate connection.Run
-        do! runner.WaitFor (fun m -> m.Connection = Connected)
+        do! runner.WaitFor (fun m -> SessionLink.live m.Link)
         return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = channel; Doc = doc; Hello = hello; Wire = fun c -> wired.Value <- Some c }
     }
 

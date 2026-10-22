@@ -53,6 +53,7 @@ open Fable.Core.JsInterop
 open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Tools
+open Yession.Domain.Standings
 open Yession.Domain.Access
 open Yession.Domain.Hooks
 open Yession.Manager
@@ -118,9 +119,9 @@ let tryHandle
     // Plan 11: the session's own report of whether it is in use, keyed by the per-launch
     // secret exactly like the name report — so the report dies with the launch it describes.
     (reportActivity: string -> bool -> Async<Result<unit, string>>)
-    // One line the session says about itself, for the roster. Keyed like the two above, and
-    // opaque: the Manager stores the string and never learns what it is made of.
-    (reportSummary: string -> string -> Async<Result<unit, string>>)
+    // What the session says about itself, for the roster. Keyed like the two above; the
+    // Manager stores the standings and never learns what they are about.
+    (reportStatus: string -> Standing list -> Async<Result<unit, string>>)
     (subscribeNotifications: string -> Subscribe<SessionNotification>)
     // Plan 17: keyed by session (what it resolves to) AND by launch secret (whose sink it
     // is), because the retained set outlives a launch and the sink must not.
@@ -194,14 +195,13 @@ let tryHandle
                             | Ok () -> respond res 200 "ok"
                             | Error e -> respond res 400 e
                         }))
-            | Some ControlRoute.Summary ->
-                // One line the session says about itself, for the roster. Same shape as the
-                // name report — the secret names the session, the body is one fact about it
-                // — and opaque to everything it passes through.
-                decodeAnd (ControlWire.fromString ControlWire.sessionSummaryReport) (fun summary ->
+            | Some ControlRoute.Status ->
+                // What the session says about itself, for the roster. Same shape as the name
+                // report — the secret names the session, the body is facts about it.
+                decodeAnd (ControlWire.fromString ControlWire.sessionStatusReport) (fun standings ->
                     Async.StartImmediate (
                         async {
-                            match! reportSummary launchSecret summary with
+                            match! reportStatus launchSecret standings with
                             | Ok () -> respond res 200 "ok"
                             | Error e -> respond res 400 e
                         }))

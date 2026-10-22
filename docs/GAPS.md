@@ -580,8 +580,8 @@ against each other. The last section holds trust boundaries as sharp as the firs
   only transient faults. It retries five times, with exponential backoff from 250ms to a 10s
   ceiling. It adds jitter so that a Process restart does not bring every peer back in lockstep.
 
-  A settled failure parks the loop and surfaces as `FeedHealth`: a sidebar line, a banner and a
-  header status. Nothing is disabled while the feed is down, because writing is CRDT state in the
+  A settled failure parks the loop and is part of the page's one link state
+  (`SessionLink.Stalled`), which the status line reports. Nothing is disabled while the feed is down, because writing is CRDT state in the
   local doc.
 
   Recovery is no longer only a hint away (Plan 20). One supervised loop drives the session leg,

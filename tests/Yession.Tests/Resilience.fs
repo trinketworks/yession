@@ -657,22 +657,25 @@ let private fakeSocket (host: Host.SessionHost) : Socket =
 /// interim reports dispatched into the model exactly as the browser wires them. `retries`
 /// collects those reports so the test can assert the retry behaviour it cannot see from the
 /// model alone (the model only ever holds the latest).
-let private connectOverFeed (get: Client.HttpGet) (retries: ResizeArray<FeedHealth>) =
+let private connectOverFeed (get: Client.HttpGet) (retries: ResizeArray<Failure>) =
     connectInMemoryClientVia (fun dispatch ->
         let feed =
             Client.EventFetch.overHttp get (RelativeUrl.under "" << SessionRoute.relative) None
             |> Resilience.Policy.guard
                 (Client.EventFetch.policy (recordingSleep (ResizeArray ())) noJitter (fun attempt ->
                     Client.EventFetch.retrying attempt
-                    |> Option.iter (fun health ->
-                        retries.Add health
-                        dispatch (EventFeedMsg health))))
+                    |> Option.iter (fun failure ->
+                        retries.Add failure
+                        dispatch (ReadRetryingMsg failure))))
         { Client.ConnectOptions.defaults with FetchEvents = Some feed })
 
-let private stalled (m: ClientModel) =
-    match m.EventConsumer.Feed with
-    | FeedStalled _ -> true
-    | _ -> false
+/// Why the reads gave up, while they have.
+let private stalledFor (m: ClientModel) : string option =
+    match m.Link with
+    | SessionLink.Stalled (_, reason, _) -> Some reason
+    | _ -> None
+
+let private stalled (m: ClientModel) = (stalledFor m).IsSome
 
 /// What is on the timeline, minus the session's own notes about itself (`Support.saidOn`):
 /// these cases are about a transport dropping and catching back up, not about the log's first
@@ -685,7 +688,7 @@ let private feedFailureTests =
             async {
                 let! host = Host.start (SessionId.create "feed-failure" |> expect) 0
                 let socket = fakeSocket host
-                let retries = ResizeArray<FeedHealth> ()
+                let retries = ResizeArray<Failure> ()
                 // Ada's history feed is down from her first read; Bob reads over frames, so he
                 // is the healthy peer hers is compared against.
                 let! ada = connectOverFeed socket.Get retries host "ada" "Ada"
@@ -695,19 +698,18 @@ let private feedFailureTests =
                 //    stalled feed carrying the fault, which is what the old code could not say.
                 do! ada.Runner.WaitFor stalled
                 Expect.equal
-                    (ada.Runner.Model ()).EventConsumer.Feed
-                    (FeedStalled "ECONNREFUSED")
+                    (stalledFor (ada.Runner.Model ()))
+                    (Some "ECONNREFUSED")
                     "the model carries the fault, not silence"
-                Expect.equal
-                    (ada.Runner.Model ()).Connection
-                    Connected
+                Expect.isTrue
+                    (SessionLink.live (ada.Runner.Model ()).Link)
                     "and the data channel is untouched — only the history leg is down"
 
                 // 2. Retrying was bounded, and by the shipped schedule: five retries per read,
                 //    numbered, then the read settles.
                 Expect.isTrue (retries.Count >= 5) "the transient fault was retried"
                 Expect.isTrue
-                    (retries |> Seq.forall (function FeedRetrying (n, _) -> n >= 1 && n <= 5 | _ -> false))
+                    (retries |> Seq.forall (fun failure -> failure.Count >= 1 && failure.Count <= 5))
                     "no read ever went past the policy's five retries"
 
                 // 3. The client stays USABLE. Composing, sending, and titling are CRDT writes to
@@ -739,7 +741,7 @@ let private feedFailureTests =
                 do! compose bob bob.Hello.PeerId "sent after the feed came back"
                 bob.Connection.SendDraft bob.Hello.PeerId
                 do! ada.Runner.WaitFor (fun m ->
-                        m.EventConsumer.Feed = FeedLive
+                        m.Link = SessionLink.Current
                         && bodies m = [ "written while history was down"; "sent after the feed came back" ])
                 Expect.equal
                     (bodies (ada.Runner.Model ()))
@@ -767,13 +769,13 @@ let private feedFailureTests =
                             attempts <- attempts + 1
                             return Error (Client.HttpStatus 401)
                         }
-                let retries = ResizeArray<FeedHealth> ()
+                let retries = ResizeArray<Failure> ()
                 let! ada = connectOverFeed refusing retries host "ada" "Ada"
 
                 do! ada.Runner.WaitFor stalled
                 Expect.equal
-                    (ada.Runner.Model ()).EventConsumer.Feed
-                    (FeedStalled "not authorized")
+                    (stalledFor (ada.Runner.Model ()))
+                    (Some "not authorized")
                     "the reason names the actual problem — a login, not a network"
                 Expect.equal retries.Count 0 "a 401 is never retried, so nothing was ever reported as retrying"
                 let settled = attempts
@@ -802,7 +804,7 @@ let private channelTests =
             // `Disconnected` flashed the "not connected" strip until the transport was asked and
             // reflowed the panes under it up by the strip's height on every cold load.
             let init = ClientModel.init (peer "ada" "Ada")
-            Expect.equal init.Connection (Connecting false) "a fresh client is about to connect, not offline"
+            Expect.equal init.Link (SessionLink.Connecting Effort.fresh) "a fresh client is about to connect, not offline"
             let html = Support.render init
             Expect.isFalse (html.Contains Dom.Hooks.degraded) "and nothing degraded is on the first paint"
 
@@ -811,14 +813,14 @@ let private channelTests =
             // The one disconnection that settles: a session that heard this peer and refused
             // it. One that could not be reached is never settled — it is `Retrying`.
             let refused = Support.step (RejectedMsg "peer token expired") init
-            Expect.equal refused.Connection (Disconnected (Some "peer token expired"))
+            Expect.equal refused.Link (SessionLink.Refused ("peer token expired", Phase.Opening))
                 "a rejection keeps the reason the session gave"
             let html = Support.render refused
             Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.connection Dom.Text.disconnected))
                 "the status word is unchanged — the reason is additive"
             Expect.isTrue (html.Contains "peer token expired")
                 "the reason is on the page, where the old model had nothing to show"
-            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedOffline))
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedSignedOut))
                 "and the strip reports the session leg, not the feed"
     ]
 
@@ -1093,7 +1095,7 @@ let private startLifecycle (host: Host.SessionHost) (token: string) (id: string)
         fun markdown ->
             async {
                 // A send needs a live session; after a drop that means the NEXT one.
-                do! runner.WaitFor (fun m -> m.Connection = Connected)
+                do! runner.WaitFor (fun m -> SessionLink.live m.Link)
                 // The draft carries the queue key it will become, so any co-editor's send writes
                 // the same one; this harness is the author, so it mints it here.
                 runner.Dispatch (user (EnsureDraftMsg (local.PeerId, QueueId.create (string (System.Guid.NewGuid ())) |> expect)))
@@ -1122,7 +1124,7 @@ let private lifecycleTests =
             async {
                 let! host = Host.start (SessionId.create "lifecycle-resume" |> expect) 0
                 let ada = startLifecycle host (host.MintPeerToken ()) "ada" "Ada"
-                do! ada.Runner.WaitFor (fun m -> m.Connection = Connected)
+                do! ada.Runner.WaitFor (fun m -> SessionLink.live m.Link)
 
                 // Build history, so "resume from where it read" has something to mean.
                 do! ada.Say "before the drop"
@@ -1169,7 +1171,7 @@ let private lifecycleTests =
                 // lifecycle brings it back, and the queued message lands.
                 let! host = Host.start (SessionId.create "lifecycle-half-open" |> expect) 0
                 let ada = startLifecycle host (host.MintPeerToken ()) "ada" "Ada"
-                do! ada.Runner.WaitFor (fun m -> m.Connection = Connected)
+                do! ada.Runner.WaitFor (fun m -> SessionLink.live m.Link)
                 do! ada.Say "while the link was honest"
                 do! ada.Runner.WaitFor (fun m -> bodies m = [ "while the link was honest" ])
 
@@ -1201,8 +1203,8 @@ let private lifecycleTests =
                 // be a retry loop against a decision — the trap the feed's 401 also avoids.
                 let ada = startLifecycle host "not-a-minted-token" "ada" "Ada"
                 do! ada.Runner.WaitFor (fun m ->
-                        match m.Connection with
-                        | Disconnected (Some _) -> true
+                        match m.Link with
+                        | SessionLink.Refused _ -> true
                         | _ -> false)
                 Expect.equal (ada.Opens ()) 1 "the transport was opened once and never again"
                 do! host.Stop ()
@@ -1259,8 +1261,8 @@ let private lifecycleTests =
                     (waits |> Seq.forall (fun d -> d.Value <= System.TimeSpan.FromMinutes 1.0))
                     "and the backoff is capped, so a session that never returns is not polled less and less for ever"
                 Expect.equal
-                    model.Value.Connection
-                    (Retrying ("the session did not answer", 3))
+                    model.Value.Link
+                    (SessionLink.Connecting { Effort.fresh with Failed = Some { Reason = "the session did not answer"; Count = 3 } })
                     "and the model holds that it is still trying, why, and how far it has got"
             }
 
@@ -1465,21 +1467,22 @@ let private releaseTests =
 
 let private surfaceTests =
     testList "Degradation is visible and never blocking" [
-        testCase "a disconnected client is offered a way to ask again; a connected one is not" <| fun () ->
+        testCase "a refused client is offered a way back in; a connected one is not" <| fun () ->
             // The affordance GAPS asked for, and the availability invariant behind it: the
             // supervised loop is already trying, but the one client it deliberately will not
-            // carry — a peer whose token was refused — parks until a person asks, and a park
-            // with nothing to press is a dead end wearing a reason.
+            // carry — a peer whose token was refused — parks until a person acts, and a park
+            // with nothing to press is a dead end wearing a reason. What it needs is its
+            // sign-in back: asking again with the same token is refused again.
             let model = ClientModel.init (peer "ada" "Ada")
-            let disconnected =
-                Support.render { model with Connection = Disconnected (Some "peer token expired") }
+            let refused =
+                Support.render { model with Link = SessionLink.Refused ("peer token expired", Phase.Opening) }
             Expect.isTrue
-                (disconnected.Contains "data-retry-now")
-                "a settled disconnection offers the ask"
-            let connected = Support.render { model with Connection = Connected }
+                (refused.Contains Dom.Hooks.sessionSignIn)
+                "a refusal offers the sign-in"
+            let connected = Support.render { model with Link = SessionLink.Current }
             Expect.isFalse
-                (connected.Contains "data-retry-now")
-                "a working session offers nothing to retry"
+                (connected.Contains Dom.Hooks.sessionSignIn || connected.Contains "data-retry-now")
+                "a working session offers nothing"
 
         testCase "a client still trying to reach its session says it is trying, and how far it has got" <| fun () ->
             // Positive feedback, not a fault: what a person should take from a session that is
@@ -1487,12 +1490,16 @@ let private surfaceTests =
             // kind; the fault and the count of failed attempts go behind it.
             let model = ClientModel.init (peer "ada" "Ada")
             let retrying failures =
-                Support.render { model with Connection = Retrying ("the session did not answer", failures) }
+                Support.render
+                    { model with
+                        Link =
+                            SessionLink.Connecting
+                                { Effort.fresh with Failed = Some { Reason = "the session did not answer"; Count = failures } } }
             let second = retrying 1
             Expect.isTrue
                 (second.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedRetrying))
                 "the strip reports a session leg that is retrying"
-            Expect.isTrue (second.Contains Dom.Text.retryingStatus) "the status says it is retrying"
+            Expect.isTrue (second.Contains Dom.Text.connectingStatus) "the status says it is still connecting"
             Expect.isFalse (second.Contains "not connected") "and it does not read as broken"
             Expect.isTrue
                 ((retrying 2).Contains (Dom.Text.retryingWhy "the session did not answer" 2))
@@ -1507,7 +1514,7 @@ let private surfaceTests =
             // to say nothing at all until it failed — which, behind a ten-second handshake,
             // looked exactly like a page that had loaded with nothing in it.
             let model = ClientModel.init (peer "ada" "Ada")
-            let html = Support.render { model with Connection = Connecting true }
+            let html = Support.render { model with Link = SessionLink.Connecting { Effort.fresh with Slow = true } }
             Expect.isTrue
                 (html.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedConnecting))
                 "the strip reports a session leg that is still connecting"
@@ -1515,28 +1522,46 @@ let private surfaceTests =
         testCase "a connect offers no retry" <| fun () ->
             // Nothing has failed yet, so there is nothing to ask for again.
             let model = ClientModel.init (peer "ada" "Ada")
-            let html = Support.render { model with Connection = Connecting true }
+            let html = Support.render { model with Link = SessionLink.Connecting { Effort.fresh with Slow = true } }
             Expect.isFalse (html.Contains "data-retry-now") "an attempt that is still running is not offered again"
 
-        testCase "a retry's status carries no count" <| fun () ->
-            // One word, so it fits beside the way back on a phone. It said "… · attempt 2"
-            // there, and the count was cut off at 390px. The count is behind the disclosure.
-            Expect.isFalse (Dom.Text.retryingStatus.Contains "attempt") "the status is the word alone"
+        // A state has one name (docs/visual-design.md, Colour): a failing attempt to connect is
+        // still connecting, and the failure is its reason. It used to change its word to
+        // "retrying", a second name for one wait. And a page that has never connected does
+        // not claim a reconnect.
+        testCase "a failing first attempt is still connecting" <| fun () ->
+            let model = ClientModel.init (peer "ada" "Ada")
+            let failing =
+                Support.render
+                    { model with
+                        Link = SessionLink.Connecting { Effort.fresh with Failed = Some { Reason = "the session did not answer"; Count = 2 } } }
+            Expect.isTrue (failing.Contains Dom.Text.connectingStatus) "connecting, by name"
+            Expect.isFalse (failing.Contains Dom.Text.reconnectingStatus) "and not a reconnect"
 
-        testCase "a retry's status does not claim a reconnect" <| fun () ->
-            // A page that has never connected has nothing to reconnect to. The status said
-            // "reconnecting" on a cold open whose every attempt had failed.
-            Expect.isFalse
-                (Dom.Text.retryingStatus.Contains "reconnect")
-                "a retry is a retry, whether or not a connection came before it"
+        // History that stopped arriving is not re-armed until the session has news, so the
+        // line offers to ask for it again now.
+        testCase "paused history is offered a way to ask again" <| fun () ->
+            let model = ClientModel.init (peer "ada" "Ada")
+            let paused =
+                Support.render
+                    { model with Link = SessionLink.Stalled (EventOffset.create 3L |> expect, "ECONNREFUSED", Phase.ReadThrough) }
+            Expect.isTrue (paused.Contains "data-retry-now") "history paused offers the ask"
+
+        testCase "asking again for paused history reads it again at once" <| fun () ->
+            let paused =
+                { ClientModel.init (peer "ada" "Ada") with
+                    Link = SessionLink.Stalled (EventOffset.create 3L |> expect, "ECONNREFUSED", Phase.ReadThrough) }
+            let asked, effects = ClientModel.update RetryNowMsg paused
+            Expect.isTrue
+                (effects |> List.exists (function ClientEffect.ReadEvents _ -> true | _ -> false))
+                (sprintf "a read is asked (now %A)" asked.Link)
 
         testCase "a stalled feed shows history paused with its reason, and the composer stays live" <| fun () ->
             let model = ClientModel.init (peer "ada" "Ada")
             let html =
                 Support.render
                     { model with
-                        Connection = Connected
-                        EventConsumer = { model.EventConsumer with Feed = FeedStalled "ECONNREFUSED" } }
+                        Link = SessionLink.Stalled (EventOffset.create 3L |> expect, "ECONNREFUSED", Phase.ReadThrough) }
             Expect.isTrue
                 (html.Contains (Dom.attr Dom.Hooks.feed Dom.Text.feedPaused))
                 "the sidebar reports the feed as paused"
@@ -1554,10 +1579,15 @@ let private surfaceTests =
             Expect.isFalse (html.Contains "disabled") "nothing is disabled by a stalled feed"
 
         testCase "a retrying feed shows its attempt; a healthy client shows no strip at all" <| fun () ->
-            let model = { ClientModel.init (peer "ada" "Ada") with Connection = Connected }
+            let model = { ClientModel.init (peer "ada" "Ada") with Link = SessionLink.Current }
             let retrying =
                 Support.render
-                    { model with EventConsumer = { model.EventConsumer with Feed = FeedRetrying (3, "HTTP 503") } }
+                    { model with
+                        Link =
+                            SessionLink.Fetching (
+                                EventOffset.create 3L |> expect,
+                                { Effort.fresh with Failed = Some { Reason = "HTTP 503"; Count = 3 } },
+                                Phase.ReadThrough) }
             Expect.isTrue
                 (retrying.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.feedRetrying))
                 "a retrying feed is strip-worthy: something is wrong but it is being handled"
@@ -1575,7 +1605,7 @@ let private surfaceTests =
             let html =
                 Support.render
                     { model with
-                        Connection = Disconnected (Some "session unreachable")
+                        Link = SessionLink.Refused ("session unreachable", Phase.Opening)
                         LocalCopy = LocalCopy.Kept (Some (EventOffset.create 22L |> expect)) }
             Expect.isTrue (html.Contains "data-history-gap") "the timeline says its earlier half is not here"
 
@@ -1589,26 +1619,15 @@ let private surfaceTests =
             let html =
                 Support.render
                     { model with
-                        Connection = Connected
+                        Link = SessionLink.Fetching (EventOffset.create 40L |> expect, Effort.fresh, Phase.Opening)
                         LocalCopy = LocalCopy.Kept (Some (EventOffset.create 22L |> expect)) }
             Expect.isFalse (html.Contains "data-history-gap") "a hole being filled is catch-up, not a fact worth a line"
             Expect.isFalse (html.Contains Dom.Hooks.degraded) "and nothing about it is a degradation"
 
-        testCase "the session leg outranks the feed: one strip, one problem" <| fun () ->
-            // A Process that cannot be reached cannot serve its feed either, so reporting both
-            // would be reporting one fault twice.
-            let model = ClientModel.init (peer "ada" "Ada")
-            let html =
-                Support.render
-                    { model with
-                        Connection = Disconnected (Some "session unreachable")
-                        EventConsumer = { model.EventConsumer with Feed = FeedStalled "ECONNREFUSED" } }
-            Expect.isTrue
-                (html.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedOffline))
-                "the strip reports the session"
-            Expect.isFalse
-                (html.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.feedPaused))
-                "and not, redundantly, its feed as well"
+        // A Process that cannot be reached cannot serve its feed either, and a case once pinned
+        // that the strip reported the one problem once. The page's link is one state now
+        // (`SessionLink`): a page that cannot reach its session is not reading its history, so
+        // the two cannot both be reported because they cannot both be.
     ]
 
 // --- The session's answer ------------------------------------------------------------------

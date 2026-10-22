@@ -1356,7 +1356,7 @@ let private start () =
                 |> Resilience.Policy.guard
                     (Client.EventFetch.policy Resilience.Policy.sleep jsRandom (fun attempt ->
                         Client.EventFetch.retrying attempt
-                        |> Option.iter (fun health -> dispatchRef (EventFeedMsg health))))
+                        |> Option.iter (fun failure -> dispatchRef (ReadRetryingMsg failure))))
             // Terminal history rides the same HTTP leg, by the same cursor, for the same
             // payoff: a reload replays a terminal out of this client's own store and only what
             // happened since crosses the network. No resilience policy on it — unlike the event

@@ -802,12 +802,10 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
               Offset = offset (int64 (10 + i))
               Woke = None; CausedBy = None } ]
     { ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" } with
-        Connection = Connected
         // A client already at work in the session, so what `__fold` brings is news rather
-        // than a log being replayed on load (`HistorySync.heardThrough`).
-        EventConsumer =
-            { (ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" }).EventConsumer with
-                Sync = Current }
+        // than a log being replayed on load (`ClientModel.heardThrough`).
+        Link = SessionLink.Current
+        Waited = true
         Session = Some (SessionId.create "harness" |> expect)
         // Two chapters, so the chapter rail has strokes to draw. Where a stroke
         // LANDS is arithmetic a model test settles; whether it lands beside the reading
@@ -1933,33 +1931,47 @@ do
     let seed (key: string) (markdown: string) : unit =
         let body = shellRegistry.Fragment key
         if (Markdown.ofFragment body).Trim () = "" then Markdown.intoFragment markdown body
-    let connection (state: ConnectionState) () = show { shellModel with Connection = state }
+    let connection (link: SessionLink) () = show { shellModel with Link = link }
+    let failing (reason: string) (count: int) : Effort = { Slow = true; Failed = Some { Reason = reason; Count = count } }
     let states : (string * (unit -> unit)) list =
         [ "rest", (fun () -> show shellModel)
-          "disconnected", connection (Disconnected (Some "the session closed its data channel"))
           // Slow, because that is the connecting a person SEES: an attempt that lands inside
           // the quiet window says nothing, and a picture of it would be a picture of `rest`.
-          "connecting", connection (Connecting true)
-          "reconnecting", connection Reconnecting
-          "retrying", connection (Retrying ("the session did not answer (502 Bad Gateway)", 3))
+          "connecting", connection (SessionLink.Connecting { Effort.fresh with Slow = true })
+          "reconnecting", connection (SessionLink.Reconnecting ({ Effort.fresh with Slow = true }, Phase.ReadThrough))
+          // With a Manager, so the way back through it is behind the disclosure.
+          "retrying",
+          (fun () ->
+              show
+                  { shellModel with
+                      Link = SessionLink.Reconnecting (failing "the session did not answer (502 Bad Gateway)" 3, Phase.ReadThrough)
+                      Manager = Some "https://yession.example" })
           "catch-up",
           (fun () ->
               show
                   { shellModel with
                       EventConsumer =
                           { shellModel.EventConsumer with
-                              LastProcessedOffset = Some (EventOffset.create 12L |> expect)
-                              Sync = Behind (EventOffset.create 40L |> expect, true) } })
+                              LastProcessedOffset = Some (EventOffset.create 12L |> expect) }
+                      Link =
+                          SessionLink.Fetching (
+                              EventOffset.create 40L |> expect,
+                              { Effort.fresh with Slow = true },
+                              Phase.ReadThrough) })
           "degraded",
           (fun () ->
               show
                   { shellModel with
-                      EventConsumer = { shellModel.EventConsumer with Feed = FeedStalled "the history route answered 503 three times" } })
-          "session-gone",
+                      Link =
+                          SessionLink.Stalled (
+                              EventOffset.create 40L |> expect,
+                              "the history route answered 503 three times",
+                              Phase.ReadThrough) })
+          "signed-out",
           (fun () ->
               show
                   { shellModel with
-                      Connection = Disconnected (Some "the session stopped")
+                      Link = SessionLink.Refused ("invalid peer token", Phase.ReadThrough)
                       Manager = Some "https://yession.example" })
           "no-agent", (fun () -> show noAgentModel)
           "agent-thinking",
@@ -2239,12 +2251,15 @@ do
                         openReport
                             (renders - rendersBefore) paints jumps jump blocked (t - started)
                             (int (conversation ()).children.length)
-                            (match model.Connection with
-                             | Connected -> "Connected"
-                             | Connecting _ -> "Connecting"
-                             | Reconnecting -> "Reconnecting"
-                             | Retrying _ -> "Retrying"
-                             | Disconnected _ -> "Disconnected")
+                            (match model.Link with
+                             | SessionLink.Fetching _
+                             | SessionLink.Stalled _
+                             | SessionLink.Current -> "Connected"
+                             | SessionLink.Connecting { Failed = Some _ }
+                             | SessionLink.Reconnecting ({ Failed = Some _ }, _) -> "Retrying"
+                             | SessionLink.Connecting _ -> "Connecting"
+                             | SessionLink.Reconnecting _ -> "Reconnecting"
+                             | SessionLink.Refused _ -> "Disconnected")
                             replaced)
                 else onFrame frame
             onFrame frame

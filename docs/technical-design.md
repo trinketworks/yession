@@ -146,14 +146,10 @@ it as one:
 
 - A read is `EventOffset option -> Async<Result<EventPage, FeedFault>>`. A dead feed is
   distinguishable from an empty one. An empty page never stands in for a failure.
-- A `Resilience.Policy` (`Yession.Domain/Resilience.fs`) handles transient faults. The
-  application boundary (`app/browser/Browser.fs`) composes it *with the transport*, per
-  "composition at the top". `App.connect` receives a feed that has already settled, so no
-  application code holds a notion of retrying. The comments in `Resilience.fs` say what each
-  piece decides and how to compose it.
-- The feed's health (`FeedHealth`) is model state, shown as a status and a banner. A stalled
-  feed disables nothing: collaborative state is CRDT state in the local doc, so reading,
-  writing, and sending continue. A lost history feed costs history and nothing else.
+- The feed's health is model state, part of the page's link (`SessionLink`). A read that fails
+  is a fact about the fetch, and reads that gave up are `Stalled`. The UI shows it on the status
+  line. A stalled feed disables nothing: collaborative state is CRDT state in the local doc, so
+  reading, writing, and sending continue. A lost history feed costs history and nothing else.
 
 The session leg can also fail independently, and silently: a WebRTC data channel can keep
 `readyState` `open` while sends go into nothing. `Link.supervise` (`Yession.Domain/Link.fs`)
