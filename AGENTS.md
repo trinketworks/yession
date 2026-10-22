@@ -45,9 +45,8 @@ nothing in front of them. Do NOT install devenv, because the devshell exists. Do
 `lint`, `bench`, `example` and `crash-repro` (and the build step of `start`, `probe` and `frames`)
 first lock a slot under `/nix/var/yession/build-slots`. When other builds hold every slot, the
 verb prints `build slot: waiting for another session's build (held by …) …` and waits. That is
-not a hang. Do not kill it or retry it. `yession.yaml` sets `TASKS_BUILD_SLOTS` (the slot count, 2)
-for `dev` and `gate`, because two 3 GiB builds fit the host's ~7 GiB pool (`cgroup-parent:
-yession`). The comment above `withBuildSlot` in `tasks.fsx` owns the why, the lock and the
+not a hang. Do not kill it or retry it. `yession.yaml` sets `TASKS_BUILD_SLOTS` (the slot count)
+for `dev` and `gate`. The comment above `withBuildSlot` in `tasks.fsx` owns the why, the lock and the
 environment variables.
 
 **In a Claude Code container**, the SessionStart hook runs `.claude/setup.sh --hook`. When devenv is
@@ -247,8 +246,8 @@ the dev shell. Do NOT use `chrome --headless --screenshot`.
 [ui-exploration](.agents/skills/ui-exploration/SKILL.md) owns the options, why headless pictures
 lie, and the full loop.
 
-- As root (a sandbox), Chromium needs `--no-sandbox`. `frames` adds it by itself from PR #1281 on.
-  If a run as root fails with "never wrote DevToolsActivePort", your checkout predates that fix.
+- As root (a sandbox), Chromium needs `--no-sandbox`. `frames` adds it by itself (PR #1281). If a run as
+  root fails with "never wrote DevToolsActivePort", your checkout is older than that.
 
 For a question the camera cannot ask, script Playwright by hand. `node_modules` has no
 `playwright`. The dev shell sets `$PLAYWRIGHT_CORE` to the `playwright-core` that matches its
