@@ -141,12 +141,8 @@ else may look lit.
 
 ### Stroke
 
-`Style.Stroke` composes every border. Two widths, and only two:
-
-- `ring`: all four sides, for what you type in or press.
-- `lead`: the leading edge, for a listed thing, where two states share one surface.
-
-The comment above `Style.Stroke` gives the tones and what interaction does to each width.
+`Style.Stroke` composes every border from a small, named set of strokes. The comment above
+`Style.Stroke` names each one, what it is for, its tones, and what interaction does to it.
 Nobody writes a bare `border-*` utility outside `Stroke`.
 
 ### Space
@@ -197,11 +193,9 @@ A head with two rows of controls is taller, because each row meets the touch tar
 floor is never traded for the band. Such a head states its rows, not its total. Its hairline is
 its own and lines up with nothing.
 
-A thing that leaves the ground sits on a named layer from `app/tokens.css`. There are four:
-the ground, the scrim that dims the ground, what floats over the scrim, and what must stay
-reachable above all of it. Four, because a phone stacks all four at once — a drawer over a
-scrim over the page, with a notice the reader must still be able to answer. Nobody writes a
-stacking order as a number.
+A thing that leaves the ground sits on a named layer. `app/tokens.css` names the layers, low to
+high, under "Layers". A phone stacks several at once: a drawer over a scrim over the page, with a
+notice the reader must still be able to answer. Nobody writes a stacking order as a number.
 *Test: search for a `z-` utility with a number in it. There are none.*
 
 ### Motion
