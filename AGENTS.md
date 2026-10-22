@@ -24,8 +24,8 @@ Boundaries: code/commits/PRs written normal.
 Read `.agents/skills/contributing-changes/SKILL.md` **before the first edit** of any request to
 build, fix, refactor or change something. It decides how the work is split, and you cannot decide
 that afterwards. The skill owns the process: stand-alone increments, one PR each, auto-merge, the
-merge queue, and driving master green. A deviation from what was asked stops the loop. Report it
-to the user.
+merge queue, and driving master green. A deviation from the request stops the loop. Report it to
+the user.
 
 **Plans are not artifacts.** Say the shape of the work to the user before you start. Write no plan
 document in this repository. Put what is worth keeping next to the code it governs, where a test
@@ -46,13 +46,12 @@ nothing in front of them. Do NOT install devenv, because the devshell exists. Do
 dotnet/Fable builds at once do not fit it. So `check`, `verify`, `build`, `compile`, `stage`,
 `package`, `lint`, `bench`, `example` and `crash-repro` (and the build step of `start`, `probe`
 and `frames`) first lock a slot under `/nix/var/yession/build-slots`, on the `/nix` volume that
-all sandboxes share. When every slot is held, the verb prints `build slot: waiting for another
-session's build (held by …) …` and waits. That is not a hang. Do not kill it or retry it. A
-killed holder releases its slot at once. `yession.yaml` sets `TASKS_BUILD_SLOTS` (the slot
+all sandboxes share. When other builds hold every slot, the verb prints `build slot: waiting for
+another session's build (held by …) …` and waits. That is not a hang. Do not kill it or retry
+it. A killed holder releases its slot at once. `yession.yaml` sets `TASKS_BUILD_SLOTS` (the slot
 count, 2) for `dev` and `gate`, because two 3 GiB builds fit the host's ~7 GiB pool
-(`cgroup-parent: yession`). Where it is unset (a laptop, CI), nothing waits.
-`TASKS_BUILD_SLOTS=0` builds now without a slot. `TASKS_BUILD_SLOT_TIMEOUT` is the wait in
-minutes before the verb fails (default 60). See `withBuildSlot` in `tasks.fsx`.
+(`cgroup-parent: yession`). The comment above `withBuildSlot` in `tasks.fsx` owns the
+environment variables: unset (a laptop, CI), `0`, and the timeout.
 
 **In a Claude Code container**, the SessionStart hook runs `.claude/setup.sh --hook`. When devenv is
 missing, it starts the full setup in the background and prints where the log is. The sandbox proxy
@@ -62,7 +61,7 @@ uses the committed `devenv.yaml`.
 
 Run the task scripts: `devenv shell -- <task>`, or bare inside the shell. The main ones are
 `check`, `build` and `verify`. They run `restore` for you. Never run `dotnet`, `fable` or
-`esbuild` directly: the scripts match tool versions and PATH to CI (`.claude/direct-tool-hook.sh`
+`esbuild` directly. The scripts match tool versions and PATH to CI (`.claude/direct-tool-hook.sh`
 enforces it).
 
 A Claude Code container has Chromium (`$PLAYWRIGHT_BROWSERS_PATH`) and the `node-datachannel`
@@ -115,7 +114,7 @@ plausible wrong answer at the same place.
 
 This is not belt-and-braces, which is two mechanisms for ONE requirement at one point. This is one
 mechanism each at two points. They go red at different times: upstream while the diagnosis still
-exists, downstream before the damage is published.
+exists, downstream before anything publishes the damage.
 
 Example, the version regression. `echo "version=$(...)"` discarded the exit status of a failed
 `devenv shell -- version`. The step went green with an empty version, and the release job tagged the
@@ -140,8 +139,8 @@ surface, not a follow-up. `src/Yession.App/AGENTS.md` lists what the tests do no
 
 ## Versioning
 
-The version is computed from the commit history (policy at the top of `tasks.fsx`) and never
-stored in a file. Every green master push publishes `1.0.0-beta.<n>`. To move the triple, put a
+The commit history determines the version (policy at the top of `tasks.fsx`). No file stores
+it. Every green master push publishes `1.0.0-beta.<n>`. To move the triple, put a
 marker in the commit message. For a squash-merged PR, that is its title or description:
 
 ```
@@ -159,10 +158,10 @@ The `BREAKING CHANGE:` marker is the exception. It is the one marker read only f
 the last blank-line-separated block.
 
 **When to bump.** A breaking change to the Manager ↔ Session API is a major bump. That API is the
-protocol between the `yession-manager` and `yession-session` bins, and the Manager tolerates anything but a
-MAJOR mismatch. Otherwise use standard semver: new user-facing capability → minor, bug fix → patch.
-The same policy applies once the version leaves beta. A plain `feat:` subject does NOT bump. Only an
-explicit marker moves the triple.
+protocol between the `yession-manager` and `yession-session` bins, and the Manager tolerates
+anything but a MAJOR mismatch. Otherwise use standard semver: new user-facing capability → minor,
+bug fix → patch. The same policy applies once the version leaves beta. A plain `feat:` subject
+does NOT bump. Only an explicit marker moves the triple.
 
 **Commit / PR messages.** Subjects follow conventional-commit style (`feat:`, `fix:`, `ci:`,
 `refactor:`, ...). That is a convention for readers, not the version input. A PR squash-merges as
@@ -218,7 +217,7 @@ The pattern, in order:
 - Change the declaration (`Identity.fs`, a facts file) and nothing else. Build. Every error is a
   site, and there are no others.
 - Fix each site with the value it already had, never with a default: `Principal.toActor p` where
-  an actor is wanted. A site with nothing of the right type to give is the finding. Examples: a
+  the site wants an actor. A site with nothing of the right type to give is the finding. Examples: a
   caller that passed `None` because it could, an event that recorded the author instead of the
   owner. Give those a case, a constructor, or a refusal, not `Option.defaultValue`.
 - A test that pinned the old shape ("an agent act with no owner still decodes") is not a
@@ -231,21 +230,21 @@ fine.
 ## Type safety
 
 F# is the type system. JavaScript is only what it compiles to. Each construct below re-opens the
-hole Fable closed. Where a rule reports one, it is named. The rest is on the author. Do not
-introduce any of these, and remove them from code you are already changing:
+hole Fable closed. Where a rule reports one, this list names the rule. The rest is on the author.
+Do not introduce any of these, and remove them from code you are already changing:
 
 - **A JavaScript program in a string.** An `[<Emit>]` outside `src/Fable.*` (rule YES011 reports
   it), an inline `<script>` body, a CDP `Runtime.evaluate` source, a Playwright `EvaluateAsync`
   program (rule YES012 holds the suite's few fixed ones to `PageScript`). Nothing type-checks the
-  string. Write F# through Fable, behind a binding project if it reaches an API we do not own; in
-  the browser suite, a probe in `Yession.App.Probes`.
+  string. Write F# through Fable, behind a binding project if it reaches an API we do not own. In
+  the browser suite, write a probe in `Yession.App.Probes`.
 - **Dynamic access: `?` and `?<-`** (rule YES015 reports them). `fs?readdirSync path` is one typo
   away from a silent `undefined`. Bind the module. Key the map with a type.
 - **`unbox`, `!!`, `:?>` on a value you did not just construct** (rule YES016 reports `unbox`,
-  `!!` and a `:?>` from `obj`, `Event` or `EventTarget`; a downcast from another declared type is
+  `!!` and a `:?>` from `obj`, `Event` or `EventTarget`. A downcast from another declared type is
   yours to judge). They assert and do not check. A `Y.Text` unboxed as `string` does not throw,
-  and the fault surfaces somewhere else. Decode it, or type whatever produced it. An event or its
-  target is narrowed with `Events` and `EventTargets` (Fable.BrowserExtras).
+  and the fault surfaces somewhere else. Decode it, or type whatever produced it. Narrow an event or
+  its target with `Events` and `EventTargets` (Fable.BrowserExtras).
 - **`obj` in a signature** (rule YES017 reports it in a function's or a member's). Both ends are
   free to disagree about the contract. If it crosses a wire, use a codec. If it configures a
   binding, use that binding's options type.
@@ -258,44 +257,36 @@ introduce any of these, and remove them from code you are already changing:
 The escape is one of three: a **binding project** (an API we do not own), a **codec** (a wire), a
 **typed options interface** (a bag). Where none applies, keep the cast on the line that needs it,
 mark that line for its rule (`analyzers/AGENTS.md`, "A justified exception"), and give the result a
-type immediately. Never carry `obj` onward. Example: the DOM's
-`querySelector` answers `Element` and no other shape is available.
+type immediately. Never carry `obj` onward. Example: the DOM's `querySelector` answers `Element`
+and no other shape is available.
 
 ## Testing
 
-Capabilities gate suites, not folders (`tests/Yession.Tests/Tags.fs`). Pass the capabilities THIS box
-has. `check` refuses a capability the box cannot host. Run `help` for the verbs and capabilities.
-`check --only "<text>"` narrows a run to the cases whose full name contains `<text>`.
+[tests/AGENTS.md](tests/AGENTS.md) owns testing: the capability notes (`Sandbox`, `Srt`,
+`LiveGitHub`, `Dogfood`), running a tier this box cannot host (`verify.yml`), and the rules for
+writing tests. [analyzers/AGENTS.md](analyzers/AGENTS.md) owns work on the F# analyzers that
+`lint` runs.
 
-To eyeball a rich-editor change, run `check Browser`.
+Capabilities gate suites, not folders (`tests/Yession.Tests/Tags.fs`). Pass the capabilities THIS
+box has. Run `help` for the verbs and capabilities. `check --only "<text>"` narrows a run to the
+cases whose full name contains `<text>`. To eyeball a rich-editor change, run `check Browser`.
 
-To screenshot ANY UI change, use the camera. It boots a scratch Manager, takes one picture, and
-stops it:
+To screenshot ANY UI change, use the camera (`frames --boot --still`) in the dev shell.
+[ui-exploration](.agents/skills/ui-exploration/SKILL.md) owns the full loop. This file adds these
+facts:
 
-```
-dotnet fsi tasks.fsx frames --boot --still                   # a session's page, true phone size
-dotnet fsi tasks.fsx frames --boot --still --desktop         # 1280x800 (--size WxH for any size)
-dotnet fsi tasks.fsx frames --boot --still --page /          # another page: the Manager's own
-dotnet fsi tasks.fsx frames --boot --still --measure "<js>"  # and print what <js> returns
-```
-
-Run it in the dev shell. It writes `./frames/still.png` (`--out` moves it) and prints `vw`,
-`docW`, `overflowX` and `hover`. Open the PNG and look at it. Do NOT use
-`chrome --headless --screenshot`. Its window clamps to about 500px and it has no hover or focus,
-so its pictures lie. As root (a sandbox), Chromium needs `--no-sandbox`. `frames` adds it by
-itself from PR #1281 on. If a run as root fails with "never wrote DevToolsActivePort", your
-checkout predates that fix. `.agents/skills/ui-exploration/SKILL.md` has the full loop.
+- `--desktop` takes 1280x800. `--size WxH` takes any size. `--out` moves `./frames/still.png`.
+- Do NOT use `chrome --headless --screenshot`. Its window clamps to about 500px and it has no hover
+  or focus, so its pictures lie.
+- As root (a sandbox), Chromium needs `--no-sandbox`. `frames` adds it by itself from PR #1281 on.
+  If a run as root fails with "never wrote DevToolsActivePort", your checkout predates that fix.
 
 For a question the camera cannot ask, script Playwright by hand. `node_modules` has no
 `playwright`. The dev shell sets `$PLAYWRIGHT_CORE` to the `playwright-core` that matches its
-Chromium. Import it, and launch with `channel: "chromium"`, because the shell has no headless
-shell build:
+Chromium. Import it, and call `launch` with `channel: "chromium"`, because the shell has no
+headless shell build:
 
 ```
 const { chromium } = await import(process.env.PLAYWRIGHT_CORE + "/index.mjs")
 const browser = await chromium.launch({ channel: "chromium" })
 ```
-
-- `tests/AGENTS.md`: capability notes (`Sandbox`, `Srt`, `LiveGitHub`, `Dogfood`), running a tier
-  this box cannot host (`verify.yml`), and the rules for writing tests.
-- `analyzers/AGENTS.md`: working on the F# analyzers that `lint` runs.
