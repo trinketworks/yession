@@ -18,6 +18,7 @@ open Node.Buffer
 open Yession.Domain
 open Yession.Domain.Link
 open Yession.Domain.Tools
+open Yession.Domain.Standings
 open Yession.Manager
 open Yession.Oidc
 open Yession.App
@@ -155,16 +156,21 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
     | None, ProcessManager.NotRunning ->
         line Silent Style.statusWait Style.statusDot Dom.Manager.statusStopped "stopped" nothing
     | None, ProcessManager.Running _ ->
-        // Rendered in the line's own voice and NOT toned. The Manager stores a line it was
-        // told and never learns what it is made of, so any colour it chose would be a colour
-        // it guessed; only the session knows whether its own sentence is good news. It exists
-        // in this arm alone because a summary is launch-scoped — a session that is not running
-        // has no work in flight to describe.
-        let summary =
-            match view.Summary with
-            | Some said -> html $"""<span class="{Style.recordRowAside}" data-session-summary> · {said}</span>"""
-            | None -> nothing
-        line Mark Style.statusOk Style.statusDotLiveLead Dom.Manager.statusRunning "running" summary
+        // Each standing in the tone the SESSION gave it: the Manager never learns what a
+        // standing is about, so a colour it chose would be one it guessed. Worst first, so
+        // the clip at the line's end takes the least urgent. It exists in this arm alone
+        // because standings are launch-scoped — a session that is not running has no work in
+        // flight to describe.
+        let standings =
+            match Standing.byConcern view.Standings with
+            | [] -> nothing
+            | said ->
+                let each =
+                    said
+                    |> List.map (fun s ->
+                        html $"""<span> · </span><span class="{Style.toneInk s.Tone}" {Dom.Manager.standing}="{s.Facet}">{s.Word}</span>""")
+                html $"""<span class="{Style.recordRowAside}">{each}</span>"""
+        line Mark Style.statusOk Style.statusDotLiveLead Dom.Manager.statusRunning "running" standings
     | None, ProcessManager.Launching ->
         line Spoken Style.statusWait Style.statusDotBeat Dom.Manager.statusStarting "starting" nothing
     | None, ProcessManager.LaunchFailed reason ->

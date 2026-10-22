@@ -3679,7 +3679,7 @@ let private chromeTests =
                   DataDir = "sessions/" + id
                   ArchivedAt = if archived then Some (DateTimeOffset (2026, 8, 1, 9, 30, 0, TimeSpan.Zero)) else None }
             let view (r: Yession.Manager.SessionRecord) : Yession.Host.ProcessManager.SessionView =
-                { Record = r; Status = Yession.Host.ProcessManager.NotRunning; Summary = None }
+                { Record = r; Status = Yession.Host.ProcessManager.NotRunning; Standings = [] }
             Yession.Host.ManagerUi.page
                 "app.css"
                 "manager-page.js"

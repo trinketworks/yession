@@ -15,7 +15,7 @@ open Yession.Manager
 let private ordinal (route: ControlRoute) : int =
     match route with
     | ControlRoute.Name -> 0
-    | ControlRoute.Summary -> 1
+    | ControlRoute.Status -> 1
     | ControlRoute.Activity -> 2
     | ControlRoute.RegisterClient -> 3
     | ControlRoute.SubscribeHook -> 4

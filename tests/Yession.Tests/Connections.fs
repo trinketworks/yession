@@ -2238,6 +2238,8 @@ let private prPollTests =
     let watchedAt = DateTimeOffset (2026, 8, 27, 11, 30, 0, TimeSpan.Zero)
     let watching known : PrWatch = { Pr = prOne; Watcher = ada; Known = known; Since = watchedAt }
     let fixedNow () = DateTimeOffset (2026, 8, 27, 12, 0, 0, TimeSpan.Zero)
+    let said (poller: PrWatches.PrWatchers) =
+        PrWatches.summaryOf (poller.Rows ()) |> Option.map (fun s -> s.Word)
 
     testList "pull request polling" [
         testCase "a merged pull request decodes as merged, however its state field reads" <| fun () ->
@@ -2636,14 +2638,14 @@ let private prPollTests =
             async {
                 let script = scriptedFetch [ PrWatches.PrChanged (snapshotWith PrOpen ChecksGreen inQueue, PrWatches.PrEtags.none) ]
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
-                Expect.equal (PrWatches.summaryOf (poller.Rows ())) "" "a session watching nothing says nothing"
+                Expect.equal (said poller) None "a session watching nothing says nothing"
                 poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 Expect.equal
-                    (PrWatches.summaryOf (poller.Rows ()))
-                    ""
+                    (said poller)
+                    None
                     "nor does one whose watch has not been looked at yet"
                 let! _ = poller.Poll ()
-                Expect.equal (PrWatches.summaryOf (poller.Rows ())) "#12 queued" "and then it says where it stands"
+                Expect.equal (said poller) (Some "#12 queued") "and then it says where it stands"
             }
 
         testCaseAsync "a watch the session cannot read says so, over whatever it last said" <|
@@ -2658,9 +2660,9 @@ let private prPollTests =
                 let poller = pollerOver fixedNow script.Fetch (RecordedTransitions ()) (ResizeArray ())
                 poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
-                Expect.equal (PrWatches.summaryOf (poller.Rows ())) "#12 queued" "read once"
+                Expect.equal (said poller) (Some "#12 queued") "read once"
                 let! _ = poller.Poke prOne.Repo
-                Expect.equal (PrWatches.summaryOf (poller.Rows ())) "#12 unreachable" "and then not readable at all"
+                Expect.equal (said poller) (Some "#12 unreachable") "and then not readable at all"
             }
 
         testCaseAsync "since reports when the watch last moved, not when it was last looked at" <|

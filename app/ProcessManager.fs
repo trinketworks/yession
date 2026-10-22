@@ -16,6 +16,7 @@ open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Link
 open Yession.Domain.Tools
+open Yession.Domain.Standings
 open Yession.Domain.Access
 open Yession.Manager
 open Yession.Oidc
@@ -44,11 +45,11 @@ type SessionStatus =
 type SessionView =
     { Record : SessionRecord
       Status : SessionStatus
-      /// One line the session last said about itself, for a roster reader deciding which of
-      /// six sessions wants them. Opaque here — the Manager stores what it was told and
-      /// never learns what the line is made of — and launch-scoped, so a stopped session
-      /// never shows a claim about work it is no longer doing.
-      Summary : string option }
+      /// What the session last said about itself, for a roster reader deciding which of six
+      /// sessions wants them. The Manager stores what it was told and never learns what a
+      /// standing is about, and it is launch-scoped, so a stopped session never shows a claim
+      /// about work it is no longer doing. Empty when there is nothing to say.
+      Standings : Standing list }
 
 /// The session registry's wire view: the RUNNING sessions only, each with the
 /// port and pid a serving binding needs to reach it. A pure projection of the published views, so
@@ -590,9 +591,9 @@ let createWithUi
     // staleness of the launch before it.
     let mutable activity : Map<string, LaunchActivity> = Map.empty
     // What each RUNNING launch last said about itself, for the roster. Runtime-only and
-    // launch-scoped like `activity`, and for the same reason: a summary describes work in
+    // launch-scoped like `activity`, and for the same reason: a standing describes work in
     // flight, so a session that has stopped must not go on claiming it.
-    let mutable summaries : Map<string, string> = Map.empty
+    let mutable standings : Map<string, Standing list> = Map.empty
     // Reaps in flight, so the exit that follows can say why it happened. Cleared on that
     // exit, and cleared again if the stop fails — a reason must never outlive its attempt
     // and mislabel the next ordinary stop.
@@ -641,7 +642,7 @@ let createWithUi
     let viewOf (record: SessionRecord) : SessionView =
         { Record = record
           Status = statusOf record
-          Summary = Map.tryFind (SessionId.value record.SessionId) summaries }
+          Standings = Map.tryFind (SessionId.value record.SessionId) standings |> Option.defaultValue [] }
 
     let viewsNow () : SessionView list = state.Sessions |> List.map viewOf
 
@@ -789,22 +790,21 @@ let createWithUi
             | None -> return Error "invalid control secret"
         }
 
-    // The control channel's summary report: the secret identifies the reporting session,
-    // exactly like the two above. Published only when the line CHANGED — a session repeats
-    // itself on every poll tick, and a roster that re-rendered every fifteen seconds per
-    // session would be a stream of frames saying nothing.
-    let reportSummary (secret: string) (summary: string) : Async<Result<unit, string>> =
+    // The control channel's status report: the secret identifies the reporting session,
+    // exactly like the two above. Published only when the standings CHANGED — a session
+    // repeats itself on every poll tick, and a roster that re-rendered every fifteen seconds
+    // per session would be a stream of frames saying nothing.
+    let reportStatus (secret: string) (said: Standing list) : Async<Result<unit, string>> =
         async {
             match Map.tryFind secret secretSessions with
             | Some sessionId ->
                 let key = SessionId.value sessionId
-                let trimmed = summary.Trim ()
-                let next = if trimmed = "" then None else Some trimmed
-                if Map.tryFind key summaries <> next then
-                    summaries <-
+                let next = said |> List.filter (fun s -> s.Word.Trim () <> "")
+                if (Map.tryFind key standings |> Option.defaultValue []) <> next then
+                    standings <-
                         match next with
-                        | Some line -> Map.add key line summaries
-                        | None -> Map.remove key summaries
+                        | [] -> Map.remove key standings
+                        | some -> Map.add key some standings
                     publishSessions ()
                 return Ok ()
             | None -> return Error "invalid control secret"
@@ -1047,7 +1047,7 @@ let createWithUi
             let handler (req: IncomingMessage) (res: ServerResponse) =
                 let handled =
                     WebhookRelay.tryHandle hookRelay req res
-                    || Control.tryHandle resolveCaller reportName reportActivity reportSummary notifications.Register mcp.Register provider.RegisterClient secretsApi connectionsApi connectionsHub.Register hookRelay.Subscribe hookRelay.Unsubscribe (fun path -> audit (SecretStore.Audit.controlUnauthorized path)) req res
+                    || Control.tryHandle resolveCaller reportName reportActivity reportStatus notifications.Register mcp.Register provider.RegisterClient secretsApi connectionsApi connectionsHub.Register hookRelay.Subscribe hookRelay.Unsubscribe (fun path -> audit (SecretStore.Audit.controlUnauthorized path)) req res
                     || handleConnectionsCallback req res
                     || provider.TryHandle req res
                     || (match ui, self with
@@ -1204,7 +1204,7 @@ let createWithUi
                 | Error reason ->
                     revokeSecret ()
                     activity <- Map.remove key activity
-                    summaries <- Map.remove key summaries
+                    standings <- Map.remove key standings
                     launchFailures <- Map.add key reason launchFailures
                     publishSessions ()
                     settle (Error reason)
@@ -1221,8 +1221,8 @@ let createWithUi
                     child.OnExit (fun code ->
                         children <- Map.remove key children
                         activity <- Map.remove key activity
-                        // A summary describes work in flight; this launch has none left.
-                        summaries <- Map.remove key summaries
+                        // A standing describes work in flight; this launch has none left.
+                        standings <- Map.remove key standings
                         // The launch's authority dies with it.
                         revokeSecret ()
                         // A stop's exit is the expected outcome, not a crash to report.

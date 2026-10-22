@@ -884,12 +884,7 @@ module View =
     /// The one place a tone becomes an ink. Exhaustive on purpose: a fifth tone fails
     /// the build HERE, where somebody has to choose a colour and prove its contrast,
     /// rather than rendering as whatever the fall-through happened to be.
-    let private ink (tone: QueryTone) : string =
-        match tone with
-        | ToneOk -> Style.toneOk
-        | ToneBusy -> Style.toneBusy
-        | ToneBad -> Style.toneBad
-        | ToneMuted -> Style.toneMuted
+    let private ink (tone: QueryTone) : string = Style.toneInk tone
 
     /// The generated read surface (Plan 15): ONE renderer for every query this session
     /// declares, now and later. Registering a query is what puts it on this screen —
