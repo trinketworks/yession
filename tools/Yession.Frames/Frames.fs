@@ -314,6 +314,8 @@ let private outOption = Cli.value "out" "dir" "where the report goes (default ./
 let private minPxOption = Cli.value "min-px" "n" "changed pixels a frame needs to be shown (default 400)"
 let private desktopOption = Cli.flag "desktop" None "1280x800 instead of a 390x844 phone"
 let private keepOption = Cli.flag "keep" None "leave the created session running"
+let private warmOption =
+    Cli.flag "warm" None "load once unfilmed, then film a reload: the cookie and kept history a returning reader has"
 let private pageOption = Cli.value "page" "url" "any page to load instead of a session — a path is taken from --manager"
 let private stillOption = Cli.flag "still" None "one picture once it lands, instead of a film"
 let private sizeOption = Cli.value "size" "WxH" "the viewport, e.g. 390x844 or 1440x900 (default: --desktop's or a phone's)"
@@ -328,6 +330,7 @@ let private spec =
     |> Cli.accepts minPxOption
     |> Cli.accepts desktopOption
     |> Cli.accepts keepOption
+    |> Cli.accepts warmOption
     |> Cli.accepts pageOption
     |> Cli.accepts stillOption
     |> Cli.accepts sizeOption
@@ -496,14 +499,15 @@ let private run () =
                     say (sprintf "stop %s %d" (SessionId.value id) stopped.Status)
             }
 
-        // Landed: a named page once it has loaded; otherwise once the document is the session
-        // shell, wherever the deployment mounts it (a path under the Manager, a port of its
-        // own) — the shell is the one document with the client's mount in it, and the
-        // Manager's opening page has none.
+        // The document is the session shell, wherever the deployment mounts it (a path under
+        // the Manager, a port of its own): the shell is the one document with the client's
+        // mount in it, and the Manager's opening page has none.
+        let shellProbe = sprintf "document.getElementById('%s') ? location.href : ''" Yession.App.Dom.appId
+        // Landed: a named page once it has loaded; otherwise once the document is the shell.
         let landedProbe =
             match page with
             | Some _ -> "document.readyState === 'complete' ? location.href : ''"
-            | None -> sprintf "document.getElementById('%s') ? location.href : ''" Yession.App.Dom.appId
+            | None -> shellProbe
 
         // Headless Chromium reports no pointing device, so `(hover: hover)` is false and every
         // Tailwind `hover:` utility — wrapped in that query — silently does nothing: a desktop
@@ -574,6 +578,29 @@ let private run () =
 
         if not desktop then
             do! Cdp.Emulation.setDeviceMetricsOverride cdp width height 2.0 true
+        // A returning reader: signed in, and holding the history its last visit kept. One
+        // unfilmed load, left `--seconds` to read the log through and keep it, and then the
+        // filmed load is the shell's own address, as a reload is — not the `/open` page a new
+        // reader starts from. What the warm-up said is dropped, so the report is the reload's.
+        let! openUrl =
+            promise {
+                if not (Cli.isSet warmOption args) then return openUrl
+                else
+                    do! Cdp.Page.navigate cdp openUrl
+                    let mutable shell = ""
+                    let startedAt = clock.Now ()
+                    while shell = "" && (clock.Now () - startedAt).TotalSeconds < 60.0 do
+                        do! delay 250
+                        let! href = landedAt cdp shellProbe
+                        shell <- href
+                    if shell = "" then abort "--warm: the shell never landed on the unfilmed load"
+                    do! delay (seconds * 1000)
+                    do! Cdp.Page.navigate cdp "about:blank"
+                    do! delay 500
+                    cdp.Events.Clear ()
+                    say (sprintf "warmed on %s" shell)
+                    return shell
+            }
         let! installed = Cdp.Page.addScriptToEvaluateOnNewDocument cdp instrument
         do! Cdp.Page.startScreencast cdp 1 (width * 2) (height * 2)
         let navigatedAt = clock.Now ()
@@ -582,10 +609,7 @@ let private run () =
         let mutable since = clock.Now ()
         while (clock.Now () - since).TotalMilliseconds < float (if landed then seconds else 60) * 1000.0 do
             do! delay 250
-            // Landed = the document is the session shell, wherever the deployment mounts it
-            // (a path under the Manager, a port of its own): the shell is the one document
-            // with the client's mount in it, and the Manager's opening page has none.
-            let! href = landedAt cdp (sprintf "document.getElementById('%s') ? location.href : ''" Yession.App.Dom.appId)
+            let! href = landedAt cdp shellProbe
             if not landed && href <> "" then
                 landed <- true
                 since <- clock.Now ()
