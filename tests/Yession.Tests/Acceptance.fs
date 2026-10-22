@@ -79,6 +79,8 @@ let private representativeModel : ClientModel =
       // on screen for the checklist. A brief one is deliberately silent.
       Link = SessionLink.Fetching (EventOffset.create 7L |> expect, { Effort.fresh with Slow = true }, Phase.ReadThrough)
       Waited = true
+      Said = None
+      Showings = 0
       Session = Some sessionId
       Approvals = RepoApprovals.empty
       Launch = Launch.empty
@@ -3307,6 +3309,15 @@ let private syncStatusTests =
             Expect.isTrue (html.Contains "role=\"progressbar\"") "which is a progress bar"
             let folded = representativeModel.EventConsumer.LastProcessedOffset |> Option.map (fun o -> EventOffset.value o + 1L) |> Option.defaultValue 0L
             Expect.isTrue (html.Contains (sprintf "aria-valuenow=\"%d\"" folded)) "carrying how far it has got"
+
+        // A showing stands for its second, whatever the link has done meanwhile (`Said`).
+        testCase "the line says what it was saying while its second stands" <| fun () ->
+            let reconnecting = SessionLink.Reconnecting ({ Effort.fresh with Slow = true }, Phase.ReadThrough)
+            let back =
+                { settled with Said = Some { Link = reconnecting; Showing = 1; Dwelt = false } }
+            Expect.isTrue
+                ((Support.render back).Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedReconnecting))
+                "still reconnecting, for the rest of its second"
 
         // Slow describes a wait that is RUNNING (`Effort` lives inside the cases that wait), so
         // a timer that fires just as the page lands has nothing to land on.

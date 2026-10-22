@@ -206,6 +206,16 @@
   from { max-height: 0; opacity: 0; translate: 0 -0.25rem; overflow: clip; }
   to { max-height: 1lh; opacity: 1; translate: 0 0; overflow: clip; }
 }
+/* The phone's status line arriving (`Style.degradedBar`). The bar is fixed over the top of
+   every pane, and the chat makes room for it by its height (`Style.mainColumn`): that room
+   used to open in one frame, the conversation shoved down a bar's height under the reader. Now
+   the bar slides down from the screen's edge while the room opens at the same pace, so it
+   unfolds into place and the conversation moves with it. Only on arriving: a line that goes is
+   gone, and the room closes behind it. */
+@keyframes bar-unfold {
+  from { translate: 0 -100%; }
+  to { translate: 0 0; }
+}
 /* A command landing in its terminal: lifted (`Style.paneToolbarLifted`) — the ground two steps
    up — and settling back into the history. The rim is this keyframe's own: it has to animate,
    and a border would reflow the row mid-animation, which is why the lifted state says its step

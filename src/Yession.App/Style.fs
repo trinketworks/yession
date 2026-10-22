@@ -1626,8 +1626,11 @@ module Style =
     let queryLegendMeaning = "font-light text-small leading-5 text-ink-dim break-words"
 
     /// On a phone this column sits under the fixed degradation bar, so it pays for it in
-    /// padding — but only while the bar is there (`degradedShell`).
-    let mainColumn = "flex-1 flex flex-col min-w-0 h-full " + degradedBarRoomPad
+    /// padding — but only while the bar is there (`degradedShell`), and at the pace the bar
+    /// unfolds at, so the conversation moves down with it rather than in one frame.
+    let mainColumn =
+        "flex-1 flex flex-col min-w-0 h-full " + degradedBarRoomPad
+        + " phone:transition-[padding-top] phone:duration-200 phone:ease-out motion-reduce:transition-none"
 
     /// The phone's band is a ROW, not a compressed copy of the desktop's stack: the two
     /// chevrons a phone always has in this band — the sidebar's and the terminals' — and the
@@ -1751,6 +1754,8 @@ module Style =
               // the top edge, so this leaves the conversation column's flow and sits over all
               // three. `z-50` clears the overlays (`z-40`) and the scrim between them.
               "phone:fixed phone:inset-x-0 phone:top-0 phone:z-50 phone:px-4"
+              // Unfolding into place as the chat makes room for it (`mainColumn`).
+              "phone:motion-safe:animate-bar-unfold"
               // One row, always, tall enough for the control it carries whether or not this
               // state has one — the panes reserve this number, so a height that tracked the
               // contents would leave a gap under the bar in some states and overlap the

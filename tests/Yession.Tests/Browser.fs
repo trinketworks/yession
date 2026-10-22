@@ -7568,6 +7568,8 @@ let editorTests =
                 do! Harness.run1 page HarnessPage.state "degraded"
                 let summary = "#shell [data-detail='degraded'] summary"
                 do! waitVisible "the notice's disclosure" page summary
+                // The bar unfolds as it arrives: what is measured is where it lands.
+                do! Probe.settled page
                 let! boxes = Probe.boxes page [ summary ]
                 let word =
                     match boxes with

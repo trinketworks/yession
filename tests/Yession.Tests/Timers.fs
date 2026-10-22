@@ -206,7 +206,9 @@ let tests =
             let quiet =
                 let model = fold [ opened; delta 3L "Looking" ]
                 ClientModel.timers model |> List.fold (fun model timer -> Support.step timer.Fire model) model
-            Expect.isEmpty (ClientModel.timers quiet) "a settled question is not asked again"
+            let quietWaits =
+                ClientModel.timers quiet |> List.filter (fun timer -> List.head timer.Key = "agent-quiet")
+            Expect.isEmpty quietWaits "a settled question is not asked again"
 
         testCase "catch-up that runs past its quiet interval is reported as slow" <| fun () ->
             let clock, send, model = program ()
@@ -305,6 +307,37 @@ let tests =
                 (model ()).Link
                 (SessionLink.Reconnecting ({ Effort.fresh with Slow = true }, Phase.ReadThrough))
                 "a reconnect that lasted is worth saying"
+
+        // A line that came and went inside a second was a flash nobody could read: a reconnect
+        // that landed just after it was said put "reconnecting" up for a frame.
+        testCase "a status, once said, is said for its second" <| fun () ->
+            let clock, send, model = program ()
+            send (accepted None)
+            send DisconnectedMsg
+            clock.Advance ClientModel.connectingQuietMs
+            send (accepted None)
+            Expect.isSome (model ()).Said "still saying it over a link that is back"
+
+        testCase "a status said for its second then goes" <| fun () ->
+            let clock, send, model = program ()
+            send (accepted None)
+            send DisconnectedMsg
+            clock.Advance ClientModel.connectingQuietMs
+            send (accepted None)
+            clock.Advance ClientModel.statusDwellMs
+            Expect.isNone (model ()).Said "gone once its second has stood"
+
+        // A showing gives way to news, never to quiet.
+        testCase "a status gives way at once to another" <| fun () ->
+            let clock, send, model = program ()
+            send (accepted None)
+            send DisconnectedMsg
+            clock.Advance ClientModel.connectingQuietMs
+            send (RejectedMsg "invalid peer token")
+            Expect.equal
+                ((model ()).Said |> Option.bind (fun said -> SessionLink.said said.Link))
+                (Some StatusKind.SignedOut)
+                "the refusal is said now, not after the reconnect's second"
 
         testCase "a copy's confirmation is taken back after its moment" <| fun () ->
             let clock, send, model = program ()
