@@ -1,14 +1,14 @@
 # The yession mark
 
-`gen.py` generates everything here from one description of the object, which its docstring
-gives. [`docs/brand/README.md`](../../docs/brand/README.md) is the design record: what the
-object is, how it is lit, and every step that led here. This file lists the files.
+`gen.py` generates everything here. Its docstring describes the object and the commands.
+[`docs/brand/README.md`](../../docs/brand/README.md) is the design record. This file lists the
+files.
 
     python3 assets/logo/gen.py            # the SVGs
     CHROME=<chromium> python3 assets/logo/gen.py --png   # and the PNGs, through Chromium
 
-The mark and the intro cannot disagree. `logo.svg` is the intro's last frame, built as a static
-file from the same code at t = 1. Regenerate everything together. Never hand-edit one file.
+`logo.svg` is the intro's last frame, so regenerate everything together. Never hand-edit one
+file.
 
 | file | what it is for |
 | --- | --- |
@@ -19,11 +19,9 @@ file from the same code at t = 1. Regenerate everything together. Never hand-edi
 | `favicon-32.png`, `favicon-16.png` | `logo-16.svg` rasterised, for a browser that takes only PNG. |
 | `icon.svg` | The app icon: the mark on off-black (`#111`, the product's surface token) in a 1024 box. Corners are at 22%, and a platform masks its own shape over this anyway. The mark's box is 84% of the icon. The mark's own 7 units of air in 64 put the object at about two thirds of the side. Past 86%, the panels' tips meet the rounded corner. The mark sits 2% above centre, because its weight sits low. |
 | `icon-1024.png`, `icon-512.png`, `icon-192.png`, `icon-180.png` | The icon rasterised: the manifest's sizes, and 180 for `apple-touch-icon`. iOS takes only PNG for a home-screen icon. |
-| `intro.svg` | The mark's intro: 2.4s, one SVG, no script. The agent starts as a solid blue diamond seen from above and turns to jelly. The camera then pulls up and back while the collaborators slide in. Click to replay. SMIL cannot read `prefers-reduced-motion`, so a page that respects it shows `logo.svg` instead. The file is about 97 KB, or 14 KB gzipped. Only 18 `d` attributes morph, one per face. The hidden edges are strokes on the faces already turned away, which is worth about a sixth of the frame rate on a phone-class CPU. There, this is the one asset that has to animate before anything else can happen. [The intro](../../docs/brand/README.md#the-intro) in the design record gives the clocks, the dolly and the measurements. |
+| `intro.svg` | The mark's intro: 2.4s, one SVG, no script. Click to replay. A page that respects `prefers-reduced-motion` shows `logo.svg` instead, because SMIL cannot read it. About 97 KB, or 14 KB gzipped. On a phone-class CPU it is the one asset that has to animate before anything else can happen. [The intro](../../docs/brand/README.md#the-intro) gives the clocks, the dolly and the frame-rate measurements. |
 
-The blue `#1ba1e2` and the green `#a8dd00` are the colours for anything that must match the mark
-without embedding it. They are the product's `--color-blue` and `--color-green`. Their hot and
-deep shades are under [Material](../../docs/brand/README.md#material) (Hue) in the design record.
-
-The wordmark is Noto Sans. [Type](../../docs/brand/README.md#type) in the design record gives the
-product's faces, and why.
+To match the mark without embedding it, use the blue `#1ba1e2` and the green `#a8dd00`, the
+product's `--color-blue` and `--color-green`. Their hot and deep shades are under
+[Material](../../docs/brand/README.md#material) (Hue). The product's faces are under
+[Type](../../docs/brand/README.md#type).
