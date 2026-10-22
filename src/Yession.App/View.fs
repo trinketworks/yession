@@ -997,8 +997,11 @@ module View =
     /// Not in the degraded strip — that reports LEGS that are down, and this is a property of
     /// how the page was served, fixed for the whole life of the document.
     let private historyStoreNote (model: ClientModel) : TemplateResult =
-        if model.CanKeepHistory then Lit.nothing
-        else
+        match model.LocalCopy with
+        | LocalCopy.Reading
+        | LocalCopy.Kept _
+        | LocalCopy.NoneKept -> Lit.nothing
+        | LocalCopy.Unkeepable ->
             html $"""
                 <section class="{Style.sideSection}" data-history-store="none">
                   <span class="{Style.label}">history</span>
@@ -3454,17 +3457,16 @@ module View =
         // that starts in the middle. The gate is the degradation strip's own — a settled,
         // REASONED disconnection — so a client that has not yet asked `/me` says nothing.
         let missing =
-            match model.EventConsumer.MissingBefore, model.Connection, model.EventConsumer.Feed with
-            | None, _, _ -> None
-            | Some _, Disconnected (Some _), _
-            | Some _, Retrying _, _
-            | Some _, _, FeedStalled _ ->
+            match model.LocalCopy, model.Connection, model.EventConsumer.Feed with
+            | LocalCopy.Kept (Some _), Disconnected (Some _), _
+            | LocalCopy.Kept (Some _), Retrying _, _
+            | LocalCopy.Kept (Some _), _, FeedStalled _ ->
                 Some (
                     html $"""
                         <p class="{Style.historyGap}" data-history-gap>
                           <span class="{Style.historyGapText}">{Dom.Text.historyMissingLocally}</span>
                         </p>""")
-            | Some _, _, _ -> None
+            | (LocalCopy.Reading | LocalCopy.Kept _ | LocalCopy.NoneKept | LocalCopy.Unkeepable), _, _ -> None
         // This client has not yet read the log through, so a message may still be a round
         // trip from landing. Shaped like the row it may become: an author line of the same
         // height as a real one, `invisible` so it reserves the room without drawing a blank

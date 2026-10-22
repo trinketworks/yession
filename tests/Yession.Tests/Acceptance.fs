@@ -87,9 +87,9 @@ let private representativeModel : ClientModel =
       EphemeralStorage = false
       // Served by a build that says which it is, so the sidebar's foot carries it.
       Build = Some "1.2.3-beta.4"
-      // A representative client is one that can keep what it is given; the case that cannot
-      // is the exception, and says so where it matters.
-      CanKeepHistory = true
+      // A representative client is one that kept what it was given; the case that cannot
+      // keep anything is the exception, and says so where it matters.
+      LocalCopy = LocalCopy.Kept None
       Synced =
         // Draft/queue bodies are rich-text `Y.XmlFragment`s mounted by the browser editor,
         // not fields on the model — so the SSR fixture carries only the slot's identity; the
@@ -150,7 +150,6 @@ let private representativeModel : ClientModel =
           // are on screen for the checklist. A brief one is deliberately silent.
           Sync = Behind (EventOffset.create 7L |> expect, true)
           Feed = FeedLive
-          MissingBefore = None
           Reading = None }
       Agent = { ActiveTurn = Some turnId; Quiet = None; Interrupting = None }
       Presence =
@@ -608,6 +607,8 @@ let private emptyAt (sync: HistorySync) : ClientModel =
         Conversation = ConversationProjection.empty
         Timeline = TimelineProjection.empty
         Synced = { representativeModel.Synced with Pending = Map.empty }
+        // Nothing on screen because nothing was kept: the store answered with nothing.
+        LocalCopy = LocalCopy.NoneKept
         EventConsumer = { representativeModel.EventConsumer with Sync = sync } }
 
 let private uiChecklistTests =
@@ -982,20 +983,20 @@ let private uiChecklistTests =
         // trip from landing). So the caret was telling most people the opposite of the truth,
         // and neither state could be told from the other on screen.
         testCase "an empty timeline not yet read through, for long enough to say, says it is reading" <| fun () ->
-            let looking = Support.render (emptyAt (Opening (None, true, false)))
+            let looking = Support.render (emptyAt (Opening (None, true)))
             Expect.isTrue
                 (looking.Contains "data-history-loading")
                 "a client the session has not yet told where its log ends says it is reading, rather than claiming emptiness"
 
         testCase "the reading state says it in words" <| fun () ->
             Expect.isTrue
-                ((Support.render (emptyAt (Opening (None, true, false)))).Contains Dom.Text.readingHistory)
+                ((Support.render (emptyAt (Opening (None, true)))).Contains Dom.Text.readingHistory)
                 "the pulse alone reaches nobody who cannot see it"
 
         testCase "an empty timeline told where the log ends, and still short of it, is still reading" <| fun () ->
             // A message never kept on this device may still be a round trip from landing, so
             // the wait is SUSTAINED rather than giving way to the caret.
-            let stillBehind = Support.render (emptyAt (Opening (Some (EventOffset.create 7L |> expect), true, false)))
+            let stillBehind = Support.render (emptyAt (Opening (Some (EventOffset.create 7L |> expect), true)))
             Expect.isTrue (stillBehind.Contains "data-history-loading") "still behind the session's own log is still reading"
 
         // A reload's own store answers in a few hundred milliseconds; "catching up" for that
@@ -1003,12 +1004,12 @@ let private uiChecklistTests =
         // was in.
         testCase "a brief wait says nothing yet" <| fun () ->
             Expect.isFalse
-                ((Support.render (emptyAt (Opening (None, false, false)))).Contains "data-history-loading")
+                ((Support.render (emptyAt (Opening (None, false)))).Contains "data-history-loading")
                 "no reading line before the wait is worth saying"
 
         testCase "a brief wait does not claim the session is empty either" <| fun () ->
             Expect.isFalse
-                ((Support.render (emptyAt (Opening (None, false, false)))).Contains "data-timeline-empty")
+                ((Support.render (emptyAt (Opening (None, false)))).Contains "data-timeline-empty")
                 "nothing is said at all"
 
         testCase "an empty timeline read through says it is empty" <| fun () ->
@@ -1033,18 +1034,20 @@ let private uiChecklistTests =
             let opening =
                 Support.render
                     { representativeModel with
+                        LocalCopy = LocalCopy.NoneKept
                         EventConsumer =
                             { representativeModel.EventConsumer with
-                                Sync = Opening (Some (EventOffset.create 7L |> expect), true, false) } }
+                                Sync = Opening (Some (EventOffset.create 7L |> expect), true) } }
             Expect.isTrue (opening.Contains "data-history-loading") "it says it is reading instead"
 
         testCase "history this client kept is drawn before read through" <| fun () ->
             let kept =
                 Support.render
                     { representativeModel with
+                        LocalCopy = LocalCopy.Kept None
                         EventConsumer =
                             { representativeModel.EventConsumer with
-                                Sync = Opening (Some (EventOffset.create 7L |> expect), false, true) } }
+                                Sync = Opening (Some (EventOffset.create 7L |> expect), false) } }
             Expect.isFalse (kept.Contains "data-history-loading") "the reader's own last picture is shown at once"
 
         testCase "a session whose only act is queued shows it and not the empty caret" <| fun () ->
@@ -1081,7 +1084,7 @@ let private uiChecklistTests =
             Expect.isFalse
                 (ordinary.Contains "data-history-store")
                 "a client that keeps history has nothing to explain"
-            let denied = Support.render { representativeModel with CanKeepHistory = false }
+            let denied = Support.render { representativeModel with LocalCopy = LocalCopy.Unkeepable }
             Expect.isTrue
                 (denied.Contains "data-history-store")
                 "a client that cannot keep history says which capability is missing"
@@ -3424,7 +3427,7 @@ let private chromeTests =
             { representativeModel with
                 Connection = Disconnected (Some "the session did not answer")
                 Manager = Some "http://127.0.0.1:8321"
-                CanKeepHistory = false
+                LocalCopy = LocalCopy.Unkeepable
                 EphemeralStorage = true }
             |> withGitHubPanel (fun panel ->
                 { panel with

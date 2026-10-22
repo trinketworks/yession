@@ -5784,12 +5784,14 @@ let private historySyncTests =
               LatestOffset = latest |> Option.map (fun o -> EventOffset.create o |> expect) }
     let page (msg: EventPage<SessionEvent> -> ClientMsg) (events: EventEnvelope<SessionEvent> list) =
         msg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true }
+    /// The store's answer at boot, holding these and nothing past a hole.
+    let stored (kept: EventPage<SessionEvent>) = LocalHistoryMsg (kept, None)
     let log = [ at 0L 0.0 (opened terminalA "build"); at 1L 1.0 (opened terminalB "tests") ]
     testList "history sync" [
         // The cold open the camera filmed: the local store came back, and the empty caret
         // replaced "catching up" while the session's history was still a round trip away.
         testCase "a page out of this client's own store does not make it read through" <| fun () ->
-            let kept = booted |> Support.step (page LocalHistoryMsg log)
+            let kept = booted |> Support.step (page stored log)
             Expect.isFalse (HistorySync.heardThrough kept.EventConsumer.Sync) "what was kept is not where the log ends"
 
         testCase "a session that says its log is empty is read through at once" <| fun () ->
@@ -5815,8 +5817,8 @@ let private historySyncTests =
             Expect.equal stale.EventConsumer.Sync Current "an end is never moved backwards"
 
         testCase "a page out of this client's own store is kept" <| fun () ->
-            let kept = booted |> Support.step (page LocalHistoryMsg log)
-            Expect.equal kept.EventConsumer.Sync (Opening (None, false, true)) "the reader's own picture"
+            let kept = booted |> Support.step (page stored log)
+            Expect.equal kept.LocalCopy (LocalCopy.Kept None) "the reader's own picture"
 
         testCase "a cold open waiting on the session's history is not drawn" <| fun () ->
             let waiting = booted |> Support.step (accepted (Some 1L))
@@ -5827,13 +5829,13 @@ let private historySyncTests =
             Expect.isTrue (ClientModel.presentable waiting) "a wait worth saying is worth drawing"
 
         testCase "what this client kept is drawn before the session has said anything" <| fun () ->
-            let kept = booted |> Support.step (page LocalHistoryMsg log)
+            let kept = booted |> Support.step (page stored log)
             Expect.isTrue (ClientModel.presentable kept) "the reader's own picture, at once"
 
         testCase "what this client kept is held once the session says there is more" <| fun () ->
             let behind =
                 booted
-                |> Support.step (page LocalHistoryMsg [ List.head log ])
+                |> Support.step (page stored [ List.head log ])
                 |> Support.step (accepted (Some 1L))
             Expect.isFalse (ClientModel.presentable behind) "the rest is a round trip away"
 
@@ -5866,7 +5868,7 @@ let private arrivalTests =
             Expect.isFalse (ClientModel.showsConversation booted) "nothing to arrive"
 
         testCase "what this client kept is the conversation, at once" <| fun () ->
-            let kept = booted |> Support.step (page LocalHistoryMsg said)
+            let kept = booted |> Support.step (page (fun kept -> LocalHistoryMsg (kept, None)) said)
             Expect.isTrue (ClientModel.showsConversation kept) "the reader's own picture arrives"
 
         testCase "the pages of a cold open are not the conversation arriving" <| fun () ->

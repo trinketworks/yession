@@ -186,7 +186,7 @@ let private storeTests =
                     seen
                     |> Seq.collect (fun msg ->
                         match msg with
-                        | LocalHistoryMsg page -> page.Events |> List.map (fun e -> EventOffset.value e.Offset)
+                        | LocalHistoryMsg (page, _) -> page.Events |> List.map (fun e -> EventOffset.value e.Offset)
                         | _ -> [])
                     |> List.ofSeq
                 Expect.equal offsets [ 0L; 1L; 2L; 3L; 4L ] "every kept event, once, in log order"
@@ -231,12 +231,12 @@ let private storeTests =
                     seen
                     |> Seq.collect (fun msg ->
                         match msg with
-                        | LocalHistoryMsg page -> page.Events |> List.map (fun e -> EventOffset.value e.Offset)
+                        | LocalHistoryMsg (page, _) -> page.Events |> List.map (fun e -> EventOffset.value e.Offset)
                         | _ -> [])
                     |> List.ofSeq
                 Expect.equal offsets [ 0L; 1L; 2L; 3L; 4L ] "every kept event, once, in log order"
                 Expect.isFalse
-                    (seen |> Seq.exists (function LocalHistoryGapMsg _ -> true | _ -> false))
+                    (seen |> Seq.exists (function LocalHistoryMsg (_, Some _) -> true | _ -> false))
                     "and nothing is missing — the events were all here, in a bag rather than a queue"
             }
 
@@ -252,7 +252,7 @@ let private storeTests =
                 let pages = seen |> Seq.filter (function LocalHistoryMsg _ -> true | _ -> false) |> Seq.length
                 Expect.equal pages 1 "one page for the whole contiguous run"
                 let last =
-                    seen |> Seq.tryPick (function LocalHistoryMsg page -> page.LastOffset | _ -> None)
+                    seen |> Seq.tryPick (function LocalHistoryMsg (page, _) -> page.LastOffset | _ -> None)
                 Expect.equal (last |> Option.map EventOffset.value) (Some 299L) "reaching the last kept event"
             }
 
@@ -268,7 +268,7 @@ let private storeTests =
                     seen
                     |> Seq.collect (fun msg ->
                         match msg with
-                        | LocalHistoryMsg page -> page.Events |> List.map (fun e -> EventOffset.value e.Offset)
+                        | LocalHistoryMsg (page, _) -> page.Events |> List.map (fun e -> EventOffset.value e.Offset)
                         | _ -> [])
                     |> List.ofSeq
                 Expect.equal offsets [ 0L; 1L; 2L; 3L; 4L; 5L ] "each kept event once, in log order"
@@ -303,7 +303,7 @@ let private storeTests =
                     seen
                     |> Seq.collect (fun msg ->
                         match msg with
-                        | LocalHistoryMsg page -> page.Events |> List.map (fun e -> EventOffset.value e.Offset)
+                        | LocalHistoryMsg (page, _) -> page.Events |> List.map (fun e -> EventOffset.value e.Offset)
                         | _ -> [])
                     |> List.ofSeq
                 Expect.equal folded [ 0L; 1L ] "everything up to the hole, and nothing past it"
@@ -322,7 +322,7 @@ let private storeTests =
                     (seen |> Seq.exists (function EventFeedMsg _ -> true | _ -> false))
                     "a local read reports no feed health at all"
                 let reported =
-                    seen |> Seq.tryPick (function LocalHistoryGapMsg at -> Some at | _ -> None)
+                    seen |> Seq.tryPick (function LocalHistoryMsg (_, gapAt) -> gapAt | _ -> None)
                 match reported with
                 | None -> failwith "a hole must be reported, not silently treated as the end"
                 | Some at ->
@@ -342,10 +342,7 @@ let private storeTests =
                     |> Seq.fold
                         (fun m msg -> Support.step msg m)
                         (ClientModel.init { PeerId = PeerId.create "p" |> expect; DisplayName = "P" })
-                Expect.equal
-                    (model.EventConsumer.MissingBefore |> Option.map EventOffset.value)
-                    (Some 5L)
-                    "the replay left the hole on the model"
+                Expect.equal model.LocalCopy (LocalCopy.Kept (Some (EventOffset.create 5L |> expect))) "the replay left the hole on the model"
                 let fill =
                     match Client.EventFetch.decodeLines (snd (answerOf 2L 3)) with
                     | Ok envelopes -> envelopes
@@ -357,7 +354,50 @@ let private storeTests =
                               LastOffset = fill |> List.tryLast |> Option.map (fun e -> e.Offset)
                               IsEnd = false })
                         model
-                Expect.equal filled.EventConsumer.MissingBefore None "and a page off the network takes it away"
+                Expect.equal filled.LocalCopy (LocalCopy.Kept None) "and a page off the network takes it away"
+            }
+
+        testCaseAsync "a store that holds nothing still answers" <|
+            async {
+                // What a page with nothing kept waits on is the store's answer, and an answer of
+                // nothing is still one: until it comes, the page cannot say the history is not here.
+                let seen = ResizeArray ()
+                do! Client.EventFetch.replay (storeOf []) seen.Add
+                let model =
+                    seen
+                    |> Seq.fold
+                        (fun m msg -> Support.step msg m)
+                        (ClientModel.init { PeerId = PeerId.create "p" |> expect; DisplayName = "P" })
+                Expect.equal model.LocalCopy LocalCopy.NoneKept "the store answered, with nothing"
+            }
+
+        testCaseAsync "a hole before anything was folded keeps nothing" <|
+            async {
+                // The run must start at the start of the log, so a store whose earliest answer
+                // starts past it can fold none of what it holds until the network fills the hole.
+                // Nothing of it can be drawn, so nothing of it is the reader's picture.
+                let store = storeOf [ answerOf 5L 2 ]
+                let seen = ResizeArray ()
+                do! Client.EventFetch.replay store seen.Add
+                let model =
+                    seen
+                    |> Seq.fold
+                        (fun m msg -> Support.step msg m)
+                        (ClientModel.init { PeerId = PeerId.create "p" |> expect; DisplayName = "P" })
+                Expect.equal model.LocalCopy LocalCopy.NoneKept "nothing it holds is folded"
+            }
+
+        testCaseAsync "a page with nowhere to keep history keeps nothing, whatever its store says" <|
+            async {
+                // The browser says at boot that it has no store (`Unkeepable`), and the walk over
+                // the empty stand-in it is given then must not turn that into "kept nothing".
+                let seen = ResizeArray ()
+                do! Client.EventFetch.replay Client.HistoryCache.none seen.Add
+                let unkeepable =
+                    { ClientModel.init { PeerId = PeerId.create "p" |> expect; DisplayName = "P" } with
+                        LocalCopy = LocalCopy.Unkeepable }
+                let model = seen |> Seq.fold (fun m msg -> Support.step msg m) unkeepable
+                Expect.equal model.LocalCopy LocalCopy.Unkeepable "still a page that keeps nothing"
             }
 
         testCaseAsync "an answer is kept under the address it came back FROM, not the one asked for" <|
