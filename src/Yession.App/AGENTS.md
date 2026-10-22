@@ -1,11 +1,10 @@
 # UI baseline
 
 Rules for UI surfaces: this project, `app/tokens.css` and the pages that `app/` renders.
+[`AGENTS.md`, "UI baseline"](../../AGENTS.md#ui-baseline) says what to read first and sets the
+WCAG floor.
 
-Read [`docs/visual-design.md`](../../docs/visual-design.md) BEFORE you change a surface. WCAG 2.0
-AA is the floor for every surface ([`AGENTS.md`, "UI baseline"](../../AGENTS.md#ui-baseline)).
-
-The "Chrome consistency" suite pins the structure: labels, `th scope`, `lang` and title
+The "Chrome consistency" suite pins labels, `th scope`, `lang` and title
 ([`tests/AGENTS.md`](../../tests/AGENTS.md#ui-tests-pin-an-invariant-never-a-design)). No central
 test pins the keyboard. You hold it:
 
