@@ -15,32 +15,32 @@ A handful of constraints drive the whole design:
 
 - **Local first.** A session runs on a local node. Clients connect to the local Session
   Process over WebRTC.
-- **Reactive.** State changes through explicit transitions driven by events, with no
-  shared mutable state across components.
-- **Types first.** Invariants, valid states, and allowed transitions live in F# types,
-  checked at compile time where possible.
+- **Reactive.** Explicit transitions, driven by events, change the state. No component shares
+  mutable state with another.
+- **Types first.** F# types hold the invariants, the valid states, and the allowed
+  transitions. The compiler checks them where possible.
 - **Ylmish is the sync boundary.** Elmish owns the model. Ylmish encodes selected Elmish
   state into Yjs and back. Yjs is not the product model.
 - **Durable facts are events.** Collaborative editing state lives in Yjs. Durable session
   history lives in an append-only event log that the Session owns.
-- **Capabilities are scoped, not ambient.** Authority is handed out explicitly and
-  composed at the application boundary.
-- **Verification is automated end to end.** Manual testing doesn't count.
+- **Capabilities have a scope. They are not ambient.** The application gives authority
+  explicitly and composes it at its boundary.
+- **Automated verification covers everything end to end.** Manual testing doesn't count.
 
-[docs/technical-design.md](docs/technical-design.md) has the full reasoning and the
-invariants that have to survive code review.
+The [technical design](https://github.com/trinketworks/yession/blob/master/docs/technical-design.md)
+has the full reasoning and the invariants that must survive code review.
 
 ### Components
 
 Yession has three components. These are their names everywhere: in prose, in code, and in
 tests.
 
-- **Manager** — the `yession-manager` bin. Launches and supervises Sessions, owns identity and
-  secret custody, and serves the management UI. It is long-lived. It outlives every Session it
-  launches, and you upgrade it only when none is running.
-- **Session** — the `yession-session` bin, one process per session. Hosts the event log, the
+- **Manager**: the `yession-manager` bin. It launches and supervises Sessions, holds identity
+  and secret custody, and serves the management UI. It is long-lived. It outlives every
+  Session it launches, and you upgrade it only when no Session runs.
+- **Session**: the `yession-session` bin, one process per session. It hosts the event log, the
   Yjs document, the Elmish loop, the agent runtime, and the WebRTC protocol.
-- **App** — F#/Fable in the browser. The Session serves it, and it connects back over WebRTC.
+- **App**: F#/Fable in the browser. The Session serves it, and it connects back over WebRTC.
 
 Each has a pure core of its own: `Yession.Manager`, `Yession.Session`, and `Yession.App`
 (bundled from `app/browser`). `Yession.Host` (`app/`) is the Node shell that both bins run in.
@@ -49,24 +49,25 @@ project, so nothing that a library needs can bend the model. `DomainReferences` 
 
 ### Contracts
 
-Every message that crosses between two components is declared once, as a codec that both ends
-use, in the project of the component that owns it:
+Each message that crosses between two components has one declaration: a codec that both ends
+use. The codec lives in the project of the component that owns the contract:
 
 - **App ↔ Session: the App owns it** (`Yession.App.Codecs`). The App is the client of
   every surface the Session serves, so the App says what each exchange carries. The Session
   references `Yession.App` to answer in that shape. Both ship in the same build.
 - **Manager ↔ Session: the Manager owns it** (`Yession.Manager`). The Manager moves
-  slowest, because it changes only when no Session is running. The contract therefore lives on
-  the side that holds it still, whichever way a message travels.
+  slowest, because it changes only when no Session runs. So the contract lives on the side
+  that holds it still, in both directions of travel.
 - **Shared by every surface** (identities: ids, actors, timestamps): this is cross-cutting.
   It lives in `Yession.Codecs`, beside the model and not in it.
 
 ## Getting started
 
 [devenv](https://devenv.sh) declares the dev environment, the tasks, and the two install
-channels once, in [devenv.nix](devenv.nix). nixpkgs pins them, so the environment you work in
-and the package you install are built the same way. The toolchain (Node 24, .NET SDK 10) comes
-from that declaration. Never install it by hand.
+channels once, in [devenv.nix](https://github.com/trinketworks/yession/blob/master/devenv.nix).
+nixpkgs pins them, so the same recipe builds the environment you work in and the package you
+install. The toolchain (Node 24, .NET SDK 10) comes from that declaration. Never install it by
+hand.
 
 ### Developing
 
@@ -86,16 +87,18 @@ start              # run the Session locally
 
 The tasks are devenv scripts: `restore`, `build`, `start`, `dev`, `check`, `verify`,
 `package`, and `clean`. `check` runs the tests and takes capabilities as arguments, for
-example `check Browser`. Each task is a thin wrapper over [`tasks.fsx`](tasks.fsx), the
-complete, standalone build interface. The devenv scripts, the GitHub Actions workflows, and
-the Nix outputs all call it. Without devenv and CI, `dotnet fsi tasks.fsx <verb>` still
-drives everything.
+example `check Browser`. Each task is a thin wrapper over
+[`tasks.fsx`](https://github.com/trinketworks/yession/blob/master/tasks.fsx). Without devenv
+and CI, `dotnet fsi tasks.fsx <verb>` still drives everything. The
+[Build interface](https://github.com/trinketworks/yession/blob/master/AGENTS.md#build-interface)
+section of AGENTS.md tells how.
 
-[AGENTS.md](AGENTS.md) holds the contributor rules.
+[AGENTS.md](https://github.com/trinketworks/yession/blob/master/AGENTS.md) holds the
+contributor rules.
 
 ### Installing
 
-Yession ships two ways, side by side. Either way installs two commands: `yession-manager`
+Yession ships two ways, side by side. Each way installs two commands: `yession-manager`
 (the Manager) and `yession-session` (a Session). `yession-manager` serves a management UI
 (default http://127.0.0.1:8321). Use it to create, launch, resume, and stop sessions. Each
 session runs in its own process.
@@ -113,8 +116,8 @@ npm i -g <release-tarball>   # installs yession-manager + yession-session
 ```
 
 On install, npm fetches the platform-native pieces through optional dependencies: the WebRTC
-transport and the agent's native Claude Code binary. That one command is all it takes. To
-build the tarball locally, run `devenv build outputs.npm`.
+transport and the agent's native Claude Code binary. You need no other command. To build the
+tarball locally, run `devenv build outputs.npm`.
 
 #### Installing with Nix
 
@@ -130,10 +133,12 @@ nix run             github:trinketworks/yession           # run the Manager with
 nix build           github:trinketworks/yession#yession   # just build the two wrapped bins
 ```
 
-The Nix package is reproducible and self-contained. The native WebRTC addon is built from
+The Nix package is reproducible and self-contained. Nix builds the native WebRTC addon from
 source, the agent points at nixpkgs `claude-code`, and nothing runs an npm postinstall.
-[`nix/packages.nix`](nix/packages.nix) defines the derivations. [`flake.nix`](flake.nix)
-exposes them as `packages.<system>.{default,yession,npm}` without devenv, so `nix build` and
+[`nix/packages.nix`](https://github.com/trinketworks/yession/blob/master/nix/packages.nix)
+defines the derivations.
+[`flake.nix`](https://github.com/trinketworks/yession/blob/master/flake.nix) exposes them as
+`packages.<system>.{default,yession,npm}` without devenv. So `nix build` and
 `nix profile install` are pure and need only the nixpkgs input. devenv exposes the same
 derivations as `outputs.{staged,nix,npm}`.
 
@@ -153,10 +158,10 @@ YESSION_SESSION_URL=https://example.com/s/{id}   # sessions: a template over {id
 yession-manager --auth trusted-headers           # or --auth localhost on one machine
 ```
 
-[`docs/deployment.md`](docs/deployment.md) describes the interfaces in full: the trust rules,
-the canonical `x-yession-*` header scheme, and the session template. It explains why `{id}`
-keeps a session's browser storage across restarts and `{port}` cannot. A worked Tailscale
-binding follows.
+[`docs/deployment.md`](https://github.com/trinketworks/yession/blob/master/docs/deployment.md)
+describes the interfaces in full: the trust rules, the canonical `x-yession-*` header scheme,
+and the session template. It explains why `{id}` keeps a session's browser storage across
+restarts and `{port}` cannot. A worked Tailscale binding follows.
 
 ### Cloud sessions (Claude Code on the web)
 
@@ -166,17 +171,18 @@ on PATH and warm-builds. The default Trusted network allowlist includes `*.nixos
 `cache.nixos.org`. nixpkgs is a `nixos.org` channel tarball, not a `github:` input, so it
 resolves and substitutes with no extra allowed domains.
 
-The sandbox blocks the `github:cachix/devenv` fetch. [`.claude/setup.sh`](.claude/setup.sh)
-therefore repoints the `devenv` input at devenv's own source, **substituted from
-`cache.nixos.org`**. `devenv shell` then needs no GitHub access. On a laptop or in CI the
-script does nothing, and devenv uses the normal `github:` input. The Bootstrap section of
-[AGENTS.md](AGENTS.md) describes the mechanism.
+The sandbox blocks the `github:cachix/devenv` fetch, so the script repoints the `devenv` input
+at devenv's own source, **substituted from `cache.nixos.org`**. `devenv shell` then needs no
+GitHub access. On a laptop or in CI the script does nothing, and devenv uses the normal
+`github:` input. The
+[Bootstrap](https://github.com/trinketworks/yession/blob/master/AGENTS.md#bootstrap) section
+of AGENTS.md describes the mechanism.
 
 ### Testing
 
 Tests declare what they need in code, not by folder: `Ports`, `Docker`, `LiveAgent`,
 `Browser`, or nothing for a pure suite. The harness runs a suite only where the environment
-meets those needs, and skips it cleanly otherwise. There are two tiers:
+meets those needs. Otherwise it skips the suite cleanly. There are two tiers:
 
 - `check` is the cheap tier: pure, model, and protocol suites on Node. It is fast and needs no
   ports or credentials. PRs run it. (`check Browser`, `check Ports Native`, … add tiers.)
@@ -187,26 +193,30 @@ Almost everything runs on Node. .NET is a build tool, and the tests exercise the
 JavaScript that the product ships. The one exception is the browser E2E. It runs on the .NET
 CLR so that it can drive Chromium through Playwright against a live Session.
 
-The Testing section of [AGENTS.md](AGENTS.md) lists the `check` tiers. [tests/AGENTS.md](tests/AGENTS.md)
-holds the capability notes and the rules for writing tests.
+The [Testing](https://github.com/trinketworks/yession/blob/master/AGENTS.md#testing) section
+of AGENTS.md lists the `check` tiers.
+[tests/AGENTS.md](https://github.com/trinketworks/yession/blob/master/tests/AGENTS.md) holds
+the capability notes and the rules for writing tests.
 
-Dependency versions are pinned centrally: npm packages in [package.json](package.json), and
-NuGet packages (including [Ylmish](Directory.Packages.props), the Elmish↔Yjs sync boundary)
-in [Directory.Packages.props](Directory.Packages.props).
+Central files pin the dependency versions. npm packages are in
+[package.json](https://github.com/trinketworks/yession/blob/master/package.json). NuGet
+packages, Ylmish (the Elmish↔Yjs sync boundary) among them, are in
+[Directory.Packages.props](https://github.com/trinketworks/yession/blob/master/Directory.Packages.props).
 
 ## Versioning
 
-The commit history determines Yession's version. The version is never stored in a file. Master
-is trunk, and every green push publishes `1.0.0-beta.<n>`. `dotnet fsi tasks.fsx version`
-prints what the current commit would publish. The policy is at the top of
-[tasks.fsx](tasks.fsx).
+The commit history determines Yession's version. No file stores the version. Master is trunk,
+and every green push publishes `1.0.0-beta.<n>`. `dotnet fsi tasks.fsx version` prints what the
+current commit would publish. The policy is at the top of
+[tasks.fsx](https://github.com/trinketworks/yession/blob/master/tasks.fsx).
 
-A marker in the commit message moves the major, minor, or patch number. The Versioning section
-of [AGENTS.md](AGENTS.md) defines the markers, where they count, and when to use each.
+A marker in the commit message moves the major, minor, or patch number. The
+[Versioning](https://github.com/trinketworks/yession/blob/master/AGENTS.md#versioning) section
+of AGENTS.md defines the markers, where they count, and when to use each.
 
 Both binaries report their build: run `yession-manager --version` or
 `yession-session --version`. A session also states its build on the readiness line that it
-prints at startup, so the Manager can warn when it has just launched a session from a
+prints at startup. So the Manager can warn when it has just launched a session from a
 different major version. Each process carries the version into telemetry as the OpenTelemetry
 `service.version` resource attribute. A collector can then attribute token counts to the build
 that produced them.
