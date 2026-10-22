@@ -3,9 +3,9 @@
 This file lists what Yession does **not** do yet, as of the `9.x-beta` line. Everything below is
 deliberate scope, recorded so nobody discovers it in production.
 
-Phases 1–4 are accepted. So is every numbered plan this file cites. The plan files no longer
-exist. Each plan's reasoning now sits beside the code it governs. A plan number joins two entries
-in different sections to one piece of work. The plans and topics are:
+The project accepted Phases 1–4 and every numbered plan this file cites. The plan files are gone.
+Each plan's reasoning now sits beside the code it governs. A plan number joins entries in
+different sections to one piece of work:
 
 - Client presentation: Metro/Zune styling, rich-text editing, collaborative presence cursors.
 - The Manager→Session control-RPC reverse legs.
@@ -24,658 +24,489 @@ in different sections to one piece of work. The plans and topics are:
 - Plan 24: srt's read model.
 - Plan 27: a repo's own sandbox declarations.
 
-Items are roughly ordered WITHIN a section by how much they matter. The sections are not ranked
-against each other. The last section holds trust boundaries as sharp as the first section's.
+Within a section, items come roughly in order of how much they matter. The sections have no rank.
+The last section holds trust boundaries as sharp as the first section's.
 
 ## Security & trust
 
 - **A lent token rotates per command, and whether that earns its keep is open.** A declaration's
-  `${github.token}` (`EnvironmentVariableRef.Lent`) is a stand-in. It is lent to each command for
-  the act the command runs as, and returned when the next command starts.
-  - Gain: a stand-in that leaks dies with the next command. Each command spends the credential of
+  `${github.token}` (`EnvironmentVariableRef.Lent`) is a stand-in. Each command borrows it for
+  the act the command runs as, and gives it back when the next command starts.
+  - Gain: a leaked stand-in dies with the next command. Each command spends the credential of
     whoever it runs for, never whoever ran the one before.
-  - Cost: the value can only be a variable's whole value. The parser refuses a stand-in composed
-    into a larger string and points here. Anything that keeps a token across commands holds a
-    dead token after the next command, and is refused in words from then on. Examples: a daemon
-    started by one command, and a tool that writes the token into its own config.
+  - Cost: the value can only be a variable's whole value. The parser refuses a stand-in inside a
+    larger string and points here. Anything that keeps a token across commands holds a dead token
+    after the next command, and the proxy refuses it in words. Examples: a daemon that one
+    command started, and a tool that writes the token into its own config.
   - Alternative: a stand-in per sandbox, resolved per request by whoever the current command
-    runs for, would keep the attribution without the rotation.
-  - Open: nothing here has measured whether the rotation is worth what it breaks.
-- **Event attribution is threaded, but presentation is thin** (Plan 07). Under a real strategy,
+    runs for, keeps the attribution without the rotation.
+  - Open: no measurement says whether the rotation is worth what it breaks.
+- **Event attribution is in place, but presentation is thin** (Plan 07). Under a real strategy,
   events attribute to the Manager-verified user (`ActorRef.UserRef`). The identity rides the OIDC
-  bounce, then a cookie, then a session-minted peer token. It never rides a peer-controlled frame.
+  bounce, then a cookie, then a session-minted peer token, never a peer-controlled frame.
   Remaining:
   - Peer display names stay self-asserted.
-  - The client UI renders a bare `UserId.value`. It shows no names or avatars from verified claims
-    yet. `UserClaims` are carried and recorded, not displayed.
-- **BYO authorization is trusted plaintext headers** (Plan 07). `--auth trusted-headers` trusts
+  - The client UI renders a bare `UserId.value`, with no names or avatars from verified claims.
+    The session carries and records `UserClaims` but does not display them.
+- **BYO authorization trusts plaintext headers** (Plan 07). `--auth trusted-headers` trusts
   canonical `x-yession-*` identity headers from an operator-run authenticating proxy
-  ([deployment.md](deployment.md#the-header-scheme)). Anyone who
-  can reach the loopback port directly can forge them. This is the same trust boundary as
-  `--auth localhost`. The proxy MUST strip inbound `x-yession-*` headers and be the only non-local
-  path in.
-
-  The recorded hardening follow-up is a signed-JWT header strategy. It would verify against an
-  operator JWKS. `Fable.Jose.jwtVerify` is already bound.
-- **No `nonce` in ID tokens yet, and the flow is why that is tolerable** rather than an oversight.
-  The ID token is never delivered through the browser. The confidential RP redeems the code over
-  its own back channel, with its client secret plus the PKCE verifier. So no injected-token path
-  exists for a nonce to close. A nonce becomes worth adding the first time a strategy federates to
-  an upstream OP.
-- **A declared MCP server's tool descriptions are untrusted text in the model's context**
-  (Plan 16, Plan 17). An external server's `tools/list` descriptions go straight into the prompt.
-  With always-available servers, they do so without a second human confirming. Yession drops
-  `instructions` for exactly this reason. It cannot drop tool descriptions, because the model must
-  read them to call anything.
-
-  `ToolDescriptor.Foreign` already marks the affected set. The recorded mitigation is an
-  `AutoApprove` flag on the DECLARATION, where the operator already is, rather than a per-call
-  prompt.
-- **A declared MCP server is unconfined, and so is what it owns** (Plan 16). No srt or docker
-  analogue exists for a serial port. The serial provider (`examples/serial`) runs on the host with
-  whatever access its user has. A device is more physical than a filesystem path: writing to the
-  wrong tty can reflash a board.
-  - The provider narrows this by refusing to list ports it does not recognise. An unrecognised tty
-    is usually the machine's own console. This is a policy, not a boundary.
-  - Its control leg is unauthenticated and must stay on loopback.
-  - A stream it OFFERS (Plan 19) is admitted the same way. The url must share the host the
-    operator declared the server at, use `ws` or `wss`, and carry no credentials. This stops a
-    tool result from pointing a session at another machine. It is again a policy, not a boundary.
-  - A declared server can still hand the session a socket to anything on the box it already runs
-    on.
-- **A second local address, unauthenticated, beside the provider** (Plan 18). The jumpstarter
-  example talks to an exporter that serves gRPC with `--tls-grpc-insecure` and no passphrase. So
-  its claim arbitrates the provider's clients and nothing else. Any process on the box can dial
-  the exporter directly and take the hardware out from under a holder.
-
-  One host, one operator and loopback make that acceptable. A shared machine would need the
-  passphrase that upstream already supports. A controller would replace the claim with a lease
-  outright.
+  ([deployment.md](deployment.md#the-header-scheme)). Anyone who can reach the loopback port
+  directly can forge them, the same trust boundary as `--auth localhost`. The proxy MUST strip
+  inbound `x-yession-*` headers and be the only non-local path in. The recorded hardening
+  follow-up is a signed-JWT header strategy that verifies against an operator JWKS.
+  `Fable.Jose.jwtVerify` is already bound.
+- **No `nonce` in ID tokens yet, and the flow makes that tolerable.** The ID token never passes
+  through the browser. The confidential RP redeems the code over its own back channel, with its
+  client secret plus the PKCE verifier, so no injected-token path exists for a nonce to close. A
+  nonce becomes worth adding when a strategy first federates to an upstream OP.
+- **A declared MCP server's tool descriptions reach the model's context with no trust check**
+  (Plan 16, Plan 17). An external server's `tools/list` descriptions go straight into the prompt,
+  and with always-available servers no second human approves them. Yession drops `instructions`
+  for this reason. It cannot drop tool descriptions, because the model must read them to call
+  anything. `ToolDescriptor.Foreign` already marks the affected set. The recorded mitigation is
+  an `AutoApprove` flag on the DECLARATION, where the operator already is, not a per-call prompt.
+- **A declared MCP server has no confinement, and neither has what it owns** (Plan 16). No srt
+  or docker analogue exists for a serial port. The serial provider (`examples/serial`) runs on
+  the host with whatever access its user has. Writing to the wrong tty can reflash a board.
+  - The provider does not list ports it does not recognise. An unrecognised tty is usually the
+    machine's own console. This is a policy, not a boundary.
+  - Its control leg has no authentication and must stay on loopback.
+  - A stream it OFFERS (Plan 19) gets the same policy. The url must share the host the operator
+    declared the server at, use `ws` or `wss`, and carry no credentials. This stops a tool result
+    from pointing a session at another machine.
+  - A declared server can still hand the session a socket to anything on the box it runs on.
+- **A second local address, with no authentication, beside the provider** (Plan 18). The
+  jumpstarter example talks to an exporter that serves gRPC with `--tls-grpc-insecure` and no
+  passphrase. So its claim arbitrates the provider's clients and nothing else. Any process on the
+  box can dial the exporter and take the hardware from a holder. One host, one operator and
+  loopback make that acceptable. A shared machine needs the passphrase that upstream already
+  supports. A controller replaces the claim with a lease.
 - **A driver method that never returns wedges one connection** (Plan 18). The jumpstarter example
-  calls the SDK on a thread of its own, and nothing can interrupt a library call from outside. A
-  method that blocks forever, or a stream whose next item never arrives, gets a timeout answer.
-  The example then drops that connection so later calls reconnect.
-
-  But the thread stays parked on the call and holds one SDK client until the process ends. The
-  cost is bounded: one thread per wedge, and only a driver that misbehaves can cause one. The
-  answer shows the fault. The fault is not fixed.
-- **A provider's lifecycle is nobody's** (Plan 16). Who starts a provider is unsettled: `systemd`,
-  `launchd`, an operator, or nothing. "The Manager only declares" argues for nothing. Plan 17's
-  poll softens this. It retries a server forever and picks it up whenever it appears, so nothing
-  has to restart to notice. But nothing starts the provider either.
+  calls the SDK on its own thread, and nothing can interrupt a library call from outside. A
+  method that blocks forever, or a stream whose next item never arrives, gets a timeout answer,
+  and the example drops that connection so later calls reconnect. But the thread stays parked
+  and holds one SDK client until the process ends: one thread per wedge, and only a misbehaving
+  driver causes one. The answer reports the fault. Nothing fixes it.
+- **A provider's lifecycle is nobody's** (Plan 16). No decision says who starts a provider:
+  `systemd`, `launchd`, an operator, or nothing. "The Manager only declares" argues for nothing.
+  Plan 17's poll retries a server forever and picks it up when it appears, so nothing has to
+  restart to notice it. But nothing starts the provider either.
 - **Remote WebRTC has no relay fallback** (Plan 09). Sessions are remotely reachable through an
   operator's proxy. The `/sessions/stream` registry drives the serving binding.
   `YESSION_SESSION_URL` (Plan 10) threads the public address into open links and redirect URIs
   ([deployment.md](deployment.md#sessions) shows each shape). Two limits remain:
-  - The data channel still connects peer-to-peer on host candidates only (no STUN/TURN). Remote
-    use needs a network where the session host's addresses route directly. An example is an
-    overlay like a tailnet, verified per deployment.
-  - An unauthenticated visitor can hold open peer connections that `PeerHello` refuses. No
-    `/signal` throttling exists.
+  - The data channel connects peer-to-peer on host candidates only (no STUN/TURN). Remote use
+    needs a network where the session host's addresses route directly, for example a tailnet,
+    verified per deployment.
+  - A visitor with no authentication can hold open peer connections that `PeerHello` refuses.
+    Nothing throttles `/signal`.
 - **User- and local-scoped secrets have exactly one writer: the connection broker** (Plan 08). The
   Claude sign-in stores an owner-scoped credential through the narrow `ConnectionAction` policy
-  family. Under an attributed strategy, the owner is the user. Under `--auth localhost`, the owner
-  is `LocalScope`, the deployment itself ([ADR](decisions/2026-08-10-local-scope.md)). Remaining:
-  - The GENERIC `/secrets` write surface for users is still absent. Sessions cannot `SetSecret` on
+  family. Under an attributed strategy, the owner is the user. Under `--auth localhost`, it is
+  `LocalScope` ([ADR](decisions/2026-08-10-local-scope.md)). Remaining:
+  - No GENERIC `/secrets` write surface for users exists. Sessions cannot `SetSecret` on
     `UserScope`, and the management UI has no secrets page.
-  - The policy rows for a session-less, user-only `AuthzSubject` (`Session = None`) exist, and
-    tests pin them. Nothing constructs that subject yet.
+  - Tests pin the policy rows for a session-less, user-only `AuthzSubject` (`Session = None`),
+    but nothing constructs that subject yet.
 - **Under `--auth localhost` a connected credential is deployment-wide.** Every visitor is the
   same unattributed subject. One Claude/GitHub connection serves every session and browser that
-  reaches the Manager, and every visitor's agent turn spends against it. This is the same boundary
-  as the rest of that trust rule: those visitors can already drive every session. Event
-  ATTRIBUTION is unaffected, because authors stay `PeerRef`.
-
-  Both exits are in [deployment.md](deployment.md#what---auth-localhost-costs-here).
-  `--secrets ephemeral` bounds the lifetime to the Manager process. `--auth trusted-headers`
-  removes the sharing.
+  reaches the Manager, and every visitor's agent turn spends it. Those visitors can already drive
+  every session, so the boundary is the same. Authors stay `PeerRef`, so event ATTRIBUTION does
+  not change. [deployment.md](deployment.md#what---auth-localhost-costs-here) gives both exits
+  (`--secrets ephemeral`, `--auth trusted-headers`).
 - **No transport encryption guarantees beyond WebRTC/DTLS.** Everything binds 127.0.0.1. Loopback
   HTTP is the RFC 8252 pattern. Nothing here is LAN-safe without the operator's proxy in front.
-- **The Manager and Process read plaintext**, per the stated Phase 1–2 threat model.
-  Command-to-container encryption is designed for but not implemented.
-- **The management UI is gated by the authentication strategy** (Plan 07). A `Denied` outcome is a
-  401 on every UI route, and the default `--auth none` denies everything. Under `--auth localhost`
-  anyone with local access can still manage sessions. That is the localhost trust rule working as
-  stated, not an oversight.
+- **The Manager and Process read plaintext**, per the stated Phase 1–2 threat model. The design
+  allows command-to-container encryption, but no code does it yet.
+- **The authentication strategy gates the management UI** (Plan 07). A `Denied` outcome is a 401
+  on every UI route, and the default `--auth none` denies everything. Under `--auth localhost`
+  anyone with local access can manage sessions. That is the localhost trust rule, not an
+  oversight.
 - **Sandboxes confine by default. `host` is the opt-out.** The WorkSandbox defaults to `srt`
-  (bubblewrap on Linux, Seatbelt on macOS). Unless an operator asks for something else, OS
-  confinement applies to agent-issued commands. It does not apply to the agent CLI. The
-  AgentSandbox defaults to `host` (`YESSION_SESSION_AGENT_BACKEND`, read once in
-  `app/SessionMain.fs`). The agent CLI entry below says why.
-
-  `YESSION_SESSION_WORK_BACKEND=host` still exists. It gives no filesystem or network
-  confinement, only the env allowlist, which the credential-leak regression test pins. An
-  operator must now choose it deliberately. `=docker` remains the full-userland option for the
-  WorkSandbox.
+  (bubblewrap on Linux, Seatbelt on macOS), so OS confinement applies to agent-issued commands.
+  It does not apply to the agent CLI: the AgentSandbox defaults to `host`
+  (`YESSION_SESSION_AGENT_BACKEND`, see the agent CLI entry below).
+  `YESSION_SESSION_WORK_BACKEND=host` gives no filesystem or network confinement, only the env
+  allowlist, which the credential-leak regression test pins. An operator must choose it
+  deliberately. `=docker` is the full-userland option for the WorkSandbox.
   - **A Linux host without the confinement tools cannot start a session.** srt needs bubblewrap,
     socat and ripgrep. The Nix installable names all three. An `npm i -g yession` on a bare box
     does not have them. The session then fails when it creates its sandbox, and does not start
-    unconfined. That is the intended trade. To proceed, install the tools or choose `host`
-    deliberately.
-  - **srt reports a probe it could not RUN as a tool that is not there.** So a bad minute makes
-    srt refuse every sandbox in a run. `StartFailure` in `app/Sandboxes.fs` holds the cause.
-
-    Yession reads a refusal against this process's own stat before it believes it. A start that
-    settled nothing is asked again (three times, 250ms apart) and is then forgotten, not memoized
-    into every later sandbox. What Yession reports contradicts srt's sentence instead of repeating
-    it. Undo this when srt stats an absolute path (still `which` in 0.0.73) or at least surfaces
-    the spawn's errno.
+    unconfined. That is the intended trade: install the tools or choose `host` deliberately.
+  - **srt reports a probe it could not RUN as a tool that is not there**, so a bad minute makes
+    srt refuse every sandbox in a run. Yession checks the refusal against this process's own stat
+    and retries a start that settled nothing (three times, 250ms apart), then forgets it.
+    `StartFailure` in `app/Sandboxes.fs` says how. What Yession reports contradicts srt's
+    sentence instead of repeating it. Undo this when srt stats an absolute path (still `which` in
+    0.0.73) or at least surfaces the spawn's errno.
   - **An srt sandbox reads what its policy names and nothing else** (Plan 24). srt's read model is
-    permissive by default. Until Plan 24, Yession denied only the invoking user's home. That left
-    every region nobody had thought to name readable by every agent-issued command: `/etc`, a
-    checkout the session was never given, and, when the Manager runs outside the operator's home,
-    another session's data directory.
-
-    The deny is now `/`, which srt re-expands from the children of `/` at each spawn. It has three
-    holes: the policy's read paths, everything the policy may write, and the host runtime.
+    permissive by default. Before Plan 24, Yession denied only the invoking user's home, and every
+    agent-issued command could read `/etc`, a checkout the session never got, and (with the
+    Manager outside the operator's home) another session's data directory. The deny is now `/`,
+    which srt re-expands from the children of `/` at each spawn. It has three holes: the policy's
+    read paths, everything the policy may write, and the host runtime.
   - **The host runtime is the half of that scope this code cannot derive.** The allow-back is a
-    platform list (`SrtTools.Runtime`) plus the install prefix of whatever is already running:
-    - `process.execPath`
-    - srt's own package (its wrapped argv execs a vendored helper from inside the sandbox)
-    - `YESSION_BIN_CLAUDE` and `YESSION_BIN_GIT`
-
-    The comment that opens `SrtSandbox` in `app/Sandboxes.fs` says why, and why a toolchain that
-    none of these finds is a resource that arrives through the policy. `runtimeReadPaths` says why
-    `YESSION_SESSION_READ` is no longer folded in here. A path that nothing names fails loudly
-    and locally: a command cannot find its interpreter.
-    - **The darwin list is unverified.** No job here runs a suite on darwin. The `Srt` tier pins
-      `linuxRuntimePaths`. `darwinRuntimePaths` is what a Seatbelt profile conventionally allows
-      back, checked against srt's implementation and nothing else.
-
-      This has already cost one release. With the read scope on, every git verb on macOS ran
-      PATH's `/usr/bin/git`. That is not git but a shim that resolves a developer directory
-      through a `/var/select` symlink. srt's macOS escape hatch allows metadata on DIRECTORIES, so
-      the symlink stayed denied. Sessions reported
-      `xcode-select: error: unable to read data link … (Operation not permitted)`, which reads as
-      a broken Xcode install and is not one. The fix was to stop asking the host which git to run
-      (below), not to widen the scope for a shim.
+    platform list (`SrtTools.Runtime`) plus the install prefix of `process.execPath`, srt's own
+    package, `YESSION_BIN_CLAUDE` and `YESSION_BIN_GIT`. The comment that opens `SrtSandbox` in
+    `app/Sandboxes.fs` says why, and `runtimeReadPaths` says why `YESSION_SESSION_READ` is not
+    folded in. A path that nothing names fails loudly and locally: a command cannot find its
+    interpreter.
+    - **No test covers the darwin list.** No job here runs a suite on darwin. The `Srt` tier
+      pins `linuxRuntimePaths`. `darwinRuntimePaths` is what a Seatbelt profile conventionally
+      allows back, checked against srt's implementation only. This already cost one release: on
+      macOS every git verb ran PATH's `/usr/bin/git`, a shim that resolves a developer
+      directory through a `/var/select` symlink. srt's macOS escape hatch allows metadata on
+      DIRECTORIES only, so the symlink stayed denied. Sessions reported
+      `xcode-select: error: unable to read data link … (Operation not permitted)`, which reads
+      as a broken Xcode install and is not one. The fix was to name git (below), not to widen
+      the scope for a shim.
   - **Every binary a confined spawn execs is NAMED. Git was the last exception.**
     `YESSION_BIN_GIT` joins `YESSION_BIN_BWRAP`, `YESSION_BIN_SOCAT`, `YESSION_BIN_RIPGREP`,
     `YESSION_BIN_SETSID` and `YESSION_BIN_CLAUDE`. The installable sets it on both platforms,
-    unlike the Linux-only srt tools. Unset, the verbs still fall back to PATH, so an off-Nix
-    install does not regress.
-
-    But an `npm i -g yession` on macOS is exactly where that fallback is wrong. So the git sandbox
-    proves `git --version` before any verb runs one. It refuses with a sentence that names
-    `YESSION_BIN_GIT` and this host's resources profile, instead of passing the host binary's
-    excuse through.
-    - **A denied read is ENOENT on Linux and EPERM on macOS.** A whole class of fault is
-      invisible on the platform CI runs: git shrugs at the first and dies on the second. That
-      asymmetry once shipped a probe that refused a working git. For that reason the regression
-      test plants a MALFORMED config, not an unreadable one
-      ([ADR](decisions/2026-08-28-one-function-builds-every-git-spawn.md)).
+    unlike the Linux-only srt tools. Unset, the verbs fall back to PATH, and the git sandbox
+    proves `git --version` first
+    ([ADR](decisions/2026-08-28-one-function-builds-every-git-spawn.md) has the refusal and the
+    fault it once caused).
+    - **A denied read is ENOENT on Linux and EPERM on macOS.** git shrugs at the first and dies
+      on the second, so a whole class of fault is invisible on the platform CI runs. The
+      regression test therefore plants a MALFORMED config, not an unreadable one (same ADR).
     - **`/proc` and `/sys` are outside the scope by construction.** srt's root-deny expansion
       skips both. srt remounts `/proc` itself, and a tmpfs over `/sys` breaks tooling for a tree
-      that is read-only anyway. Neither is a route back to the denied paths. `/proc/<pid>/root`
+      that nobody can write anyway. Neither is a route back to the denied paths: `/proc/<pid>/root`
       does not resolve to the host root from inside, and bwrap gives the sandbox its own pid
-      namespace. But neither is scoped either.
+      namespace. But the scope does not cover them either.
     - **srt's own default write paths reach into the denied home.** `getDefaultWritePaths()`
-      always allows `~/.npm/_logs` and `~/.claude/debug`. srt re-binds an allowed write path that
-      its read-deny tmpfs wiped. So both are readable AND writable from inside a sandbox whose
-      policy names neither. The home they resolve against is the Session Process's
-      `os.homedir()`. The fix is therefore that process's own `HOME`, not the policy.
+      always allows `~/.npm/_logs` and `~/.claude/debug`, and srt re-binds an allowed write path
+      that its read-deny tmpfs wiped. So a sandbox can read AND write both, though its policy
+      names neither. They resolve against the Session Process's `os.homedir()`, so the fix is
+      that process's own `HOME`, not the policy.
     - **A symlink INSIDE a granted directory is still denied, and
-      srt work sandboxes do not run builds.** Seatbelt matches paths as written, while srt
-      normalises an allow to its realpath. So on macOS:
-      - A granted path can be unreachable by the spelling a process uses.
-      - Symlink nodes en route (`/tmp`, `/etc`, `/var`) refuse lstat.
-      - MSBuild's hardcoded `/tmp/MSBuild<pid>` pipes cannot bind.
-
-      A fork of srt that fixed all of this was built, verified end to end, and retired anyway. The
-      next wall was Fable enumerating `/Users` for path casing. No grant can allow that without
-      exposing dirent names all the way up. That wall showed that a build wants a machine, not a
-      syscall filter.
-
-      Work that builds runs in a CONTAINER. srt confines the light default sandbox (checkout,
-      small edits), where none of these faults bite. What a light sandbox wanted from an
-      unreadable config is declared instead (`NIX_CONFIG` in `yession.yaml`). The
-      [2026-08-28 ADR](decisions/2026-08-28-no-srt-fork-for-symlink-metadata.md) argues this, and
-      its argument stands.
-    - **A `Socket` grant is path-scoped on macOS and widens to every socket on Linux.** #335 gave
-      a socket its own axis. `limitsFor` in `app/Sandboxes.fs` says why srt scopes it by path only
-      on macOS. On Linux, `wrapCommandWithSandboxLinux` takes `allowAllUnixSockets` and never reads
-      the path list at all. Every `AF_UNIX` socket is blocked, or none is.
-
-      Yession lets every socket through when a policy grants one, and says so. The host realises a
-      `Socket` leaf as `Coarsened "sock:*"`, and the policy carries that in `Realisation`.
-      `SrtSandbox.configFor` sets `allowAllUnixSockets` only for a policy that reported the
-      widening (`SrtConfig.AllowAllUnixSockets`). The grant therefore works on Linux, but the
-      sandbox holds every unix socket and not only the one the operator named. The report reaches
-      three places:
-      - The approval prompt shows `sock:<path> ~> sock:*` (`RealisedClosure.describeOn`).
-      - The `WorkSandboxStarted` event records the lines, and the start note shows them as
-        "adjusted".
-      - The `work_sandboxes` panel has a `degraded` column for the running sandbox.
-
-      The widening itself is not fixed. A socket the operator meant to scope is every socket on
-      Linux, and the report only tells people so. Scoping by path there needs a mechanism that
-      seccomp cannot give srt. The Srt-tier case that pins the macOS path scoping reports a visible
-      skip on Linux. The cheap tier pins the Linux side: the policy reports the widening, and
-      `configFor` sets `allowAllUnixSockets` only for that report.
-    - **A granted executable that cannot RUN is invisible to the start-up checks.** Measured: the
+      srt work sandboxes do not run builds.** Seatbelt matches paths as written, and srt
+      normalises an allow to its realpath. So on macOS a granted path can be unreachable by the
+      spelling a process uses, symlink nodes en route (`/tmp`, `/etc`, `/var`) refuse lstat, and
+      MSBuild's hardcoded `/tmp/MSBuild<pid>` pipes cannot bind. A fork of srt that fixed this
+      worked, and we retired it: the next wall was Fable enumerating `/Users` for path casing,
+      which no grant allows without exposing dirent names all the way up. A build wants a
+      machine, not a syscall filter. Work that builds runs in a CONTAINER, and srt confines the
+      light default sandbox (checkout, small edits). The
+      [2026-08-28 ADR](decisions/2026-08-28-no-srt-fork-for-symlink-metadata.md) argues this,
+      and its argument stands.
+    - **A `Socket` grant is path-scoped on macOS and widens to every socket on Linux.** #335
+      gave a socket its own axis, and `limitsFor` in `app/Sandboxes.fs` says why. On Linux,
+      `wrapCommandWithSandboxLinux` takes `allowAllUnixSockets` and never reads the path list,
+      so srt blocks every `AF_UNIX` socket or none. Yession lets every socket through when a
+      policy grants one, and says so: the host realises a `Socket` leaf as `Coarsened "sock:*"`,
+      and `SrtSandbox.configFor` sets `allowAllUnixSockets` only for that report
+      (`SrtConfig.AllowAllUnixSockets`). The report reaches the approval prompt (`sock:<path> ~>
+      sock:*`, `RealisedClosure.describeOn`), the `WorkSandboxStarted` event and start note
+      ("adjusted"), and the `work_sandboxes` panel's `degraded` column. The widening itself
+      stays: scoping by path on Linux needs a mechanism that seccomp cannot give srt. The
+      Srt-tier case for macOS path scoping reports a visible skip on Linux. The cheap tier pins
+      the Linux side.
+    - **The start-up checks cannot see a granted executable that cannot RUN.** Measured: the
       `nix` an operator would name on nix-darwin (`/run/current-system/sw/bin/nix`, canonically
-      `…-nix-2.34.6+1/bin/nix`) aborts under Seatbelt on every subcommand, including `--version`.
-      The Lix binary from this repo's own dev shell runs fine in the same sandbox. (The
+      `…-nix-2.34.6+1/bin/nix`) aborts under Seatbelt on every subcommand, including
+      `--version`. The Lix binary from this repo's dev shell runs fine in the same sandbox (the
       [2026-08-28 ADR](decisions/2026-08-28-no-srt-fork-for-symlink-metadata.md) has the
-      measurement table.) An `Exec` leaf joins PATH in front. So naming that binary makes it the
-      one that answers, and a working nix becomes a broken one by being declared.
-
-      The checks (#333) do not catch it and cannot as written. An exec leaf lands in the read
-      paths, so it gets `test -r`, which passes. `test -x` would be no better. It consults the file
-      mode, which is the same lie `test -w` tells. The only probe that answers "can this run" is
-      running it, and no invocation is safe for an arbitrary binary. No fix is chosen.
+      table). An `Exec` leaf joins PATH in front, so declaring that nix makes a working nix a
+      broken one. The checks (#333) give an exec leaf `test -r`, which passes. `test -x` reads
+      the file mode, the same lie `test -w` tells. Only running a binary answers "can this run",
+      and no invocation is safe for an arbitrary binary. No fix is chosen.
 - **The agent CLI runs through the `spawnClaudeCodeProcess` seam with a policy env**
-  (AgentSandbox). The seam provides:
-  - an allowlisted baseline plus proxy passthrough
-  - a per-session scratch HOME (`<data>/agent-home`), so `~/.claude` state lives and dies with the
-    session
-  - exactly one credential
-  - a process-group kill on the SDK's forwarded abort signal
-
-  srt adds OS confinement around it. The CLI reads and writes its scratch HOME and reads the host
-  runtime. It touches no other file of the operator's. It reaches only `AgentSandbox`'s domains
-  (`YESSION_SESSION_AGENT_NET`). Docker is BY DESIGN not an agent backend: a container per session
-  boot is the opposite of the sub-second start the agent needs. The WorkSandbox keeps the docker
-  backend.
-  - **The default is `host`, and unlike the WorkSandbox's that is a shortfall rather than a
-    decision.** `YESSION_SESSION_AGENT_BACKEND=srt` confines the CLI and is the answer this wants.
-    It is not the default because it does not yet work.
-
-    The variable used to have two readers with two defaults
-    ([`EnvReaders.fs`](../analyzers/Yession.Analyzers/EnvReaders.fs) records that fault). #364
-    made it one reader. Making that reader say `srt` turned the release gate's live turn red. The
-    turn stalled the whole 90s and streamed nothing.
-    - **The cause, now confirmed by the live tier.** A `verify.yml` dispatch with
-      `YESSION_SESSION_AGENT_BACKEND=srt` instrumented the spawn boundary to tee the CLI's stdio
-      and dump its `DEBUG=1` log. The CLI comes up FULLY: MCP server connected, tools listed,
-      credential accepted, an `init` message emitted. Then every request to `api.anthropic.com`
-      fails in about 3ms with a transport-level `Connection error.` (no HTTP status).
-
-      Claude Code retries with exponential backoff until the 90s deadline kills it. From outside,
-      that reads as a silent stall. srt's own proxy logs ZERO connections for those attempts.
-
-      The `claude` binary is a **Bun** executable. Claude Code's proxy support routes through
-      undici's `setGlobalDispatcher(EnvHttpProxyAgent)`, which Bun's native `fetch` does not
-      consult. So the CLI's API egress never touches `HTTP_PROXY` and goes DIRECT. srt's
-      `--unshare-net` makes direct egress unreachable.
-
-      srt is built to sandbox the COMMANDS that Claude Code runs, never Claude Code ITSELF. The
-      WorkSandbox's git and node honour the proxy and are fine: every `Srt` suite is green.
-      Confining the `claude` process behind srt's egress proxy is a use that srt was not designed
-      for.
-    - **What was NOT the cause**, each checked:
-      - The async spawn seam. The `Srt` suite drives it end to end.
-      - The read scope. `process.execPath` allows `/nix/store` back, so the Bun binary is
-        readable.
-      - The policy env. The proxy env DOES reach the CLI regardless of what the spawner passes as
-        `options.env`. srt bakes it into the wrapped argv: bwrap `--setenv` on Linux, an
-        `env VAR=…` prefix on macOS.
-      - A missing CA bundle. No TLS interception exists to fail, because srt runs a plain
-        authenticated CONNECT proxy by default, with no MITM CA.
-    - **Why it stays `host`, and is not a small fix.** srt's `SandboxManager` is process-wide.
-      That used to mean the agent CLI and the WorkSandbox shared one egress policy. Each srt
-      sandbox now runs its manager in a process of its own (`SrtSandbox.HostWire`). So the
-      agent's network policy could be loosened without loosening anybody else's.
-
-      What remains is the binary. Only the Bun one is shipped (the SDK's per-platform optional
-      deps), and no Node-runnable CLI exists. Running the CLI on Node is the alternative. There,
-      undici's global dispatcher governs `fetch`, and the proxy is honoured. It means adding a
-      large dependency and packaging it under Nix.
-
-      Until then the agent CLI is confined by its env allowlist and scratch HOME only. That is the
-      same standing as `host` everywhere else, and `host` is the honest default.
-  - The SDK's spawn seam is SYNCHRONOUS and srt's wrap is not. So the srt tier hands the SDK a
-    stand-in process whose streams are live immediately. It joins the real child to them when the
-    wrap resolves. This is plumbing, not policy. The `Srt` suite drives it end to end (stdin in,
-    stdout out, exit code) instead of trusting it.
-- **The strict confinement profile mounts a fresh `/proc`, which a container can refuse.** Both
-  profiles run the command in bubblewrap's user namespace. Both also nest a second one inside it
-  for srt's seccomp helper, unless the policy grants a unix socket, which turns the helper off.
-  Only strict mounts a fresh `/proc` for the command. A container runtime covers some `/proc`
-  paths and makes others read-only (Docker's default does). The kernel then refuses the fresh
-  mount: "bwrap: Can't mount proc on /proc: Operation not permitted".
-
-  `YESSION_NESTED_SANDBOX=weak` is srt's documented answer. With it, the command sees the host's
-  `/proc` instead of its own, so the confinement is genuinely weaker. It is therefore CONFIGURED,
-  not fallen back to. An unset value means strict, and a session on a host that cannot host it
-  fails at boot instead of quietly running wide open.
-
-  The two profiles hold the same capabilities. A non-root caller's command holds none. Under the
-  helper, a root caller's command holds a full set inside the helper's namespace, which maps to
-  the caller's uid 0.
+  (AgentSandbox): an allowlisted baseline plus proxy passthrough, a per-session scratch HOME
+  (`<data>/agent-home`, so `~/.claude` state lives and dies with the session), exactly one
+  credential, and a process-group kill on the SDK's forwarded abort signal. srt adds OS
+  confinement: the CLI reads and writes its scratch HOME, reads the host runtime, touches no other
+  operator file, and reaches only `AgentSandbox`'s domains (`YESSION_SESSION_AGENT_NET`). Docker
+  is BY DESIGN not an agent backend: a container per session boot is the opposite of the
+  sub-second start the agent needs.
+  - **The default is `host`, and unlike the WorkSandbox's that is a shortfall, not a decision.**
+    `YESSION_SESSION_AGENT_BACKEND=srt` is the answer this wants, but it does not work yet. The
+    comment above `agentBackend` in `app/SessionMain.fs` gives the history (#364, the 90s
+    stall) and the cause: the **Bun** `claude` binary ignores `HTTP_PROXY`, so its API egress
+    goes DIRECT into srt's `--unshare-net`. What the live tier measured beyond that:
+    - A `verify.yml` dispatch with `=srt` teed the CLI's stdio and its `DEBUG=1` log. The CLI
+      comes up FULLY (MCP server connected, tools listed, credential accepted, `init` emitted).
+      Then every request to `api.anthropic.com` fails in about 3ms with a transport-level
+      `Connection error.` (no HTTP status), and srt's proxy logs ZERO connections.
+    - Claude Code's proxy support goes through undici's
+      `setGlobalDispatcher(EnvHttpProxyAgent)`, which Bun's native `fetch` ignores. The
+      WorkSandbox's git and node honour the proxy: every `Srt` suite is green.
+    - **Not the cause**, each checked:
+      - the async spawn seam (the `Srt` suite drives it)
+      - the read scope (`process.execPath` allows `/nix/store` back)
+      - the policy env (srt bakes the proxy env into the wrapped argv: bwrap `--setenv` on
+        Linux, an `env VAR=…` prefix on macOS)
+      - a missing CA bundle (srt runs a plain authenticated CONNECT proxy, with no MITM CA)
+    - **Why it is not a small fix.** Each srt sandbox now runs its `SandboxManager` in its own
+      process (`SrtSandbox.HostWire`), so the agent's network policy could change alone. What
+      remains is the binary: only the Bun one ships (the SDK's per-platform optional deps). On
+      Node, undici's dispatcher governs `fetch` and the proxy works, but that means a large
+      dependency packaged under Nix. Until then the agent CLI has only its env allowlist and
+      scratch HOME, the same standing as `host` everywhere else.
+  - The SDK's spawn seam is SYNCHRONOUS and srt's wrap is not. So the srt tier gives the SDK a
+    stand-in process whose streams are live at once, and joins the real child to them when the
+    wrap resolves. The `Srt` suite drives it end to end (stdin in, stdout out, exit code).
+- **The strict confinement profile mounts a fresh `/proc`, which a container can refuse.**
+  `SandboxNesting` in `app/Sandboxes.fs` states the two profiles and why an operator configures
+  `weak` (`YESSION_NESTED_SANDBOX=weak`), never a fallback. An unset value means strict, and a
+  session on a host that cannot run strict fails at boot. Both profiles nest a second user
+  namespace for srt's seccomp helper, unless the policy grants a unix socket, which turns the
+  helper off. The refusal reads "bwrap: Can't mount proc on /proc: Operation not permitted". A
+  non-root caller's command holds no capabilities. Under the helper, a root caller's command
+  holds a full set inside the helper's namespace, which maps to the caller's uid 0.
 
   `weak` does not help where neither profile runs:
-  - A root caller without `CAP_SETFCAP` in its bounding set. The kernel refuses the uid map of
-    each namespace: "bwrap: setting up uid map: Operation not permitted". The Docker backend's
-    work container, run as root, is one: it adds back only `CHOWN`, `FOWNER` and
-    `DAC_OVERRIDE`. A non-root caller does not need the capability.
-  - A host that strips capabilities from a new user namespace. srt's README names Ubuntu
-    24.04's default (`kernel.apparmor_restrict_unprivileged_userns=1`), and `pr.yaml` clears it.
+  - A root caller without `CAP_SETFCAP` in its bounding set. The kernel refuses each namespace's
+    uid map: "bwrap: setting up uid map: Operation not permitted". The Docker backend's work
+    container, run as root, is one: it adds back only `CHOWN`, `FOWNER` and `DAC_OVERRIDE`. A
+    non-root caller does not need the capability.
+  - A host that strips capabilities from a new user namespace. srt's README names Ubuntu 24.04's
+    default (`kernel.apparmor_restrict_unprivileged_userns=1`), and `pr.yaml` clears it.
 
-  A Claude Code container runs strict. It is a VM, and `check` runs there as root, with
-  `CAP_SETFCAP` and an uncovered `/proc`. What Docker's default seccomp and AppArmor profiles
-  add is not measured. `check` asks srt's own command line to run the profile the run
-  configures before it declares the `Sandbox` capability. `Srt`, which is confinement under
-  test, is refused under `weak`.
-- **The Docker backend runs through the `dockerode` SDK and is integration-tested in the verify
-  gate.** The session id (a Crockford base32 id, always a valid Docker object name) names the
-  containers and a per-sandbox named workspace volume. `EnvironmentSpec` is fully interpreted:
-  image/build, mounts (including the persistent workspace volume), working directory, env-var
-  refs, and secret refs (resolved at sandbox spawn).
+  A Claude Code container runs strict: it is a VM, and `check` runs there as root, with
+  `CAP_SETFCAP` and an uncovered `/proc`. No measurement says what Docker's default seccomp and
+  AppArmor profiles add. `check` asks srt's own command line to run the configured profile before
+  it declares the `Sandbox` capability, and refuses `Srt` (confinement under test) under `weak`.
+- **The Docker backend runs through the `dockerode` SDK, and the `verify` gate tests it.** The
+  session id (Crockford base32, always a valid Docker object name) names the containers and a
+  per-sandbox named workspace volume. The backend interprets all of `EnvironmentSpec`:
+  image/build, mounts (including the workspace volume), working directory, env-var refs, and
+  secret refs (resolved at sandbox spawn). The container drops all capabilities, adds back
+  `CHOWN`, `FOWNER` and `DAC_OVERRIDE` (the comment at that `CapAdd` in `app/Sandboxes.fs` says
+  why), and sets `no-new-privileges`.
 
-  The container drops all capabilities. It then adds back the three file-ownership ones that a
-  real build measurably needs: `CHOWN`, `FOWNER` and `DAC_OVERRIDE`. The comment at that
-  `CapAdd` in `app/Sandboxes.fs` says why. The container also sets `no-new-privileges`.
+  The container runs the image's default (usually root) user, by DECISION. With
+  `DAC_OVERRIDE`, that root bypasses file permissions on anything MOUNTED, so the boundary is the
+  mount set (`mountPlan`: the session's checkouts and what the operator granted). Non-root breaks
+  the named workspace volume, which Docker creates root-owned. Files written through a BIND
+  mount belong to root on the host: a nuisance, not an escape.
 
-  The container runs the image's default (usually root) user. That is a DECISION, not an
-  omission. But the argument for it changed when `DAC_OVERRIDE` came back:
-  - Before, this root could not bypass file permissions. The mount suite proved it by failing to
-    write into a `0700` host directory.
-  - Now, with `DAC_OVERRIDE`, it can bypass them on anything MOUNTED.
-  - The boundary is therefore the mount set, not the permission bits within it. A container
-    reaches only what `mountPlan` mounts: the session's own checkouts and whatever the operator
-    granted. Inside that set, container root was always going to own most of what it touches.
-    Running non-root breaks the named workspace volume, which Docker creates root-owned.
-  - What remains: files written through a BIND mount are owned by root on the host. That is a
-    nuisance, not an escape.
-
-  Resource limits are likewise absent, as they are for every backend. Three more edges are known
-  and accepted for now:
-  - A docker exec has no kill. "Kill" is closing the stdin stream, so a runaway that ignores EOF
-    burns CPU until the sandbox is disposed.
+  Known and accepted for now:
+  - No backend has resource limits.
+  - A docker exec has no kill. "Kill" closes the stdin stream, so a runaway that ignores EOF
+    burns CPU until the sandbox goes.
   - The operator's resource ceiling is global: one profile for every repo the session hosts. An
     operator cannot offer a socket to one repo and not another.
   - A host with no reachable daemon surfaces at the first `ensure_environment` as a raw dockerode
-    socket error. The error names neither the missing backend nor whose configuration is at
-    fault. `repoWorkBackend` is hard-coded with no preflight.
+    socket error that names neither the missing backend nor whose configuration is at fault.
+    `repoWorkBackend` is hard-coded with no preflight.
 
-  The suite (`tests/Yession.Tests/DockerIntegration.fs`) needs the `Docker` capability. See
-  `requireCapabilities` in [tasks.fsx](../tasks.fsx), which refuses a capability the box lacks.
-- **Secrets are a real Manager-owned store now** (Plan 06). The store has these parts:
-  - AES-256-GCM per-entry ciphertext in `<DataDir>/secrets.json`
-  - the KEK in the OS credential manager (`@napi-rs/keyring`), imported non-extractably each start
-  - a `/control/secrets/*` surface whose only value-returning route is `resolve` (below)
-  - a pure default-deny `Policy.authorize` over the composite session+user identity
-  - store-backed `SecretRef` injection (session scope ▸ bound users' scopes ▸ Manager process env)
+  The suite (`tests/Yession.Tests/DockerIntegration.fs`) needs the `Docker` capability
+  (`requireCapabilities` in [tasks.fsx](../tasks.fsx)).
+- **Secrets are a real Manager-owned store now** (Plan 06). The header of `app/SecretStore.fs`
+  describes it: AES-256-GCM per-entry ciphertext in `<DataDir>/secrets.json`, a KEK in the OS
+  credential manager (`@napi-rs/keyring`, imported non-extractably each start), and `resolve` as
+  the only value-returning `/control/secrets/*` route. A pure default-deny `Policy.authorize`
+  covers the composite session+user identity. `SecretRef` injection takes the session scope ▸
+  bound users' scopes ▸ Manager process env.
 
   Remaining, deliberate:
   - **Hosts without a credential manager run in-memory only** (dev containers, CI, headless
-    servers). Secrets die with the Manager. The boot is loud about it, and a plaintext key file
-    never exists. In-memory is now also an operator CHOICE (`--secrets ephemeral`), recorded at
-    info instead of warn. `--secrets durable` refuses the boot on such a host instead of
-    degrading to in-memory (see [deployment.md](deployment.md#credentials)). The `Keyring`
-    capability covers the real keyring in tests.
-  - **No AMBIENT scope.** `LocalScope` is deployment-wide but not ambient. It is authorized
-    against unattributed access that the Manager recorded for that launch. It holds connection
-    credentials only: generic `SecretAction`s on it deny. User-scoped GENERIC secrets still have
-    no writer (see the connection-broker entry above). There is deliberately no peer scope
-    (`Secrets.fs` says why). User↔launch and local↔launch bindings are both launch-lifetime. A
-    re-login re-forms them.
-  - **Two deliberate value-returning routes, both resolve-shaped:**
-    - `/control/connections/resolve` (Plan 08) returns a connection credential to the calling
+    servers). Secrets die with the Manager, the boot says so loudly, and no plaintext key file
+    exists. `--secrets ephemeral` makes in-memory an operator CHOICE (logged at info, not warn).
+    `--secrets durable` refuses the boot on such a host
+    ([deployment.md](deployment.md#credentials)). The `Keyring` capability covers the real
+    keyring in tests.
+  - **No AMBIENT scope.** `LocalScope` is deployment-wide but not ambient: the Manager authorizes
+    it against unattributed access it recorded for that run. It holds connection credentials
+    only, and generic `SecretAction`s on it deny. User-scoped GENERIC secrets have no writer (see
+    the connection-broker entry above). There is deliberately no peer scope (`Secrets.fs` says
+    why). User↔launch and local↔launch bindings both last one launch. A re-login re-forms them.
+  - **Two deliberate value-returning routes, both resolve-shaped,** both gated to the caller's
+    readable scopes:
+    - `/control/connections/resolve` (Plan 08) gives a connection credential to the calling
       session, because an agent turn needs the token in-process.
-    - `/control/secrets/resolve` feeds `SecretRef` env injection at the session's sandbox spawn.
-      Sandboxes are session-owned, so injection happens there.
+    - `/control/secrets/resolve` feeds `SecretRef` env injection at the session's sandbox spawn
+      (sandboxes are session-owned).
 
-    Both routes are gated to the caller's readable scopes. Refresh tokens still never leave the
-    Manager. No agent-facing tool wraps either route.
+    Refresh tokens never leave the Manager. No agent-facing tool wraps either route.
   - **Secret-token-injection is future work.** A resolved secret enters the sandbox as a plain env
-    var, so anything the agent runs inside can read it. Under the srt backend, the enforced egress
-    allowlist now bounds where a read value can be *sent*. That covers most of the practical risk.
-
-    The real fix is egress substitution: a placeholder inside the sandbox, with the real value
-    substituted at the proxy toward declared hosts. srt implements exactly that
-    (`credentials.envVars` with `mode: "mask"` and `injectHosts`). What remains is to wire
-    `SecretRef` injection through it instead of through the policy env.
+    var, so anything the agent runs inside can read it. Under srt, the egress allowlist bounds
+    where a read value can be *sent*, which covers most of the practical risk. The real fix is
+    egress substitution: a placeholder inside, the real value substituted at the proxy toward
+    declared hosts. srt implements that (`credentials.envVars` with `mode: "mask"` and
+    `injectHosts`). What remains is to route `SecretRef` injection through it.
   - **No KEK rotation/recovery.** A lost credential entry orphans the store loudly, and the
-    operator deletes the file. Multi-user same-name injection precedence is unresolved until a
-    real multi-user strategy lands.
+    operator deletes the file. Multi-user same-name injection precedence stays open until a real
+    multi-user strategy lands.
   - `@napi-rs/keyring`'s per-platform prebuilds join `node-datachannel` in the "unsigned
-    third-party native binaries" trust bucket below. Only field verification covers the
-    macOS and Windows paths. CI exercises Linux/Secret Service.
+    third-party native binaries" trust bucket below. CI exercises Linux/Secret Service. Only
+    field use covers macOS and Windows.
 
 ## Runtime & topology
 
-- **An operator's `repos:` on `default` is not read where repo paths are resolved.** The session's
-  own sandboxes are the operator's declarations now, and `repos:` is legal on them. But the path
-  an agent is told a checkout is at (`SessionMain.fs`, `VisibleAt`) comes from the backend alone.
-  A `default` that is a container with its own `repos:` would be told the backend's path, not its
-  own.
-- **The process split is done** (Phase 4). Each session is a child OS process of the Manager.
+- **An operator's `repos:` on `default` is not read where repo paths resolve.** The session's own
+  sandboxes are the operator's declarations, and `repos:` is legal on them. But the path an agent
+  hears for a checkout (`SessionMain.fs`, `VisibleAt`) comes from the backend alone. A `default`
+  that is a container with its own `repos:` hears the backend's path, not its own.
+- **The process split is complete** (Phase 4). Each session is a child OS process of the Manager.
   Supervision and secrets custody cross the boundary as a secret-scoped control RPC (environments
   are session-owned via the sandbox seam). The htmx management UI creates, launches, resumes and
-  stops sessions.
-
-  But **children die with the Manager**. There is no daemonising and no orphan adoption, so a
-  Manager restart stops every running session. Relaunching a session is no longer a manual click.
-  `GET /sessions/{id}/open` launches a stopped session and lands on its address (Plan 11). The
-  client offers that route when the session it was talking to has gone.
+  stops sessions. But **children die with the Manager**: no daemonising and no orphan adoption,
+  so a Manager restart stops every running session. `GET /sessions/{id}/open` launches a stopped
+  session and lands on its address (Plan 11), and the client offers that route when its session
+  has gone.
 - **The hook relay takes a session's word on what it may receive.** The Manager verifies a
-  DELIVERY, because it comes from the internet. It trusts a SUBSCRIPTION, because it comes over
-  the authenticated control channel from a child the Manager spawned. This is the stated posture,
-  not an oversight
-  ([ADR](decisions/2026-08-29-the-manager-relays-hooks-it-cannot-read.md)). All of the following
-  is accepted:
-  - **Only HMAC over the raw body is verifiable.** Schemes that sign a constructed string carrying
-    a timestamp (Stripe, Slack) are not. Configuring one is refused at boot, instead of failing at
-    the first delivery. The relay forwards a delivery's headers, so a session could verify its own
-    endpoint. That is not built either.
-  - **A rotation is a counter an operator bumps**, and the previous secret stays accepted until
-    they bump again. Nothing expires it on a timer. An operator who never bumps a second time
-    leaves two live secrets, not one.
-  - **Endpoints need a durable secret store**, because the signing secret is derived from its KEK.
-    Declaring them on an ephemeral store is refused at boot. The alternative was to hand out a
-    secret that stops working at the next restart, silently and only inbound.
-- **The Manager is practically a singleton.** Nothing global is assumed: data directories are
-  per-instance and session ports are OS-assigned. But two Managers over the SAME data directory
-  are unsupported, because there is no lock until the SQLite move. The management UI's fixed
-  default port (8321) means a second instance must configure its own.
+  DELIVERY (it comes from the internet) and trusts a SUBSCRIPTION (it comes over the
+  authenticated control channel from a child the Manager spawned)
+  ([ADR](decisions/2026-08-29-the-manager-relays-hooks-it-cannot-read.md)). Accepted:
+  - **Only HMAC over the raw body is verifiable.** Schemes that sign a constructed string with a
+    timestamp (Stripe, Slack) are not, and the boot refuses one. The relay forwards a delivery's
+    headers, so a session could verify its own endpoint, but nobody has built that.
+  - **A rotation is a counter an operator bumps**, and the previous secret stays valid until the
+    next bump. No timer expires it, so an operator who never bumps again leaves two live secrets.
+  - **Endpoints need a durable secret store**, because the signing secret derives from its KEK.
+    The boot refuses them on an ephemeral store, instead of a secret that silently stops working
+    inbound at the next restart.
+- **The Manager is practically a singleton.** Data directories are per-instance and session ports
+  are OS-assigned. But two Managers over the SAME data directory are not supported: there is no
+  lock until the SQLite move. The UI's fixed default port (8321) means a second instance must
+  configure its own.
 - **Session ports are OS-assigned and change on every launch.** A session has one stable URL,
-  `/sessions/{id}/open`. The address it lands on is stable only where `YESSION_SESSION_URL`
-  derives it from `{id}` (Plan 12).
-
-  On the zero-config loopback default, the origin moves with the port. The browser partitions
-  everything it kept for a session by origin, so that data is left behind. This covers the
-  document's IndexedDB store, the Cache API history store, and one transcript store per terminal.
-  The client says so instead of promising otherwise (`PublicAccess.sessionAddressIsStable`). That
-  is the whole remedy. Nothing migrates the stranded stores.
+  `/sessions/{id}/open`. Its target address is stable only where `YESSION_SESSION_URL` derives it
+  from `{id}` (Plan 12). On the zero-config loopback default, the origin moves with the port, and
+  the browser leaves behind everything it kept for the session by origin: the document's
+  IndexedDB store, the Cache API history store, and one transcript store per terminal. The client
+  says so (`PublicAccess.sessionAddressIsStable`). Nothing migrates the stranded stores.
 - **Health is a liveness report, not a health check.** A launch reports busy/idle on
-  `POST /control/activity`. The Manager reaps on silence, but only when an operator sets an idle
-  timeout (`IdleTimeout` is `None` by default). Unset, a child that wedges after readiness still
-  shows as running until it exits. Set, the Manager stops it as `NeverReported` instead of
-  diagnosing it.
-- **The Manager→Session notification channel is a transport without a producer yet.** The reverse
-  leg of the control RPC exists end to end:
-  - The child subscribes to `GET /control/notifications` (SSE, per-launch secret).
-  - The Manager multiplexes and fans out through
-    `ProcessManager.Notify : SessionId -> SessionNotification -> unit`.
-  - The child dispatches each notification through a handler that MAY record a durable
-    `SessionEvent`.
-
-  But **nothing calls `Notify` in production yet**. The payload
-  (`SessionNotification.EnvironmentChanged of unit`) is an explicit placeholder, and the default
-  handler only logs. The follow-up is the intended first producer and the real notification
-  payload. The first producer would be the Manager autonomously detecting an out-of-band
-  environment change. An example is a container it owns dying without the session having stopped
-  it.
-- **A second reverse leg, the MCP server set, is shipped end to end** (Plan 17). The child
-  subscribes to `GET /control/mcp` (SSE). It gets its session's resolved set immediately and a
-  fresh set on every change. `ProcessManager.publishMcpServers` is the producer. It publishes from
-  the operator's durable declarations, on every registry write and at boot. The leg is per
-  SESSION, not Manager-global (`app/KeyedRetainedHub.fs` says why). The child holds the set
-  (`app/SessionMain.fs`) and `McpClient` connects it, so a declared server's tools reach agent
-  turns.
+  `POST /control/activity`. The Manager reaps on silence only when an operator sets an idle
+  timeout (`IdleTimeout` is `None` by default). Unset, a child that wedges after readiness shows
+  as running until it exits. Set, the Manager stops it as `NeverReported` without a diagnosis.
+- **The Manager→Session notification channel is a transport without a producer yet.** The child
+  subscribes to `GET /control/notifications` (SSE, per-launch secret). The Manager fans out
+  through `ProcessManager.Notify : SessionId -> SessionNotification -> unit`. The child's handler
+  MAY record a durable `SessionEvent`. But **nothing calls `Notify` in production yet**, the
+  payload (`SessionNotification.EnvironmentChanged of unit`) is a placeholder, and the default
+  handler only logs. The intended first producer: the Manager detects an out-of-band environment
+  change, for example a container it owns dies without the session stopping it.
+- **A second reverse leg, the MCP server set, ships end to end** (Plan 17). The child subscribes
+  to `GET /control/mcp` (SSE) and gets its session's resolved set at once and on every change.
+  `ProcessManager.publishMcpServers` publishes from the operator's durable declarations, on every
+  registry write and at boot. The leg is per SESSION (`app/KeyedRetainedHub.fs` says why). The
+  child holds the set (`app/SessionMain.fs`) and `McpClient` connects it, so a declared server's
+  tools reach agent turns.
 - **A third reverse leg, connection statuses, has a real producer** (Plan 08).
   `GET /control/connections` streams each launch its readable connection metadata: a snapshot on
   subscribe, and a fresh list on every credential change or new binding. The session's agent gate
   and `/claude` status surface consume it. `NotificationHub<'n>` serves this leg and the
   notification one.
 - **Peer-to-peer is star-shaped through the Process.** Clients sync Yjs state via the Session
-  relay, not directly with each other. y-webrtc-style meshes are not used.
+  relay, not with each other. Yession does not use y-webrtc-style meshes.
 
 ## Persistence & data
 
-- **Everything durable is now persisted** (Phase 3). The event log and the Yjs document both
-  survive Process restarts. The doc store uses a sidecar `*.doc.jsonl`, compacted at open. Browser
-  clients keep the document in IndexedDB (`y-indexeddb`), keyed by the session id embedded in the
-  bootstrap page.
-
-  The event log's browser-side cache is the client's own Cache API store, not the browser's HTTP
-  cache ([technical-design.md §2.3](technical-design.md#23-transport)). A cold load replays what
-  it kept, and only the tail reaches the network.
+- **Everything durable persists** (Phase 3). The event log and the Yjs document both survive
+  Process restarts. The doc store uses a sidecar `*.doc.jsonl`, compacted at open. Browser
+  clients keep the document in IndexedDB (`y-indexeddb`), keyed by the session id in the
+  bootstrap page. The event log's browser cache is the client's own Cache API store
+  ([technical-design.md §2.3](technical-design.md#23-transport)).
 - **The JSONL event log loads fully into memory.** It has no compaction, rotation or
-  checksumming. A corrupt line fails the whole open, which is loud by design. The doc store
-  compacts only at open, so a very long-lived Process grows its sidecar until restart.
-- **Event ranges are cookie-gated for browsers. Headless clients still put a minted peer token in
-  the range URL** (`?token=`). The browser path is clean: the same-origin auth cookie rides each
-  fetch. So the URLs, and the cache keys that the client stores them under, carry no secrets. The
-  token-in-URL path remains for Node clients and tests. It is scoped to per-process minted tokens
-  that die with the session.
+  checksumming. A corrupt line fails the whole open, loudly by design. The doc store compacts
+  only at open, so a long-lived Process grows its sidecar until restart.
+- **Cookies gate event ranges for browsers. Headless clients still put a minted peer token in the
+  range URL** (`?token=`). The browser path sends the same-origin auth cookie with each request, so
+  the URLs, and the cache keys the client stores them under, carry no secrets. The token-in-URL
+  path remains for Node clients and tests, scoped to per-process minted tokens that die with the
+  session.
 - **A session opens cold with no network** (Plan 20). A service worker at the mount keeps the
-  shell and this build's assets, and nothing else:
-  - The shell is network-first, because it names the fingerprinted assets.
-  - This build's assets are cache-first, because their address pins their bytes.
-  - The event log is the page's own cache. `/me`, `/signal` and `/queries` are liveness
-    questions that a cached answer would answer wrongly.
-
-  The worker needs a secure context. So a session served over plain HTTP at a non-loopback
-  address still cannot open cold. There, the settings pane names the missing capability and the
-  flag that restores it.
+  shell (network-first, because it names the fingerprinted assets) and this build's assets
+  (cache-first, because their address pins their bytes), and nothing else. The event log is the
+  page's own cache. `/me`, `/signal` and `/queries` are liveness questions that a cached answer
+  gets wrong. The worker needs a secure context, so a session on plain HTTP at a non-loopback
+  address cannot open cold. There, the settings pane names the missing capability and the flag
+  that restores it.
 - **Nothing measures whether the history store holds.** `storage.persist()` is a request, not a
-  guarantee. Chrome grants it for an engaged site. Safari essentially grants it only for an
-  installed app, and Safari additionally caps script-writable storage at seven days without user
-  interaction. So the exposure is the session nobody has opened in a week, which is also the one
-  somebody most wants back.
-
-  A walk knows how many answers it served locally and how many went to the network. That ratio
-  would settle the question. It is not on the OTel resource yet. So the decision to replace the
-  Cache API store with an IndexedDB one keyed by offset has no evidence to rest on.
+  guarantee. Chrome grants it for an engaged site. Safari grants it essentially only for an
+  installed app, and caps script-writable storage at seven days without user interaction. So the
+  exposure is the session nobody opened in a week, which is the one somebody most wants back. A
+  walk knows how many answers it served locally and how many went to the network. That ratio
+  would settle the question, but it is not on the OTel resource yet. So the idea to replace the
+  Cache API store with an IndexedDB one keyed by offset has no evidence.
 - **Nothing drops a session's kept history when the session is gone.** Each session names its own
   caches (`yession/session/<id>/events`, and one per terminal). A deleted or reaped session
-  leaves them behind for ever. The names are the remedy, not the problem: `caches.keys()` makes a
-  sweep a filter over the sessions the Manager says still exist. No surface does that sweep yet.
+  leaves them behind for ever. With `caches.keys()`, a sweep is a filter over the sessions the
+  Manager says still exist. No surface does that sweep yet.
 - **The history feed degrades explicitly, and only history degrades.** The event feed is the one
-  leg that is HTTP instead of the data channel, so it fails on its own. It once failed silently.
-  A rejected fetch became an empty final page, which the read loop re-requested at once, for ever.
-  Drafts, title and presence kept syncing over WebRTC, so the only symptom was a timeline that
-  never filled.
-
-  Now a read returns `Result<EventPage, FeedFault>`. A resilience policy
-  (`Yession.Domain.Resilience`, composed with the transport in `app/browser/Browser.fs`) retries
-  only transient faults. It retries five times, with exponential backoff from 250ms to a 10s
-  ceiling. It adds jitter so that a Process restart does not bring every peer back in lockstep.
-
-  A settled failure parks the loop and surfaces as `FeedHealth`: a sidebar line, a banner and a
-  header status. Nothing is disabled while the feed is down, because writing is CRDT state in the
-  local doc.
-
-  Recovery is no longer only a hint away (Plan 20). One supervised loop drives the session leg,
-  capped at a minute. The browser's `online` event pokes it, and so does a *Try again* control on
-  the status line. A REFUSED peer parks until somebody asks, and does not end. No schedule can
-  help it, because the same token would be refused again. That control is the affordance this
-  entry used to say was missing.
+  leg on HTTP instead of the data channel, so it fails on its own. It once failed silently, as a
+  timeline that never filled while drafts, title and presence kept syncing. Now a read returns
+  `Result<EventPage, FeedFault>`. A resilience policy (`Yession.Domain.Resilience`, composed in
+  `app/browser/Browser.fs`) retries only transient faults: five times, exponential backoff from
+  250ms to a 10s ceiling, with jitter. A settled failure parks the loop and shows as
+  `FeedHealth` (a sidebar line, a banner and a header status). Writing stays enabled, because it
+  is CRDT state in the local doc. One supervised loop drives the session leg, capped at a minute
+  (Plan 20). The browser's `online` event and a *Try again* control on the status line poke it.
+  A REFUSED peer parks until somebody asks, because a schedule would send the same refused token.
 
 ## Browser client
 
 - **Rendering is Fable.Lit (lit-html), a reconciling renderer.** The view is a total function of
-  the model, rendered into `#app` on every change. Lit diffs the DOM, so focus and caret survive
-  re-renders with no manual restore hack. The only remaining manual DOM work is pinning the chat
-  scroll and pixel-positioning collaborators' cursor markers, because a native `<input>` exposes
-  no per-character geometry.
+  the model, rendered into `#app` on every change, so focus and caret survive re-renders. The
+  only manual DOM work left pins the chat scroll and positions collaborators' cursor markers,
+  because a native `<input>` exposes no per-character geometry.
 - **Sending a draft still bypasses the Elmish loop, and moving it in needs Ylmish to change.**
-  Every other control now dispatches a message. `ClientModel.update` answers the requests it makes
-  as `ClientEffect` values, and `Client.Ports` carries them out after the model they came with.
-  The read cursor, the reads out and presence work this way too (`ClientModel.reads` and
-  `presenceToSend`). The drafts are what is left:
-  - the composer's Send (`ViewActions.SendDraft`)
-  - the terminal composer's Send (`SendTerminalDraft`)
-  - the editors' keyboard send (`Links.SendDraft`, `SendTerminalDraft` in `Render.fs`)
+  Every other control dispatches a message: `ClientModel.update` answers with `ClientEffect`
+  values, and `Client.Ports` runs them after their model. The read cursor, the reads out and
+  presence work this way too (`ClientModel.reads`, `presenceToSend`). The drafts remain: the
+  composer's Send (`ViewActions.SendDraft`), the terminal composer's Send (`SendTerminalDraft`),
+  and the editors' keyboard send (`Links.SendDraft`, `SendTerminalDraft` in `Render.fs`). Each
+  calls a verb on `Client.Connection` that, inside one `doc.transact`, copies a body root the
+  app owns beside the synced model (a draft's `Y.XmlFragment`, a terminal slot's `Y.Text`) into
+  the queued entry and dispatches `SendDraftMsg` / `SendTerminalDraftMsg`. That one transaction
+  is the invariant, and the comments at the verbs in `Client.connect` give both reasons.
 
-  Each calls a verb on `Client.Connection`. The verb opens a `doc.transact`. It copies a body root
-  into the queued entry. The app owns that root beside the synced model (a draft's
-  `Y.XmlFragment`, a terminal slot's `Y.Text`). The verb then dispatches `SendDraftMsg` /
-  `SendTerminalDraftMsg` from INSIDE that transaction.
-
-  That one transaction is the invariant:
-  - The Session drains on a queue entry's arrival. An entry that lands without its body runs as an
-    empty message.
-  - A send split across updates lets a `withYlmish` `Set` from the drain's removal clobber the
-    sender's own state. (`Client.connect` says both at the verbs.)
-
-  The invariant holds today only because of two facts. A dispatch from a click handler is
-  processed synchronously. And `withYlmish` wraps each update in `Y.transact`, which nests inside
-  the one already open. Made an effect, it breaks. A dispatch from inside an Elmish command is
-  queued until the command returns, so the model's write lands in a second transaction after the
-  body's.
-
-  The fix belongs in Ylmish, not around it. An update needs a way to declare doc writes that run
-  inside the transaction `withYlmish` already opens for it, before the model's own write. Then
+  It holds today only because a dispatch from a click handler runs synchronously, and
+  `withYlmish` wraps each update in a `Y.transact` that nests inside the open one. As an Elmish
+  command, it breaks: the dispatch waits until the command returns, so the model's write lands in
+  a second transaction. The fix belongs in Ylmish: an update needs a way to declare doc writes
+  that run inside the transaction `withYlmish` opens for it, before the model's own write. Then
   "seed the queued body, clear the draft, add the entry" is one message, one update and one
-  transaction. The cheap tier can assert the writes as values. To design:
+  transaction, and the cheap tier can assert the writes as values. To design:
   - Whether the writes are opaque `Y.Doc -> unit` functions or a typed vocabulary over the roots
     an app declares (copy a fragment, clear a text).
   - Which origin they carry, given that the binding filters its own echoes by origin and these
     roots sit outside the binding.
   - Whether this is a new `Program` combinator or a change to `Options`.
-- **One WIP draft per client, co-editable by any peer** (Plan 03). Drafts are keyed by author
-  (`Map<PeerId, DraftState>`), so each client owns at most one. The structure enforces this, not a
-  runtime cap.
-  - Any peer may co-edit any slot, and any co-editor may send it. The entry is attributed to the
-    draft's AUTHOR.
-  - The key the author minted (`QueueId`, carried by the slot since it was published) makes two
-    concurrent sends one entry, not two.
-  - The queue is untouched. Send clears the slot, so a client still queues many messages by
-    sending repeatedly.
-
-  Drafts and queued messages are **rich ProseMirror editors** on a Yjs `XmlFragment` (markdown
-  typing, bold/italic/code, lists, paste-as-markdown, undo/redo). They are not textareas and not
-  plain text. **Collaborative presence cursors** overlay every collaborative field (the title
-  input and the body editors). They show each peer's caret and selection with a colour and name
-  label, relayed over ephemeral `Presence` frames (never durable).
-
-  Invariant 4 (clean send) has a dedicated Hedgehog property. Broader draft-op schedules
-  (participation, offline rejoin) are the follow-up.
-- **A 401 from `/me` renavigates to `/login` unconditionally.** There is no in-app "signed out"
-  state. The client simply rides the OIDC bounce again. The other axis is handled: an unreachable
-  session keeps the cached shell local-first. Once the disconnection settles, the client offers
-  the `/sessions/{id}/open` card instead of a status word.
+- **One WIP draft per client, co-editable by any peer** (Plan 03). The author is the key of a
+  draft (`Map<PeerId, DraftState>`), so the structure, not a runtime cap, gives each client at
+  most one. Any peer may co-edit and send any slot, and the entry goes to the draft's AUTHOR.
+  The author's `QueueId` makes two concurrent sends one entry. Send clears the slot, so a client
+  still queues many messages by sending repeatedly. Drafts and queued messages are rich
+  ProseMirror editors on a Yjs `XmlFragment` (markdown typing, bold/italic/code, lists,
+  paste-as-markdown, undo/redo). Presence cursors overlay every collaborative field (the title
+  input and the body editors) with each peer's caret, selection, colour and name, relayed over
+  ephemeral `Presence` frames (never durable). Invariant 4 (clean send) has a dedicated Hedgehog
+  property. Broader draft-op schedules (participation, offline rejoin) are the follow-up.
+- **A 401 from `/me` goes to `/login` unconditionally.** No in-app "signed out" state exists. The
+  client rides the OIDC bounce again. An unreachable session keeps the cached shell local-first,
+  and once the disconnection settles the client offers the `/sessions/{id}/open` card.
 - **No browser support matrix.** Tests run on Chromium (headless, in CI). The ICE gathering
-  settle-fallback should cover Safari and Firefox mDNS behaviour, but those browsers are untested.
+  settle-fallback should cover Safari and Firefox mDNS behaviour, but nobody tests those browsers.
 - **A session's port, pid and build are no longer on the manager page.** They shared the status
-  cell with the line a session now says about itself, and both do not fit. Measured: the word
-  plus a summary plus a build want 460px of a 384px cell. The summary answers the question the
-  page exists for (which of six sessions wants me). The rest is diagnostic. So the diagnostic
-  went, and the column shrank to 256px.
-  - Nothing else lost it: `SessionRegistryEntry.Build` still rides the registry stream, and the
-    Manager's own build is still on the page header.
-  - Below `xl` the summary yields too (the column is 100px there). A phone gets this answer from
-    the tab title.
-  - The way back, if a reader ever wants it, is a row that opens: clicking the id to expand or pop
-    out the process detail. It is not a fourth thing competing for one line. That is unbuilt. The
-    summary is deliberately what the row shows instead.
+  cell with the session's own summary line, and the two did not fit (measured: 460px wanted of a
+  384px cell). The summary answers the page's question (which of six sessions wants me), so the
+  diagnostics went, and the column shrank to 256px. `SessionRegistryEntry.Build` still rides the
+  registry stream, and the Manager's own build is on the page header. Below `xl` the summary
+  yields too (the column is 100px), and a phone gets it from the tab title. The way back, if
+  wanted, is a row that opens (click the id to show the process detail). Nobody has built it.
 
 ## Visual design
 
-[visual-design.md](visual-design.md) is the doctrine. This section is what the doctrine says
-and the code does not yet do.
+[visual-design.md](visual-design.md) is the doctrine. This section lists what the doctrine says
+and the code does not do yet.
 
-A full audit ran on 2026-10-06 against the master of that day. Eleven reviewers read the
-doctrine, then read the product: every surface pictured at three anchors (1440x900, 390x844
-and 844x390, the last because the stylesheet says a short screen is a phone however wide),
-plus two static passes over `Style.fs` and over every class literal written outside it. It
-found 203 defects. They are listed below, by the part of the code that owns the fix, then by
-the doctrine's own "Deciding" order: floor, honesty, one verb, vocabulary, grid, less.
+An audit on 2026-10-06 found 203 defects. Eleven reviewers read the doctrine, then the product:
+every surface at 1440x900, 390x844 and 844x390 (the stylesheet treats a short screen as a phone
+however wide), plus static passes over `Style.fs` and every class literal outside it. The list
+groups them by the part of the code that owns the fix, then by the doctrine's "Deciding" order:
+floor, honesty, one verb, vocabulary, grid, less.
 
-Read this list as DATED, and dated against a doctrine that has since moved. The audit's line
-numbers are left out, because they are already wrong. The value's name identifies a defect.
-Verify a finding against today's code AND against today's doctrine
-before you fix it. Some are fixed. Some are no longer defects: #1276 rewrote principle 2, so
-chrome may now show grouping, nesting and selection, and it deleted the rule that nothing but
-a field or a button carries a border. An entry that no longer reproduces, or that cites a rule
-that no longer exists, is closed and not forced.
-
-The list is a snapshot, not a worklog. Nobody edits it one line per fix. After the fixes land,
-one pass rewrites it to whatever still reproduces.
+The list dates from that audit, against a doctrine that has since moved. A finding's name, not a line
+number, identifies it. Check each against today's code AND doctrine before you fix it. #1276
+rewrote principle 2: chrome may now show grouping, nesting and selection, and the rule that only
+a field or a button carries a border is gone. Close a finding that no longer reproduces, or that
+cites a rule that no longer exists. Do not edit the list one line per fix. After the fixes land,
+one pass rewrites it to what still reproduces.
 
 ### The marks and voices (Strokes, Motion, Typography, Statuses)
 
@@ -687,7 +518,7 @@ one pass rewrites it to whatever still reproduces.
   apart
 - **G-2** (vocabulary) — Green and blue mean the opposite of the doctrine on commands
 - **G-3** (vocabulary) — Four red marks on one screen of blocks
-- **H-15** (vocabulary) — The 6px disc is written nine times
+- **H-15** (vocabulary) — Code writes the 6px disc nine times
 - **S1-12** (vocabulary) — Bare border utilities written outside Stroke
 - **S1-13** (vocabulary) — Hollow dots draw a border
 - **S1-29** (vocabulary) — Motion durations written as literals
@@ -744,7 +575,7 @@ one pass rewrites it to whatever still reproduces.
 
 - **E-1** (floor) — On a sideways phone the card has no field, no list and no CONNECT GITHUB
 - **E-9** (floor) — The search field's focus is a one-pixel colour change on a rule
-- **H-1** (floor) — The ⋮ handle rests at 2.8:1 because it is dimmed by opacity
+- **H-1** (floor) — The ⋮ handle rests at 2.8:1 because opacity dims it
 - **S1-1** (floor) — Message menu handle fades ink-faint with opacity-60
 - **X-2** (floor) — Confirms S1-1: the message handle measures 84 grey, a fourth ink
 - **D-9** (honesty) — Empty timeline shows nothing at all three anchors
@@ -786,8 +617,8 @@ one pass rewrites it to whatever still reproduces.
 - **S1-5** (honesty) — Hover-only reveal of queue reorder and delete
 - **B-8** (one verb) — "NO AGENT" is a status in the colour of the button under it, drawn
   the same way
-- **B-9** (vocabulary) — The absent agent's mark is dimmed with opacity, and its row is
-  written with raw utilities
+- **B-9** (vocabulary) — Opacity dims the absent agent's mark, and raw utilities write its
+  row
 - **D-5** (vocabulary) — Chapter and break are drawn rules. Type alone does not divide
 - **F-6** (vocabulary) — A joined draft names its author with a faint label only
 - **H-18** (vocabulary) — A person's presence is a coloured round dot with the name in a
@@ -810,7 +641,7 @@ one pass rewrites it to whatever still reproduces.
 - **G-15** (honesty) — On a phone the strip shows one tab and a clipped word
 - **S1-11** (honesty) — Splitter is invisible until hovered
 - **S1-6** (honesty) — Hover-only reveal of terminal row verbs on desktop
-- **G-12** (one verb) — A closed terminal's status line is dressed as the command field
+- **G-12** (one verb) — A closed terminal's status line wears the command field's dress
 - **C-10** (vocabulary) — The terminals pivot is a third face of the pivot
 - **D-11** (vocabulary) — The agent's `$` is the people's green
 - **G-10** (vocabulary) — The recording player brings a white fill, round corners and its
@@ -839,7 +670,7 @@ one pass rewrites it to whatever still reproduces.
   is which
 - **H-5** (floor) — The collaborator caret flag is a rounded rectangle, white text on a
   person colour, below the contrast floor at some seats
-- **H-6** (floor) — The idle agent's diamond in the sidebar is dimmed by opacity to 2:1
+- **H-6** (floor) — Opacity dims the idle agent's diamond in the sidebar to 2:1
 - **C-15** (honesty) — A flow under way does not change the weight of the idle verbs beside
   it
 - **C-18** (honesty) — Connecting is drawn exactly as connected
@@ -849,7 +680,7 @@ one pass rewrites it to whatever still reproduces.
 - **D-3** (honesty) — Queued, a wait, wears live green
 - **E-11** (honesty) — The card emits `disabled` at six sites the Style side does not show
 - **E-3** (honesty) — The branch pane never ticks the branch START will launch on
-- **F-4** (honesty) — Move up on the head row is offered and does nothing
+- **F-4** (honesty) — The head row offers Move up, which does nothing
 - **G-1** (honesty) — Running dot pulses through 25% opacity and is caught dim at rest
 - **X-4** (honesty) — More than one red word on a surface
 - **C-6** (one verb) — A status phrased as the button's verb
@@ -857,8 +688,8 @@ one pass rewrites it to whatever still reproduces.
   same parts
 - **C-5** (vocabulary) — One stopped session, two names for it
 - **D-15** (vocabulary) — Two arrows for the one fold
-- **F-7** (vocabulary) — Draft summary edge is a person's colour set inline
-- **G-6** (vocabulary) — The run fold's sentence is set in the terminal face
+- **F-7** (vocabulary) — Draft summary edge is a person's colour, set inline
+- **G-6** (vocabulary) — The run fold's sentence uses the terminal face
 - **H-12** (vocabulary) — The gem is a lit, translucent, glowing object, and nothing says it
   is exempt
 - **H-13** (vocabulary) — Icon strokes render in five weights, and the 12px marks are
@@ -884,7 +715,7 @@ one pass rewrites it to whatever still reproduces.
 - **G-14** (grid) — The closed mark sits low beside the running mark
 - **H-16** (grid) — Marks sit off the 4px rhythm: 14px icons, 14px pics, 6px dots, an 8px
   diamond
-- **D-13** (less) — The thinking cube is shaded, lit from one side
+- **D-13** (less) — The thinking cube has shading, lit from one side
 - **E-12** (less) — The "starting…" hold on START can never be seen
 - **G-18** (less) — A file's own name is the faintest thing in its pane
 
@@ -913,14 +744,14 @@ one pass rewrites it to whatever still reproduces.
 - **A-11** (vocabulary) — The MCP/hook count is a hand-written copy of the label voice
 - **A-12** (vocabulary) — Arrows are three different things: two text glyphs and one stroked
   icon
-- **A-13** (vocabulary) — Faint mono is spelled out six times instead of one Style value
+- **A-13** (vocabulary) — Code spells faint mono out six times instead of one Style value
 - **A-14** (vocabulary) — The header band is a raw 88px literal
 - **A-7** (vocabulary) — Withdraw is a bordered 128x32 button on a row. Stop and Archive are
   bare
-- **B-5** (vocabulary) — The opening screen's failure sentence is set in the caps label
+- **B-5** (vocabulary) — The opening screen's failure sentence uses the caps label
   voice
 - **S2-10** (vocabulary) — ManagerUi.fs layout and typography literals
-- **X-12** (vocabulary) — Listed rows are separated three ways
+- **X-12** (vocabulary) — Listed rows have three kinds of separator
 - **X-13** (vocabulary) — The Manager page and the session shell are two designs
 - **A-15** (grid) — The CREATED head sits 2pt below the NAME and ID heads
 - **A-16** (grid) — Timestamp and verbs centre on a two-line cell: aligned to neither line
@@ -938,388 +769,310 @@ one pass rewrites it to whatever still reproduces.
 - **Not from the audit: the browser tier tests the sideways phone in three cases, and should
   have one per shell surface.** `Browser.fs` holds three cases at 844x390 (`thumbSized`,
   `navOverPane` and the chat-width case). The stylesheet's `phone:`/`wide:` pair answers by
-  height as well as width, so every shell surface has a sideways-phone layout of its own,
-  and only those three are pinned.
+  height as well as width, so every shell surface has its own sideways-phone layout, and the
+  tests pin only those three.
 
-<!-- 203 findings. The audit's own ids are kept so a fix can say what it closes. -->
+<!-- 203 findings. The audit's own ids stay so a fix can say what it closes. -->
 
 ## Agent
 
 - **A bare `start_work_sandbox` beside a repo-declared name mints a decoy.** Sandbox names are
   scoped (`SandboxRef`): the repo's file declares `trinketworks/yession:dev`. An agent that calls
-  `start_work_sandbox` with plain `dev` gets a NEW session-owned sandbox. That sandbox is
-  srt-confined, has an empty workspace, and wears the name the agent had in mind.
-
-  Nothing is wrong in the model, because two scopes may share a short name. But agents driven
-  through the tool fall for it repeatedly. Measured across the container e2e runs, one agent spent
-  a whole errand creating, inspecting and removing `dev` decoys while the real dev container sat
-  running. The tool's own answer says which sandbox came up. A refusal, or a disambiguating nudge
-  when a repo-scoped sibling exists, is the likely fix. It is not built yet.
+  `start_work_sandbox` with plain `dev` gets a NEW session-owned, srt-confined sandbox with an
+  empty workspace and the name the agent had in mind. The model is right, because two scopes may
+  share a short name. But agents fall for it repeatedly: in the container e2e runs, one agent
+  spent a whole errand creating, inspecting and removing `dev` decoys while the real dev
+  container sat running. The tool's answer says which sandbox came up. The likely fix is a
+  refusal, or a nudge when a repo-scoped sibling exists. Nobody has built it.
 - **An agent and a long-running build are a bad pairing without explicit parking.** A container
-  build (`nix develop --command check`, tens of minutes cold) outlives any patience an agent turn
-  has. Measured: agents polled it into their own timeout and re-ran it. They twice called
-  `stop_work_sandbox` on the container mid-build, which killed a 7.5GB-warm store to "reset".
-
-  The working pattern is a detached launch (`nohup … &`, log to a file) plus an instruction to
-  stop after starting it. The missing piece is a first-class long-job story: a command the session
-  watches and reports on, instead of a turn that has to survive it.
-- **The live agent's tool results are text renderings** of the typed capability results. No
-  structured tool-result schema exists. The agent can read back what its own terminal commands did
-  (`read_terminal`, plus the digest on the context pack, Plan 13 stages 3a/3b). But no tool reads
+  build (`nix develop --command check`, tens of minutes cold) outlives an agent turn's patience.
+  Measured: agents polled it into their own timeout and re-ran it, and twice called
+  `stop_work_sandbox` on the container mid-build, which killed a 7.5GB-warm store to "reset". The
+  working pattern is a detached launch (`nohup … &`, log to a file) plus an instruction to stop
+  after starting it. Missing: a first-class long job that the session watches and reports on.
+- **The live agent's tool results are text renderings** of the typed capability results, with no
+  structured tool-result schema. The agent can read back its own terminal commands
+  (`read_terminal`, plus the digest on the context pack, Plan 13 stages 3a/3b). No tool reads
   session history beyond the prompt transcript.
-- **The context pack is a flat transcript** rebuilt per turn from the full projection. It has no
-  windowing, summarisation or token budgeting. Bodies are now Markdown (rich text landed), but the
-  transcript is still a naive `author: body` join with no multi-line handling. Long sessions or
-  large rich bodies will eventually overflow the model context. Only the terminal digest is
-  bounded (an output tail, with the elided count stated).
-- **Turn discipline is done** (Phase 3). The queue drain enforces single-flight, interrupt is
+- **The context pack is a flat transcript** rebuilt per turn from the full projection, with no
+  windowing, summarisation or token budgeting. Bodies are Markdown, but the transcript is a naive
+  `author: body` join with no multi-line handling. Long sessions or large rich bodies will
+  eventually overflow the model context. Only the terminal digest has a bound (an output tail,
+  with the elided count stated).
+- **Turn discipline is complete** (Phase 3). The queue drain enforces single-flight, interrupt is
   explicit, and property tests pin the invariants. But:
   - The queue has **no size cap**.
-  - A drain coalesces any backlog into ONE turn. No option for per-message turns exists.
-  - The queued-message UI has no "locked" visual during the drain broadcast window. A peer can
-    briefly type into an entry that is about to vanish. The edit is safely discarded, but the UX
-    flickers.
+  - A drain coalesces any backlog into ONE turn, with no option for per-message turns.
+  - The queued-message UI shows no "locked" state during the drain broadcast window. A peer can
+    briefly type into an entry that is about to vanish. The drain discards the edit safely, but
+    the UX flickers.
 - **A turn has no step ceiling, and nothing automatic bounds a runaway one.** `maxTurns` is
-  OPTIONAL on the Agent SDK's `query()`, and unset means no cap. `Agent.fs` now passes it unset,
-  which is the setting interactive Claude Code runs under. The ceiling that was here before (32
-  model turns) ENDED the turn as a failure. An errand long enough to hit it was the errand least
-  well served by being cut off mid-way.
-
-  Only the interrupt replaces it. A turn spends the TURN HUMAN's credential in a session that
-  other people can watch and nobody need be watching. A bound that requires somebody present is no
-  bound at all for an unattended session. Missing: a budget the model can see, any signal that a
-  turn is running long, and any cost ceiling per turn or session.
+  OPTIONAL on the Agent SDK's `query()`, and `Agent.fs` leaves it unset (no cap), as interactive
+  Claude Code does. The old ceiling (32 model turns) ENDED the turn as a failure, which cut off the
+  errands that most needed to finish. Only the interrupt replaces it. A turn spends the TURN
+  HUMAN's credential in a session that nobody need be watching, and a bound that needs somebody
+  present is no bound for an unattended session. Missing: a budget the model can see, a signal
+  that a turn runs long, and a cost ceiling per turn or session.
 - **A wake can start a turn nobody asked for, and wake→turn→command→wake is a legitimate loop.** A
-  background command finishing makes a turn due. That turn may background another command.
-
-  Two things bound the loop. One is visibility: every woken turn carries its reason durably on
-  `AgentTurnStarted.Woke` and shows it in the chat. The other is the human interrupt, which is no
-  bound at all for a session nobody is watching. A per-session woken-turn budget is the next dial.
-  It is deliberately not built in advance.
-- **Watching a pull request is polling, deliberately.** A session asks GitHub about each watched
-  pull request instead of being told ([ADR](decisions/2026-08-27-pr-state-by-polling.md)). A repo
-  webhook needs admin on the repo. Inbound delivery needs a deployment that github.com can reach,
-  and the loopback default is not one. All of the following is accepted:
+  background command that finishes makes a turn due, and that turn may background another. Two
+  things bound the loop: visibility (every woken turn records its reason on
+  `AgentTurnStarted.Woke` and shows it in the chat) and the human interrupt, which is no bound for
+  a session nobody watches. A per-session woken-turn budget is the next dial, deliberately not
+  built in advance.
+- **Watching a pull request is polling, deliberately**
+  ([ADR](decisions/2026-08-27-pr-state-by-polling.md) gives the reasons and the cost of each
+  cadence). A repo webhook needs admin on the repo, and inbound delivery needs a deployment
+  github.com can reach, which the loopback default is not. Accepted:
   - **Up to fifteen seconds of latency while a suite is in flight, and up to a minute otherwise.**
     A declared hook endpoint with the App's webhook pointed at it (deployment.md §Webhooks) drops
-    this to seconds. Otherwise polling cannot give less, short of editing the two constants in
-    `PrWatches`.
-
-    The ADR gives the cost of each cadence: the pending one puts the ceiling around ten pull
-    requests with live suites at once per credential. That is the argument for a pushed transport
-    instead. The hosted dispatching service that the ADR describes is the exit, and it does not
-    exist.
-  - **Check runs only.** The legacy commit-status API is not read. A repo whose CI reports only
-    statuses (no check runs) therefore reads as having no checks, not as failing. That is the safe
-    direction, and it is invisible.
-  - **The first 100 check runs on a commit.** No pagination exists. A commit with more is rolled
-    up from a prefix, biased toward pending.
-  - **Only rollup FLIPS are announced.** A push that resets checks to pending and ends green again
-    says nothing. Entering pending is the ordinary rhythm of work, and a notification per push is
-    a notification nobody reads.
+    this to seconds. Otherwise, only an edit to the two constants in `PrWatches` lowers it. The
+    hosted dispatching service the ADR names as the exit does not exist.
+  - **Check runs only.** Yession does not read the legacy commit-status API. A repo whose CI
+    reports only statuses reads as having no checks, not as failing: the safe direction, and
+    invisible.
+  - **The first 100 check runs on a commit.** No pagination exists. The rollup of a commit with
+    more comes from a prefix, biased toward pending.
+  - **Only rollup FLIPS make an announcement.** A push that resets checks to pending and ends
+    green again says nothing. Entering pending is the ordinary rhythm of work, and a
+    notification per push is one nobody reads.
   - **A rate-limited watch waits out GitHub's own reset window** and says so in the
-    `pull_requests` query's status column. It does not fail, and it does not retry sooner.
-  - **A transition wakes a turn**, which joins the wake→turn loop above as a third source.
-    Flapping CI can wake once per genuine flip, and the per-session woken-turn budget is still
-    deliberately unbuilt. The log-anchored baseline bounds the wakes to one turn per transition.
-    It does not bound how many transitions a flapping suite produces.
-- **Repo integration is the read-only bootstrap slice** (Plan 14). It has typed clone-and-orient
-  verbs beside the agent, one repos dir shared into the WorkSandbox, and GitHub sign-in per user
-  over the device flow. Remaining, deliberate:
-  - **A session's repos are session-readable, and bytes outlive revocation.** One user's private
-    repo, once added, is readable by every peer and everything in the WorkSandbox. This is the
+    `pull_requests` query's status column. It does not fail or retry sooner.
+  - **A transition wakes a turn**, a third source for the wake→turn loop above. The log-anchored
+    baseline gives one turn per transition. It does not bound how many transitions a flapping
+    suite produces, and the woken-turn budget is still unbuilt.
+- **Repo integration is the read-only bootstrap slice** (Plan 14): typed clone-and-orient verbs
+  beside the agent, one repos dir shared into the WorkSandbox, and GitHub sign-in per user over
+  the device flow. Remaining, deliberate:
+  - **Every session member can read a session's repos, and bytes outlive revocation.** One user's
+    private repo, once added, is readable by every peer and everything in the WorkSandbox, the
     same shared-trust boundary as "terminal access equals session access". The `RepoAdded` event
-    names who brought it in. GitHub-side revocation does not claw back what is already on disk.
+    names who brought it in. GitHub-side revocation does not claw back what is on disk.
   - **A pasted PAT bypasses the App-installation scope rule.** The device-flow token is a GitHub
-    App user-to-server token, so it can only reach repos where the App is installed. A pasted
+    App user-to-server token, so it reaches only repos that have the App. A pasted
     `github_pat_`/`ghp_` answers to no such bound.
-  - **A GitHub token rotates only if the App expires it** (Plan 21). A device-flow grant is stored
-    as a grant now, and the Manager refreshes it on use. But an App registered with user-token
+  - **A GitHub token rotates only if the App expires it** (Plan 21). The Manager stores a
+    device-flow grant as a grant and refreshes it on use. But an App registered with user-token
     expiration disabled still yields a permanent token. Revocation is at GitHub either way.
     Nothing tells an operator which of the two they registered.
   - **`git push` in the `default` WorkSandbox terminal has no forwarded credential.** Forwarding
-    shipped as `start_work_sandbox`'s `forward` argument (`app/WorkSandboxes.fs`), so a sandbox the
-    agent asked for can carry `github`. But `default` is the one nobody asks for, and it is created
-    with `Forwarded = []`. Its terminals do local git only until somebody starts a named sandbox.
-
-    In a sandbox that forwards `github`, every BLOCK is told who its commits are by. That is the
-    GitHub account behind the credential the block's act runs on
-    (`GitHubConnection.commitIdentity`). `__y_env` exports it at the head of the block's line and
-    takes it away when nobody's is known. But a sandbox that forwards nothing has no author, and
-    `Co-Authored-By` for the agent is absent everywhere.
+    is `start_work_sandbox`'s `forward` argument (`app/WorkSandboxes.fs`), so a sandbox the agent
+    asked for can carry `github`. But `default` is the one nobody asks for, and it starts with
+    `Forwarded = []`. Its terminals do local git only until somebody starts a named sandbox. In a
+    sandbox that forwards `github`, `__y_env` exports each BLOCK's commit author: the GitHub
+    account behind the credential its act runs on (`GitHubConnection.commitIdentity`). A sandbox
+    that forwards nothing has no author, and `Co-Authored-By` for the agent is absent everywhere.
   - **A forwarded `github` credential reaches every backend by the host address its sandbox can
-    use.** Forwarding is a route through the session's git gateway (`app/GitGateway.fs`). The
-    sandbox's git is told one `insteadOf`, and the credential never enters the sandbox. The route
-    has to be REACHABLE. `Sandboxes.hostAddressFrom` documents the answer per backend and
-    platform. The gateway binds every interface because of the docker answer.
-
-    The macOS answer for srt is the box's own hostname. It assumes the box resolves its own name.
-    Where it does not, a confined git gets a proxy error that names the host instead of a route.
-
-    A `Provision` carries the host it needs as a `Domains` entry, and the composition widens a
-    filtering backend's allowlist by it.
-  - **Under `YESSION_SESSION_AGENT_BACKEND=host` the git verbs run unconfined.** This is the
-    operator's explicitly lax choice, as everywhere `host` is chosen. The per-invocation hardening
-    (hooks/fsmonitor/ext off, no global config, protocol pinned) still applies. The filesystem and
-    egress boundaries do not.
-  - **Every srt sandbox may write a checkout's `.git/config`.** srt denies that write by default,
-    and a `git clone` makes it, so the flag is on, for every sandbox. Scoping the flag to the git
-    sandbox is a change nobody has made yet, and srt does not refuse it (`AllowGitConfig` in
-    `app/Sandboxes.fs` says why). Until then the WorkSandbox and the agent can write a
-    `.git/config` too. They can plant a `core.fsmonitor`, an alias, or a pager that runs when git
-    next runs in that checkout.
-    - Inside the session, that is the shared-trust boundary already stated above. The verbs
-      themselves are immune, because the per-invocation `GIT_CONFIG_*` hardening wins over any
-      repo config.
-    - OUTSIDE the session, a human who runs git in the checkout on their own host is not immune.
-
-    `.git/hooks`, the other half of the same vector, stays denied.
-  - **The clone verb runs with no filesystem confinement.** A confined process cannot materialize
-    a checkout that contains a name srt refuses, and srt scopes the exemption per SPAWN, never per
-    path. The comment on `FilesystemConfinement` in `src/Yession.Domain/Sandbox.fs` lists the
-    names, says why the exemption applies on Linux too, and says when to undo it.
-
-    So `add_repo`'s clone has its own sandbox with srt's filesystem rules off. For that one
-    command, git can read and write whatever the session's user can, including the credential
-    files srt would otherwise mask. `filesystem.disabled` drops the READ policy together with the
-    write one, so the read scope above does not reach this spawn either. Egress stays pinned to
-    github.com, the env stays the hardened one, and every other verb keeps the confined policy.
-    None of them writes a path that srt objects to. The exemption also goes away if srt reads
-    `allowGitConfig` per spawn.
+    use.** The header of `app/GitGateway.fs` describes the route and why it binds every
+    interface, and `Sandboxes.hostAddressFrom` gives the address per backend and platform. The
+    macOS answer for srt is the box's own hostname. Where the box does not resolve its own name,
+    a confined git gets a proxy error that names the host. A `Provision` carries the host it
+    needs as a `Domains` entry, and the composition widens a filtering backend's allowlist by it.
+  - **Under `YESSION_SESSION_AGENT_BACKEND=host` the git verbs run unconfined**, the operator's
+    explicitly lax choice. The per-invocation hardening (hooks/fsmonitor/ext off, no global
+    config, protocol pinned) still applies. The filesystem and egress boundaries do not.
+  - **Every srt sandbox may write a checkout's `.git/config`** (`AllowGitConfig` in
+    `app/Sandboxes.fs` says why, and that scoping it to the git sandbox is not done yet). So the
+    WorkSandbox and the agent can plant a `core.fsmonitor`, an alias, or a pager that runs when
+    git next runs in that checkout. Inside the session, that is the shared-trust boundary above,
+    and the verbs are immune because the per-invocation `GIT_CONFIG_*` hardening wins over repo
+    config. A human who runs git in the checkout on their own host is NOT immune. `.git/hooks`
+    stays denied.
+  - **The clone verb runs with no filesystem confinement.** The comment on
+    `FilesystemConfinement` in `src/Yession.Domain/Sandbox.fs` says why, lists the names, and
+    says when to undo it. For that one command, git can read and write whatever the session's
+    user can, including credential files srt would otherwise mask, and the read scope does not
+    reach it either. Egress stays pinned to github.com, the env stays hardened, and every other
+    verb keeps the confined policy, since none of them writes a path srt objects to. The
+    exemption also goes away if srt reads `allowGitConfig` per spawn.
   - **A docker terminal does not open on the checkouts.** Under the host-family backends, the
-    repos directory sits inside the workspace a terminal starts in (`Sandboxes.SessionLayout`), so
-    the agent's first `ls` shows what it cloned. The docker backend cannot do this. Its workspace
-    is whatever the image's working directory is, because this session composes no
-    `WorkingDirectory`, so nothing here knows the path. The repos dir arrives as a bind mount at
-    `/repos` beside it. A verb still ANSWERS with the right path (`reposVisibleAt`), so nothing is
-    unreachable. The cost is one `cd` that the other backends no longer need.
-  - **A repo's `yession.yaml` is read, and here is what it still cannot say** (Plan 27). The file
-    declares sandboxes and nothing else. A sandbox is the only scope where "two repos both said
-    something" has a total answer. The keys are (repo, name) pairs and the repos are disjoint, so
-    the union is disjoint by construction. **That is the rule for every future key: a key belongs
-    in `yession.yaml` only if its scope is a sandbox.** What that leaves out, deliberately:
+    repos directory sits inside a terminal's start workspace (`Sandboxes.SessionLayout`), so the
+    agent's first `ls` shows what it cloned. Under docker, the workspace is the image's working
+    directory (this session composes no `WorkingDirectory`), and the repos dir is a bind mount at
+    `/repos` beside it. Verbs still answer with the right path (`reposVisibleAt`). The cost is
+    one `cd`.
+  - **Yession reads a repo's `yession.yaml`, and here is what it still cannot say** (Plan 27).
+    The file declares sandboxes and nothing else. A sandbox is the only scope where "two repos
+    both said something" has a total answer: the keys are (repo, name) pairs and the repos are
+    disjoint, so the union is disjoint by construction. **That is the rule for every future key:
+    a key belongs in `yession.yaml` only if its scope is a sandbox.** Left out, deliberately:
     - **No inter-sandbox networking.** A `db:` sandbox's process is reachable from inside that
       sandbox only. A compose-like shared network is a design of its own.
     - **A `command` (`cmd`), an `entrypoint`, the limits (`memory`, `oom-score-adj`,
-      `pids-limit`, `cgroup-parent`) and a `dialect` are docker-only.** They live inside or
-      beside the `container:` block. Under `srt` or `host`, there is nowhere to write one, instead
-      of a refusal to explain. The exception is `dialect`, which is refused on a sandbox with no
-      container because it reads as if it would apply.
-    - **A memory kill is named only for a block that died from SIGKILL.** A terminal block reads
-      its container's `memory.events` before and after it runs (`MemoryWatch` in
-      `Terminals.fs`). When `oom_kill` went up and the block exited 137, the block says "killed:
-      out of memory". It also says if the container reached its own limit (`oom` went up too) or
-      if the machine ran out (`oom` did not go up). What it still cannot say:
-      - A block whose CHILD was killed, and which then exited with its own code, reports that
-        code. A build whose compiler process died exits 1. The counters went up, but the kill of
-        some other process in the same container looks the same, so the block does not guess.
-      - Two blocks that run at the same time in one container share the counters. A block that
-        another cause killed with 137, while a sibling block was OOM-killed, reads as a memory
-        kill.
+      `pids-limit`, `cgroup-parent`) and a `dialect` are docker-only.** They live in or beside
+      the `container:` block, so under `srt` or `host` there is nowhere to write one. The
+      exception is `dialect`, which a sandbox with no container refuses because it reads as if
+      it would apply.
+    - **Only a block that died from SIGKILL can say "killed: out of memory".** A terminal block
+      reads its container's `memory.events` before and after it runs (`MemoryWatch` in
+      `Terminals.fs`). When `oom_kill` went up and the block exited 137, it says so, and whether
+      the container hit its own limit (`oom` went up too) or the machine ran out (`oom` did
+      not). What it cannot say:
+      - A block whose CHILD died and which then exited with its own code reports that code (a
+        build whose compiler died exits 1). Another process's kill in the same container looks
+        the same, so the block does not guess.
+      - Two blocks that run at once in one container share the counters. A block that another
+        cause killed with 137, while a sibling was OOM-killed, reads as a memory kill.
       - The gate's commands, `setup:` and the session's own execs do not read the counters.
       - The Docker tier pins case (a) with a 64m container. Nothing tests case (b) for real: it
         needs the whole VM to run out of memory.
-    - **No operator ceiling on a container's memory.** A repo's `memory:` is checked against
-      what the daemon has, not against a share the operator chose. Six sessions that each
-      declare most of the VM are each accepted.
+    - **No operator ceiling on a container's memory.** Yession checks a repo's `memory:` against
+      what the daemon has, not a share the operator chose. Six sessions that each declare most of
+      the VM all pass.
     - **A `cgroup-parent` is the repo's to name, and the host's to make.** Nothing in yession
-      creates the parent cgroup or gives it a limit.
-      [technical-design.md §4](technical-design.md#4-repo-local-configuration) gives the
-      spelling per cgroup driver and what this repo's host makes. Where the parent is missing,
-      Docker (cgroupfs) or systemd makes it with no limit, which changes nothing. A `memory:` is
-      also not checked against the parent's limit, only against the daemon's total.
+      creates the parent cgroup or limits it
+      ([technical-design.md §4](technical-design.md#4-repo-local-configuration) gives the
+      spelling per driver and what happens when the parent is missing). Yession checks a
+      `memory:` against the daemon's total, not the parent's limit.
     - **No `${VAR}` in an entrypoint.** compose interpolates from the host's environment at parse
-      time. That is the wrong environment here: the sandbox's is the one that means something.
-      Nothing has needed it. The string form is read into words and nothing else. A value that
-      needs expansion is one to run through an actual `sh -c`.
-    - **No per-session ceiling.** The tier-3 operator env is host-wide. So a human at the command
+      time, the wrong environment here. Nothing needs it yet. The string form splits into words
+      and nothing else. A value that needs expansion belongs in an actual `sh -c`.
+    - **No per-session ceiling.** The tier-3 operator env is host-wide, so a human at the command
       gate bounds a widening ask, not a policy for this session.
     - **No file watcher.** A `git pull` that changes the file takes effect at the next fold
       trigger: boot, or `add_repo` / `switch_branch` / `remove_repo`.
     - **No session-wide keys, and there will not be.** Gates, approvals and MCP servers are
       session-wide, so two repos that disagree have no honest tie-break. Those stay the
-      operator's. A `repos:` key (this repo needs that one) is recursive, and its fixed point is a
-      design of its own.
-    - **A repo's file is as trusted as its push access.** Only the gate and the schema's own
+      operator's. A `repos:` key (this repo needs that one) is recursive, and its fixed point is
+      a design of its own.
+    - **A repo's file has the trust of its push access.** Only the gate and the schema's own
       refusals mitigate this: the reserved `YESSION_` prefix, a host-path volume, and a workdir
       outside the checkout.
-- **The session's imperative API is split, and only half of it is built** (Plan 15). Commands
-  mutate and belong to the agent alone. Queries read and are declared once. They reach the agent
-  as generated MCP tools (`readOnlyHint`) and the humans as a generated settings surface fed by
-  one multiplexed SSE stream. Stage 1 shipped. It retired the Repos panel's add/remove/switch
-  controls and the `/repos*` routes. Remaining, deliberate:
-  - **Every session member reads every query.** There is no per-query authorization. The timeline
-    takes the same stance: every member reads every attributed act-line. A query that should not
-    be session-wide has nowhere to hide yet.
-  - **The shipped classifier approves everything.** Every terminal block and every structured
-    command passes the classifier (`Classify.fs`, Plan 23) on its way to happening. The only
-    implementation is `Classifier.approveAll`. So until an AI-driven classifier lands, nothing
-    stands between an agent turn and any command except the work sandbox's confinement.
-
-    Manual approval was removed deliberately, not lost. The queue stays visible and editable,
-    refusals stay recorded and attributed, and the seam is where the real classifier plugs in.
+- **The session's imperative API has two halves, and only one exists** (Plan 15). Commands
+  mutate and belong to the agent alone. Queries read and have one declaration each. They reach
+  the agent as generated MCP tools (`readOnlyHint`) and the humans as a generated settings
+  surface fed by one multiplexed SSE stream. Stage 1 shipped and retired the Repos panel's
+  add/remove/switch controls and the `/repos*` routes. Remaining, deliberate:
+  - **Every session member reads every query.** No per-query authorization exists, as on the
+    timeline, where every member reads every attributed act-line. A query that should not be
+    session-wide has nowhere to hide yet.
+  - **The shipped classifier approves everything.** Every terminal block and structured command
+    passes the classifier (`Classify.fs`, Plan 23), whose only implementation is
+    `Classifier.approveAll`. Until an AI-driven classifier lands, only the work sandbox's
+    confinement stands between an agent turn and any command. Manual approval went deliberately:
+    the queue stays visible and editable, refusals stay recorded and attributed, and the seam is
+    where the real classifier plugs in.
   - **A forwarded credential is a route, and the route's cap lives in the sandbox's env for that
     sandbox's lifetime** (Plan 15 stage 2, reshaped by the git gateway). The header of
-    `app/GitGateway.fs` describes the route, the per-sandbox capability and the per-block loan
-    (`__y_env`). The VALUE does not enter the sandbox. The gateway resolves the credential on
-    every request, so a refresh under Plan 21 reaches a running sandbox, and a revocation at the
-    provider is felt on the next push. `stop_work_sandbox` revokes the route. A push writes
-    `GitCredentialSpent` to the log, which is where the person whose credential it was finds out.
+    `app/GitGateway.fs` describes the route, the per-sandbox cap, the per-block loan (`__y_env`)
+    and why a block can read another's live loan from `/proc`. The VALUE never enters the
+    sandbox. A refresh under Plan 21 reaches a running sandbox, a revocation at the provider
+    shows on the next push, and `stop_work_sandbox` revokes the route. A push writes
+    `GitCredentialSpent` to the log, where the person whose credential it was finds out.
 
-    What the sandbox holds is the cap and, in each block's environment, that block's loan.
-    Everyone in the session and everything running in it can read the loan. A block can read
-    another block's live loan out of `/proc`, the same shared trust boundary Plan 14 states. The
-    loan is worth exactly "act as this sandbox's git at this session's gateway" for as long as it
-    is live, because a loan answers only on the route of the sandbox it was lent in.
+    The transcript is NOT held. `env`, `printenv` or a program that dumps its environment on
+    exit prints the loan into a durable record that replays to every peer, present and future.
+    The printed loan dies at the terminal's next block and works only inside that sandbox, but
+    the person it names stays in the transcript for good.
 
-    What is NOT held is the transcript. The loan is in the block's environment. So `env`,
-    `printenv`, or a program that dumps its environment on the way down prints the loan into a
-    durable record. That record replays to every peer, present and future. A printed loan is a
-    live credential only until the terminal's next block returns it, and only from inside that
-    sandbox. But the person it names is in the transcript for good.
-
-    A lease lends nothing, and a take types nothing into the shell. A take returns every loan out
-    on the terminal except the holder's own running block's, so what a holder types spends their
-    own credential or none. A push typed there otherwise is refused in words. A person's acts with
-    a credential are blocks, sent from the command line, like everyone's.
-
-    Only `github` is forwardable so far. The gateway admits only git's three smart-HTTP requests
-    to a repository path, so a cap is not a token for the rest of github.com.
-  - **The GitHub API reaches a sandbox only as far as somebody bound it.** A connection forwarded
-    by `api` routes `api.github.com` and `uploads.github.com` to the credential proxy, and
-    nothing else. The route is a `${proxy.https}` that the sandbox was given, so it exists only
-    under docker or the host. srt is not given the route at all (`CredentialProxy.forwardApi`).
-    Two further bindings come from the operator, in a resource's `env`, or from a repo's
-    declaration. Nothing sets them on a sandbox's behalf:
-    - which bundle a client trusts (`${proxy.ca-file}`)
-    - which variables carry a stand-in (`${github.token}`)
-
-    A sandbox that binds neither reaches the API through the proxy unauthenticated. The stand-in is
-    in the block's environment exactly as the git loan is, with the same transcript caveat above.
-    The proxy, unlike the gateway, admits every request to a declared host. So a stand-in is the
-    lender's whole API token for as long as it is live.
-  - **The AgentSandbox is granted nothing.** The agent CLI runs with no built-in tools. Every
-    command it issues runs in a work sandbox, under that sandbox's grants. Its own process holds no
-    connection and no proxy, and nothing in the profile can give it one. If the CLI ever runs tools
-    of its own, it needs a selection of its own first.
-  - **A grant is the operator's file as it reads today, and nobody consents to it.** What a sandbox
-    is given is the closure of its selection under the current profile (`ResourceProfile.grants`).
-    A person who joins a session is not shown it. A change to a profile or to a repo's file widens
-    what every later sandbox holds, without anybody being asked.
-
-    The closure is already the one value that says what was granted. Two remedies build on it, not
-    on a second account of the same thing. One is to show it at join or at connect. The other is to
-    record it per person, so that a later configuration cannot widen a grant silently.
-  - **An external MCP server's read-only tools are not queries yet.** `readOnlyHint` is declared,
-    not inferred, precisely so that a third-party server's queries could be listed into the
-    registry without a yession-specific convention. But only the in-process registrations reach
-    the registry. The rendering is in the way: a foreign tool's answer has an arbitrary JSON
-    Schema, and the generated surface draws rows, fields and a value. The missing piece is a
-    JSON-Schema-subset renderer.
-  - **A person cannot mint a stream without the agent.** Someone who wants a device terminal before
-    the agent has opened one has to ask the agent for it. Yession cannot offer a button. The tool
-    that mints a stream offer has a name and an argument schema learned at runtime, and the product
-    has no opinion about either.
-
-    The general answer is a human surface for invoking a declared tool. It would be a form
-    generated from the tool's JSON Schema, plus an authorization story for a person who calls a
-    foreign tool directly.
-- **Per-user agent credentials landed** (Plan 08). A human signs into their Claude account from the
-  session's Connections panel: "this session only" (`SessionScope`) or "all my sessions" (their
-  user scope, or the local scope under `--auth localhost`). The Manager brokers the OAuth exchange
-  as pure standards and never learns the provider. Each agent turn runs on the TURN ACTOR's
-  credential (session-scoped ▸ actor's own ▸ ambient env), resolved fresh per turn with
+    A lease lends nothing, and a take types nothing into the shell. A take returns every loan on
+    the terminal except the holder's own running block's, so what a holder types spends their own
+    credential or none, and a push otherwise gets a refusal in words. A person's acts with a
+    credential are blocks, sent from the command line, like everyone's. Only `github` is
+    forwardable so far. The gateway admits only git's three smart-HTTP requests to a repository
+    path, so a cap is not a token for the rest of github.com.
+  - **The GitHub API reaches a sandbox only as far as somebody bound it.** A connection
+    forwarded by `api` routes `api.github.com` and `uploads.github.com` to the credential proxy,
+    and nothing else, and never under srt ([technical-design.md
+    §4](technical-design.md#4-repo-local-configuration) has the `${proxy.…}` and
+    `${github.token}` references). Nothing sets the trust bundle or the stand-in on a sandbox's
+    behalf: only an operator's resource `env` or a repo's declaration binds them. A sandbox that
+    binds neither reaches the API through the proxy unauthenticated. The stand-in sits in the
+    block's environment like the git loan, with the same transcript caveat. Unlike the gateway,
+    the proxy admits every request to a declared host, so a live stand-in is the lender's whole
+    API token.
+  - **The AgentSandbox has no grants.** The agent CLI runs with no built-in tools. Every command
+    it issues runs in a work sandbox, under that sandbox's grants. Its own process holds no
+    connection and no proxy, and nothing in the profile can give it one. If the CLI ever runs
+    tools of its own, it needs a selection of its own first.
+  - **A grant is the operator's file as it reads today, and nobody consents to it.** A sandbox
+    gets the closure of its selection under the current profile (`ResourceProfile.grants`).
+    Nobody shows it to a person who joins a session. A change to a profile or a repo's file
+    widens what every later sandbox holds, and asks nobody. Two remedies build on the closure,
+    not on a second account of it: show it at join or at connect, or record it per person so a
+    later configuration cannot widen a grant silently.
+  - **An external MCP server's read-only tools are not queries yet.** A server declares
+    `readOnlyHint`, Yession does not infer it, so that a third-party server's queries could join
+    the registry without a yession-specific convention. But only in-process registrations reach
+    the registry. A foreign tool's answer has an arbitrary JSON Schema, and the generated
+    surface draws rows, fields and a value. The missing piece is a JSON-Schema-subset renderer.
+  - **A person cannot mint a stream without the agent.** Someone who wants a device terminal
+    before the agent opens one has to ask the agent. Yession cannot offer a button: the tool that
+    mints a stream offer has a name and argument schema learned at runtime. The general answer is
+    a human surface for a declared tool: a form generated from its JSON Schema, plus an
+    authorization story for a person who calls a foreign tool directly.
+- **Per-user agent credentials landed** (Plan 08). A human signs into their Claude account from
+  the session's Connections panel: "this session only" (`SessionScope`) or "all my sessions"
+  (their user scope, or the local scope under `--auth localhost`). The Manager brokers the OAuth
+  exchange as pure standards and never learns the provider. Each agent turn runs on the TURN
+  ACTOR's credential (session-scoped ▸ actor's own ▸ ambient env), resolved fresh per turn with
   Manager-side lazy refresh. Remaining, deliberate:
   - The ambient `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN` process env stays as the documented
-    last resort. It is how CI's LiveAgent tier feeds the agent, and it applies to ANY actor.
-  - A refresh failure surfaces only as the turn's failure. No panel-level health indicator exists.
+    last resort. It feeds CI's LiveAgent tier, and it applies to ANY actor.
+  - A refresh failure shows only as the turn's failure. No panel-level health indicator exists.
   - The browser polls the panel's status. The SESSION learns of changes live over its control
     stream, but the open browser tab re-asks.
-- **Live-path verification is credential-gated by design.** The `LiveAgent` capability makes
-  `verify` fail without `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN`, instead of skipping (see
-  `requireCapabilities` in [tasks.fsx](../tasks.fsx)). A cheap-tier run
-  never asks. `YESSION_BIN_CLAUDE` matters in sandboxes that kill the SDK's vendored binary.
+- **Live-path verification needs a credential, by design.** The `LiveAgent` capability makes
+  `verify` fail without `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN`, not skip (see
+  `requireCapabilities` in [tasks.fsx](../tasks.fsx)). A cheap-tier run never asks.
+  `YESSION_BIN_CLAUDE` matters in sandboxes that kill the SDK's vendored binary.
 
-  That gate does NOT cover the credential going missing after it passes. The parent probes the
-  credential once, before the suite starts. The suites read it out of the process env, and the
-  suite is one process. So anything that mutates that env changes what every later suite tests.
-
-  That happened. `Phase2`'s credential-leak regression planted a key and DELETED it on the way
-  out. The live clone case, compiled after it, got a session with no credential. `SessionMain`
-  answers no credential by starting **no agent at all**, so the turn produced no reply and no
-  error. Nothing said why.
-
-  `Support.withEnv` (one verb: take and give back, absence included) closes the known cause, and
-  three cheap-tier cases pin it. The CLASS is still open. Nothing re-checks a declared capability
-  at the point a suite uses it, so the next mutation of process-wide state is silent in the same
-  way.
+  That gate does NOT cover the credential going missing after it passes. The parent probes it
+  once, and every suite in the one process reads it from the process env, so a suite that
+  mutates that env changes what later suites test. `Phase2`'s credential-leak regression once
+  DELETED the key on its way out, and the live clone case after it got **no agent at all**: no
+  reply, no error, no reason. `Support.withEnv` (take and give back, absence included) closes
+  that cause, and three cheap-tier cases pin it. The CLASS stays open: nothing re-checks a
+  declared capability where a suite uses it.
 
 ## Delivery & operations
 
 - **Node is a required runtime.** Yession ships as one npm package with two bins
   (`yession-manager`, `yession-session`). `npm i -g yession-*.tgz` pulls the platform-native deps
-  through npm's optional dependencies: `node-datachannel`'s addon AND the SDK's native `claude`.
-  So install is all it takes, and the agent works offline afterward.
-
-  But there is no self-contained binary anymore. A machine without Node ≥24 cannot run Yession
-  from npm. (The Nix installable wraps `nodejs_24`, so that route brings its own Node, at the cost
-  of needing Nix.)
+  through npm's optional dependencies (`node-datachannel`'s addon AND the SDK's native `claude`),
+  so after install the agent works offline. No self-contained binary exists anymore: a machine
+  without Node ≥24 cannot run Yession from npm. (The Nix installable wraps `nodejs_24`, at the
+  cost of needing Nix.)
 - **First install downloads the native `claude`** (~240 MB, platform-specific). It is not in the
-  300 KB tarball, so npm fetches it. The *first* install therefore needs network and disk. The
-  SDK's own resolution finds the binary afterward, so `YESSION_BIN_CLAUDE` is not needed.
-- **Build slots count only this repository's own heavy verbs.** The slots are described in
-  [AGENTS.md](../AGENTS.md#bootstrap) ("Heavy verbs take a build slot"). The ~7 GiB pool is in an
-  8 GiB Colima VM. A `dotnet` or `node` run by hand, another repository's build, or a `dev` watch
-  takes no slot. It can still push the pool into the kernel's OOM killer, which then picks the
-  largest process in ANY session.
-
-  The slot is admission, not a limit. A per-container memory limit (#1312) bounds one container.
-  The pool cgroup (`cgroup-parent: yession`, `/yession` on the VM's cgroupfs driver) keeps the
-  daemon itself out of reach. The host's Colima start wrapper (in the nix-darwin config) makes
-  that pool at every boot, not yession. Where it is missing, Docker makes `/yession` with no
-  limit, and the daemon is again in reach.
-- **The composition E2E and install smoke run on Linux/CI.** Other platforms' npm resolution rides
-  npm's own optional-dependency machinery, unverified per-commit.
+  300 KB tarball, so the *first* install needs network and disk. The SDK finds the binary
+  afterward, so `YESSION_BIN_CLAUDE` is not needed.
+- **Build slots count only this repository's own heavy verbs**
+  ([AGENTS.md](../AGENTS.md#bootstrap), "Heavy verbs take a build slot"). The ~7 GiB pool is in
+  an 8 GiB Colima VM. A `dotnet` or `node` run by hand, another repository's build, or a `dev`
+  watch takes no slot, and can still push the pool into the kernel's OOM killer, which picks the
+  largest process in ANY session. The slot is admission, not a limit. A per-container memory
+  limit (#1312) bounds one container. The pool cgroup (`cgroup-parent: yession`) keeps the
+  daemon out of reach, where the host makes it
+  ([technical-design.md §4](technical-design.md#4-repo-local-configuration)).
+- **The composition E2E and install smoke run on Linux/CI.** Other platforms' npm resolution
+  rides npm's own optional-dependency machinery, with no per-commit check.
 - **No per-platform build matrix for the npm route, no code signing.** Release CI ships one
   platform-neutral npm tarball and a Nix package, both from `ubuntu-latest`. npm's
-  `optionalDependencies` resolve the platform-native pieces on whichever machine runs
-  `npm install`. Yession does not build them. (This replaced the earlier SEA per-platform
-  binaries — see Step 26→28.)
-
-  Yession therefore has no compiled binary of its own to sign or notarise. The native `claude` and
-  the `node-datachannel` addon that npm pulls in are unsigned third-party downloads, and they may
-  still trip macOS Gatekeeper.
-
-  Darwin has one foothold: the PR gate builds the flake package on `macos-latest`, enters the dev
-  shell, and loads the native WebRTC addon there. But only the Linux install-smoke exercises the
-  npm INSTALL path on darwin, and everything on Windows.
+  `optionalDependencies` resolve the platform-native pieces on the machine that runs `npm
+  install`. (This replaced the earlier SEA per-platform binaries — see Step 26→28.) So Yession
+  has no compiled binary of its own to sign or notarise. The native `claude` and the
+  `node-datachannel` addon are third-party downloads with no signature, and may trip macOS
+  Gatekeeper. The PR gate builds the flake package on `macos-latest`, enters the dev shell, and
+  loads the native WebRTC addon there. But only the Linux install-smoke exercises the npm
+  INSTALL path on darwin, and everything on Windows.
 - **Telemetry is agent-turn usage plus Manager audit records** (Plans 04 + 06). Each completed
-  turn emits one OpenTelemetry **log record**: the token and cache counts plus session, turn and
+  turn emits one OpenTelemetry **log record**: token and cache counts plus session, turn and
   model ids, never message content. Every process is a **direct OTel emitter**, with no
-  Manager-side collector. The header of `app/Telemetry.fs` lists the standard `OTEL_*` variables
-  that choose the destination, and how the Manager passes them to each child.
-
-  Separately, the Manager emits its own in-process `yession.*` **audit records** for the
-  secrets/ABAC surface: ops, denies, injection, KEK/store lifecycle, user↔launch bindings, and
-  control 401s (see Plan 06 § Telemetry). Each is one greppable stdout line.
-
-  Still missing:
+  Manager-side collector (the header of `app/Telemetry.fs` gives the `OTEL_*` variables and how
+  they reach each child). The Manager also emits `yession.*` **audit records** for the
+  secrets/ABAC surface (ops, denies, injection, KEK/store lifecycle, user↔launch bindings,
+  control 401s, see Plan 06 § Telemetry), each one greppable stdout line. Missing:
   - a **metrics pipeline** and **traces** (the emitter path generalises to both, with the same
     env selection and no collector to touch)
   - **forwarding of audit records to a collector**
   - **structured app logging or crash reporting** beyond stdout
-- **Multi-node operation and work-intake integrations (Slack/Linear)** remain out of scope, as
-  planned. Terminals landed as Plan 13 and remote access as Plans 09/10/12. Still out of scope
-  there: a session that runs on a machine other than its Manager's.
-
-  The deployment shapes are now loopback and fronted
-  ([ADR](decisions/2026-08-28-deployment-fronts-everything-or-nothing.md)). The remaining
-  centralisation is the connection broker's single refresher. A provider that rotates refresh
-  tokens on use makes two nodes that share one stored grant a race. The second node loses it. This
-  is the reason the in-flight map in `app/Broker.fs` exists.
-
-  The sketched exit is per-node grants: each node has its own sign-in, and nothing is replicated.
-  It is deliberately a follow-up, not built.
+- **Multi-node operation and work-intake integrations (Slack/Linear)** stay out of scope, as
+  planned. Terminals landed as Plan 13 and remote access as Plans 09/10/12. Still out of scope:
+  a session on a machine other than its Manager's. The deployment shapes are loopback and
+  fronted ([ADR](decisions/2026-08-28-deployment-fronts-everything-or-nothing.md)). The
+  remaining centralisation is the connection broker's single refresher: a provider that rotates
+  refresh tokens on use makes two nodes that share one grant a race, which the second node loses
+  (the reason for the in-flight map in `app/Broker.fs`). The sketched exit is per-node grants,
+  each node with its own sign-in and nothing replicated. It is a follow-up, not built.
 
 ## Testing debt
 
@@ -1329,97 +1082,77 @@ one pass rewrites it to whatever still reproduces.
   *frames* on the wire.
 - The vendored Hedgehog does no shrinking. A failing property prints the whole schedule, not a
   minimal one.
-- Load and scale characteristics (many peers, large logs, long drafts) are unmeasured.
-- **The serial engine is tested against a tty, never against a chip** (Plan 16, part E).
-  `check Serial` drives `Ports.real` over a socat PTY pair. So the open, the line settings, the
-  read and write paths, and the vanish path all cross a real kernel tty. No CI box can cover a
-  specific adapter. Three examples:
-  - a baud rate that the driver silently rounds
-  - a chip that needs DTR/RTS toggled to come out of reset
-  - a USB stack that reuses `/dev/ttyUSB0` for a different device after a replug
-
-  Those faults surface on hardware or not at all.
+- No measurement covers load and scale (many peers, large logs, long drafts).
+- **The serial engine meets a tty in tests, never a chip** (Plan 16, part E). `check Serial`
+  drives `Ports.real` over a socat PTY pair, so the open, the line settings, the read and write
+  paths, and the vanish path all cross a real kernel tty. No CI box can cover a specific adapter:
+  a baud rate the driver silently rounds, a chip that needs DTR/RTS toggled to leave reset, a USB
+  stack that reuses `/dev/ttyUSB0` for another device after a replug. Those faults surface on
+  hardware or not at all.
 
 ## Terminals
 
-- **A queued command whose terminal closes stays queued for ever, and is now unreachable.**
-  Nothing runs it and nothing removes it. This is deliberately non-destructive, instead of
-  silently dropping someone's text. But a closed terminal renders its recording instead of its
-  composer (stage 3e). So the entry that was at least visible and deletable before is now neither.
-  It sits in the doc with no surface at all.
-- **Terminal access equals session access.** A terminal can read the sandbox's environment (`env`).
-  After resolve-at-spawn, that environment includes secrets the session's spec references. This is
-  not a new privilege, because any peer could already ask the agent to run `env`. But a terminal
-  makes it one keystroke. A future per-user terminal gate would attach here.
+- **A queued command whose terminal closes stays queued for ever, and nobody can reach it.**
+  Nothing runs or removes it, deliberately, so nobody's text drops silently. But a closed
+  terminal renders its recording instead of its composer (stage 3e), so the entry has no surface
+  at all.
+- **Terminal access equals session access.** A terminal can read the sandbox's environment
+  (`env`), which after resolve-at-spawn includes secrets the session's spec references. Any peer
+  could already ask the agent to run `env`, so this is no new privilege, but a terminal makes it
+  one keystroke. A future per-user terminal gate would attach here.
 - **A screen that showed a secret is in the recording, permanently, one tap from the chat.**
-  Keystrokes are deliberately not captured (`Session/Terminals.fs`, `Input`), because live mode
-  makes typing a password ordinary. But output is captured. The replay work removed the age at
-  which a closed transcript was deleted, and it put a tappable chip on every block and lease
-  stretch.
-
-  So the distance between a secret and a casual reader is now one tap. That holds for every peer
-  in the session, for as long as the session's data exists. Nothing here is newly privileged,
-  because terminal access already equals session access. But anything that widens who may read a
-  session (a link scope, a public view, an export) widens this with it.
+  Keystrokes stay out of the recording (`Session/Terminals.fs`, `Input`), because live mode makes
+  typing a password ordinary. Output goes in. The replay work removed the age limit on closed
+  transcripts and put a tappable chip on every block and lease stretch. So every peer is one tap
+  from a secret, for as long as the session's data exists. Terminal access already equals
+  session access, but anything that widens who may read a session (a link scope, a public view,
+  an export) widens this with it.
 - **`renewable` is a provider's claim about its own tool, and nothing verifies it** (Plan 19,
-  step 4). A closed stream offers a way back when the provider said asking again is safe. Pressing
-  it replays that tool call with its original arguments. A provider that marks a destructive tool
-  renewable makes the button destructive. The default is false, and the field is documented as a
-  promise. `SourceCapabilities` has the same standing, and it is unverifiable for the same reason:
-  only the thing on the other end knows.
+  step 4). A closed stream offers a way back when the provider said asking again is safe.
+  Pressing it replays that tool call with its original arguments, so a provider that marks a
+  destructive tool renewable makes the button destructive. The default is false, and the docs
+  call the field a promise. `SourceCapabilities` has the same standing: only the other end knows.
 - **A tool-use chip does not point at the terminal its call opened** (Plan 19).
-  `ToolUseFinished` carries `Block` for exactly this reason in the block case. The stream case has
-  no equivalent. So the audit says a call happened, the timeline says a terminal appeared, and
-  nothing joins them. A `Terminal : TerminalId option` beside `Block` is the obvious symmetry. It
-  was deliberately not smuggled into the step that would have needed it.
+  `ToolUseFinished` carries `Block` for the block case. The stream case has no equivalent, so
+  the audit says a call happened, the timeline says a terminal appeared, and nothing joins them.
+  A `Terminal : TerminalId option` beside `Block` is the obvious symmetry, deliberately kept out
+  of the step that would have needed it.
 - **The jumpstarter console has an echo floor of one quiet period** (~50ms measured at 61-67ms
-  round trip, set by `QUIET_SECONDS` in `examples/jumpstarter`). Its stream is a drain loop over a
-  `pexpect` handle, not ownership of the fd. A person typing therefore sees their own echo that
-  much late. The serial provider owns its fd and has no such floor.
-
-  The floor is a coalescing window we chose. It is not a cost of teeing a handle the SDK owns. The
-  drain matches a real pattern, returns on the first byte, and waits only long enough not to split
-  a line. (An earlier version read with `console.expect([pexpect.TIMEOUT])`, which always waits
-  its timeout out and never clears the buffer. It set the floor at the timeout and re-sent the
-  console's whole history five times a second.)
-- **An agent holds a lease where its own block has taken the screen, and nowhere else it could
-  have run a block instead.** Two steps closed this gap. What is left is a boundary, not a
-  shortfall.
+  round trip, set by `QUIET_SECONDS` in `examples/jumpstarter`). Its stream is a drain loop over
+  a `pexpect` handle, not ownership of the fd, so a typist sees their echo that much late. The
+  serial provider owns its fd and has no floor. The floor is a coalescing window we chose: the
+  drain matches a real pattern, returns on the first byte, and waits only long enough not to
+  split a line. (An earlier `console.expect([pexpect.TIMEOUT])` waited its whole timeout, never
+  cleared the buffer, and re-sent the console's history five times a second.)
+- **An agent holds a lease where its own block took the screen, and nowhere else it could
+  have run a block instead.** What remains is a boundary, not a shortfall:
   - Plan 19 step 3: a live-only source has no blocks, so `execute_command` has nothing to do
-    there. The alternative was the provider's own write tool, past the lease entirely.
-    `write_terminal` now takes the lease exactly as a peer does: visible in the holder field,
-    stealable back mid-sentence, with every byte in the transcript.
-  - Plan 20 stage 6a was a bug, not a policy. The alt-screen flip refused to hand an
-    agent-authored block its terminal. A full-screen program waited for a keystroke that nobody
-    was allowed to send. Its block never finished, and every command queued behind it stalled for
-    ever. The flip now follows the AUTHOR, agent included.
+    there. `write_terminal` takes the lease exactly as a peer does: visible in the holder field,
+    stealable back mid-sentence, every byte in the transcript.
+  - Plan 20 stage 6a fixed a bug: the alt-screen flip refused to give an agent-authored block its
+    terminal, so a full-screen program waited for a keystroke nobody could send, and every
+    command behind it stalled. The flip now follows the AUTHOR, agent included.
 
-  The boundary that remains: the agent cannot TAKE an instrumented terminal. It may only use the
-  one that detection hands it, over a block already classified and on the record. Taking it would
-  be the door around the classifier that `execute_command` is the one door for (Plan 23).
-
-  The drain gate that accompanies live mode (Plan 13, stage 2e) is unchanged. A leased terminal
-  holds its queue instead of typing into a session someone else owns.
+  The agent cannot TAKE an instrumented terminal. It may only use the one detection hands it,
+  over a block already classified and on the record. Taking it would be a door around the
+  classifier, and `execute_command` is the one door (Plan 23). The drain gate of live mode
+  (Plan 13, stage 2e) stays: a leased terminal holds its queue instead of typing into a
+  session someone else owns.
 - **A rejected command is silent to whoever issued it.** `SessionCommandResult` carries
-  `CommandRejected reason`, and no client reads it. The browser has no notice surface at all, so
-  `grep CommandRejected src/Yession.App` finds nothing. Every refusal a peer command can produce
-  lands the same way: the button does nothing, and the reason exists only in the Process's answer.
-
-  This was found while building the capability-approval prompt (Plan 27). Its own refusal ("what
-  this repo asks for changed since you looked") is exactly the sentence somebody needs and cannot
-  see. The gap is not specific to that command and not fixable inside it. A rejection needs
-  somewhere to be shown, and there is nowhere yet.
-- **A block waiting on a keystroke is announced to the agent and to nobody else.**
-  `execute_command` answers `TerminalCommandInteractive` the moment detection hands the terminal
-  over. The agent has `write_terminal`/`read_terminal` to resolve it. If it does not, the chat
-  shows only a pulsing chip. The affordance a person needs is the terminal panel's ordinary lease
-  bar, which they have to go and find. A handoff card in the chat was designed and not built.
-- **The live viewport is proven host-free, never against a real pty end to end** (Plan 14,
-  stage 6). Stage 6 closed the older "no browser viewport" gap. The panel renders a live screen,
-  the holder's copy takes keystrokes, and the client composes it with the same emulator the
-  Session uses.
-
-  What no suite drives is the whole loop at once. Stage 6's own note says so. The keystroke
-  translation is answered host-free under `Browser`, because a `KeyboardEvent` is the part only a
-  real browser can answer. The pty suite pins the Process half separately. Neither end covers two
-  peers sharing one real pty, with one of them typing into it.
+  `CommandRejected reason`, and no client reads it. The browser has no notice surface, so
+  `grep CommandRejected src/Yession.App` finds nothing. For every refusal a peer command can
+  produce, the button does nothing, and the reason exists only in the Process's answer. The
+  capability-approval prompt (Plan 27) showed it: its refusal ("what this repo asks for changed
+  since you looked") is the sentence somebody needs and cannot see. A rejection needs somewhere
+  to show, and no such place exists yet.
+- **Only the agent hears that a block waits on a keystroke.** `execute_command` answers
+  `TerminalCommandInteractive` when detection hands the terminal over, and the agent has
+  `write_terminal`/`read_terminal` to resolve it. If it does not, the chat shows only a pulsing
+  chip, and a person must find the terminal panel's lease bar. A handoff card in the chat has a
+  design but no build.
+- **The live viewport works host-free, never against a real pty end to end** (Plan 14, stage 6).
+  The panel renders a live screen, the holder's copy takes keystrokes, and the client composes it
+  with the same emulator the Session uses. No suite drives the whole loop, as stage 6's note
+  says. The keystroke translation runs host-free under `Browser`, because only a real browser
+  answers for a `KeyboardEvent`. The pty suite pins the Process half. Neither covers two peers on
+  one real pty, with one of them typing.
