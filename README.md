@@ -163,8 +163,8 @@ avoids GitHub, see
 ### Testing
 
 Tests declare what they need in code, not by folder (`Ports`, `Docker`, `LiveAgent`,
-`Browser`, or nothing for a pure suite). Where the environment does not meet those needs,
-the harness skips the suite cleanly. There are two tiers:
+`Browser`, or nothing for a pure suite). [`Tags.fs`](https://github.com/trinketworks/yession/blob/master/tests/Yession.Tests/Tags.fs)
+says which suites a run includes. There are two tiers:
 
 - `check` is the cheap tier: pure, model, and protocol suites on Node, with no ports or
   credentials. PRs run it. (`check Browser`, `check Ports Native`, … add tiers.)
