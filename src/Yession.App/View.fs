@@ -158,25 +158,20 @@ module View =
 
     // --- Sidebar ------------------------------------------------------------------------
 
-    /// The offer to bring a stopped session back (Plan 11), in place of the connection
-    /// status word — the same move `peopleSection` makes for a missing agent: when the
-    /// thing being reported is not a state you can wait out, a status word is the wrong
-    /// shape, and what belongs there is what is wrong plus the button that fixes it.
+    /// The way back to a session this page cannot reach (Plan 11): reopening it through the
+    /// Manager, which launches a session that stopped and hands the browser back.
+    ///
+    /// Offered while an attempt to reach the session is FAILING, and behind the status line's
+    /// disclosure rather than on it. The page cannot tell a session that stopped from one it
+    /// cannot reach — both answer nothing, or a gateway's error — so it does not claim the
+    /// first; but reopening is the one thing a person can do about it, so it is never further
+    /// than the reason it fixes. A refused page is not offered it: what it needs is a sign-in,
+    /// which reopening does not give (`StatusVerb.SignInAgain`).
     ///
     /// TOTAL over the model, which is what makes the failure modes structural rather than
-    /// defensive. The offer needs a settled disconnection (a session still reconnecting has
-    /// nothing to reopen), a Manager to ask, and a session to ask for; absent any of them
-    /// the ordinary status renders. The view never reads the DOM, so there is no path that
-    /// produces a button with nowhere to go — the shell omitting the meta tag is enough.
-    /// The way back, wherever the report is. ONE definition, because it is one act and it
-    /// now has two homes: the card in the nav column, and the bar for where the column cannot
-    /// be seen. It briefly had only the first — which, once the column's mount became
-    /// `max-md:hidden`, meant a phone could be told its session had stopped and offered
-    /// nothing whatever to do about it.
-    ///
-    /// TOTAL over the model for the same reasons the card always was: reopening needs a
-    /// settled disconnection, a Manager to ask, and a session to ask for. Absent any of them
-    /// there is no link, rather than a button with nowhere to go.
+    /// defensive: reopening needs a failing attempt, a Manager to ask, and a session to ask
+    /// for. Absent any of them there is no link, rather than a link with nowhere to go. The
+    /// view never reads the DOM, so the shell omitting the meta tag is enough.
     ///
     /// A plain anchor, with NO click handler. It had one — `location.assign` of the same
     /// URL, described as an enhancement over the href — and the two fired together: every
@@ -185,126 +180,103 @@ module View =
     /// its port and its OIDC registration; the login bounce then redeemed its code against
     /// whichever registration had won, and the page ended on a bare `authorization failed`.
     /// The navigation IS the mechanism, and a link performs it once.
-    let private reopenAction (model: ClientModel) (extra: string) : TemplateResult option =
-        let away =
+    let private reopenAction (model: ClientModel) : TemplateResult option =
+        let failing =
             match model.Link with
-            | SessionLink.Refused _
             | SessionLink.Connecting { Failed = Some _ }
             | SessionLink.Reconnecting ({ Failed = Some _ }, _) -> true
             | SessionLink.Connecting _
             | SessionLink.Reconnecting _
             | SessionLink.Fetching _
             | SessionLink.Stalled _
-            | SessionLink.Current -> false
-        match away, model.Manager, model.Session with
+            | SessionLink.Current
+            | SessionLink.Refused _ -> false
+        match failing, model.Manager, model.Session with
         | true, Some origin, Some sessionId ->
             let target = ManagerRoute.at origin (ManagerRoute.OpenSession sessionId)
             Some (
                 html $"""
-                    <a class="{Style.cls [ Style.btnPrimary; extra ]}"
-                       href="{target}"
+                    <a class="{Style.statusVerbLink}" href="{target}"
                        data-session-reopen="{target}">{Dom.Text.reopenSession}</a>""")
         | _ -> None
 
-    let private reconnectOffer (model: ClientModel) : TemplateResult option =
-        // What the card's status line says: a session that stopped answering for good, or one
-        // this client is still trying — the same offer either way, because reopening is the
-        // one thing a person can do about both, but the word should not say "stopped" over a
-        // loop that is still at work.
-        let settled =
-            match model.Link with
-            | SessionLink.Refused (reason, _) ->
-                Some (
-                    reason,
-                    html $"""<span class="{Style.syncRow}"><span class="{Style.syncDot} bg-err"></span><span class="{Style.statusErr}">session stopped</span></span>""")
-            | SessionLink.Connecting { Failed = Some failure }
-            | SessionLink.Reconnecting ({ Failed = Some failure }, _) ->
-                Some (
-                    Dom.Text.retryingWhy failure.Reason failure.Count,
-                    html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{Dom.Text.retryingStatus}</span></span>""")
-            | SessionLink.Connecting _
-            | SessionLink.Reconnecting _
-            | SessionLink.Fetching _
-            | SessionLink.Stalled _
-            | SessionLink.Current -> None
-        match settled, reopenAction model Style.noAgentAction with
-        | Some (reason, status), Some action ->
-            // What reopening actually costs. Under a `{id}` template the session returns to
-            // the same address, so the doc in this browser is still its doc and syncs on
-            // reconnect. Addressed by port it returns somewhere new, and everything written
-            // here since it went is stranded — say so before they click, not after.
-            //
-            // The transport's own reason for stopping goes BEHIND the disclosure, with the
-            // storage rule when there is one. It used to open this card — so the sentence
-            // somebody reads before pressing a button began with a fault they can do nothing
-            // about, and the one that told them whether their work was safe came second.
-            let reopenPromise =
-                if model.EphemeralStorage then Dom.Text.reopenPromiseEphemeral else Dom.Text.reopenPromise
-            let why =
-                [ reason
-                  if model.EphemeralStorage then Dom.Text.ephemeralAddress ]
-            Some (
-                html
-                    $"""
-                    <div class="{Style.noAgentBlock}" data-session-gone>
-                      {status}
-                      <div class="{Style.noAgentPrompt}">
-                        <span class="{Style.noAgentEdge}"></span>
-                        <div class="{Style.noAgentBody}">
-                          <span class="{Style.small}">{reopenPromise}</span>
-                          {detailNote "session-gone" why}
-                          {action}
-                        </div>
-                      </div>
-                    </div>"""
-            )
-        | _ -> None
+    /// The one thing a status line offers to do, when it offers anything. A word the size of
+    /// the line it rides, never a box: the line is a notice, and a filled block in it was the
+    /// loudest thing on a screen that was otherwise working.
+    [<RequireQualifiedAccess>]
+    type private StatusVerb =
+        /// Ask again, here and now: the link, or reads that gave up (`RetryNowMsg`). It acts in
+        /// place, so it is a button, in ink.
+        | TryAgain
+        /// Sign in again, through the session's own sign-in, which comes back to this page. It
+        /// goes somewhere, so it is a link, in blue.
+        | SignInAgain
 
-    /// What the client's transport is doing, when it is doing something worth saying —
-    /// and `None` while both legs are healthy.
+    /// What the status line says, when the page's link is worth a word at all.
+    type private StatusLine =
+        { /// The state's token, on `data-degraded`: the same name, spelled for a machine.
+          Token : string
+          /// The state's name, in the caps voice, led by its dot.
+          Word : string
+          /// WRONG — red, its dot still — rather than a wait, whose dot beats.
+          Wrong : bool
+          /// What it costs, said on the surface where there is room for a sentence, for a state
+          /// that waits on a person: the cost is what decides whether to act. Every other state
+          /// says it behind the disclosure.
+          Promise : string option
+          /// Behind the disclosure: what it costs where that is not said above, why it is
+          /// happening, and, where the deployment cannot keep the promise, why it cannot.
+          Why : string list
+          Verb : StatusVerb option }
+
+    /// What the client's link is doing, when it is doing something worth saying — and `None`
+    /// while it is healthy.
     ///
     /// Nothing is said about health. "Connected", "Up to date" and a green dot used to be on
     /// three surfaces at once (the header, the sidebar's sync row, and the sidebar again on
     /// the feed's line), which made the least actionable fact on the screen the loudest one.
-    /// What is left is the transport's own state token on `data-connection` — a value a test
-    /// reads, not words a person does.
+    /// What is left is the link's own state token on `data-connection` — a value a test reads,
+    /// not words a person does.
     ///
-    /// ONE function, two mounts: the nav column carries the report where the column is on
+    /// ONE function, two mounts: the nav column carries the line where the column is on
     /// screen, and `degradedBar` carries it where the column is not — a phone, or a collapsed
     /// nav. They cannot disagree, and the visibility rule means only ever one is seen.
     ///
-    /// Three fields: the token a test reads, the status word, and everything else folded
-    /// away behind it.
-    ///
-    /// The status word IS the consequence at a glance — offline is a thing you understand
-    /// from the word — so what the disclosure holds is the rest of the answer somebody asks
-    /// next: what it costs (your work is safe / your work is not), why it happened, and, on a
-    /// deployment that cannot keep the promise, why it cannot. That ordering is also what
-    /// makes the bar affordable on a phone: one line, a known height, and the panes under it
-    /// reserve exactly that much and no more.
-    let private connectionReport
-        (model: ClientModel)
-        : (string * TemplateResult * string list) option =
+    /// A state keeps its name whatever is happening to it. A failing attempt to connect is
+    /// still connecting, and the failure is a reason: it goes behind the disclosure with how
+    /// many attempts have failed, and the line offers to try again. "Retrying" was a second
+    /// name for the same wait, which a reader had to learn meant connecting.
+    let private connectionReport (model: ClientModel) : StatusLine option =
         // Why the promise reads the way it does. Only an ephemeral deployment has anything to
         // explain: on a stable address the sentence IS the whole story.
         let promise =
             if model.EphemeralStorage then Dom.Text.localFallbackEphemeral else Dom.Text.localFallback
         let why =
             [ if model.EphemeralStorage then Dom.Text.ephemeralAddress ]
-        let running (word: string) =
-            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{word}</span>"""
-        let stopped (word: string) = html $"""<span class="{Style.statusErr}">{word}</span>"""
+        let waiting (token: string) (word: string) (failure: Failure option) : StatusLine =
+            { Token = token
+              Word = word
+              Wrong = false
+              Promise = None
+              Why = promise :: (failure |> Option.map (fun f -> Dom.Text.retryingWhy f.Reason f.Count) |> Option.toList) @ why
+              Verb = failure |> Option.map (fun _ -> StatusVerb.TryAgain) }
         // One state, so one report: a page that cannot reach its session is not reading its
         // history either, and is not said to be.
         match model.Link with
+        // The one state that waits on a person: the session would not have this page. What
+        // fixes it is signing in again, which is where the line goes.
         | SessionLink.Refused (reason, _) ->
-            Some (Dom.Text.degradedOffline, stopped "not connected", promise :: reason :: why)
-        | SessionLink.Connecting { Failed = Some failure }
+            Some
+                { Token = Dom.Text.degradedSignedOut
+                  Word = Dom.Text.signedOutStatus
+                  Wrong = true
+                  Promise = Some Dom.Text.signedOutPromise
+                  Why = [ reason ]
+                  Verb = Some StatusVerb.SignInAgain }
+        | SessionLink.Connecting { Failed = Some failure } ->
+            Some (waiting Dom.Text.degradedRetrying Dom.Text.connectingStatus (Some failure))
         | SessionLink.Reconnecting ({ Failed = Some failure }, _) ->
-            Some (
-                Dom.Text.degradedRetrying,
-                running Dom.Text.retryingStatus,
-                promise :: Dom.Text.retryingWhy failure.Reason failure.Count :: why)
+            Some (waiting Dom.Text.degradedRetrying Dom.Text.reconnectingStatus (Some failure))
         // An attempt that has run past `ClientModel.connectingQuietMs`. Every client starts
         // connecting, and one that lands inside the window says nothing, so this is never a
         // flash on a healthy load — but one that does not land is news, and a page that said
@@ -312,21 +284,71 @@ module View =
         // A link lost and found again inside the same window is the same: a phone drops its
         // link each time it leaves the app, and has it back as it returns.
         | SessionLink.Connecting { Slow = true } ->
-            Some (Dom.Text.degradedConnecting, running Dom.Text.connectingStatus, promise :: why)
+            Some (waiting Dom.Text.degradedConnecting Dom.Text.connectingStatus None)
         | SessionLink.Reconnecting ({ Slow = true }, _) ->
-            Some (Dom.Text.degradedReconnecting, running "reconnecting", promise :: why)
+            Some (waiting Dom.Text.degradedReconnecting Dom.Text.reconnectingStatus None)
+        // Reads failing while the policy tries them again: said, with nothing to press, because
+        // the policy is already doing what a press would.
         | SessionLink.Fetching (_, { Failed = Some failure }, _) ->
-            Some (
-                Dom.Text.feedRetrying,
-                running "history retrying",
-                promise :: sprintf "%s · attempt %d" failure.Reason failure.Count :: why)
-        | SessionLink.Stalled (_, reason, _) -> Some (Dom.Text.feedPaused, stopped "history paused", promise :: reason :: why)
+            Some { waiting Dom.Text.feedRetrying Dom.Text.historyRetryingStatus (Some failure) with Verb = None }
+        // History stopped arriving, and nothing will re-arm it until the session has news. It
+        // is wrong rather than a wait, and a press asks again now.
+        | SessionLink.Stalled (_, reason, _) ->
+            Some
+                { Token = Dom.Text.feedPaused
+                  Word = Dom.Text.historyPausedStatus
+                  Wrong = true
+                  Promise = None
+                  Why = promise :: reason :: why
+                  Verb = Some StatusVerb.TryAgain }
         // A wait inside its quiet window is not a degradation and says nothing — a strip that
         // flashed on every load would be chrome, not news.
         | SessionLink.Connecting _
         | SessionLink.Reconnecting _
         | SessionLink.Fetching _
         | SessionLink.Current -> None
+
+    /// A status line's dot, on its own: it stands in the bar's gutter, and hangs to the left of
+    /// the word in the nav column, so in neither does it push the word off the rail. A wait's
+    /// beats; a wrong one stands still.
+    let private statusLineMark (line: StatusLine) : TemplateResult =
+        let mark = if line.Wrong then Style.statusLineMarkWrong else Style.statusLineMarkWait
+        html $"""<span class="{mark}" aria-hidden="true"></span>"""
+
+    let private statusLineWord (line: StatusLine) : TemplateResult =
+        let voice = if line.Wrong then Style.statusErr else Style.statusWait
+        html $"""<span class="{voice} {Style.statusLineWord}">{line.Word}</span>"""
+
+    /// The line's verb, the same on both mounts. Its hit area grows to a thumb only on a phone,
+    /// where the only mount that shows is the bar.
+    let private statusLineVerb (dispatch: ClientMsg -> unit) (line: StatusLine) : TemplateResult =
+        match line.Verb with
+        | None -> Lit.nothing
+        | Some StatusVerb.TryAgain ->
+            html $"""
+                <button type="button" class="{Style.statusVerb}" data-retry-now
+                        @click={Ev(fun _ -> dispatch RetryNowMsg)}>{Dom.Text.retryNow}</button>"""
+        | Some StatusVerb.SignInAgain ->
+            let target = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative SessionRoute.Login)
+            html $"""<a class="{Style.statusVerbLink}" href="{target}" data-session-signin>{Dom.Text.signInAgain}</a>"""
+
+    /// The line's disclosure: the rest of the answer somebody asks next, and — while an attempt
+    /// is failing — the way back through the Manager (`reopenAction`), beside the reason it
+    /// answers. `bodyClass` is the mount's: where the lines stand when it is open.
+    let private statusLineDetails (token: string) (bodyClass: string) (model: ClientModel) (line: StatusLine) : TemplateResult =
+        let reopen =
+            match reopenAction model with
+            | Some action -> html $"""<span class="{Style.statusLineReopen}">{action}</span>"""
+            | None -> Lit.nothing
+        match line.Why |> List.filter (fun w -> w <> "") with
+        | [] -> Lit.nothing
+        | why ->
+            let say (w: string) = html $"""<span class="{Style.detailBody}">{w}</span>"""
+            html $"""
+                <details class="{Style.detailNote}" data-detail="{token}">
+                  <summary class="{Style.detailSummary}">{Dom.Text.details}</summary>
+                  <div class="{bodyClass}">{why |> List.map say}{reopen}</div>
+                </details>"""
 
     /// Whether a catch-up is worth showing: PROGRESS, not health, so it is the one thing that
     /// still speaks while everything works — and only while the log is being fetched, once the
@@ -369,54 +391,36 @@ module View =
             if not showsCatchUp then Lit.nothing
             else
                 html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}" data-catch-up>{Dom.Text.catchingUp}</span><span class="{Style.label} tabular-nums"><b class="text-ink-dim" data-last-processed-offset>{offsetText consumer.LastProcessedOffset}</b> / <b class="text-ink-dim" data-latest-known-offset>{offsetText (SessionLink.target consumer.LastProcessedOffset model.Link)}</b></span></span>"""
-        // The one thing a person can do about a settled disconnection. The supervised loop is
-        // already trying; this is for the client it will not carry — a refused peer parks
-        // until asked — and for anyone who would rather not wait out a backoff.
-        let retry =
-            match model.Link with
-            | SessionLink.Refused _
-            | SessionLink.Connecting { Failed = Some _ }
-            | SessionLink.Reconnecting ({ Failed = Some _ }, _) ->
-                html $"""
-                  <button type="button" class="{Style.btn}" data-retry-now
-                          @click={Ev(fun _ -> dispatch RetryNowMsg)}>{Dom.Text.retryNow}</button>"""
-            | _ -> Lit.nothing
-        // The offer REPLACES the report rather than sitting over it: a status reading "not
-        // connected", its reason, and a button to fix it would be saying one thing three
-        // times. The offer carries the same promise and the same disclosure.
-        let offer = reconnectOffer model
         let report = connectionReport model
-        // Whichever of the two this column has to show, it is ONE mount of one report, so it
-        // wears one hook and one visibility rule. Anything narrower and the rule stops being
-        // checkable: the browser suite counts the mounts a person can see, and a mount that
-        // wore the hook only on its status face left the face it actually shows — the card —
-        // uncounted, so the suite passed over a phone reporting the same fault twice.
-        let inColumn (inner: TemplateResult) =
-            match report with
-            | None -> inner
-            | Some (token, _, _) ->
-                html $"""<div class="{Style.connectionInColumn}" data-degraded="{token}">{inner}</div>"""
+        // ONE mount of one report, wearing one hook and one visibility rule: the browser suite
+        // counts the mounts a person can see. The word on the column's rail with its dot hung
+        // to the left of it, the verb at the row's end, then what it costs where that decides
+        // anything, then the rest behind the disclosure.
         let body =
-            match offer, report with
-            | Some offer, _ -> inColumn offer
-            | None, None -> Lit.nothing
-            | None, Some (_, status, why) ->
-                inColumn (
-                    html $"""
-                      <span class="{Style.syncRow}">{status}</span>
-                      {detailNote "connection" why}
-                      {retry}""")
-        // The section is always in the document, and always carries BOTH legs' exact state
+            match report with
+            | None -> Lit.nothing
+            | Some line ->
+                let promise =
+                    match line.Promise with
+                    | Some sentence -> html $"""<span class="{Style.small}">{sentence}</span>"""
+                    | None -> Lit.nothing
+                html $"""
+                    <div class="{Style.connectionInColumn}" data-degraded="{line.Token}">
+                      <div class="{Style.statusLineRow}">
+                        <span class="{Style.statusLineHung}">{statusLineMark line}</span>
+                        {statusLineWord line}
+                        <span class="{Style.statusLineVerbSlot}">{statusLineVerb dispatch line}</span>
+                      </div>
+                      {promise}
+                      {statusLineDetails "connection" Style.statusLineDetailsInColumn model line}
+                    </div>"""
+        // The section is always in the document, and always carries the link's exact state
         // tokens, because that is the markup contract a test reads. What is conditional is
         // the words — they appear when something is wrong and at no other time — and, with
         // them, the section's own box: a section with nothing in it still costs its padding,
         // which on a healthy client is a band of empty panel under the wordmark that reads as
         // something that failed to load.
-        //
-        // (The tokens used to disappear on exactly the state most worth asserting: the offer
-        // replaced the row that carried `data-connection`, so a stopped session had no state
-        // to read off the page at all.)
-        let quiet = offer.IsNone && report.IsNone && not showsCatchUp
+        let quiet = report.IsNone && not showsCatchUp
         let shape =
             if quiet then Style.navLane1 else Style.cls [ Style.sideSection; Style.navLane1 ]
         html $"""
@@ -1217,22 +1221,24 @@ module View =
     /// read from the other two. The panes make room for it through `Style.degradedShell`, a
     /// class this view puts on the shell whenever there is something to say, so nothing
     /// reserves a band of dead space while everything is fine.
-    let private degradedBar (actions: ViewActions) (model: ClientModel) : TemplateResult =
+    let private degradedBar (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         match connectionReport model with
         | None -> Lit.nothing
-        | Some (token, status, why) ->
-            // The way back rides the bar, right-aligned, because this mount is the ONLY thing
-            // a phone reader has: the card that carries it in the column is hidden at that
-            // width by the rule that stops the report being read twice.
-            let action =
-                match reopenAction model Style.degradedBarAction with
-                | Some action -> action
-                | None -> Lit.nothing
+        | Some line ->
+            // On the conversation's own rail, as the title and every message under it are:
+            // the dot in the gutter where an avatar stands, the word where a name does, and
+            // the verb at the row's end — the only place a phone reader has one, because the
+            // column that carries it on a desktop is hidden at that width. The disclosure's
+            // lines open BELOW the bar, over the pane, rather than inside a height the panes
+            // reserve.
             html $"""
-                <section class="{Style.degradedBar}" data-degraded="{token}">
-                  <span class="{Style.degradedBarStatus}">{status}</span>
-                  {detailNote "degraded" why}
-                  {action}
+                <section class="{Style.degradedBar}" data-degraded="{line.Token}">
+                  <span class="{Style.degradedBarMark}">{statusLineMark line}</span>
+                  <span class="{Style.degradedBarWords}">
+                    {statusLineWord line}
+                    {statusLineDetails "degraded" Style.degradedBarDetails model line}
+                  </span>
+                  <span class="{Style.degradedBarVerb}">{statusLineVerb dispatch line}</span>
                 </section>"""
 
     /// The `(selectionStart, selectionEnd)` of the event's target input, or `None` when the
@@ -5558,7 +5564,7 @@ module View =
             <div class="contents {shellState}">
             {sidebar actions dispatch model}
             <div class="{Style.mainColumn}">
-              {degradedBar actions model}
+              {degradedBar dispatch model}
               {header actions dispatch model}
               {signInPrompt dispatch model}
               {refusalNotice dispatch model RefusalMount.Chat}

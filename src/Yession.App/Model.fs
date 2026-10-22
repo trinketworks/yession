@@ -322,6 +322,19 @@ module SessionLink =
         | SessionLink.Current
         | SessionLink.Refused _ -> link
 
+    /// A person asked for the session again now (`RetryNowMsg`). Reads that gave up are asked
+    /// again at once, from where the fold got to: nothing else was going to re-arm them until
+    /// the session had news. A link still being sought is the lifecycle's to hurry, and the
+    /// effect the press also asks for does that (`ClientEffect.RetryNow`).
+    let retried (waited: bool) (link: SessionLink) : SessionLink =
+        match link with
+        | SessionLink.Stalled (target, _, phase) -> fetching waited target phase
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _
+        | SessionLink.Fetching _
+        | SessionLink.Current
+        | SessionLink.Refused _ -> link
+
     /// The page has been open long enough for its wait to be worth saying (`PageWaitedMsg`):
     /// an opening fetch, which has been waited on since the page loaded, is now slow.
     let waited (link: SessionLink) : SessionLink =
@@ -2377,8 +2390,8 @@ type ClientMsg =
     | CopyMsg of box: string * text: string
     /// Try the session again NOW, rather than when the supervised loop next would. A trigger,
     /// never a second schedule (Plan 20): it shortens the wait the lifecycle is already in, and
-    /// earns its place on the one client the loop deliberately will not carry — a peer whose
-    /// token was refused, which no amount of waiting fixes.
+    /// it asks again for history whose reads gave up, which nothing else re-arms until the
+    /// session has news (`SessionLink.retried`).
     | RetryNowMsg
     /// Ask the session for a terminal with this title, and remember that this client asked
     /// (`Opening`).
@@ -5414,7 +5427,7 @@ module ClientModel =
         | ScreenPressedMsg _
         | WalkTabsMsg _
         | CopyMsg _
-        | RetryNowMsg -> model
+        | RetryNowMsg -> { model with Link = SessionLink.retried model.Waited model.Link }
         | RewindTerminalMsg terminal ->
             // The length is pinned NOW rather than followed. A recording that grew under a
             // reader would move the scrub bar out from under them, which is the one thing
@@ -5830,6 +5843,8 @@ module ClientModel =
         | ConnectedMsg _ -> askEventsIfBehind (forgotten model) |> unheard
         | DisconnectedMsg -> forgotten model, []
         | EventsAvailableMsg _ -> askEventsIfBehind model
+        // A press that put reads which gave up back to fetching asks the first of them now.
+        | RetryNowMsg -> askEventsIfBehind model
         | EventsReadMsg (read, answer) when model.EventConsumer.Reading = Some read ->
             let settled = { model with EventConsumer = { model.EventConsumer with Reading = None } }
             match answer with

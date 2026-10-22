@@ -1935,13 +1935,17 @@ do
     let failing (reason: string) (count: int) : Effort = { Slow = true; Failed = Some { Reason = reason; Count = count } }
     let states : (string * (unit -> unit)) list =
         [ "rest", (fun () -> show shellModel)
-          "disconnected", connection (SessionLink.Refused ("the session closed its data channel", Phase.ReadThrough))
           // Slow, because that is the connecting a person SEES: an attempt that lands inside
           // the quiet window says nothing, and a picture of it would be a picture of `rest`.
           "connecting", connection (SessionLink.Connecting { Effort.fresh with Slow = true })
           "reconnecting", connection (SessionLink.Reconnecting ({ Effort.fresh with Slow = true }, Phase.ReadThrough))
+          // With a Manager, so the way back through it is behind the disclosure.
           "retrying",
-          connection (SessionLink.Reconnecting (failing "the session did not answer (502 Bad Gateway)" 3, Phase.ReadThrough))
+          (fun () ->
+              show
+                  { shellModel with
+                      Link = SessionLink.Reconnecting (failing "the session did not answer (502 Bad Gateway)" 3, Phase.ReadThrough)
+                      Manager = Some "https://yession.example" })
           "catch-up",
           (fun () ->
               show
@@ -1963,11 +1967,11 @@ do
                               EventOffset.create 40L |> expect,
                               "the history route answered 503 three times",
                               Phase.ReadThrough) })
-          "session-gone",
+          "signed-out",
           (fun () ->
               show
                   { shellModel with
-                      Link = SessionLink.Refused ("the session stopped", Phase.ReadThrough)
+                      Link = SessionLink.Refused ("invalid peer token", Phase.ReadThrough)
                       Manager = Some "https://yession.example" })
           "no-agent", (fun () -> show noAgentModel)
           "agent-thinking",

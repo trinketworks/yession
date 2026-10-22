@@ -971,7 +971,7 @@ let private uiChecklistTests =
             let html = Support.render offline
             Expect.isFalse (html.Contains Dom.Hooks.signInRequired) "no sign-in prompt while offline"
             Expect.isTrue
-                (html.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedOffline))
+                (html.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedSignedOut))
                 "the degraded strip is what speaks for that moment"
             // The panel row still says it. A status is true whether or not it can be acted on
             // right now; only the OFFER is withheld.
@@ -2782,38 +2782,41 @@ let private paneActionsTests =
 // word, so the thing to pin is WHEN it appears — a button with nowhere to go, or one shown
 // over a session that is merely reconnecting, are both worse than the plain status.
 let private reconnectOfferTests =
-    testList "The reconnect offer" [
-        let stopped (manager: string option) (session: SessionId option) =
+    testList "The way back to a session" [
+        /// A page whose attempts to reach its session keep failing — which is what a session
+        /// that stopped looks like from here, since the page cannot tell the two apart.
+        let failing (manager: string option) (session: SessionId option) =
             { representativeModel with
-                Link = SessionLink.Refused ("the session did not answer", Phase.ReadThrough)
+                Link =
+                    SessionLink.Reconnecting (
+                        { Effort.fresh with Failed = Some { Reason = "the session did not answer"; Count = 3 } },
+                        Phase.ReadThrough)
                 Manager = manager
                 Session = session }
 
-        testCase "a settled disconnection with a manager and a session offers a way back" <| fun () ->
-            let html = Support.render (stopped (Some "http://127.0.0.1:8321") (Some sessionId))
-            Expect.isTrue (html.Contains Dom.Hooks.sessionGone) "the card renders"
-            Expect.isTrue (html.Contains Dom.Text.reopenSession) "with its button"
-            Expect.isTrue
-                (html.Contains "http://127.0.0.1:8321/sessions/demo-session/open")
-                "pointing at the manager's open route for THIS session"
-
-        /// The nav column's connection section alone. The report has two mounts now — the
-        /// column, and the bar for where the column cannot be seen — so a whole-page
-        /// `Contains` is answered by whichever happened to be right.
+        /// The nav column's connection section alone. The report has two mounts — the column,
+        /// and the bar for where the column cannot be seen — so a whole-page `Contains` is
+        /// answered by whichever happened to be right.
         let navConnection (html: string) : string =
             let at = html.IndexOf Dom.Hooks.feed
             Expect.isTrue (at >= 0) "the connection section renders at all"
             let start = html.LastIndexOf ("<section", at)
             html.Substring (start, html.IndexOf ("</section>", at) - start)
 
-        // Replaces, never accompanies: the status word and a button to fix it would be
-        // saying the same thing twice.
-        testCase "the offer replaces the connection status word" <| fun () ->
-            let column = navConnection (Support.render (stopped (Some "http://127.0.0.1:8321") (Some sessionId)))
-            Expect.isTrue (column.Contains Dom.Hooks.sessionGone) "the card is what the column shows"
-            Expect.isFalse (column.Contains "not connected") "not the status word as well"
-            // The reason itself is not lost — it moves behind the card's disclosure.
-            Expect.isTrue (column.Contains "the session did not answer") "the reason still reaches the reader"
+        testCase "a failing attempt with a manager and a session offers a way back" <| fun () ->
+            let html = Support.render (failing (Some "http://127.0.0.1:8321") (Some sessionId))
+            Expect.isTrue (html.Contains Dom.Text.reopenSession) "the way back renders"
+            Expect.isTrue
+                (html.Contains "http://127.0.0.1:8321/sessions/demo-session/open")
+                "pointing at the manager's open route for THIS session"
+
+        // Beside the reason it answers, because the page cannot say that the session stopped:
+        // it says it is still reaching it, and why that is failing.
+        testCase "the way back stands behind the disclosure, with the reason" <| fun () ->
+            let column = navConnection (Support.render (failing (Some "http://127.0.0.1:8321") (Some sessionId)))
+            let details = column.Substring (column.IndexOf "<details")
+            Expect.isTrue (details.Contains Dom.Hooks.sessionReopen) "inside the disclosure"
+            Expect.isTrue (details.Contains "the session did not answer") "beside the reason"
 
         // The report has two mounts and only one is ever visible, so the way back has to be on
         // BOTH or it is missing from whichever is showing. It went missing from the bar's:
@@ -2821,24 +2824,23 @@ let private reconnectOfferTests =
         // being read twice — a phone could be told its session had stopped and offered
         // nothing whatever to do about it.
         testCase "the way back is offered at both mounts, since only one is ever seen" <| fun () ->
-            let html = Support.render (stopped (Some "http://127.0.0.1:8321") (Some sessionId))
+            let html = Support.render (failing (Some "http://127.0.0.1:8321") (Some sessionId))
             Expect.equal
                 ((html.Split Dom.Hooks.sessionReopen |> Array.length) - 1)
                 2
-                "the nav column's card, and the bar for where the column cannot be seen"
+                "the nav column's, and the bar's for where the column cannot be seen"
             Expect.isTrue ((navConnection html).Contains Dom.Hooks.sessionReopen) "one of them is the column's"
 
-        // The three ways the offer must decline to render, each of which would otherwise be
-        // a button that cannot work.
-        testCase "no manager origin means no offer, just the status" <| fun () ->
-            let column = navConnection (Support.render (stopped None (Some sessionId)))
-            Expect.isFalse (column.Contains Dom.Hooks.sessionGone) "nothing to ask, so nothing offered"
-            Expect.isTrue (column.Contains "not connected") "the ordinary status still renders"
+        // The ways the offer must decline to render, each of which would otherwise be a link
+        // that cannot work.
+        testCase "no manager origin means no way back, just the status" <| fun () ->
+            let column = navConnection (Support.render (failing None (Some sessionId)))
+            Expect.isFalse (column.Contains Dom.Hooks.sessionReopen) "nothing to ask, so nothing offered"
+            Expect.isTrue (column.Contains Dom.Text.reconnectingStatus) "the ordinary status still renders"
 
-        testCase "no session id means no offer" <| fun () ->
-            let column = navConnection (Support.render (stopped (Some "http://127.0.0.1:8321") None))
-            Expect.isFalse (column.Contains Dom.Hooks.sessionGone) "nothing to ask FOR"
-            Expect.isTrue (column.Contains "not connected") "the ordinary status still renders"
+        testCase "no session id means no way back" <| fun () ->
+            let column = navConnection (Support.render (failing (Some "http://127.0.0.1:8321") None))
+            Expect.isFalse (column.Contains Dom.Hooks.sessionReopen) "nothing to ask FOR"
 
         testCase "a session that is merely reconnecting is not offered a reopen" <| fun () ->
             let html =
@@ -2846,36 +2848,44 @@ let private reconnectOfferTests =
                     { representativeModel with
                         Link = SessionLink.Reconnecting ({ Effort.fresh with Slow = true }, Phase.ReadThrough)
                         Manager = Some "http://127.0.0.1:8321" }
-            Expect.isFalse (html.Contains Dom.Hooks.sessionGone) "reconnecting is not stopped"
+            Expect.isFalse (html.Contains Dom.Hooks.sessionReopen) "nothing has failed yet"
 
-        // Plan 13: the card promises what the deployment can actually deliver. Nothing
+        // A refused page needs its sign-in back, which reopening does not give it: the one way
+        // in it is offered is the session's own sign-in.
+        testCase "a page the session refused is offered its sign-in, not a reopen" <| fun () ->
+            let html =
+                Support.render
+                    { representativeModel with
+                        Link = SessionLink.Refused ("invalid peer token", Phase.ReadThrough)
+                        Manager = Some "http://127.0.0.1:8321" }
+            Expect.isTrue (html.Contains Dom.Hooks.sessionSignIn) "signing in again is offered"
+            Expect.isFalse (html.Contains Dom.Hooks.sessionReopen) "and reopening is not"
+
+        // Plan 13: the line promises what the deployment can actually deliver. Nothing
         // asserted this sentence before, which is how it came to claim work was safe on a
         // deployment that strands it.
         testCase "a stable-address deployment promises the work comes back" <| fun () ->
-            let html = Support.render (stopped (Some "http://127.0.0.1:8321") (Some sessionId))
-            Expect.isTrue (html.Contains Dom.Text.reopenPromise) "the promise is kept where it can be"
-            Expect.isFalse (html.Contains Dom.Text.reopenPromiseEphemeral) "and no warning where none is due"
+            let html = Support.render (failing (Some "http://127.0.0.1:8321") (Some sessionId))
+            Expect.isTrue (html.Contains Dom.Text.localFallback) "the promise is kept where it can be"
+            Expect.isFalse (html.Contains Dom.Text.localFallbackEphemeral) "and no warning where none is due"
 
         testCase "an ephemeral-address deployment warns instead of promising" <| fun () ->
             let html =
                 Support.render
-                    { stopped (Some "http://127.0.0.1:8321") (Some sessionId) with EphemeralStorage = true }
-            Expect.isTrue (html.Contains Dom.Text.reopenPromiseEphemeral) "it says what reopening costs"
-            Expect.isFalse (html.Contains Dom.Text.reopenPromise) "and never both"
+                    { failing (Some "http://127.0.0.1:8321") (Some sessionId) with EphemeralStorage = true }
+            Expect.isTrue (html.Contains Dom.Text.localFallbackEphemeral) "it says what the wait costs"
+            Expect.isFalse (html.Contains Dom.Text.localFallback) "and never both"
 
-        // The card is the more specific message, so within the column it is the ONLY one:
-        // a status word, a promise and a card that repeats both would be one fact three times.
-        testCase "the column says it once, by the card" <| fun () ->
-            let column = navConnection (Support.render (stopped (Some "http://127.0.0.1:8321") (Some sessionId)))
+        testCase "the column says it once" <| fun () ->
+            let column = navConnection (Support.render (failing (Some "http://127.0.0.1:8321") (Some sessionId)))
             Expect.equal
-                ((column.Split Dom.Text.reopenPromise |> Array.length) - 1)
+                ((column.Split Dom.Text.localFallback |> Array.length) - 1)
                 1
                 "the promise is stated once"
-            Expect.isFalse (column.Contains Dom.Text.localFallback) "and never beside the bar's wording of it"
 
-        testCase "a connected session shows no offer" <| fun () ->
+        testCase "a connected session shows no way back" <| fun () ->
             Expect.isFalse
-                ((Support.render representativeModel).Contains Dom.Hooks.sessionGone)
+                ((Support.render representativeModel).Contains Dom.Hooks.sessionReopen)
                 "connected, with a manager known — still nothing to offer"
     ]
 
