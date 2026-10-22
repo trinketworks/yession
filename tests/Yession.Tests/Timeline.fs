@@ -5831,6 +5831,27 @@ let private historySyncTests =
             let waiting = booted |> Support.step (accepted (Some 1L)) |> Support.step PageWaitedMsg
             Expect.isTrue (ClientModel.presentable waiting) "a wait worth saying is worth drawing"
 
+        // The two renders every open paid when this rule was "only a fetch waits": each message
+        // before the store answered drew the empty page it had already drawn.
+        testCase "a page reaching its session before its store has answered is not drawn" <| fun () ->
+            Expect.isFalse (ClientModel.presentable booted) "nothing to show that is not already shown"
+
+        testCase "the page's own wait draws nothing while its session is being reached" <| fun () ->
+            let waited = booted |> Support.step PageWaitedMsg
+            Expect.isFalse (ClientModel.presentable waited) "there is no catch-up to say yet"
+
+        testCase "a page with nothing kept is not drawn while its session is being reached" <| fun () ->
+            let nothingKept = booted |> Support.step (page stored [])
+            Expect.isFalse (ClientModel.presentable nothingKept) "still the empty page"
+
+        testCase "a first attempt long enough to name is drawn" <| fun () ->
+            let slow = booted |> Support.step (page stored []) |> Support.step EffortSlowMsg
+            Expect.isTrue (ClientModel.presentable slow) "\"connecting\", said"
+
+        testCase "a first attempt that failed is drawn" <| fun () ->
+            let failing = booted |> Support.step (page stored []) |> Support.step (RetryingMsg ("the session did not answer", 1))
+            Expect.isTrue (ClientModel.presentable failing) "the failure, said"
+
         testCase "what this client kept is drawn before the session has said anything" <| fun () ->
             let kept = booted |> Support.step (page stored log)
             Expect.isTrue (ClientModel.presentable kept) "the reader's own picture, at once"

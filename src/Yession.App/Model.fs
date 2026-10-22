@@ -2943,14 +2943,19 @@ module ClientModel =
     /// follows it. A client fetching the log is held — a page is at most a round trip away,
     /// and every page drawn on the way is a picture the next one replaces — until it is read
     /// through, or the fetch has lasted long enough to be worth saying, or a read has failed.
-    /// Nothing else waits on a page: a client still reaching its session is waiting on none,
-    /// and one cut off from it has everything it will have.
+    /// So is a client first reaching its session with nothing of it to show: until its store
+    /// answers with a kept copy, or the attempt is worth naming, every model is the empty
+    /// page already drawn, and drawing it again is the whole view rendered for nothing — two
+    /// renders on every open, the bench counted. A link sought AGAIN is drawn at once: losing
+    /// it took away whatever the screen was saying. One cut off from its session has
+    /// everything it will have.
     ///
-    /// Every change of this is a message (a page, the slow timer, a disconnect), so whoever
-    /// draws needs no clock of its own to honour it.
+    /// Every change of this is a message (a page, the store's answer, the slow timer, a
+    /// disconnect), so whoever draws needs no clock of its own to honour it.
     let presentable (model: ClientModel) : bool =
         match model.Link with
         | SessionLink.Fetching (_, { Slow = false; Failed = None }, _) -> false
+        | SessionLink.Connecting { Slow = false; Failed = None } -> LocalCopy.kept model.LocalCopy
         | SessionLink.Fetching _
         | SessionLink.Connecting _
         | SessionLink.Reconnecting _
