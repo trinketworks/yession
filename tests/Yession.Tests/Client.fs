@@ -75,8 +75,12 @@ let tests =
         testCaseAsync "client connects, reaches Connected, renders offset + catch-up indicators" <|
             async {
                 let mutable model = ClientModel.init { PeerId = peerId; DisplayName = "Grace" }
-                let checkConnected, connected = waiterFor (fun m -> m.Connection = Connected)
-                let checkReconnecting, reconnecting = waiterFor (fun m -> m.Connection = Reconnecting)
+                let checkConnected, connected = waiterFor (fun m -> SessionLink.live m.Link)
+                let checkReconnecting, reconnecting =
+                    waiterFor (fun m ->
+                        match m.Link with
+                        | SessionLink.Reconnecting _ -> true
+                        | _ -> false)
                 let dispatch msg =
                     model <- Support.step msg model
                     checkConnected model
@@ -88,22 +92,22 @@ let tests =
 
                 // Handshake completes -> Connected, with the joined offset as latest-known.
                 do! connected
-                Expect.equal model.Connection Connected "model reaches Connected"
+                Expect.isTrue (SessionLink.live model.Link) "model is linked"
                 Expect.equal model.Peer.DisplayName "Grace" "assigned display name reflected"
                 // The session's own start is offset 0, written before any peer can be accepted,
                 // so the offset a joiner is told — and catches up to — is the one past it.
                 Expect.equal
-                    (HistorySync.target model.EventConsumer.LastProcessedOffset model.EventConsumer.Sync)
+                    (SessionLink.target model.EventConsumer.LastProcessedOffset model.Link)
                     (EventOffset.create 1L |> Result.toOption)
                     "latest-known offset = the log's end when this peer joined"
                 Expect.equal model.EventConsumer.LastProcessedOffset None "nothing consumed yet"
-                Expect.isTrue (HistorySync.behind model.EventConsumer.Sync) "catch-up active while behind the known offset"
+                Expect.isTrue (Support.fetching model) "catch-up active while behind the known offset"
 
                 // The UI renders both offset displays and the catch-up indicator — once the
                 // catch-up has lasted long enough to be worth reporting, which is the only
                 // state that shows them (a catch-up too brief to wait on is silent, so that
                 // sending a message does not flicker the status).
-                let html = Support.render (Support.step (CatchUpSlowMsg true) model)
+                let html = Support.render (Support.step PageWaitedMsg model)
                 Expect.isTrue (html.Contains Dom.Hooks.lastProcessedOffset) "last-processed offset display rendered"
                 Expect.isTrue (html.Contains Dom.Hooks.latestKnownOffset) "latest-known offset display rendered"
                 Expect.isTrue (html.Contains Dom.Hooks.catchUp) "catch-up indicator rendered"
@@ -117,7 +121,11 @@ let tests =
                 // A dropped channel moves the model to Reconnecting.
                 do! channel.Close ()
                 do! reconnecting
-                Expect.equal model.Connection Reconnecting "dropped connection moves model to Reconnecting"
+                Expect.isTrue
+                    (match model.Link with
+                     | SessionLink.Reconnecting _ -> true
+                     | _ -> false)
+                    "dropped connection moves model to Reconnecting"
             }
 
         // Teardown, and nothing else — it asserts nothing, which is why it must not also be

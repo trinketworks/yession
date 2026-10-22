@@ -432,12 +432,12 @@ The last section holds trust boundaries as sharp as the first section's.
   timeline that never filled while drafts, title and presence kept syncing. Now a read returns
   `Result<EventPage, FeedFault>`. A resilience policy (`Yession.Domain.Resilience`, composed in
   `app/browser/Browser.fs`) retries only transient faults, with capped exponential backoff and
-  jitter (`Client.EventFetch.policy` holds the numbers). A settled failure parks the loop and
-  shows as `FeedHealth` (a sidebar line, a banner and a header status). Writing stays enabled,
-  because it is CRDT state in the local doc. One supervised loop drives the session leg, capped
-  at a minute (Plan 20). The browser's `online` event and a *Try again* control on the status
-  line poke it. A REFUSED peer parks until somebody asks, because a schedule would send the same
-  refused token.
+  jitter (`Client.EventFetch.policy` holds the numbers). A settled failure parks the loop and is
+  part of the page's one link state (`SessionLink.Stalled`), which the status line reports. Writing
+  stays enabled, because it is CRDT state in the local doc. One supervised loop drives the session
+  leg, capped at a minute (Plan 20). The browser's `online` event and a *Try again* control on the
+  status line poke it. A REFUSED peer parks until somebody asks, because a schedule would send the
+  same refused token.
 
 ## Browser client
 

@@ -455,7 +455,7 @@ let private withPage (events: EventEnvelope<SessionEvent> list) (model: ClientMo
 
 /// A client that has read the log through — booted, its local store read, connected to a
 /// session whose log ends at the last of `events`, and caught up — so that what arrives next
-/// is NEWS (`HistorySync.heardThrough`) rather than history being replayed.
+/// is NEWS (`ClientModel.heardThrough`) rather than history being replayed.
 let private heardOf (events: EventEnvelope<SessionEvent> list) : ClientModel =
     ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
     |> Support.step
@@ -5773,7 +5773,7 @@ let private presenceTests =
 // and what an answer settles. The connection only carries a read out and hands the answer
 // back under the number it was asked with, so every rule is here, a fold away from a test.
 
-/// Where a client stands against the log (`HistorySync`), reached the way a client reaches it:
+/// Where a client stands against the log (`SessionLink`), reached the way a client reaches it:
 /// by the messages a cold open, a reload and a live session send.
 let private historySyncTests =
     let booted = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
@@ -5792,29 +5792,32 @@ let private historySyncTests =
         // replaced "catching up" while the session's history was still a round trip away.
         testCase "a page out of this client's own store does not make it read through" <| fun () ->
             let kept = booted |> Support.step (page stored log)
-            Expect.isFalse (HistorySync.heardThrough kept.EventConsumer.Sync) "what was kept is not where the log ends"
+            Expect.isFalse (ClientModel.heardThrough kept) "what was kept is not where the log ends"
 
         testCase "a session that says its log is empty is read through at once" <| fun () ->
             let connected = booted |> Support.step (accepted None)
-            Expect.equal connected.EventConsumer.Sync Current "an empty log has nothing to read"
+            Expect.equal connected.Link SessionLink.Current "an empty log has nothing to read"
 
         testCase "a session whose log runs past what is folded is not read through" <| fun () ->
             let connected = booted |> Support.step (accepted (Some 1L))
-            Expect.isFalse (HistorySync.heardThrough connected.EventConsumer.Sync) "the history is still to come"
+            Expect.isFalse (ClientModel.heardThrough connected) "the history is still to come"
 
         testCase "folding to where the session said the log ends is read through" <| fun () ->
             let read = booted |> Support.step (accepted (Some 1L)) |> Support.step (page EventsPageMsg log)
-            Expect.equal read.EventConsumer.Sync Current "caught up"
+            Expect.equal read.Link SessionLink.Current "caught up"
 
         testCase "a client read through that hears of more is behind, never opening again" <| fun () ->
             let read = booted |> Support.step (accepted (Some 1L)) |> Support.step (page EventsPageMsg log)
             let hinted = read |> Support.step (EventsAvailableMsg (EventOffset.create 3L |> expect))
-            Expect.equal hinted.EventConsumer.Sync (Behind (EventOffset.create 3L |> expect, false)) "news, not history"
+            Expect.equal
+                hinted.Link
+                (SessionLink.Fetching (EventOffset.create 3L |> expect, Effort.fresh, Phase.ReadThrough))
+                "news, not history"
 
         testCase "a hint older than what is folded does not put a client behind" <| fun () ->
             let read = booted |> Support.step (accepted (Some 1L)) |> Support.step (page EventsPageMsg log)
             let stale = read |> Support.step (EventsAvailableMsg (EventOffset.create 0L |> expect))
-            Expect.equal stale.EventConsumer.Sync Current "an end is never moved backwards"
+            Expect.equal stale.Link SessionLink.Current "an end is never moved backwards"
 
         testCase "a page out of this client's own store is kept" <| fun () ->
             let kept = booted |> Support.step (page stored log)
@@ -5825,7 +5828,7 @@ let private historySyncTests =
             Expect.isFalse (ClientModel.presentable waiting) "the next page is a round trip away"
 
         testCase "a cold open whose wait has lasted is drawn, to say so" <| fun () ->
-            let waiting = booted |> Support.step (accepted (Some 1L)) |> Support.step (CatchUpSlowMsg true)
+            let waiting = booted |> Support.step (accepted (Some 1L)) |> Support.step PageWaitedMsg
             Expect.isTrue (ClientModel.presentable waiting) "a wait worth saying is worth drawing"
 
         testCase "what this client kept is drawn before the session has said anything" <| fun () ->
@@ -5849,6 +5852,40 @@ let private historySyncTests =
                 |> Support.step (accepted (Some 1L))
                 |> Support.step (RejectedMsg "session unreachable")
             Expect.isTrue (ClientModel.presentable cut) "what it has is all it will have"
+
+        // Reaching and fetching are never both true: a link that drops mid-fetch is reaching
+        // again, and the catch-up that was running goes with it rather than running beside
+        // "reconnecting".
+        testCase "a link lost while fetching is reaching again, not fetching" <| fun () ->
+            let dropped = booted |> Support.step (accepted (Some 1L)) |> Support.step DisconnectedMsg
+            Expect.equal dropped.Link (SessionLink.Reconnecting (Effort.fresh, Phase.Opening)) "the fetch resumes once a link is back"
+
+        testCase "a read that fails after its link has gone says nothing about the reads" <| fun () ->
+            let lost = booted |> Support.step (accepted (Some 1L)) |> Support.step DisconnectedMsg
+            let late = lost |> Support.step (EventsReadMsg (1, Error "ECONNREFUSED"))
+            Expect.equal late.Link lost.Link "a read over a link that has gone is not this link's"
+
+        testCase "reads that gave up are fetching again when the session says there is news" <| fun () ->
+            let gaveUp =
+                booted
+                |> Support.step (accepted (Some 1L))
+                |> Support.step (EventsReadMsg (1, Error "ECONNREFUSED"))
+            let hinted = gaveUp |> Support.step (EventsAvailableMsg (EventOffset.create 2L |> expect))
+            Expect.equal
+                hinted.Link
+                (SessionLink.Fetching (EventOffset.create 2L |> expect, Effort.fresh, Phase.Opening))
+                "news re-arms the read, towards the newer end"
+
+        testCase "a page off the network ends a read's failure" <| fun () ->
+            let failing =
+                booted
+                |> Support.step (accepted (Some 5L))
+                |> Support.step (ReadRetryingMsg { Reason = "HTTP 503"; Count = 2 })
+            let read = failing |> Support.step (page EventsPageMsg log)
+            Expect.equal
+                read.Link
+                (SessionLink.Fetching (EventOffset.create 5L |> expect, Effort.fresh, Phase.Opening))
+                "the reads work, and the rest is ordinary catch-up"
     ]
 
 /// The conversation's first appearance: when it is (the model's), and which rows rise in which

@@ -11,6 +11,7 @@ open Yession.Domain
 open Yession.Codecs
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
+open Yession.Domain.Standings
 open Yession.Domain.Access
 open Yession.Domain.Hooks
 open Yession.Manager
@@ -109,19 +110,19 @@ let nameReporter (baseUrl: string) (secret: string) : string -> Async<unit> =
             with _ -> return ()
         }
 
-/// Report the one line this session says about itself, so the roster can show it.
-/// Best-effort like `nameReporter` and for the same reason: a summary that fails to arrive
-/// leaves the roster showing the last one, which is stale rather than wrong, and never a
-/// reason to disturb the session.
-let summaryReporter (baseUrl: string) (secret: string) : string -> Async<unit> =
-    fun summary ->
+/// Report what this session says about itself, so the roster can show it. Best-effort like
+/// `nameReporter` and for the same reason: standings that fail to arrive leave the roster
+/// showing the last ones, which is stale rather than wrong, and never a reason to disturb
+/// the session.
+let statusReporter (baseUrl: string) (secret: string) : Standing list -> Async<unit> =
+    fun standings ->
         async {
             try
                 let! _ =
                     postJson
-                        (ControlRoute.at baseUrl ControlRoute.Summary)
+                        (ControlRoute.at baseUrl ControlRoute.Status)
                         secret
-                        (ControlWire.toString ControlWire.sessionSummaryReport summary)
+                        (ControlWire.toString ControlWire.sessionStatusReport standings)
                     |> Interop.awaitPromise
                 return ()
             with _ -> return ()

@@ -25,6 +25,7 @@ open System
 open Yession.Domain
 open Yession.Domain.Prs
 open Yession.Domain.Tools
+open Yession.Domain.Standings
 
 /// The ETags a watch carries between polls, one per endpoint. The checks ETag is
 /// implicitly per head commit: its URL names the sha, so a push moves the URL and the
@@ -807,16 +808,16 @@ let word (row: PrWatchRow) : string option =
     |> Option.map (fun snapshot ->
         PrStatus.word row.Known.Mergeable row.Known.WayIn snapshot.Review snapshot.Behind snapshot.State)
 
-/// The one line this session says about its pull requests — what the roster and the header
-/// strip both read, and the only place the mapping from rows to words lives.
+/// Where this session's pull requests stand, as the one standing the roster reads — the
+/// only place the mapping from rows to words lives on this side.
 ///
 /// A watch that cannot be READ outranks whatever it last said: a dead credential means
 /// nobody is driving this one, which is worse news than any state it is stuck in. Which of
-/// those words wins, and whether the line is worth saying at all, is `PrStatus.summarize`.
-let summaryOf (rows: PrWatchRow list) : string =
+/// those words wins, and whether there is anything to say at all, is `PrStatus.summary`.
+let summaryOf (rows: PrWatchRow list) : Standing option =
     rows
     |> List.choose (fun row -> PrStatus.standing (PrStatus.label row.Pr) (word row) (Option.isNone row.Health))
-    |> PrStatus.summarize
+    |> PrStatus.summary
 
 /// Register the watched pull requests as a query. A GETTER for the `mcp_servers` reason:
 /// the query surface is composed before the Host is started, and the Host is what builds

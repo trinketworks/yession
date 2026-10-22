@@ -6,6 +6,8 @@ open Yession.Codecs
 open Yession.Domain.Sandboxes
 open Yession.Domain.Access
 open Yession.Domain.Hooks
+open Yession.Domain.Standings
+open Yession.Domain.Tools
 
 #if FABLE_COMPILER
 open Thoth.Json
@@ -42,22 +44,37 @@ module ControlWire =
     /// to it, and the running turn lives in its scheduler. The Manager supplies the policy
     /// (how long idle is too long) and the CLOCK — it timestamps each report on arrival, so
     /// a child's idea of the time never enters the decision.
-    /// One line a session says about ITSELF, reported child→Manager so the roster can show
-    /// it. Metadata like the name and the activity beat, and deliberately opaque: the
-    /// Manager stores and renders a string, and never learns that this one was made of
-    /// pull requests. Empty clears it.
-    ///
-    /// A summary rather than a structure, because the alternative is the Manager growing a
-    /// vocabulary for every feature a session might want to report — and a roster that has
-    /// to be taught about pull requests cannot be taught about the next thing without a
-    /// deployment.
-    let sessionSummaryReport : Codec<string> =
-        { Encode = fun summary -> Encode.object [ "summary", Encode.string summary ]
-          Decode = Decode.field "summary" Decode.string }
-
     let sessionActivityReport : Codec<bool> =
         { Encode = fun busy -> Encode.object [ "busy", Encode.bool busy ]
           Decode = Decode.field "busy" Decode.bool }
+
+    let private standing : Codec<Standing> =
+        { Encode =
+            fun (s: Standing) ->
+                Encode.object
+                    [ "facet", Encode.string s.Facet
+                      "word", Encode.string s.Word
+                      "tone", Encode.string (QueryTone.name s.Tone) ]
+          Decode =
+            Decode.object (fun get ->
+                { Standing.Facet = get.Required.Field "facet" Decode.string
+                  Standing.Word = get.Required.Field "word" Decode.string
+                  Standing.Tone =
+                    get.Required.Field
+                        "tone"
+                        (Decode.string
+                         |> Decode.andThen (fun raw ->
+                             match QueryTone.parse raw with
+                             | Some tone -> Decode.succeed tone
+                             | None -> Decode.fail (sprintf "Unknown tone: %s" raw))) }) }
+
+    /// What a session says about ITSELF, reported child→Manager so the roster can show it:
+    /// every standing it holds, the whole set each time, so an empty list clears them.
+    /// Metadata like the name and the activity beat. The Manager learns what a status IS —
+    /// a word and how loudly to say it — and never what it is about (`Standing`).
+    let sessionStatusReport : Codec<Standing list> =
+        { Encode = fun standings -> Encode.object [ "standings", standings |> List.map standing.Encode |> Encode.list ]
+          Decode = Decode.field "standings" (Decode.list standing.Decode) }
 
     /// A Manager→Session notification (the reverse leg, Manager-pushed): the payload of the
     /// `/control/notifications` SSE stream. Tagged by `kind` like every other control shape,

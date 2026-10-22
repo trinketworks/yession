@@ -2269,11 +2269,11 @@ let private acceptanceE2eTests =
 
                 let! a = connectClient signalUrl (managed.Host.MintPeerToken ()) "ada" "Ada"
                 let! b = connectClient signalUrl (managed.Host.MintPeerToken ()) "grace" "Grace"
-                do! b.Runner.WaitFor (fun model -> not (HistorySync.behind model.EventConsumer.Sync))
+                do! b.Runner.WaitFor (fun model -> not (fetching model))
 
                 // Grace leaves; the agent works while she is away.
                 do! b.Channel.Close ()
-                do! b.Runner.WaitFor (fun model -> model.Connection = Reconnecting)
+                do! b.Runner.WaitFor (fun model -> match model.Link with SessionLink.Reconnecting _ -> true | _ -> false)
 
                 do! compose a a.Hello.PeerId "do the work"
                 a.Connection.SendDraft a.Hello.PeerId
@@ -2422,7 +2422,7 @@ let private persistenceTests =
                 let! b = connectClient (managed2.BootstrapUri + "signal") (managed2.Host.MintPeerToken ()) "grace" "Grace"
                 do! b.Runner.WaitFor (fun model ->
                         (model.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "remember me"))
-                        && not (HistorySync.behind model.EventConsumer.Sync))
+                        && not (fetching model))
                 let! page = managed2.Host.Log.Read None Int32.MaxValue
                 let offsets = page.Events |> List.map (fun e -> EventOffset.value e.Offset)
                 Expect.equal offsets [ 0L .. int64 (List.length page.Events - 1) ] "offsets continue densely across the restart"
@@ -2442,7 +2442,7 @@ let private persistenceTests =
                 let log = InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                 let! host = Host.startWithEnvironment None None (Some log) sessionId 0
                 let! a = connectClient (sprintf "http://127.0.0.1:%d/signal" host.Port) (host.MintPeerToken ()) "ada" "Ada"
-                do! a.Runner.WaitFor (fun model -> not (HistorySync.behind model.EventConsumer.Sync))
+                do! a.Runner.WaitFor (fun model -> not (fetching model))
                 let note : Tools.McpServerNoted =
                     { MessageId = MessageId.create "heard-1" |> expect; Name = McpServerName.create "serial" |> expect }
                 let! appended = log.Append ActorRef.System (SessionEvent.McpServerAvailable note)

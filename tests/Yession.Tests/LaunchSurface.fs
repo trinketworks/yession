@@ -93,7 +93,7 @@ let private offeredTests =
         testCase "a client still reading is not: the log may hold the repo it is about to see" <| fun () ->
             // Connected to a session whose log runs past what this client has folded.
             let behind = clientAt 40L fresh
-            Expect.isTrue (HistorySync.behind behind.EventConsumer.Sync) "still catching up"
+            Expect.isTrue (fetching behind) "still catching up"
             Expect.isFalse (ClientModel.launchOffered behind) "not offered over an unread log"
             Expect.isFalse ((render behind).Contains "data-repo-picker") "and not drawn"
 

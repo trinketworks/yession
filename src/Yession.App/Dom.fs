@@ -304,10 +304,11 @@ module Dom =
         /// worth counting: a consent prompt shows the entries ITS grants use, so a legend
         /// that grew to the whole vocabulary would be a wall of text over the button.
         let legend = "data-legend"
-        // The reconnect offer (Plan 11): shown in place of the connection status word when
-        // the session has stopped and this deployment can bring it back.
-        let sessionGone = "data-session-gone"
+        // The way back to a session this page cannot reach (Plan 11), behind the status
+        // line's disclosure while an attempt is failing.
         let sessionReopen = "data-session-reopen"
+        /// The way back in for a page the session refused: its own sign-in.
+        let sessionSignIn = "data-session-signin"
         // The CONTENT column (Plan 13): the pane itself and the control that shows or hides it.
         // One surface over several kinds of thing — a terminal, a block, a recording, a file —
         // so the column is named after what it holds rather than after the first kind it held.
@@ -752,37 +753,39 @@ module Dom =
         /// Writing a chapter's name, named when this client knows the chapter.
         let namingChapter (name: string) : string = "naming " + name
         let atSomeChapter = "naming a chapter"
-        // Event-feed health tokens (the HTTP leg that carries history). `HistorySync` says
-        // there is more to read; these say whether reading is getting through.
+        // Event-feed health tokens (the HTTP leg that carries history). `SessionLink.Fetching`
+        // says there is more to read; these say whether reading is getting through.
         let feedLive = "live"
         let feedRetrying = "retrying"
         let feedPaused = "paused"
-        // Session-leg tokens for the same strip: the transport itself, not its history feed.
-        let degradedOffline = "offline"
+        // Session-leg tokens for the same strip: the link itself, not its history feed.
+        let degradedSignedOut = "signed-out"
         let degradedReconnecting = "reconnecting"
         let degradedRetrying = "session-retrying"
         let degradedConnecting = "session-connecting"
         /// What a client says while its first attempt to reach the session is still running,
-        /// once that has lasted long enough to say (`ClientModel.connectingQuietMs`).
+        /// once that has lasted long enough to say (`ClientModel.connectingQuietMs`) — and while
+        /// that attempt is failing, because a failing attempt to connect is still connecting.
+        /// How many attempts have failed is behind the disclosure (`retryingWhy`).
         let connectingStatus = "connecting"
-        /// What a client that cannot reach its session says while it keeps trying: the work
-        /// going on, rather than the fault. One word, so it fits beside the way back on a
-        /// phone; how many attempts have failed is behind the disclosure (`retryingWhy`).
-        /// "Retrying", not "reconnecting": a page that has never connected has nothing to
-        /// reconnect to, and a session that dropped is `Reconnecting` before it is this.
-        let retryingStatus = "retrying"
+        /// The same, for a page that had its session and lost it.
+        let reconnectingStatus = "reconnecting"
         /// Why it is still trying, behind the disclosure: the last attempt's fault and how many
         /// have failed, in the shape the history feed's retries already use.
         let retryingWhy (reason: string) (failures: int) = sprintf "%s · attempt %d" reason failures
-        // The reconnect offer's button (Plan 11).
+        /// A session that would not have this page: its sign-in has lapsed, and only signing in
+        /// again lets it back (`signInAgain`, which is the line's verb).
+        let signedOutStatus = "signed out"
+        /// What being signed out costs, said under the status: nothing is lost, and nothing
+        /// syncs until the sign-in is back.
+        let signedOutPromise = "Your work is saved here and will sync once you are signed in."
+        /// History stopped arriving: the reads gave up (`SessionLink.Stalled`).
+        let historyPausedStatus = "history paused"
+        /// History is arriving slowly: a read failed, and is being tried again.
+        let historyRetryingStatus = "history retrying"
+        /// The way back to a session this page cannot reach, behind the status line's
+        /// disclosure (Plan 11).
         let reopenSession = "Reopen session"
-        /// What reopening costs, on that offer's card. Two, because a deployment that
-        /// addresses sessions by port brings one back at a NEW origin, and a browser
-        /// partitions storage by origin — the promise the first can make is the one the
-        /// second cannot keep. Both say the CONSEQUENCE; `ephemeralAddress` is the
-        /// mechanism, and it goes behind the disclosure.
-        let reopenPromise = "Your work is saved here and will sync when the session is back."
-        let reopenPromiseEphemeral = "Anything written here since it stopped will be lost."
         /// What a credential that stopped working asks for. The panel row says it as a
         /// STATUS, in the caps the other status words use; the prompt over the timeline says
         /// it on a button, in the sentence case the other actions use. One phrase either
@@ -1300,11 +1303,12 @@ module Dom =
         /// have the column, and a session says its own build at the foot of its own sidebar
         /// (`Hooks.build`).
         let managerBuild = "data-manager-build"
-        /// The one line a session says about ITSELF, rendered beside its status word. The
-        /// Manager stores and shows the string without learning what it means, so this hook
-        /// marks the place rather than the content — a test asserts that what the session
-        /// said is what the row shows, never what a session ought to say.
-        let summary = "data-session-summary"
+        /// One standing a session says about ITSELF, rendered beside its status word, and
+        /// valued with the standing's facet. The Manager shows the standing without learning
+        /// what it means, so this hook marks the place rather than the content — a test
+        /// asserts that what the session said is what the row shows, never what a session
+        /// ought to say.
+        let standing = "data-session-standing"
         /// A filter or sort control. Carries a STABLE name (`show-archived`, `sort`) rather
         /// than the query it links to, so a swap can put focus back on the control that was
         /// pressed even though its href just changed.

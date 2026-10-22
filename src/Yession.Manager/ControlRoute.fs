@@ -18,8 +18,8 @@ namespace Yession.Manager
 type ControlRoute =
     /// The session's self-assigned display name.
     | Name
-    /// The one line a session says about itself, for the roster.
-    | Summary
+    /// What a session says about itself, for the roster: its standings.
+    | Status
     /// Whether the session is in use (Plan 11).
     | Activity
     /// Dynamic client registration: bind this launch's OAuth client to its secret.
@@ -55,7 +55,7 @@ module ControlRoute =
     /// Manager 404s, which the suite's ordinal check refuses to let pass.
     let all : ControlRoute list =
         [ ControlRoute.Name
-          ControlRoute.Summary
+          ControlRoute.Status
           ControlRoute.Activity
           ControlRoute.RegisterClient
           ControlRoute.SubscribeHook
@@ -82,7 +82,7 @@ module ControlRoute =
         | ControlRoute.McpServers
         | ControlRoute.ConnectionStatuses -> "GET"
         | ControlRoute.Name
-        | ControlRoute.Summary
+        | ControlRoute.Status
         | ControlRoute.Activity
         | ControlRoute.RegisterClient
         | ControlRoute.SubscribeHook
@@ -104,7 +104,7 @@ module ControlRoute =
     let path (route: ControlRoute) : string =
         match route with
         | ControlRoute.Name -> "/control/name"
-        | ControlRoute.Summary -> "/control/summary"
+        | ControlRoute.Status -> "/control/status"
         | ControlRoute.Activity -> "/control/activity"
         | ControlRoute.RegisterClient -> "/control/register-client"
         | ControlRoute.SubscribeHook -> "/control/hooks/subscribe"

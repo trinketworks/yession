@@ -132,7 +132,7 @@ let private endpointTests =
                 do! compose a a.Hello.PeerId "fetched over http"
                 a.Connection.SendDraft a.Hello.PeerId
                 do! a.Runner.WaitFor (fun m ->
-                        not (HistorySync.behind m.EventConsumer.Sync)
+                        not (fetching m)
                         && Support.saidOn m = [ "fetched over http" ])
                 do! a.Channel.Close ()
                 do! h.Stop ()
@@ -201,12 +201,10 @@ let private storeTests =
                 let store = storeOf [ answerOf 0L 2 ]
                 let seen = ResizeArray ()
                 do! Client.EventFetch.replay store seen.Add
-                let stalled = { ClientModel.init { PeerId = PeerId.create "p" |> expect; DisplayName = "P" } with
-                                  EventConsumer =
-                                    { (ClientModel.init { PeerId = PeerId.create "p" |> expect; DisplayName = "P" }).EventConsumer with
-                                        Feed = FeedStalled "offline" } }
+                let gaveUp = SessionLink.Stalled (EventOffset.create 9L |> expect, "offline", Phase.Opening)
+                let stalled = { ClientModel.init { PeerId = PeerId.create "p" |> expect; DisplayName = "P" } with Link = gaveUp }
                 let folded = seen |> Seq.fold (fun m msg -> Support.step msg m) stalled
-                Expect.equal folded.EventConsumer.Feed (FeedStalled "offline") "the feed's health is untouched by a local read"
+                Expect.equal folded.Link gaveUp "the reads are still stalled after a local read"
                 Expect.equal
                     (folded.Conversation.Items |> List.length)
                     0
@@ -319,7 +317,7 @@ let private storeTests =
                 let seen = ResizeArray ()
                 do! Client.EventFetch.replay store seen.Add
                 Expect.isFalse
-                    (seen |> Seq.exists (function EventFeedMsg _ -> true | _ -> false))
+                    (seen |> Seq.exists (function ReadRetryingMsg _ | EventsReadMsg _ -> true | _ -> false))
                     "a local read reports no feed health at all"
                 let reported =
                     seen |> Seq.tryPick (function LocalHistoryMsg (_, gapAt) -> gapAt | _ -> None)
