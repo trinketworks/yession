@@ -785,6 +785,9 @@ let create (deps: Deps) : Renderer =
     let mutable frameOpen = 0
     // A model came during the open frame and was not drawn: the frame's end draws `latest`.
     let mutable owed = false
+    // The conversation has been shown on this page load (`ClientModel.showsConversation`): it
+    // rose in then (`Arrival`), and whatever reaches it after that is news.
+    let mutable arrived = false
     let rec setState (model: ClientModel) =
         latest <- Some model
         if drawn && not (ClientModel.presentable model) then owed <- false
@@ -852,6 +855,18 @@ let create (deps: Deps) : Renderer =
         // end before those ran was put back at an end that had moved by the time anybody
         // looked.
         tail.Restore tails model
+        // The conversation's first appearance rises in, after the end it is pinned to has been
+        // put back, so the rows that rise are the rows the reader is looking at. An arrival is
+        // a change: a conversation already on the page's first render was there from its first
+        // paint, and has not come from anywhere. The app's first render never holds one — it
+        // takes over the server's page, which has none — so this is a page born holding one,
+        // the harness's stand-in for a session.
+        if not arrived && ClientModel.showsConversation model then
+            arrived <- true
+            if frame > 1 then
+                Browser.Dom.document.querySelector ("[" + Dom.Hooks.conversation + "]")
+                |> Option.ofObj
+                |> Option.iter Arrival.play
 
     { SetState = setState
       SyncTerminalInputs = syncTerminalInputs

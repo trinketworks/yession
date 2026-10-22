@@ -5849,6 +5849,56 @@ let private historySyncTests =
             Expect.isTrue (ClientModel.presentable cut) "what it has is all it will have"
     ]
 
+/// The conversation's first appearance: when it is (the model's), and which rows rise in which
+/// lane (`Arrival`'s, from where the page laid them out).
+let private arrivalTests =
+    let booted = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+    let accepted (latest: int64 option) =
+        ConnectedMsg
+            { SessionId = sessionId
+              AssignedDisplayName = "swift-heron"
+              LatestOffset = latest |> Option.map (fun o -> EventOffset.create o |> expect) }
+    let said = [ for n in 0L .. 1L -> at n (float n) (sent (string n) "said") ]
+    let page (msg: EventPage<SessionEvent> -> ClientMsg) (events: EventEnvelope<SessionEvent> list) =
+        msg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true }
+    testList "the conversation arriving" [
+        testCase "a client that has folded nothing shows no conversation" <| fun () ->
+            Expect.isFalse (ClientModel.showsConversation booted) "nothing to arrive"
+
+        testCase "what this client kept is the conversation, at once" <| fun () ->
+            let kept = booted |> Support.step (page LocalHistoryMsg said)
+            Expect.isTrue (ClientModel.showsConversation kept) "the reader's own picture arrives"
+
+        testCase "the pages of a cold open are not the conversation arriving" <| fun () ->
+            let reading = booted |> Support.step (accepted (Some 3L)) |> Support.step (page EventsPageMsg said)
+            Expect.isFalse (ClientModel.showsConversation reading) "the oldest end of the log, on its way"
+
+        testCase "a cold open read through is the conversation arriving" <| fun () ->
+            let read = booted |> Support.step (accepted (Some 1L)) |> Support.step (page EventsPageMsg said)
+            Expect.isTrue (ClientModel.showsConversation read) "the end of the log"
+
+        testCase "a session with nothing in it has no conversation to arrive" <| fun () ->
+            let empty = booted |> Support.step (accepted None)
+            Expect.isFalse (ClientModel.showsConversation empty) "so its first message is news"
+
+        testCase "the rows in view rise a lane apart, top to bottom" <| fun () ->
+            let lanes = Arrival.laneOf (0.0, 100.0) [ (0.0, 20.0); (24.0, 50.0); (54.0, 100.0) ]
+            Expect.equal lanes [ Some 0; Some 1; Some 2 ] "reading order"
+
+        testCase "a row out of view does not rise, and takes no lane from one that does" <| fun () ->
+            let lanes = Arrival.laneOf (100.0, 200.0) [ (0.0, 60.0); (64.0, 100.0); (90.0, 150.0); (154.0, 200.0); (204.0, 260.0) ]
+            Expect.equal lanes [ None; None; Some 0; Some 1; None ] "only what a reader sees moves, from the first lane"
+
+        testCase "every row past the last lane shares it" <| fun () ->
+            let rows = [ for n in 0 .. 5 -> float (n * 10), float (n * 10 + 8) ]
+            let lanes = Arrival.laneOf (0.0, 100.0) rows
+            Expect.equal lanes [ Some 0; Some 1; Some 2; Some 3; Some 3; Some 3 ] "four lanes, so the screen settles a pace after the fourth"
+
+        testCase "a row with no height does not rise" <| fun () ->
+            let lanes = Arrival.laneOf (0.0, 100.0) [ (10.0, 10.0); (12.0, 40.0) ]
+            Expect.equal lanes [ None; Some 0 ] "nothing drawn, nothing to move"
+    ]
+
 let private readLoopTests =
     let offset (n: int64) = EventOffset.create n |> expect
     let accepted (latest: int64 option) =
@@ -6308,4 +6358,5 @@ let tests =
         revealTests
         readLoopTests
         historySyncTests
+        arrivalTests
     ]

@@ -2737,6 +2737,12 @@ module ClientModel =
         | Current -> true
         | Opening (_, _, kept) -> kept || cutOff model
 
+    /// Whether the timeline is drawing the conversation: what is folded is shown, and there
+    /// is some of it. The moment this first holds on a page load is the conversation ARRIVING,
+    /// which moves (`Arrival`); every change after it is news, which lands as it always has.
+    let showsConversation (model: ClientModel) : bool =
+        showsFolded model && not (List.isEmpty model.Conversation.Items)
+
     /// Whether a model is worth putting on the screen, or should be held for the one that
     /// follows it. A client waiting on the log is held — a page is at most a round trip away,
     /// and every page drawn on the way is a picture the next one replaces — until it is read

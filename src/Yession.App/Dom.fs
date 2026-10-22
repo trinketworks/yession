@@ -122,6 +122,10 @@ module Dom =
         let environmentReason = "data-environment-reason"
         // Conversation timeline.
         let conversation = "data-conversation"
+        /// On a row of the conversation while it rises in, the first time a page load shows
+        /// the conversation, valued with its lane: `app/tailwind.css` keys the motion off it,
+        /// and `Arrival` puts it on and takes it off again once the row has landed.
+        let arrive = "data-arrive"
         /// The float that takes a reader who has scrolled away back to the tail, valued with
         /// the `tail` of the surface it brings back. Present in every render — whether it can
         /// be SEEN is whether that surface's reader is following it, which the document holds
