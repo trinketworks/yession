@@ -39,6 +39,11 @@ module Scheduler =
           RequestInterrupt : PeerId -> AgentTurnId -> Result<unit, string>
           /// The turn currently running, if any.
           RunningTurn : unit -> AgentTurnId option
+          /// Be told each time a turn takes or gives up the slot — each time `RunningTurn`'s
+          /// answer moves. A turn gives it up AFTER its last append, so a reader that only
+          /// listened to the log would see the turn still running and nothing after to say
+          /// it stopped.
+          OnTurnChanged : (unit -> unit) -> unit
           /// Re-examine whether the LOG owes the agent a turn nobody asked for (Plan 20,
           /// stage 2) — a background command finished while the agent was not running.
           ///
@@ -121,6 +126,10 @@ module Scheduler =
         let mutable consumed = initialConsumed
         let mutable generation = 0
         let mutable running : RunningTurn option = None
+        let mutable turnListeners : (unit -> unit) list = []
+        let setRunning (turn: RunningTurn option) =
+            running <- turn
+            turnListeners |> List.iter (fun listener -> listener ())
         let mutable drainBusy = false
 
         let signalFor (turn: RunningTurn) : AgentAbortSignal =
@@ -199,7 +208,7 @@ module Scheduler =
                                       TurnId = mintTurnId ()
                                       Aborted = false
                                       AbortCallbacks = [] }
-                                running <- Some turn
+                                setRunning (Some turn)
                                 drainBusy <- false
                                 let projection, _ =
                                     ConversationProjection.applyEvents None page.Events ConversationProjection.empty
@@ -222,7 +231,7 @@ module Scheduler =
                                 // already released it (and possibly started a successor).
                                 match running with
                                 | Some current when current.Generation = turn.Generation ->
-                                    running <- None
+                                    setRunning None
                                     drain ()
                                     // A background block may have finished WHILE this turn
                                     // ran, and the wake it fired found the slot taken. The
@@ -266,7 +275,7 @@ module Scheduler =
                                   TurnId = mintTurnId ()
                                   Aborted = false
                                   AbortCallbacks = [] }
-                            running <- Some turn
+                            setRunning (Some turn)
                             drainBusy <- false
                             let projection, _ =
                                 ConversationProjection.applyEvents None page.Events ConversationProjection.empty
@@ -297,7 +306,7 @@ module Scheduler =
                                     (AgentTurn.FromWake (reason, turnActor))
                             match running with
                             | Some current when current.Generation = turn.Generation ->
-                                running <- None
+                                setRunning None
                                 // A person may have said something while the woken turn ran,
                                 // and their turn is the one that outranks everything.
                                 drain ()
@@ -321,7 +330,7 @@ module Scheduler =
                 turn.Aborted <- true
                 let callbacks = turn.AbortCallbacks
                 turn.AbortCallbacks <- []
-                running <- None
+                setRunning None
                 Async.StartImmediate (
                     async {
                         let! _ =
@@ -366,6 +375,7 @@ module Scheduler =
         { Drain = drain
           RequestInterrupt = requestInterrupt
           RunningTurn = fun () -> running |> Option.map (fun t -> t.TurnId)
+          OnTurnChanged = fun listener -> turnListeners <- turnListeners @ [ listener ]
           Wake = wake
           Boot =
             fun () ->

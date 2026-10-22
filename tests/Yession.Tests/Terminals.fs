@@ -264,6 +264,26 @@ let private projectionTests =
             Expect.equal a.Blocks.Head.Status (BlockFinished (CommandSucceeded 0)) "with its exit code"
             Expect.equal a.Blocks.Head.ToSeq (Some 4) "and the transcript range it produced"
 
+        // What the agent's standing calls "running <terminal>": only a command that owes the
+        // agent a wake, so not one a person is running and not one that has finished.
+        testCase "the agent awaits only its own background commands still running" <| fun () ->
+            let background event =
+                match event with
+                | SessionEvent.TerminalBlockStarted s -> SessionEvent.TerminalBlockStarted { s with Background = true }
+                | other -> other
+            let proj =
+                fold
+                    [ opened terminalA "build"
+                      opened terminalB "logs"
+                      background (started terminalA "1" "make" 0)
+                      background (started terminalB "2" "make test" 0)
+                      completed terminalB "2" (CommandSucceeded 0) 3
+                      started terminalB "3" "tail -f log" 3 ]
+            Expect.equal
+                (Projection.awaitedByAgent proj)
+                [ TerminalTitle.named (Some SandboxRef.defaultRef) (TerminalTitle.fromProse "build") ]
+                "the running background command, and neither the finished one nor the person's"
+
         // The exit code says a command was interrupted; only the record says by whom.
         testCase "an interrupted block carries who stopped it" <| fun () ->
             let proj =

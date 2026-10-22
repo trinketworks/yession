@@ -452,6 +452,15 @@ module Projection =
     let runningBlock (view: TerminalView) : Block option =
         view.Blocks |> List.tryFind (fun b -> b.Status = BlockRunning)
 
+    /// The open terminals running a command the agent asked for in the background, by the
+    /// name people know them by: work the agent is waiting to be told has finished, which
+    /// is the agent's work in flight while no turn runs. A command a person runs owes the
+    /// agent nothing, so it is not one of these.
+    let awaitedByAgent (proj: Projection) : string list =
+        openTerminals proj
+        |> List.filter (fun view -> runningBlock view |> Option.exists (fun block -> block.Background))
+        |> List.map (fun view -> TerminalTitle.named view.Sandbox view.Title)
+
     /// Whether `block` is the one a loss left open: still running on the record, which is
     /// exactly what was lost — nothing will say how it ended while the loss lasts, and whether
     /// it started at all is not known either. A surface drawing it as running would be a
