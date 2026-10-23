@@ -145,6 +145,15 @@ let private argv () : string array = Node.Api.``process``.argv |> Seq.skip 2 |> 
 
 let private say (line: string) : unit = JS.console.log line
 
+/// Close the camera's browser. A profile it could not remove is said on stderr and is not a
+/// failure: by now the picture or report is written, and an exit code that a leftover temp
+/// directory turns to 1 is one no caller can trust.
+let private closeBrowser (browser: Fable.NodeExtras.Chromium.Launched) : JS.Promise<unit> =
+    promise {
+        let! left = Fable.NodeExtras.Chromium.close browser
+        left |> Option.iter (fun why -> JS.console.error (sprintf "warning: %s" why))
+    }
+
 // The files and paths, through `Fable.Node`'s own bindings to `node:fs` and `node:path`, which
 // type every call made here. `writeFileSync` takes text or bytes alike, and these are the two
 // this camera writes, so each has its own name rather than one over anything.
@@ -566,7 +575,7 @@ let private run () =
             writeBytes picture (bytesOfBase64 shot)
             say (sprintf "wrote %s (%dx%d)" picture width height)
             cdp.Close ()
-            Fable.NodeExtras.Chromium.close browser
+            do! closeBrowser browser
             do! stopCreated ()
             // A page that never landed is a failed picture of SOMETHING, kept because what the
             // tab showed is usually why — and said with a code, so a caller cannot read it as a
@@ -788,7 +797,7 @@ let private run () =
             if not (List.isEmpty lines) then say (sprintf "#%d t=%d %s" r.N r.T (String.concat " ; " lines))
 
         cdp.Close ()
-        Fable.NodeExtras.Chromium.close browser
+        do! closeBrowser browser
         do! stopCreated ()
         exitWith 0
     }

@@ -41,16 +41,56 @@ module Chromium =
           /// The profile directory it runs on, made for it and removed with it.
           Profile: string }
 
-    /// Stop the browser at once, and remove its profile. SIGKILL rather than a request to
-    /// close: nothing in the profile is wanted afterwards, and a browser asked politely goes on
-    /// writing to it while it goes, under a removal that is already walking it. Synchronous, so
-    /// the exit listener `launch` hangs can call it from a process that is already leaving. A
-    /// second call finds the process gone and the directory gone, and does nothing.
-    let close (launched: Launched) : unit =
+    /// How the profile is removed once the browser is gone: retried, because "gone" is the
+    /// browser's own process, and its helpers — renderer, GPU, network service, crash handler —
+    /// are not its process group's to take with it (it has none: a detached browser would
+    /// outlive a Ctrl-C to the terminal that started it). They end on their own when it does,
+    /// a few milliseconds later, and a helper still writing in that window puts an entry into a
+    /// directory the removal has just emptied: `ENOTEMPTY`, after the picture was taken. Ten
+    /// retries 50ms apart and growing is 2.75s, far past any helper's end.
+    let private removeProfile (profile: string) : unit =
+        Files.removeTreeRetrying 10 50 profile
+
+    /// Whether the browser's process is over — or never was, for a spawn that failed, which
+    /// has no pid and may never report an exit at all.
+    let private ended (child: ChildProcess) : bool =
+        ChildProcesses.exitCode child |> Option.isSome
+        || ChildProcesses.signalCode child |> Option.isSome
+        || isNull (box child.pid)
+
+    /// Stop the browser at once and remove its profile, without waiting for it to end: for the
+    /// `exit` listener `launch` hangs, which runs in a process that is already leaving and can
+    /// wait for nothing. The retries in `removeProfile` are all this one has.
+    let private abandon (launched: Launched) : unit =
         // The child's own `kill`, not a signal to its pid: it does nothing to a child already
         // reaped, where a pid may since have been handed to somebody else's process.
         launched.Process.kill "SIGKILL" |> ignore
-        Files.removeTree launched.Profile
+        removeProfile launched.Profile
+
+    /// Stop the browser, wait until its process has ended, and remove its profile. SIGKILL
+    /// rather than a request to close: nothing in the profile is wanted afterwards, and a
+    /// browser asked politely goes on writing to it while it goes. Waiting for the exit first is
+    /// the point: a killed browser is not a dead one until the OS says so, and a removal begun
+    /// in between walks a directory it is still writing into.
+    ///
+    /// Answers why the profile could not be removed, or `None` when it was. It does not throw
+    /// for that: the profile is a temporary directory, and whatever the browser was started
+    /// for has already been done — a caller that throws here turns a picture it has into a
+    /// failure it reports. A second call finds the process ended and the directory gone, and
+    /// does nothing.
+    let close (launched: Launched) : JS.Promise<string option> =
+        promise {
+            let child = launched.Process
+            if not (ended child) then
+                let exited = Promise.create (fun resolve _ -> ChildProcessStreams.onExit child (fun _ -> resolve ()))
+                child.kill "SIGKILL" |> ignore
+                do! exited
+            try
+                removeProfile launched.Profile
+                return None
+            with error ->
+                return Some (sprintf "Chromium's profile %s was not removed: %s" launched.Profile error.Message)
+        }
 
     /// How much of Chromium's stderr is kept to explain a launch that failed: its LAST bytes,
     /// because a refusal is the last thing it says, and a browser that started keeps talking
@@ -117,7 +157,7 @@ module Chromium =
                 let launched = { Process = child; Page = ""; Profile = profile }
                 // A process that is leaving has nobody left to tell that the profile would not
                 // go, and a throw here would change the code it leaves with.
-                Processes.onEnding "exit" (fun () -> try close launched with _ -> ())
+                Processes.onEnding "exit" (fun () -> try abandon launched with _ -> ())
                 // Read for the browser's whole life, not only the launch: a pipe nobody drains
                 // fills, and a Chromium blocked writing a log line is a browser that stops.
                 let said = ref ""
@@ -132,11 +172,14 @@ module Chromium =
                 let unspawned : string option ref = ref None
                 ChildProcessStreams.onExit child (fun code -> exited.Value <- Some code)
                 ChildProcessStreams.onError child (fun error -> unspawned.Value <- Some (StreamError.describe error))
-                /// Stop what was started, and say why with what Chromium said.
-                let failed (why: string) : Result<Launched, string> =
-                    let stderr = said.Value.Trim ()
-                    close launched
-                    Error (sprintf "%s\n%s" why (if stderr = "" then "(Chromium wrote nothing to stderr)" else stderr))
+                /// Stop what was started, and say why with what Chromium said. A profile left
+                /// behind is not why the launch failed, so its own reason is not added to this one.
+                let failed (why: string) : JS.Promise<Result<Launched, string>> =
+                    promise {
+                        let stderr = said.Value.Trim ()
+                        let! _ = close launched
+                        return Error (sprintf "%s\n%s" why (if stderr = "" then "(Chromium wrote nothing to stderr)" else stderr))
+                    }
                 let portFile = Node.Api.path.join (profile, "DevToolsActivePort")
                 let mutable port = ""
                 let mutable waited = 0
@@ -148,13 +191,13 @@ module Chromium =
                         waited <- waited + 1
                 if port = "" then
                     match unspawned.Value, exited.Value with
-                    | Some why, _ -> return failed (sprintf "Chromium (%s) could not be started: %s. Its stderr:" executable why)
+                    | Some why, _ -> return! failed (sprintf "Chromium (%s) could not be started: %s. Its stderr:" executable why)
                     | None, Some (Some code) ->
-                        return failed (sprintf "Chromium (%s) exited with code %d before writing DevToolsActivePort. Its stderr:" executable code)
+                        return! failed (sprintf "Chromium (%s) exited with code %d before writing DevToolsActivePort. Its stderr:" executable code)
                     | None, Some None ->
-                        return failed (sprintf "Chromium (%s) was ended by a signal before writing DevToolsActivePort. Its stderr:" executable)
+                        return! failed (sprintf "Chromium (%s) was ended by a signal before writing DevToolsActivePort. Its stderr:" executable)
                     | None, None ->
-                        return failed (sprintf "Chromium (%s) never wrote DevToolsActivePort in %ds. Its stderr:" executable portWaitSeconds)
+                        return! failed (sprintf "Chromium (%s) never wrote DevToolsActivePort in %ds. Its stderr:" executable portWaitSeconds)
                 else
                     let mutable target = ""
                     waited <- 0
@@ -169,7 +212,7 @@ module Chromium =
                             do! pause 200
                             waited <- waited + 1
                     if target = "" then
-                        return failed (sprintf "Chromium (%s) offered no page target in 10s. Its stderr:" executable)
+                        return! failed (sprintf "Chromium (%s) offered no page target in 10s. Its stderr:" executable)
                     else
                         return Ok { launched with Page = target }
         }

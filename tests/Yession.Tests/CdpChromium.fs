@@ -93,6 +93,39 @@ let findingTests =
             Expect.stringContains said "set CHROMIUM_PATH" "what to do"
     ]
 
+// --- Closing it -----------------------------------------------------------------------------
+//
+// A Chromium of each case's own, not the suite's: closing is what is under test, and the
+// suite's browser has to outlive every case. The camera closes its browser right after the
+// picture is written, and a profile removal begun while the killed browser was still going
+// raced it into `ENOTEMPTY` — a written picture that exited 1.
+
+/// A browser of this case's own, closed: what it was, and what closing answered.
+[<Waits>]
+let private closedBrowser () : Async<Chromium.Launched * string option> =
+    async {
+        let! launched = Chromium.launch Promise.sleep 800 600 [] |> Interop.awaitPromise
+        match launched with
+        | Error why -> return failwithf "a Chromium of the case's own did not start: %s" why
+        | Ok browser ->
+            let! left = Chromium.close browser |> Interop.awaitPromise
+            return browser, left
+    }
+
+let closingTests =
+    testList "Closing Chromium (Fable.NodeExtras.Chromium)" [
+        testCaseAsync "a closed browser's process has ended by the time close answers" <| async {
+            let! browser, _ = closedBrowser ()
+            let ended = ChildProcesses.exitCode browser.Process |> Option.isSome || ChildProcesses.signalCode browser.Process |> Option.isSome
+            Expect.isTrue ended "an exit code or the signal that ended it"
+        }
+
+        testCaseAsync "a closed browser's profile is gone, and close says nothing was left" <| async {
+            let! browser, left = closedBrowser ()
+            Expect.equal (left, Node.Api.fs.existsSync (U2.Case1 browser.Profile)) (None, false) "no reason, and no directory"
+        }
+    ]
+
 // --- The browser ----------------------------------------------------------------------------
 
 /// The suite's Chromium, once a case has asked for it.
