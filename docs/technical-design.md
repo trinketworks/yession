@@ -7,7 +7,131 @@ the [root README](../README.md).
 
 ## 1. Core principles
 
-These are architectural constraints, not preferences.
+These are architectural constraints, not preferences. They are for everybody who changes this
+repository, a person or an agent. Read them before a change that adds a component, a
+dependency, an option, a test or a rule. A reviewer cites one by name.
+
+When a change has to break a principle, change this section first, in the same PR, and say
+why. A principle that the code no longer follows misleads the next reader.
+
+**How to build anything here:**
+
+- **[Fast feedback](#fast-feedback)**: the cheapest signal that can catch a fault catches it,
+  without a manual step.
+- **[Colocation](#colocation)**: a rule lives with the state that it governs.
+- **[Policy/mechanism separation](#policymechanism-separation)**: a mechanism gives an
+  ability, and a policy decides its use.
+- **[Acyclic dependencies](#acyclic-dependencies)**: a component refers only to the
+  components before it.
+- **[Composition at the top](#composition-at-the-top)**: one root composes the concrete
+  infrastructure, and decides nothing.
+- **[Types first](#types-first)**: the type system specifies correctness.
+- **[High-signal automated verification](#high-signal-automated-verification)**: a test pins
+  one invariant, and no manual run takes the place of one.
+
+**What the runtime is:**
+
+- **[Local first](#local-first)**: a session runs on a local node, and its clients reach it
+  over WebRTC.
+- **[Reactive](#reactive)**: events drive explicit state transitions, and each view is a
+  projection.
+- **[Ylmish is the sync boundary](#ylmish-is-the-sync-boundary)**: Elmish owns the model, and
+  Ylmish encodes it into Yjs (§5 names one exception).
+- **[Durable facts are events](#durable-facts-are-events)**: an append-only log holds what
+  happened, and only the Session writes it.
+
+[§5](#5-architectural-invariants) lists the invariants that follow from these principles.
+
+### Fast feedback
+
+A change gets to a signal without a manual step. The cheapest signal that can catch a fault is
+the one that catches it. For example, `dev` runs the Manager under `fable watch`,
+`check --only "<text>"` runs only the cases whose name contains the text, and
+`frames --boot --still` takes a picture of a surface.
+
+- Put a rule where the cheap tier reaches it. A rule that only the composition root or the
+  browser tier can see is not checked between runs of that tier ([Colocation](#colocation)).
+- Tag a suite with the minimum capabilities that it needs, so that it runs in the cheapest
+  tier that can run it ([tests/AGENTS.md](../tests/AGENTS.md#writing-tests)).
+- Give time and entropy to the code as ports, for example `Resilience.Policy` and
+  `LinkPolicy`. A test then drives a backoff or a timeout in zero real time. A test waits for
+  a condition, never for a duration (YES014).
+
+### Colocation
+
+What belongs to one piece of state is in one place: its type, the rules that guard it, the
+operations on it, and the tests that pin them. A caller must not have to remember to ask
+first. The root [AGENTS.md](../AGENTS.md#colocation) ("Colocation") has the three questions
+that find a rule in the wrong place.
+
+The same applies to reasons. The reason for a piece of code is in its doc comment, and this
+document points to it. For example, the header of `src/Yession.Domain/Config.fs` holds the
+design of `yession.yaml` and the rule for each future key.
+
+### Policy/mechanism separation
+
+A mechanism gives an ability. A policy decides when and how to use it. Keep them apart. Then a
+policy is a value that a cheap test reads without the mechanism, and a new policy costs a
+declaration and not a change to the mechanism.
+
+- `Policy.guard` in `Yession.Domain/Resilience.fs` is the mechanism of a retry. A `Schedule`
+  and a `Verdict` are its policy: values that compose, print and test without an operation.
+- A Session has the mechanism to spawn and confine sandboxes (`CreateSandbox`,
+  `SandboxBackend`). The operator's declarations are the policy: what a session may reach,
+  which connections and which MCP servers ([§3](#3-authority-model-phase-2)). A
+  `yession.yaml` narrows that ceiling and never makes it wider
+  ([§4](#4-repo-local-configuration)).
+
+Do not add an option to a mechanism for a choice that its caller can make. Let the caller give
+the mechanism a value.
+
+### Acyclic dependencies
+
+A component refers only to the components before it. F# enforces the order. In a project, a
+file sees only the files above it in the `.fsproj`. Between projects, a `ProjectReference`
+refers back. The order is:
+
+```text
+Fable.*            binding projects: APIs that we do not own
+Yession.Domain     types, rules and pure transitions. It refers to no other project.
+Yession.Codecs     the wire formats of the domain
+Yession.App        the client: the Elmish model, Ylmish, the views
+Yession.Session    one session. It serves the App.
+Yession.Manager    the Manager's pure state and wire layer
+Yession.Oidc       the Manager's OIDC provider
+app/               Yession.Host, the composition root
+Yession.Peer       the browser's client, driven headlessly for tests and probes
+```
+
+When a component needs something from a component after it, the earlier component declares a
+function-shaped port, and the composition root gives it the implementation. Pass state down. Do
+not reach up for it ([AGENTS.md](../AGENTS.md#colocation)).
+
+### Composition at the top
+
+Capabilities are small and function-shaped. The application boundary composes concrete
+infrastructure. Concrete infrastructure does not spread through domain code.
+
+The composition root composes and decides nothing. A bound, a fallback or a refusal that the
+root computes is a decision that no cheap test reaches. The root
+[AGENTS.md](../AGENTS.md#colocation) ("Colocation") states this half of the rule.
+
+### Types first
+
+The type system specifies correctness. F# types encode core invariants, valid states, and
+allowed transitions. Where possible, the check happens at compile time. Yjs is not the
+product model. JSON blobs, Y maps, and stringly-typed payloads remain boundary formats.
+They must not leak into application logic. The root [AGENTS.md](../AGENTS.md#type-safety)
+("Type safety") lists the constructs that open the type system again, and the analyzer that
+reports each one.
+
+### High-signal automated verification
+
+Each implementation phase must include automated end-to-end tests. Manual testing is not
+a substitute for verification. There is no "one-shot" manual validation.
+
+A test pins one invariant and goes red only when that invariant breaks. The rules for
+writing tests are in [tests/AGENTS.md](../tests/AGENTS.md#writing-tests).
 
 ### Local first
 
@@ -22,13 +146,6 @@ signalling, but it is **not** the main session API.
 Events drive the system as explicit state transitions. Components share no mutable state.
 Transitions should be deterministic and composable. UI, collaboration, agent progress, and
 event consumption are projections of state. Explicit boundaries isolate side effects.
-
-### Types first
-
-The type system specifies correctness. F# types encode core invariants, valid states, and
-allowed transitions. Where possible, the check happens at compile time. Yjs is not the
-product model. JSON blobs, Y maps, and stringly-typed payloads remain boundary formats.
-They must not leak into application logic.
 
 ### Ylmish is the sync boundary
 
@@ -56,20 +173,6 @@ Client offset = read progress through the event log
 ```
 
 The Session is the only event writer.
-
-### Composition at the top
-
-Capabilities are small and function-shaped. The application boundary composes concrete
-infrastructure. Concrete infrastructure does not spread through domain code. The root
-[AGENTS.md](../AGENTS.md#colocation) ("Colocation") states the other half of this rule.
-
-### High-signal automated verification
-
-Each implementation phase must include automated end-to-end tests. Manual testing is not
-a substitute for verification. There is no "one-shot" manual validation.
-
-A test pins one invariant and goes red only when that invariant breaks. The rules for
-writing tests are in [tests/AGENTS.md](../tests/AGENTS.md#writing-tests).
 
 ---
 
@@ -391,29 +494,34 @@ maintain yession measures whether the file can say anything real.
 
 ## 5. Architectural invariants
 
-These must be visible in code review. They matter more than polish in the first phases.
+These must be visible in code review. They matter more than polish in the first phases. Each
+follows from a principle in [§1](#1-core-principles). A reviewer cites a rule by its number.
 
-```text
-Elmish is the product model.
-Ylmish is the encoding/sync boundary.
-Yjs is not the domain model.
-WebRTC is the session transport.
-HTTP is bootstrap/signalling only.
-The Session is the only event writer.
-Clients consume events read-only by offset.
-Drafts are collaborative state.
-Sent messages are durable events.
-Conversation is a projection.
-Manager owns authority.
-Session owns orchestration.
-Environment starts lazily.
-Capabilities are scoped, not ambient.
-Verification is automated end-to-end, not manual.
-```
+Update this list before a change that breaks a rule, in the same PR, and say why.
 
-`Ylmish is the encoding/sync boundary` has one named exception. Message bodies and terminal
-command lines are top-level Yjs roots, keyed by `BodyKey`, that the app co-manages outside the
-encoded tree, and the structural reader skips them. The header of
+1. Elmish is the product model.
+2. Ylmish is the encoding/sync boundary.
+3. Yjs is not the domain model.
+4. WebRTC is the session transport.
+5. HTTP is bootstrap/signalling only. [§2.3](#23-transport) names its one read-only exception,
+   the history by cursor.
+6. The Session is the only event writer.
+7. Clients consume events read-only by offset.
+8. Drafts are collaborative state.
+9. Sent messages are durable events.
+10. Conversation is a projection.
+11. Manager owns authority.
+12. Session owns orchestration.
+13. Environment starts lazily.
+14. Capabilities are scoped, not ambient.
+15. Verification is automated end-to-end, not manual.
+16. A project refers only to the projects before it in the order of
+    [Acyclic dependencies](#acyclic-dependencies). `Yession.Domain` refers to no other project.
+17. The composition root composes and decides nothing.
+
+Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
+roots, keyed by `BodyKey`, that the app co-manages outside the encoded tree, and the structural
+reader skips them. The header of
 `src/Yession.App/Collab/Bodies.fs` says why. Everything else crosses through the codec.
 
 ---
