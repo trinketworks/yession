@@ -5660,7 +5660,7 @@ let private shellProfileTests =
                     |> String.concat ""
                 Expect.equal (said ()) "" "nothing is said before the window"
                 clock.Advance (TimeSpan.FromSeconds 5.0)
-                Expect.stringContains (said ()) "still waiting" "the terminal says it is waiting, not that it gave up"
+                Expect.stringContains (said ()) "still waits" "the terminal says it is waiting, not that it gave up"
                 Expect.stringContains (said ()) "sh-3.2$" "and quotes what the shell printed so far"
                 Expect.stringContains (said ()) "\\x1b" "with its control bytes escaped, not carried"
             }
@@ -6082,7 +6082,7 @@ let private agentVerbTests =
                 | Ok _ -> failwith "a fifth terminal must not open"
                 | Error reason ->
                     Expect.isTrue (reason.Contains "4") "the limit is stated"
-                    Expect.isTrue (reason.Contains "close") "and so is what to do about it"
+                    Expect.isTrue (reason.Contains "Close") "and so is what to do about it"
             }
 
         testCaseAsync "closing one makes room" <|

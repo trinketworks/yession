@@ -182,7 +182,7 @@ module TerminalQueueDrain =
     /// its `TerminalCommandRejected`, which the agent reads back as the refusal's words and
     /// a person reads on the block. One sentence of fact, one instruction.
     let cannotRunReason =
-        "The session cannot tell when commands start or end in this terminal, so it did not run this command. Run the command in a different terminal."
+        "The session cannot detect the start and end of commands in this terminal. For this reason, it did not run this command. Run the command in a different terminal."
 
 
     /// The gate for ONE terminal, shared by `plan` and `holdOf` so what runs and what the
@@ -1440,7 +1440,7 @@ module SessionTerminals =
                                                 current
                                                 TranscriptStderr
                                                 (sprintf
-                                                    "yession: the shell has not printed an instrumented prompt after %dms — still waiting for it. So far it said: %s\r\n"
+                                                    "yession: the shell has not printed an instrumented prompt after %dms. Yession still waits for it. So far it said: %s\r\n"
                                                     (int probeWindow.TotalMilliseconds)
                                                     (overture ()))
                                         | _ -> ()
@@ -1670,7 +1670,7 @@ module SessionTerminals =
                                     terminal
                                     TranscriptStderr
                                     (sprintf
-                                        "yession: no shell for this terminal (%s) — each command runs as its own process, so nothing carries between them and nothing can be typed into one\r\n"
+                                        "yession: no shell for this terminal (%s). Each command runs as its own process. Nothing carries between commands. You cannot type into a command\r\n"
                                         reason)
                             | Ok pty ->
                                 ready.Value <- false
@@ -1708,7 +1708,7 @@ module SessionTerminals =
                                         terminal
                                         TranscriptStderr
                                         (sprintf
-                                            "yession: could not start a shell in %s — starting where the sandbox puts them instead\r\n"
+                                            "yession: could not start a shell in %s. Starting it where the sandbox puts shells instead\r\n"
                                             cwd.Value)
                                     return! start None
                                 | Error run ->
@@ -1728,7 +1728,7 @@ module SessionTerminals =
                                         terminal
                                         TranscriptStderr
                                         (sprintf
-                                            "yession: the shell %s before it printed an instrumented prompt — each command runs as its own process instead. It said: %s\r\n"
+                                            "yession: the shell %s before it printed an instrumented prompt. Each command runs as its own process instead. It said: %s\r\n"
                                             how
                                             (said ()))
                                     pty.Kill ()
@@ -2497,7 +2497,7 @@ module SessionTerminals =
         /// terminal it should stop typing at and whose transcript header names the cause; the
         /// second read as a bug in the verb, and was retried with every line ending there is.
         let noShell =
-            "this terminal has no shell: each command here runs as its own process, so there is nothing to type into — its first lines say why"
+            "this terminal has no shell: each command here runs as its own process. There is nothing to type into. Its first lines say why"
 
         /// ^C to the block running in `id`, and the record of who sent it.
         ///
@@ -2522,12 +2522,12 @@ module SessionTerminals =
                 | true, terminal ->
                     match terminal.Shell, pending.ContainsKey key, typedBlock.TryGetValue key with
                     | None, _, _ when Set.contains key busy ->
-                        return Error "this terminal has no shell: each command here runs as its own process, so there is no ^C to send — close the terminal to stop it"
+                        return Error "this terminal has no shell: each command here runs as its own process. There is no ^C to send. Close the terminal to stop it"
                     | Some pty, true, (true, (blockId, _)) when sawCommandStart.Contains key ->
                         do! appendAs by (SessionEvent.TerminalBlockInterrupted { TerminalId = id; BlockId = blockId; By = by })
                         pty.Write "\u0003"
                         return Ok ()
-                    | _ when Set.contains key busy -> return Error "the command has not started yet, so there is nothing to stop — try again in a moment"
+                    | _ when Set.contains key busy -> return Error "the command has not started yet. There is nothing to stop. Try again in a moment"
                     | _ -> return Error "nothing is running in this terminal"
             }
 
@@ -2549,7 +2549,7 @@ module SessionTerminals =
                         | true, author when Set.contains key busy -> Some author
                         | _ -> None
                     if not (BlockAccess.admits holder running by) then
-                        return Error "this terminal runs commands as blocks — run it with execute_command, where they are classified and on the record"
+                        return Error "this terminal runs commands as blocks. Run it with execute_command. That tool classifies commands and records them"
                     elif holder = Some by then
                         return (if input id by data then Ok () else Error noShell)
                     else
@@ -2604,7 +2604,7 @@ module SessionTerminals =
                 if from.IsNone && canInstrument key && not (BlockAccess.admits (TerminalLeases.holderOf id leases) running by) then
                     return
                         Error
-                            "this terminal's output comes back as blocks — run it with execute_command, whose answer carries what it printed, and read on from a line of it with from:"
+                            "this terminal's output comes back as blocks. Run it with execute_command. Its answer carries what the command printed. To continue from a line of that answer, use from:"
                 else
                     // The live edge, whether or not the terminal is still open: a closed one
                     // reads back from its recording, and its length stopped moving with it.
@@ -2768,14 +2768,14 @@ module SessionTerminals =
                             | _ -> false))
                     |> Seq.length
                 let name = name.Trim ()
-                if name = "" then return Error "a terminal needs a name — it is what everyone here reads"
+                if name = "" then return Error "a terminal needs a name. Everyone here reads it"
                 elif held >= agentTerminalLimit then
                     // Named, so the agent can act on it. "No" with a number is a decision it can
                     // make; "no" on its own is a wall it can only retry.
                     return
                         Error (
                             sprintf
-                                "you already have %d terminals open in %s, which is the limit — close one you have finished with"
+                                "you already have %d terminals open in %s. That is the limit. Close one you have finished with"
                                 held
                                 (SandboxRef.render sandbox))
                 else
@@ -2880,7 +2880,7 @@ module SessionTerminals =
                                         return
                                             Error (
                                                 sprintf
-                                                    "the %s sandbox could not say where %s is, so nothing was set."
+                                                    "the %s sandbox could not say where %s is. Nothing was set."
                                                     name
                                                     path)
                                 | SandboxExited _ ->
@@ -2891,9 +2891,9 @@ module SessionTerminals =
                                                 path
                                                 name)
                                 | SandboxSignalled signal ->
-                                    return Error (sprintf "the %s sandbox's shell was ended by %s, so nothing was set." name signal)
+                                    return Error (sprintf "the %s sandbox's shell was ended by %s. Nothing was set." name signal)
                                 | SandboxKilledForMemory kill ->
-                                    return Error (sprintf "the %s sandbox's shell was %s, so nothing was set." name (MemoryKill.described kill))
+                                    return Error (sprintf "the %s sandbox's shell was %s. Nothing was set." name (MemoryKill.described kill))
                                 | SandboxRunFailed reason -> return Error reason
                         }
                 match checked' with
@@ -2946,7 +2946,7 @@ module SessionTerminals =
                         match retired with
                         | Some (_, true) -> [ "Your command terminal was closed and reopens there on your next command." ]
                         | Some (_, false) ->
-                            [ "Your command terminal has a command running, so it was left alone and keeps the directory it is in." ]
+                            [ "Your command terminal has a command running. It stays open and keeps the directory it is in." ]
                         | None -> []
                     return
                         Ok (
@@ -2954,7 +2954,7 @@ module SessionTerminals =
                                 " "
                                 ([ where ]
                                  @ mine
-                                 @ [ "Terminals you opened, and the people's, keep the directory they are in." ]))
+                                 @ [ "Terminals that you or the people opened keep the directory they are in." ]))
         }
 
         /// Every profile pointing inside a tree that is about to go, cleared (Plan 26).

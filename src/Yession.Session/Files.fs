@@ -117,7 +117,7 @@ module SessionFiles =
                             return
                                 Error (
                                     sprintf
-                                        "the answer is longer than %d characters, which is not one to read as text — reach for a command in the %s sandbox instead"
+                                        "the answer is longer than %d characters. That is too long to read as text. Use a command in the %s sandbox instead"
                                         maxChars
                                         (SandboxRef.render sandbox))
                         | SandboxExited code -> return Ok { Said.Code = code; Said.Out = out.ToString (); Said.Err = err.ToString () }
@@ -273,7 +273,7 @@ module SessionFiles =
                     match! run sandbox "a path was resolved" "printenv -- \"$1\"" [ name ] None with
                     | Error reason -> return Error reason
                     | Ok said when said.Code = 0 && said.Out.Trim () <> "" -> return Ok (said.Out.TrimEnd ('\n', '\r') + rest)
-                    | Ok _ -> return Error (sprintf "%s is not set in the %s sandbox, so %s is not a path there" name (SandboxRef.render sandbox) path)
+                    | Ok _ -> return Error (sprintf "%s is not set in the %s sandbox. For this reason, %s is not a path there" name (SandboxRef.render sandbox) path)
             }
 
         /// Every verb takes its path through `resolve` first — one place, so a variable means

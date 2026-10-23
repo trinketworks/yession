@@ -81,7 +81,7 @@ module IdleWindow =
                 | "s" -> Ok (Some (TimeSpan.FromSeconds value))
                 | "m" -> Ok (Some (TimeSpan.FromMinutes value))
                 | "h" -> Ok (Some (TimeSpan.FromHours value))
-                | other -> Error (sprintf "idle timeout '%s' has unknown unit '%s' — use s, m, or h" raw other)
+                | other -> Error (sprintf "idle timeout '%s' has unknown unit '%s'. Use s, m, or h" raw other)
             |> Result.bind (fun window ->
                 match window with
                 // Zero would reap every session on the next sweep, including one launched a

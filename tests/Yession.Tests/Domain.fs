@@ -2615,7 +2615,7 @@ let private configTests =
             Expect.equal (parsed """ "cmd": "./serve" """ |> expect |> command) (Some "./serve") "the older word still reads"
             match parsed """ "cmd": "./serve", "command": "./other" """ with
             | Ok _ -> failwith "two spellings of one key cannot both be honoured"
-            | Error reason -> Expect.stringContains reason "one key by two names" "and the refusal says they are one key"
+            | Error reason -> Expect.stringContains reason "two names for one key" "and the refusal says they are one key"
 
         // Which shell a terminal in the container opens, by dialect, when the repo would
         // rather say than have the backend look. Only a container has a shell to choose.
