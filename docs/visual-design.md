@@ -191,7 +191,10 @@ every column at one height.
 
 A head with two rows of controls is taller, because each row meets the touch target and the
 floor is never traded for the band. Such a head states its rows, not its total. Its hairline is
-its own and lines up with nothing.
+its own and lines up with nothing — unless the head pins its FIRST row to the band instead of
+letting the band be the rows' sum, which is how a column with a two-row head aligns its hairline
+with a sibling's single-row one (the session pane's tab strip, `Style.panePivotRow`, against the
+chat header). Each row still meets the touch target; only where in the taller row it sits moves.
 
 A thing that leaves the ground sits on a named layer. `app/tokens.css` names the layers, low to
 high, under "Layers". A phone stacks several at once: a drawer over a scrim over the page, with a
