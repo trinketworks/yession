@@ -19,6 +19,8 @@ why. A principle that the code no longer follows misleads the next reader.
 - **[Fast feedback](#fast-feedback)**: the cheapest signal that can catch a fault catches it,
   without a manual step.
 - **[Colocation](#colocation)**: a rule lives with the state that it governs.
+- **[One mechanism per requirement](#one-mechanism-per-requirement)**: keep only the
+  mechanism that is verified to work, and remove its spare.
 - **[Policy/mechanism separation](#policymechanism-separation)**: a mechanism gives an
   ability, and a policy decides its use.
 - **[Acyclic dependencies](#acyclic-dependencies)**: a component refers only to the
@@ -28,6 +30,8 @@ why. A principle that the code no longer follows misleads the next reader.
 - **[Types first](#types-first)**: the type system specifies correctness.
 - **[High-signal automated verification](#high-signal-automated-verification)**: a test pins
   one invariant, and no manual run takes the place of one.
+- **[Fix upstream, guard downstream](#fix-upstream-guard-downstream)**: a bug fix stops the
+  cause, and a guard stops the next fault at the place where the damage shows.
 
 **What the runtime is:**
 
@@ -60,13 +64,33 @@ the one that catches it. For example, `dev` runs the Manager under `fable watch`
 ### Colocation
 
 What belongs to one piece of state is in one place: its type, the rules that guard it, the
-operations on it, and the tests that pin them. A caller must not have to remember to ask
-first. The root [AGENTS.md](../AGENTS.md#colocation) ("Colocation") has the three questions
-that find a rule in the wrong place.
+operations on it, and the tests that pin them. An invariant that holds only because a caller
+remembered to ask first is not an invariant. The next caller has not read it.
+
+The tell is a member exported for no local reason. `SessionTerminals` once exported an
+`Instrumented` predicate that only `Host.fs` used, to subtract a line window and cap the
+answer. No cheap test saw that arithmetic, and a bug lived in it.
+
+Ask three questions. Any `no` means the rule is in the wrong place:
+
+- **Can a caller break it by not calling something first?** Then those calls are one verb.
+- **Would testing it mean building the composition root?** Then move it down to where the
+  state is. A rule the cheap tier cannot reach is a rule nobody re-checks.
+- **Does a sibling operation on the same state live somewhere else?** Then one of them has
+  moved.
+
+A seam belongs where it is used. Pass state down. Do not reach up for it.
 
 The same applies to reasons. The reason for a piece of code is in its doc comment, and this
-document points to it. For example, the header of `src/Yession.Domain/Config.fs` holds the
+document points to it. Write no plan document. Put what is worth keeping next to the code
+that it governs, where a test can contradict it. For example, the header of `src/Yession.Domain/Config.fs` holds the
 design of `yession.yaml` and the rule for each future key.
+
+### One mechanism per requirement
+
+Two mechanisms can meet the same requirement, for example two config locations, or a fallback
+beside a primary. Keep only the one that is verified to work here. Remove the other. A spare
+hides which path is live, rots unverified, and turns the next failure into an archaeology dig.
 
 ### Policy/mechanism separation
 
@@ -93,7 +117,7 @@ refers back. The order is:
 
 ```text
 Fable.*            binding projects: APIs that we do not own
-Yession.Domain     types, rules and pure transitions. It refers to no other project.
+Yession.Domain     types, rules and pure transitions. It refers to nothing.
 Yession.Codecs     the wire formats of the domain
 Yession.App        the client: the Elmish model, Ylmish, the views
 Yession.Session    one session. It serves the App.
@@ -105,7 +129,7 @@ Yession.Peer       the browser's client, driven headlessly for tests and probes
 
 When a component needs something from a component after it, the earlier component declares a
 function-shaped port, and the composition root gives it the implementation. Pass state down. Do
-not reach up for it ([AGENTS.md](../AGENTS.md#colocation)).
+not reach up for it ([Colocation](#colocation)).
 
 ### Composition at the top
 
@@ -113,17 +137,47 @@ Capabilities are small and function-shaped. The application boundary composes co
 infrastructure. Concrete infrastructure does not spread through domain code.
 
 The composition root composes and decides nothing. A bound, a fallback or a refusal that the
-root computes is a decision that no cheap test reaches. The root
-[AGENTS.md](../AGENTS.md#colocation) ("Colocation") states this half of the rule.
+root computes is a decision that no cheap test reaches ([Colocation](#colocation)).
 
 ### Types first
 
 The type system specifies correctness. F# types encode core invariants, valid states, and
 allowed transitions. Where possible, the check happens at compile time. Yjs is not the
 product model. JSON blobs, Y maps, and stringly-typed payloads remain boundary formats.
-They must not leak into application logic. The root [AGENTS.md](../AGENTS.md#type-safety)
-("Type safety") lists the constructs that open the type system again, and the analyzer that
-reports each one.
+They must not leak into application logic.
+
+**Narrow the type, and let the compiler find the sites.** Change a field's type, a
+parameter's type or a union's cases, and nothing else. Every place that no longer fits is a
+compile error. Fix each site with the value it already had, never with a default. A site with
+nothing of the right type to give is the finding: give it a case, a constructor or a refusal,
+not `Option.defaultValue`. Keep no bridging alias, second constructor or `option` "for now".
+A test that pinned the old shape is not a regression guard when the shape was the bug.
+
+`MessageSent.Author` stayed `ActorRef` because it had sixty-five sites, and the turn's
+principal rode beside the message, consistent by discipline and not by type. Narrowing it took
+one edit and forty minutes of compiler errors. The sites were never the cost. The aliasing was.
+
+**Do not open the type system again.** Each construct below reopens the hole that Fable
+closed. Do not add one, and remove the ones in code that you change. Where an analyzer reports
+one, the doc comment of its module in `analyzers/Yession.Analyzers/` says why.
+
+- A JavaScript program in a string: an `[<Emit>]` outside `src/Fable.*` (YES011), an inline
+  `<script>` body, a CDP `Runtime.evaluate` source, or a Playwright `EvaluateAsync` program
+  (YES012 holds the suite's few fixed ones to `PageScript`). In the browser suite, write a
+  probe in `Yession.App.Probes`.
+- Dynamic access with `?` and `?<-` (YES015). Bind the module. Key the map with a type.
+- `unbox`, `!!` or `:?>` on a value that you did not just construct (YES016). Decode it, or
+  type what produced it. Narrow an event or its target with `Events` and `EventTargets`
+  (`Fable.BrowserExtras`).
+- `obj` in the signature of a function or a member (YES017).
+- `createObj`, `==>` or `[<AllowNullLiteral>]` outside a binding project (YES013).
+- A decode that cannot refuse: `Option.defaultValue ""` over a field read (YES009). Answer
+  `None`, or say in the code why the default is the right answer.
+
+The escape is one of three: a **binding project** (an API that we do not own), a **codec** (a
+wire), or a **typed options interface** (a bag). Where none applies, keep the cast on the line
+that needs it, mark that line for its rule ([analyzers/AGENTS.md](../analyzers/AGENTS.md),
+"A justified exception"), and give the result a type at once. Never carry `obj` onward.
 
 ### High-signal automated verification
 
@@ -132,6 +186,24 @@ a substitute for verification. There is no "one-shot" manual validation.
 
 A test pins one invariant and goes red only when that invariant breaks. The rules for
 writing tests are in [tests/AGENTS.md](../tests/AGENTS.md#writing-tests).
+
+### Fix upstream, guard downstream
+
+Fix the root cause upstream, and harden against the symptom downstream. Do both. The upstream
+fix stops this fault. The downstream guard stops the next, different fault from becoming a
+plausible wrong answer at the same place. This is one mechanism at each of two points, not two
+mechanisms for one requirement ([One mechanism per requirement](#one-mechanism-per-requirement)).
+
+For example, `echo "version=$(...)"` discarded the exit status of a failed
+`devenv shell -- version`. The step went green with an empty version, and the release job
+tagged the commit `v`. That tag matched `--match 'v*'` and restarted the 6.13.1 line at 1.0.0.
+
+- Upstream: capture under `pipefail`, and refuse an empty result.
+- Downstream: `--match 'v[0-9]*'`, and refuse a nearest tag of the wrong shape.
+
+The tell that you did half: the fault reads as a chain (X failed, so Y saw nothing, so Z
+published garbage), and your change touches one link. Ask what the other links do when X is
+different.
 
 ### Local first
 
@@ -179,6 +251,15 @@ The Session is the only event writer.
 ## 2. System overview
 
 ### 2.1 Runtime components
+
+Yession has three components, and these names apply everywhere: in prose, code and tests. The
+Manager is the `yession-manager` bin. It outlives every Session that it launches, and you
+upgrade it only when no Session runs. A Session is the `yession-session` bin, one process for
+each session. The App is F#/Fable in the browser. The Session serves it, and it connects back
+over WebRTC.
+
+Each has its own pure core: `Yession.Manager`, `Yession.Session` and `Yession.App`.
+`Yession.Host` (`app/`) is the Node shell that both bins run in.
 
 ```text
 Session
@@ -262,6 +343,20 @@ close, which both pumps already handle. Supervision is symmetric, which is also 
 silently-dead peer stops holding a terminal lease. `LinkPolicy` takes its clock as a port, as
 `Resilience.Policy` does. The header of `Link.fs` and the
 [ADR](decisions/2026-08-20-session-link-liveness.md) hold the reasoning.
+
+### 2.4 Contracts
+
+Each message between two components has one declaration: a codec that both ends use. It lives
+in the project of the component that owns the contract.
+
+- **App ↔ Session: the App owns it** (`Yession.App.Codecs`). The App is the client of every
+  surface the Session serves, so the App says what each exchange carries. The Session
+  references `Yession.App` to answer in that shape. Both ship in the same build.
+- **Manager ↔ Session: the Manager owns it** (`Yession.Manager`). The Manager changes only
+  when no Session runs, so it holds the contract still in both directions. A breaking change
+  to it is a major version bump.
+- **Shared by every surface** (ids, actors, timestamps): `Yession.Codecs`, beside the model
+  and not in it.
 
 ---
 
@@ -516,7 +611,8 @@ Update this list before a change that breaks a rule, in the same PR, and say why
 14. Capabilities are scoped, not ambient.
 15. Verification is automated end-to-end, not manual.
 16. A project refers only to the projects before it in the order of
-    [Acyclic dependencies](#acyclic-dependencies). `Yession.Domain` refers to no other project.
+    [Acyclic dependencies](#acyclic-dependencies). `Yession.Domain` refers to no other project
+    and no package but FSharp.Core (`DomainReferences` in `tests/` pins it).
 17. The composition root composes and decides nothing.
 
 Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
