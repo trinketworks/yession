@@ -1089,7 +1089,7 @@ module Client =
         let describe =
             function
             | ChannelUnreachable detail -> if detail = "" then "session unreachable" else detail
-            | ChannelUnrouted -> "the session answered, but no network route reached it"
+            | ChannelUnrouted -> "the session answered. No network route reached it."
             | ChannelTimedOut -> "the session did not answer"
 
     /// When the browser's offer goes. The handshake is non-trickle — ONE complete SDP, posted

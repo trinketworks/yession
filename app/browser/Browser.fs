@@ -552,7 +552,7 @@ let private historyCacheName () = persistenceKey () + "/events"
 let private openCache (name: string) : JS.Promise<Cache> =
     match caches () with
     | Some stores -> stores.openStore name
-    | None -> failwith "this page has no cache storage, so there is no store to open"
+    | None -> failwith "this page has no cache storage. There is no store to open."
 
 // `keys()` answers in insertion order, and insertion order is NOT log order: `put` of an
 // address already kept deletes the entry and appends the new one, so an answer two tabs both
@@ -644,7 +644,7 @@ let private transcriptCacheName (terminal: TerminalId) = transcriptCachePrefix (
 let private cacheNames () : JS.Promise<string array> =
     match caches () with
     | Some stores -> stores.names ()
-    | None -> failwith "this page has no cache storage, so there are no stores to name"
+    | None -> failwith "this page has no cache storage. There are no stores to name."
 
 // The line an answer starts on, kept BESIDE the bytes rather than parsed back out of the
 // address: a transcript line cannot carry its own index, and the address is the one thing this
@@ -972,7 +972,7 @@ let private sendUpload (peer: PeerId) (id: string) (name: string) (into: UploadI
             |> Result.map (fun content -> ContentUpload content, [ SessionRoute.uploaderHeader, PeerId.value peer ])
         | UploadInto.Message _ -> UploadId.create id |> Result.map (fun upload -> StagedUpload upload, [])
     match keptUploads.TryGetValue id, route with
-    | (false, _), _ -> async.Return (UploadAnswer.Refused "this page no longer has the file — choose it again")
+    | (false, _), _ -> async.Return (UploadAnswer.Refused "this page no longer has the file. Choose it again.")
     | _, Error reason -> async.Return (UploadAnswer.Refused reason)
     | (true, (file, _)), Ok (route, headers) ->
         Async.FromContinuations (fun (resolve, _, _) ->

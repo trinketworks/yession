@@ -2714,7 +2714,7 @@ module Uploads =
             if bytes > ArtifactRef.cap then
                 let reason =
                     sprintf
-                        "%s is %s, and a file may be at most %s"
+                        "%s is %s. A file may be at most %s."
                         name
                         (ContentSize.render bytes)
                         (ContentSize.render ArtifactRef.cap)
@@ -4625,7 +4625,7 @@ module ClientModel =
             else model.Session |> Option.map SessionId.value
         let signal = tabSignal model
         match subject with
-        | Some subject -> sprintf "%s%s — yession" signal subject
+        | Some subject -> sprintf "%s%s · yession" signal subject
         | None -> signal + "yession"
 
     /// How long the agent's writing has to sit still before it reads as thinking again. Long

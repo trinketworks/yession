@@ -756,7 +756,7 @@ module View =
         | None ->
             html $"""<span class="{Style.statusOk}"><span class="{Style.statusDot}"></span>{label} ({ConnectionKind.label credential.Kind})</span>"""
         | Some _ ->
-            html $"""<span class="{Style.statusErr}"><span class="{Style.statusDot}"></span>{label} — {Dom.Text.signInAgainStatus}</span>"""
+            html $"""<span class="{Style.statusErr}"><span class="{Style.statusDot}"></span>{label}: {Dom.Text.signInAgainStatus}</span>"""
 
     /// Why, under the row, and only when there is a why. It is the provider's own words, so
     /// it says what a person could not have guessed — "the refresh token has expired" and
@@ -4353,7 +4353,7 @@ module View =
                 | Some (UserRef _ | PeerRef _ | ActorRef.Agent as who) ->
                     html $"""{name} {Dom.Text.killedBy} {Entity.render model who (EntityRef.Actor who)}"""
                 | Some (ActorRef.Session | ActorRef.System | ActorRef.Configured _)
-                | None -> html $"""{name} closed — {closed.Reason}"""
+                | None -> html $"""{name} closed: {closed.Reason}"""
             | None -> html $"""{name} closed"""
         // The gap in the audit trail, stated as a status rather than narrated: the drop is
         // recorded so it can be SAID — in the voice the `all` page says it in, because it is

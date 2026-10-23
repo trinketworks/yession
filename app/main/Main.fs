@@ -146,7 +146,7 @@ let private checkReport () =
 
 // `--detailed` alone does nothing, so it is refused rather than ignored.
 if Cli.isSet ManagerCli.detailedOption args && not (Cli.isSet ManagerCli.checkOption args) then
-    Interop.rejectValue cli "--detailed says what a --check report means, so it needs --check"
+    Interop.rejectValue cli "--detailed needs --check. It says what a --check report means."
 
 if Cli.isSet ManagerCli.checkOption args then
     printfn "%s" (checkReport ())
@@ -174,7 +174,7 @@ Async.StartImmediate(
         let! keyStore =
             if ProcessManager.SecretsMode.needsCredentialManager secretsMode then
                 eprintfn
-                    "Yession Manager: reading the secrets key from the OS credential manager — if nothing follows, it is waiting on a prompt (on macOS, a keychain dialog for node)"
+                    "Yession Manager: reading the secrets key from the OS credential manager. If nothing follows, it is waiting on a prompt (on macOS, a keychain dialog for node)."
                 KeyStore.detect ()
             else async { return None }
         let secretsBacking =
@@ -217,7 +217,7 @@ Async.StartImmediate(
             |> Option.isSome
         if archived then
             printfn
-                "Yession Manager: session %s is archived — not launching it. Unarchive it in the management UI."
+                "Yession Manager: session %s is archived. The Manager does not launch it. Unarchive it in the management UI."
                 defaultSession
         else
             match! manager.Launch sessionId with
