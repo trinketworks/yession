@@ -2018,12 +2018,16 @@ let private prWatchTests =
             Expect.equal (say { idle with TurnRunning = true }) ("working", ToneBusy) "a turn is work"
             Expect.equal (say { idle with BusyTerminals = [ "build" ] }) ("running build", ToneBusy) "a command owes a wake"
             Expect.equal (say { idle with BusyTerminals = [ "a"; "b" ] }) ("running 2 commands", ToneBusy) "several are counted"
-            Expect.equal (say { idle with NoAgent = true }) ("no agent", ToneBad) "nothing here can answer"
-            Expect.equal (say { idle with SignInRequired = true }) ("sign in needed", ToneBad) "an agent that cannot run"
+            Expect.equal (say { idle with NoAgent = true }) ("no agent", ToneBusy) "a wait, in the doctrine's words"
+            Expect.equal (say { idle with SignInRequired = true }) ("sign in again", ToneBad) "the sidebar's word for it"
             Expect.equal
                 (say { idle with SignInRequired = true; BusyTerminals = [ "build" ] })
-                ("sign in needed", ToneBad)
+                ("sign in again", ToneBad)
                 "what needs a person outranks what is under way"
+            Expect.equal
+                (say { idle with NoAgent = true; BusyTerminals = [ "build" ] })
+                ("no agent", ToneBusy)
+                "no agent outranks a command it can never be woken by"
             Expect.equal
                 (say { idle with TurnRunning = true; NoAgent = true; SignInRequired = true })
                 ("working", ToneBusy)

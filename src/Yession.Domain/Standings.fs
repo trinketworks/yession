@@ -66,9 +66,17 @@ type AgentSituation =
 /// What the agent is doing, said as one standing. "Waiting" is the honest word for idle: the
 /// ball is with the people, and the log holds no fact that says the agent asked them
 /// something, so this does not guess at one.
+///
+/// The words are the ones the session page's sidebar already says for the same states
+/// ("sign in again", "no agent"), because a state has one name on every screen
+/// (docs/visual-design.md, Colour). "No agent" is a wait in that doctrine, not a wrong
+/// thing, so it is busy and not bad.
 module AgentStatus =
 
     let facet = "agent"
+
+    let noAgent = "no agent"
+    let signInAgain = "sign in again"
 
     /// A running turn is work whatever else holds, because it proves an agent is there and
     /// signed in. Otherwise the two that need a person outrank a command still running,
@@ -76,8 +84,8 @@ module AgentStatus =
     let standing (situation: AgentSituation) : Standing =
         let say word tone = { Facet = facet; Word = word; Tone = tone }
         if situation.TurnRunning then say "working" ToneBusy
-        elif situation.SignInRequired then say "sign in needed" ToneBad
-        elif situation.NoAgent then say "no agent" ToneBad
+        elif situation.SignInRequired then say signInAgain ToneBad
+        elif situation.NoAgent then say noAgent ToneBusy
         else
             match situation.BusyTerminals with
             | [] -> say "waiting" ToneOk

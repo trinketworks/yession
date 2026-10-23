@@ -501,13 +501,7 @@ module View =
         // working left this reading "ready" in green over a credential the next turn would
         // fail on. The status word follows the credential's health; the gate does not, so
         // the no-agent prompt keeps meaning "nothing is connected" rather than doubling up.
-        let claudeNeedsSignIn =
-            match model.Claude.Status with
-            | Some panel ->
-                [ panel.MineCredential; panel.SessionCredential ]
-                |> List.exists (fun credential ->
-                    credential |> Option.map (fun c -> c.SignInRequired.IsSome) |> Option.defaultValue false)
-            | None -> false
+        let claudeNeedsSignIn = ClientModel.claudeNeedsSignIn model
         let agentRow =
             // `None` is the stream not having said yet, which is the one state this row has
             // nothing to say in — it was a third case of a `bool option` and is the absence
@@ -1318,43 +1312,34 @@ module View =
               </span>
             </span>"""
 
-    /// The agent's absence, said in the header only while the sidebar — where the real call to
-    /// action lives — is off screen. A phone's sidebar is off-canvas by default, so without this
-    /// the one report would be one a phone never sees; the CSS in `Style.headerNoAgent` makes the
-    /// two mutually exclusive, so it is never said twice.
+    /// Where this session stands, in the header band — the same standings the Manager's
+    /// roster shows for it, on the page somebody is actually looking at, worst first
+    /// (`ClientModel.standings`). A wide screen draws them all; a phone draws the worst alone
+    /// (`Style.headerStandingSlot`).
     ///
-    /// A STATUS and not a control: a wait, leading with a beating dot, in the voice every other
-    /// wait in the product speaks (docs/visual-design.md, Colour — "no agent yet" is one of the
-    /// named waits). It was a button here, which made the band's one unpressable word its
-    /// brightest and left the pressable one beside it leading with nothing. The way to do
-    /// something about it is the column's own roster row (`connect`), which this reports the
-    /// absence FOR rather than duplicating.
-    let private agentAbsence (claude: ClaudeViewState) : TemplateResult =
-        match claude.Status |> Option.map (fun panel -> panel.AgentAvailable) with
-        | Some false ->
-            html $"""<span class="{Style.headerNoAgent}"><span class="{Style.statusDotBeat}"></span>no agent</span>"""
-        | _ -> Lit.nothing
-
-    /// What this session's pull requests amount to, in the header band — the same line the
-    /// Manager's roster shows for this session, on the page somebody is actually looking at.
-    ///
-    /// Read off the `pull_requests` query, because that is what a browser has: the rows
-    /// arrive on the stream the settings panel already draws, so the strip costs no plumbing
-    /// and cannot show a different set of watches from the table behind it. The reading is
-    /// `ClientModel.prStandings` and the wording is `PrStatus`, so the strip, the tab title,
-    /// the roster and the panel all say the same words about the same session — the point of
-    /// putting that vocabulary below the surfaces rather than at each of them.
-    ///
-    /// Nothing at all when nothing is owed. A session with no watches, or whose watches have
-    /// all merged, gets no strip rather than an empty one: silence is what makes a line that
-    /// IS there worth looking at.
-    let private prStrip (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
-        match PrStatus.summary (ClientModel.prStandings model) with
-        | None -> Lit.nothing
-        | Some standing ->
-            html $"""
-                <button type="button" class="{Style.prStripIn (ink standing.Tone)}" aria-label="Pull requests"
-                        data-pr-strip @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>{standing.Word}</button>"""
+    /// The pull requests' line is a control, because it GOES somewhere: the rows behind it
+    /// are one press away in settings. It is silent when nothing is owed, so a line that IS
+    /// there is worth looking at. The agent's line is a status and not pressable; the two of
+    /// its states that need a person ("no agent", "sign in again") are the sidebar agent
+    /// row's to act on, so the band says them only while that row is off screen.
+    let private headerStandings (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+        let standings = ClientModel.standings model |> Standings.Standing.byConcern
+        let worst = Standings.Standing.worst standings
+        let slot (standing: Standings.Standing) =
+            let followsSidebar =
+                standing.Facet = Standings.AgentStatus.facet
+                && (standing.Word = Standings.AgentStatus.noAgent || standing.Word = Standings.AgentStatus.signInAgain)
+            let said =
+                if standing.Facet = PrStatus.facet then
+                    html $"""
+                        <button type="button" class="{Style.prStripIn (ink standing.Tone)}" aria-label="Pull requests"
+                                data-pr-strip @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>{standing.Word}</button>"""
+                else
+                    let dot = if standing.Tone = ToneBusy then Style.statusDotBeat else Style.statusDot
+                    html $"""<span class="{Style.headerAgentStanding (ink standing.Tone)}" data-agent-standing><span class="{dot}"></span>{standing.Word}</span>"""
+            let phoneShows = worst = Some standing
+            html $"""<span class="{Style.headerStandingSlot phoneShows followsSidebar}" ?data-phone-shows={phoneShows}>{said}</span>"""
+        html $"""{standings |> List.map slot}"""
 
     /// The way back into the content column once it is shut. Present only while it IS
     /// shut, so there are never two controls for the one column on screen at once.
@@ -1417,8 +1402,7 @@ module View =
                 <span class="{Style.titleId}" data-session-id>{sessionIdText}</span>
               </div>
               <div class="{Style.headerAside}">
-                {prStrip dispatch model}
-                {agentAbsence model.Claude}
+                {headerStandings dispatch model}
                 {contentReopen dispatch model}
               </div>
               {catchUpBar model}
