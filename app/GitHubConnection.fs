@@ -89,8 +89,8 @@ let classifyPasted (deviceFlowConfigured: bool) (raw: string) : Result<string, s
     elif expiring |> List.exists trimmed.StartsWith && not deviceFlowConfigured then Ok trimmed
     elif expiring |> List.exists trimmed.StartsWith then
         Error
-            "a ghu_…/gho_… user token expires in a few hours and cannot be refreshed once pasted \
-             — use Connect GitHub, which stores a refresh token"
+            "a ghu_…/gho_… user token expires in a few hours. A pasted token cannot be refreshed. \
+             Use Connect GitHub, which stores a refresh token."
     else
         // The kinds this session will actually take, which is not the same list on both
         // sides of the branch above — offering one it is about to refuse would be the
@@ -216,7 +216,7 @@ let pollOutcome (currentInterval: int) (body: string) : PollOutcome =
         match field "error" with
         | Some "authorization_pending" -> PollPending currentInterval
         | Some "slow_down" -> PollPending (currentInterval + 5)
-        | Some "expired_token" -> PollFailed "the device code expired — start the sign-in again"
+        | Some "expired_token" -> PollFailed "the device code expired. Start the sign-in again."
         | Some "access_denied" -> PollFailed "the sign-in was denied on github.com"
         | Some other ->
             field "error_description"
@@ -542,7 +542,7 @@ let routes
                                         match configuredClientId () with
                                         | None ->
                                             respondText res 400
-                                                "no GitHub App is configured (set YESSION_GITHUB_CLIENT_ID) — paste a token instead"
+                                                "no GitHub App is configured (set YESSION_GITHUB_CLIENT_ID). Paste a token instead."
                                         | Some clientId ->
                                             let url = envOr "YESSION_GITHUB_DEVICE_URL" deviceCodeUrl
                                             let request = sprintf """{"client_id":%s}""" (jsonString clientId)
@@ -565,7 +565,7 @@ let routes
                                                               DeviceBegun.Interval = grant.Interval })
                                     | GitHubAction.Poll ->
                                         match Map.tryFind target pending, configuredClientId () with
-                                        | None, _ -> respondText res 400 "no sign-in in progress for that scope — begin again"
+                                        | None, _ -> respondText res 400 "no sign-in is in progress for that scope. Start the sign-in again."
                                         | Some _, None -> respondText res 400 "no GitHub App is configured (set YESSION_GITHUB_CLIENT_ID)"
                                         | Some grant, Some clientId ->
                                             let url = envOr "YESSION_GITHUB_TOKEN_URL" tokenUrl

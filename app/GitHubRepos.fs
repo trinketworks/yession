@@ -60,9 +60,9 @@ module LookupFailure =
         | NoCredential -> "connect GitHub to list your repositories"
         // "Sign in", not "sign in again": a connected credential is spent ahead of an
         // ambient GITHUB_TOKEN, so signing in is the fix whichever of the two was refused.
-        | Refused -> "github rejected this credential — sign in to github on the settings panel"
+        | Refused -> "github rejected this credential. Sign in to github on the settings panel."
         | NotFound -> "github does not show that repository to this credential"
-        | RateLimited -> "github is rate limiting this credential — try again shortly"
+        | RateLimited -> "github is rate limiting this credential. Try again soon."
         | Forbidden -> "github does not let this credential see that"
         | Unreadable said -> sprintf "github answered with something this session could not read: %s" said
         | Unreachable said -> sprintf "github could not be reached: %s" said

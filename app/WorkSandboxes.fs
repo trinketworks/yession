@@ -73,7 +73,7 @@ module ProxyProvider =
 
     /// A composition with no credential proxy: a declaration that asks for one is refused.
     let none : ProxyProvider =
-        { Provide = fun _ _ -> Error "this session runs no credential proxy, so nothing can provide a '${proxy.…}' reference"
+        { Provide = fun _ _ -> Error "this session runs no credential proxy. Nothing can provide a '${proxy.…}' reference."
           Release = ignore }
 
 /// What forwarding one credential into one sandbox came to.
@@ -281,13 +281,13 @@ let private unknownSandbox (name: SandboxRef) (existing: SandboxRef list) : stri
     // (`sandboxes:` in the resources profile), and a repo's are its `yession.yaml`'s.
     let whoDeclares =
         match SandboxRef.scope name with
-        | SessionOwned -> "this session's own sandboxes are the ones its operator declares, under `sandboxes:` in the resources profile"
-        | RepoOwned _ -> "a repo's sandbox is one its yession.yaml declares, started with start_work_sandbox"
+        | SessionOwned -> "This session's own sandboxes are the ones its operator declares, under `sandboxes:` in the resources profile."
+        | RepoOwned _ -> "A repo's sandbox is one that its yession.yaml declares. start_work_sandbox starts it."
     match existing with
-    | [] -> sprintf "there is no sandbox named '%s' in this session, and none at all — %s" (SandboxRef.render name) whoDeclares
+    | [] -> sprintf "there is no sandbox named '%s' in this session. The session has no sandboxes at all. %s" (SandboxRef.render name) whoDeclares
     | existing ->
         sprintf
-            "there is no sandbox named '%s' in this session — there is %s; %s"
+            "there is no sandbox named '%s' in this session. There is %s. %s"
             (SandboxRef.render name)
             (existing |> List.map (fun ref -> sprintf "'%s'" (SandboxRef.render ref)) |> String.concat ", ")
             whoDeclares
@@ -437,14 +437,14 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                 | [] ->
                     Error (
                         sprintf
-                            "this sandbox names %s, and forwards no connection by api — the credential proxy answers only what a connection's api route sends it; select a resource granting one"
+                            "this sandbox names %s, and forwards no connection by api. The credential proxy answers only what a connection's api route sends it. Select a resource that grants one."
                             named
                     )
                 // It asked for one, and was refused: what to select is not the question.
                 | refused ->
                     Error (
                         sprintf
-                            "this sandbox names %s, and forwards no connection by api — %s"
+                            "this sandbox names %s, and forwards no connection by api. %s"
                             named
                             (refused
                              |> List.map (fun (connection, reason) -> sprintf "'%s' was refused it: %s" (ConnectionName.value connection) reason)
@@ -550,13 +550,13 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                                 |> List.map (fun (connection, variables) ->
                                     let refused =
                                         sprintf
-                                            "%s names '${%s.token}', and this sandbox does not forward '%s' by api"
+                                            "%s names '${%s.token}', but this sandbox does not forward '%s' by api"
                                             (String.concat ", " variables)
                                             (ConnectionName.value connection)
                                             (ConnectionName.value connection)
                                     match Map.tryFind connection refusedApi with
-                                    | Some reason -> sprintf "%s — it was refused it: %s" refused reason
-                                    | None -> sprintf "%s — select a resource granting it under uses or wants, from a host that offers it" refused)
+                                    | Some reason -> sprintf "%s. The sandbox was refused it: %s" refused reason
+                                    | None -> sprintf "%s. Select a resource that grants it under uses or wants, from a host that offers it" refused)
                             return Error (String.concat "; " said)
                         | [] ->
                             match provideProxy name forwarded refusedApi spec with
@@ -672,7 +672,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                     return
                         Error (
                             sprintf
-                                "sandbox '%s' is already running and %s — stop_work_sandbox it first if you want to change that (anything running in it dies with it)"
+                                "sandbox '%s' is already running and %s. To change that, use stop_work_sandbox on it first. Anything that runs in it dies with it."
                                 (SandboxRef.render name)
                                 (SandboxRequest.differences existing.Request wanted |> String.concat "; "))
                 // The session's own sandboxes are the operator's to declare, and all of them
@@ -927,10 +927,10 @@ let private queryDef : QueryDef =
     { Name = queryName
       Title = "work sandboxes"
       Description =
-        "The sandboxes commands can run in, each with the backend confining it, what it \
-         runs, whether it is up, and which credentials were forwarded into it and by whom. \
-         Read from the processes themselves. A degraded row says what this host could not \
-         give exactly."
+        "The sandboxes that commands can run in. Each row shows the backend that confines the \
+         sandbox, what it runs and whether it is up. It also shows which credentials were \
+         forwarded into it, and by whom. The rows come from the processes themselves. A \
+         degraded row says what this host could not give exactly."
       Shape =
         Rows
             [ QueryColumn.create "name" "name"

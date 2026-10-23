@@ -94,7 +94,7 @@ let pinOnce (clock: Clock) (log: string -> unit) (sandbox: Sandbox) (lease: Leas
             | Some (SandboxRunFailed reason) ->
                 log (sprintf "volume %s: pin %s failed: %s%s" lease.Volume lease.Maintenance.Pin reason (said ()))
             | None ->
-                log (sprintf "volume %s: pin %s was still running after %gs and was killed" lease.Volume lease.Maintenance.Pin pinLimit.TotalSeconds)
+                log (sprintf "volume %s: pin %s was still running after %gs. It was killed." lease.Volume lease.Maintenance.Pin pinLimit.TotalSeconds)
     }
 
 /// One lease kept current: pinned now, every interval after, and once more at the end.

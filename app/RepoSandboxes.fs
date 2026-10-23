@@ -558,7 +558,7 @@ let create
                         return
                             Error (
                                 sprintf
-                                    "what %s asks for changed since you looked — it now asks for %s"
+                                    "what %s asks for changed since you looked. It now asks for %s."
                                     (RepoRef.value repo)
                                     (String.concat "; " asked))
                     | Some asked ->
@@ -613,10 +613,10 @@ let private queryDef : QueryDef =
     { Name = queryName
       Title = "repo config"
       Description =
-        "What each checkout's yession.yaml asked this session for, and what came of it. A \
-         row with no problem is a declaration that became a sandbox; a row naming one is a \
-         declaration that did not, and says why. A sandbox listed as no longer declared is \
-         still running — removing one is stop_work_sandbox's job, never a fold's."
+        "What each checkout's yession.yaml asked this session for, and the result. A row with \
+         no problem is a declaration that became a sandbox. A row that names a problem is a \
+         declaration that did not become a sandbox, and the row says why. A sandbox listed as \
+         no longer declared is still running. Only stop_work_sandbox removes it. A fold never does."
       Shape =
         Rows
             [ QueryColumn.create "repo" "repo"

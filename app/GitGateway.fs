@@ -366,7 +366,7 @@ let start (upstream: string) (report: string -> unit) : Async<Gateway> =
                 match loanOf req with
                 | None ->
                     refuse
-                        "nothing is lending a github credential to this request — git here spends the credential of the command it runs in; run it as a command in this terminal"
+                        "nothing lends a github credential to this request. Git here spends the credential of the command it runs in. Run git as a command in this terminal."
                 | Some secret ->
                     // A loan answers on the route of the sandbox it was lent in, and on no
                     // other. Carried down another sandbox's route it is a secret THAT route
@@ -383,7 +383,7 @@ let start (upstream: string) (report: string -> unit) : Async<Gateway> =
                         | Some loan ->
                             refuse (
                                 sprintf
-                                    "the github credential lent to %s for that command has been returned — run the push as its own command"
+                                    "the github credential lent to %s for that command has been returned. Run the push as its own command."
                                     (ownerLabel loan.Lender.Owner))
                         | None -> notFound res
                     | Some loan ->
@@ -395,7 +395,7 @@ let start (upstream: string) (report: string -> unit) : Async<Gateway> =
                                     | None ->
                                         refuse (
                                             sprintf
-                                                "%s has not connected github — connect it on the settings panel and run the command again"
+                                                "%s has not connected github. Connect it on the settings panel, then run the command again."
                                                 (ownerLabel lender.Owner))
                                     | Some token ->
                                         let target = upstream.TrimEnd '/' + "/" + request.Path + (requestUrl url).search
@@ -404,7 +404,7 @@ let start (upstream: string) (report: string -> unit) : Async<Gateway> =
                                             do! lender.Refused ()
                                             refuse (
                                                 sprintf
-                                                    "github rejected %s's credential — sign in again on the settings panel"
+                                                    "github rejected %s's credential. Sign in again on the settings panel."
                                                     (ownerLabel lender.Owner))
                                         | Forwarded.Unreachable error ->
                                             refuse (sprintf "%s could not be reached from this session: %s" remoteHost error)
@@ -420,7 +420,7 @@ let start (upstream: string) (report: string -> unit) : Async<Gateway> =
                                                 with e ->
                                                     report (
                                                         sprintf
-                                                            "a push to %s went out on %s's github credential and the record of it could not be written: %s"
+                                                            "a push to %s used %s's github credential. The record of that push could not be written: %s"
                                                             (RepoRef.value request.Repo)
                                                             (ownerLabel lender.Owner)
                                                             e.Message)

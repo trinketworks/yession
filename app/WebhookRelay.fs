@@ -392,10 +392,10 @@ let compose
             | Ok None ->
                 return
                     Error
-                        "--webhook needs a durable secret store, because each endpoint's \
-                         signing secret is derived from the key that seals it. This deployment \
-                         has an ephemeral store, so the key — and every secret an operator \
-                         pasted into a provider — would be different after a restart. Run with \
-                         a usable OS credential manager, or declare no endpoints."
+                        "--webhook needs a durable secret store. Each endpoint's signing secret is derived \
+                         from the key that seals the store. This deployment has an ephemeral store. \
+                         After a restart, the key would be different. So would every secret that \
+                         an operator pasted into a provider. Run with a usable OS credential \
+                         manager, or declare no endpoints."
             | Ok (Some payload) -> return Ok (create (endpointsFor payload specs) notify mintId)
     }

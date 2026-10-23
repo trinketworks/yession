@@ -101,10 +101,10 @@ let create (sessionId: SessionId) (mount: string) : Auth =
                 | None -> return Error (503, "session is still registering with its manager")
                 | Some (config, redirectUri) ->
                     match queryParamOf requestUrl "state" with
-                    | None -> return Error (400, "unknown or expired login; reopen the session URL")
+                    | None -> return Error (400, "unknown or expired login. Reopen the session URL.")
                     | Some state ->
                       match pendingLogins.Take state with
-                      | None -> return Error (400, "unknown or expired login; reopen the session URL")
+                      | None -> return Error (400, "unknown or expired login. Reopen the session URL.")
                       | Some verifier ->
                         try
                             // The certified client redeems the code AND validates the ID

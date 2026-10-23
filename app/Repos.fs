@@ -205,7 +205,7 @@ let gitExec
 /// what is left really is the binary or the runtime it reads.
 let unusableGit (git: string) (reason: string) : string =
     sprintf
-        "git ('%s') cannot run inside the sandbox: %s. Name a working git with YESSION_BIN_GIT; if it needs files the sandbox's read scope denies, declare those as a resource in this host's profile (YESSION_SESSION_RESOURCES) and put it in `default`."
+        "git ('%s') cannot run inside the sandbox: %s. Name a working git with YESSION_BIN_GIT. If that git needs files that the sandbox's read scope denies, declare those files as a resource in this host's profile (YESSION_SESSION_RESOURCES). Then put that resource in `default`."
         git
         reason
 
@@ -583,7 +583,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         let requirePresent (repo: RepoRef) (inner: unit -> Async<Result<'a, string>>) : Async<Result<'a, string>> =
             async {
                 if not (present repo) then
-                    return Error (sprintf "repo %s is not in this session — add_repo first" (RepoRef.value repo))
+                    return Error (sprintf "repo %s is not in this session. Use add_repo first." (RepoRef.value repo))
                 else return! inner ()
             }
 
@@ -598,7 +598,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     return
                         Error (
                             sprintf
-                                "github now calls %s %s — add %s instead. A checkout made under the old name clones through a redirect and keeps an origin the provider no longer answers to by that name."
+                                "github now calls %s %s. Add %s instead. A checkout made under the old name clones through a redirect. It keeps an origin that the provider no longer answers to by that name."
                                 (RepoRef.value repo)
                                 (RepoRef.value current)
                                 (RepoRef.value current))
@@ -703,7 +703,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                         return
                             Error (
                                 sprintf
-                                    "%s is already checked out here, but git cannot read that checkout: %s. That is what an interrupted clone leaves behind — remove_repo it, then add it again."
+                                    "%s is already checked out here, but git cannot read that checkout: %s. An interrupted clone leaves a checkout like this. Use remove_repo on it, then add it again."
                                     (RepoRef.value repo)
                                     e)
                 else
@@ -787,7 +787,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     | Error e -> return Error e
                     | Ok run ->
                         let said = run.Stdout.Trim ()
-                        return Ok (if said = "" then "(clean — nothing to show)" else capText outputLimit said)
+                        return Ok (if said = "" then "(clean: nothing to show)" else capText outputLimit said)
                 })
 
         let removeRepo (caller: RepoCaller) (repo: RepoRef) (force: bool) : Async<Result<string, string>> =
@@ -812,7 +812,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                         return
                             Error (
                                 sprintf
-                                    "%s has uncommitted changes, and removing it deletes them — adding the repo again brings back the commits and nothing else. Commit or push them first, or pass force to delete them."
+                                    "%s has uncommitted changes. Removing it deletes them. Adding the repo again brings back only the commits. Commit or push the changes first, or pass force to delete them."
                                     (RepoRef.value repo))
                     | Ok _ -> return! remove ()
                     // git cannot read the checkout: exactly what an interrupted clone leaves
@@ -852,10 +852,10 @@ let private queryDef : QueryDef =
     { Name = queryName
       Title = "repos"
       Description =
-        "The repos checked out in this session, each with the branch it is on, whether it \
-         has uncommitted changes, and its path from where the default sandbox's terminals \
-         and file tools start (`.` when they start in it). Read from the \
-         checkouts themselves, so it always agrees with git."
+        "The repos checked out in this session. Each row shows the branch the repo is on and \
+         whether it has uncommitted changes. It also shows the repo's path from where the \
+         default sandbox's terminals and file tools start (`.` when they start in it). The rows \
+         come from the checkouts themselves, so they always agree with git."
       Shape =
         Rows
             [ QueryColumn.create "repo" "repo"

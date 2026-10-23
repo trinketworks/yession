@@ -135,7 +135,7 @@ let private grantsFor (uses: ResourceName list) (wants: ResourceName list) : Res
     | None ->
         Error (
             sprintf
-                "this sandbox selects %s, and this host declares no resources at all — an operator sets YESSION_SESSION_RESOURCES to a profile naming them"
+                "this sandbox selects %s, but this host declares no resources at all. An operator sets YESSION_SESSION_RESOURCES to a profile that names them."
                 (uses |> List.map ResourceName.value |> String.concat ", "))
 
 // The AgentSandbox backend (`YESSION_SESSION_AGENT_BACKEND`): where the agent CLI process
@@ -763,7 +763,7 @@ let private resolveCredential (actor: CredentialFor) : Async<Result<(string * st
                 return
                     Error (
                         sprintf
-                            "no Claude account connected for %s — open Connections to sign in"
+                            "no Claude account is connected for %s. Open Connections to sign in."
                             (ClaudeConnection.actorLabel actor))
     }
 

@@ -383,7 +383,7 @@ let private tableTemplate
         | [] -> "no sessions yet"
         | _ ->
             let hidden = List.length all - List.length views
-            sprintf "no sessions match — %d hidden" hidden
+            sprintf "no sessions match (%d hidden)" hidden
     let rows =
         match views with
         | [] ->
@@ -503,7 +503,7 @@ let private mcpTemplate (views: ProcessManager.SessionView list) (declarations: 
     // content is no harder to see). What is left is the sentence and the form that fills it.
     let table =
         match declarations with
-        | [] -> html $"""<p class="{Style.small}">no MCP servers — a session reaches only its own tools</p>"""
+        | [] -> html $"""<p class="{Style.small}">no MCP servers. A session reaches only its own tools.</p>"""
         | declarations ->
             html $"""
               <table class="{Col.table}">

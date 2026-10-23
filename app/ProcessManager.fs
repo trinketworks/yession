@@ -329,10 +329,10 @@ module SecretsBacking =
         | AutoSecrets, None -> Ok (EphemeralSecrets NoCredentialManager)
         | RequireDurable, None ->
             Error
-                "--secrets durable, but no OS credential manager answered on this host — the \
-                 secrets KEK has nowhere to live. Make one available (unlock the keychain, \
-                 start a Secret Service daemon), or pass --secrets ephemeral to accept a \
-                 store that dies with this Manager."
+                "--secrets durable is set, but no OS credential manager answered on this host. \
+                 The secrets KEK has nowhere to live. Make a credential manager available \
+                 (unlock the keychain, or start a Secret Service daemon). Or pass \
+                 --secrets ephemeral to accept a store that dies with this Manager."
 
 /// How often to look for sessions to reap, derived from the window rather than configured
 /// separately: a quarter of it, so the worst-case overshoot is a quarter of a window and
@@ -1031,7 +1031,7 @@ let createWithUi
                 res.writeHead (status, headers)
                 res.``end`` page
             match broker with
-            | None -> respondHtml 404 "Not available" "This Manager has no secrets store, so connections are disabled."
+            | None -> respondHtml 404 "Not available" "This Manager has no secrets store. Connections are disabled."
             | Some b ->
                 match Interop.queryParamOf req.url "error" with
                 | Some providerError ->

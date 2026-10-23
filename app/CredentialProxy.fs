@@ -424,7 +424,7 @@ let start
                             res
                             401
                             (sprintf
-                                "%s has not connected %s — connect it on the settings panel and run the command again"
+                                "%s has not connected %s. Connect it on the settings panel, then run the command again."
                                 (owner loan.Lender)
                                 route.Provider)
                     | Some token ->
@@ -437,7 +437,7 @@ let start
                 res
                 401
                 (sprintf
-                    "the %s credential lent to %s for that command has been returned — run it as its own command"
+                    "the %s credential lent to %s for that command has been returned. Run it as its own command."
                     route.Provider
                     (owner loan.Lender))
         // Nothing lent here: the client's own credential, or none, carried as it came.
@@ -501,9 +501,9 @@ let start
                 client
                 "407 Proxy Authentication Required"
                 "proxy-authenticate: Basic realm=\"yession\"\r\n"
-                "this proxy admits a sandbox by the capability in the proxy URL it was given, and this request carried none that is live"
+                "this proxy admits a sandbox by the capability in the proxy URL it was given. This request carried no live capability."
 
-    let refuseRequest = fun _ res -> answer res 405 "this proxy carries HTTPS, through CONNECT, and nothing else"
+    let refuseRequest = fun _ res -> answer res 405 "this proxy carries only HTTPS, through CONNECT."
     let onPort = createServer refuseRequest
     onPort.onConnect (Func<_, _, _, _> onPortConnect)
     let listening (server: HttpServer) (where: string) (listen: (unit -> unit) -> unit) =
@@ -522,7 +522,7 @@ let start
                     | SrtBackend, _ ->
                         Error (
                             sprintf
-                                "sandbox '%s' is confined by srt, whose egress is its policy — it reaches this proxy through srt's own, for declared hosts only, and the TCP door would tunnel it anywhere"
+                                "sandbox '%s' is confined by srt. Its egress is its policy. It reaches this proxy through srt's own proxy, for declared hosts only. The TCP door would tunnel it to any host."
                                 (SandboxRef.render sandbox)
                         )
                     | _, Some capability -> Ok capability
@@ -567,7 +567,7 @@ let forwardApi (backend: SandboxBackend) : WorkSandboxes.CredentialForwarding =
     match backend with
     | SrtBackend ->
         WorkSandboxes.CredentialForwarding.Unforwardable
-            "an srt sandbox takes a connection by git alone — the api route (gh, the credential proxy) is for a container sandbox, which reaches the proxy by '${proxy.https}'"
+            "an srt sandbox takes a connection by git alone. The api route (gh, the credential proxy) is for a container sandbox. A container sandbox reaches the proxy by '${proxy.https}'."
     | HostBackend
     | DockerBackend -> WorkSandboxes.CredentialForwarding.Forwarded WorkSandboxes.Provision.empty
 
@@ -614,7 +614,7 @@ let provide
         | ProxyValue.Https ->
             match hostAddress with
             | None ->
-                Error (sprintf "sandbox '%s' has no way to reach this host, so no proxy URL would get anywhere" (SandboxRef.render sandbox))
+                Error (sprintf "sandbox '%s' has no way to reach this host. No proxy URL can work from it." (SandboxRef.render sandbox))
             | Some host ->
                 proxy.Admit backend sandbox
                 |> Result.map (fun capability ->
@@ -623,7 +623,7 @@ let provide
     | SrtBackend ->
         Error (
             sprintf
-                "sandbox '%s' is confined by srt, which takes a connection by git alone — the credential proxy is for a container sandbox"
+                "sandbox '%s' is confined by srt, which takes a connection by git alone. The credential proxy is for a container sandbox."
                 (SandboxRef.render sandbox)
         )
     | HostBackend

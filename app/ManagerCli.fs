@@ -24,7 +24,7 @@ let authOption =
     Cli.parsedValue
         "auth"
         "rule"
-        "how a request's subject is established: none, localhost, trusted-headers"
+        "the rule that establishes a request's subject (none, localhost or trusted-headers)"
         Yession.Oidc.Strategy.ofName
 
 let secretsOption =
@@ -51,7 +51,7 @@ let idleTimeoutOption =
     Cli.parsedValue
         "idle-timeout"
         "window"
-        "stop a session unused for this long: 90s, 30m, 2h (default never)"
+        "stop a session after it is unused for this long, such as 90s, 30m or 2h (default: never)"
         (function
          | None -> Ok None
          | Some given -> Yession.Manager.IdleWindow.parse given)
@@ -93,12 +93,12 @@ let webhookOption =
 /// way to here — a bad `--port`, an unknown `--auth`, a half-set address pair, a retired
 /// variable — so `--check` reaching its report at all is itself the first answer.
 let checkOption =
-    Cli.flag "check" None "resolve the configuration, print what it came to, and exit"
+    Cli.flag "check" None "resolve the configuration, print the result, then exit"
 
 /// Only meaningful beside `--check`, and refused without it: a flag that silently did
 /// nothing would be indistinguishable from one that had no effect to have.
 let detailedOption =
-    Cli.flag "detailed" None "with --check, also say what each setting and state means"
+    Cli.flag "detailed" None "with --check, also explain each setting and state"
 
 /// `--version` and `--help` answer from this before any configuration is read — no data
 /// directory, no ports, no sessions launched — and an unknown option or a missing value stops
