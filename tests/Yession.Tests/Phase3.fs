@@ -521,7 +521,7 @@ let private docPersistenceTests =
                 // First life: a held turn consumes e1; e2 stays pending; a plain draft
                 // is typed but never sent.
                 let runner1, _release1 = heldAgent ()
-                let! h1 = Host.startFull Clock.system (fun () -> Some runner1) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
+                let! h1 = Host.startFull Clock.system (fun () -> Some runner1) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
                 let o = offlinePeer 21.0 "olive" "Olive"
                 let q1 = enqueue o "d-1" "q-1" "consumed before crash"
                 deliver o.Doc h1.Doc
@@ -537,7 +537,7 @@ let private docPersistenceTests =
                 // Second life: replay doc + log. The boot drain consumes e2 exactly
                 // once; the draft is intact.
                 let runner2, release2 = heldAgent ()
-                let! h2 = Host.startFull Clock.system (fun () -> Some runner2) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
+                let! h2 = Host.startFull Clock.system (fun () -> Some runner2) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
                 let! secondLife = sentMessages h2.Log
                 Expect.equal
                     (secondLife |> List.map (fun m -> m.QueueId, m.Body))
@@ -568,7 +568,7 @@ let private docPersistenceTests =
                 let sessionId = SessionId.create "phase3-emptydraft" |> expect
                 let openLog () = EventStore.openLog logPath sessionId (fun () -> DateTimeOffset.UtcNow)
 
-                let! h1 = Host.startFull Clock.system (fun () -> None) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
+                let! h1 = Host.startFull Clock.system (fun () -> None) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
                 // Two peers, exactly as a pre-`DraftSlot` build left them in the doc: one published
                 // a slot when its composer mounted and never typed (the garbage that put an empty
                 // draft box on every peer's composer for every peer that ever opened the session),
@@ -585,7 +585,7 @@ let private docPersistenceTests =
                 do! h1.Stop ()
 
                 // Second life: the replay sweeps the empty slot, and only that.
-                let! h2 = Host.startFull Clock.system (fun () -> None) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
+                let! h2 = Host.startFull Clock.system (fun () -> None) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
                 let synced = SyncedStateSync.ofDoc h2.Doc
                 Expect.isFalse (Map.containsKey idlePeer synced.Drafts) "the empty slot is gone after the replay"
                 Expect.equal
@@ -601,7 +601,7 @@ let private docPersistenceTests =
                 let sessionId = SessionId.create "phase3-torn" |> expect
                 let openLog () = EventStore.openLog logPath sessionId (fun () -> DateTimeOffset.UtcNow)
 
-                let! h1 = Host.startFull Clock.system (fun () -> None) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
+                let! h1 = Host.startFull Clock.system (fun () -> None) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
                 let o = offlinePeer 22.0 "olive" "Olive"
                 let oPeer = (o.Runner.Model ()).Peer.PeerId
                 Body.author o.Registry o.Runner oPeer "acknowledged"
@@ -611,7 +611,7 @@ let private docPersistenceTests =
                 // A crash tore the final append: an unparseable half-line, no newline.
                 TestFiles.append docPath "////////"
 
-                let! h2 = Host.startFull Clock.system (fun () -> None) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
+                let! h2 = Host.startFull Clock.system (fun () -> None) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
                 let synced = SyncedStateSync.ofDoc h2.Doc
                 Expect.equal
                     (synced.Drafts |> Map.tryFind oPeer |> Option.map (fun _ -> SyncedStateSync.draftBodyMarkdown h2.Doc oPeer))
@@ -626,7 +626,7 @@ let private docPersistenceTests =
                 let sessionId = SessionId.create "phase3-corrupt" |> expect
                 let openLog () = EventStore.openLog logPath sessionId (fun () -> DateTimeOffset.UtcNow)
 
-                let! h1 = Host.startFull Clock.system (fun () -> None) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
+                let! h1 = Host.startFull Clock.system (fun () -> None) (fun _ -> None) None None (Some (openLog ())) (Some (DocStore.openStore docPath)) None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
                 do! h1.Stop ()
                 // A garbage line WITH a trailing newline claims to be acknowledged:
                 // that is corruption, and it must never be silently dropped.
@@ -641,12 +641,50 @@ let private docPersistenceTests =
             }
     ]
 
+// --- What the agent is doing, as the Manager is told it ------------------------------------
+
+let private agentStandingTests =
+    testList "The agent's standing" [
+        testCaseAsync "a turn reads working while it holds the slot, and waiting once it lets go" <|
+            async {
+                let reports = ResizeArray<string> ()
+                let mutable onReport : string -> unit = ignore
+                let report : Host.AgentReport =
+                    { SignInRequired = fun () -> false
+                      Report =
+                        fun standing ->
+                            reports.Add standing.Word
+                            onReport standing.Word }
+                let runner, release = heldAgent ()
+                let sessionId = SessionId.create "phase3-agent-standing" |> expect
+                let! h = Host.startFull Clock.system (fun () -> Some runner) (fun _ -> None) None None None None None None None (Some report) (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false 0
+                Expect.equal (List.ofSeq reports) [ "waiting" ] "an agent with nothing to do is waiting from boot"
+
+                let o = offlinePeer 31.0 "olive" "Olive"
+                enqueue o "d-1" "q-1" "over to you" |> ignore
+                deliver o.Doc h.Doc
+                Expect.equal (Seq.last reports) "working" "a held turn is work"
+
+                // The turn gives up the slot after its last append, so this is the case a
+                // reader of the log alone would leave saying "working" until the next beat.
+                let backToWaiting =
+                    Async.FromContinuations (fun (cont, _, _) ->
+                        onReport <- fun word -> if word = "waiting" then (onReport <- ignore; cont ()))
+                let! waiter = Async.StartChild backToWaiting
+                release ()
+                do! waiter
+                Expect.equal (List.ofSeq reports) [ "waiting"; "working"; "waiting" ] "each change said once, and nothing else"
+                do! h.Stop ()
+            }
+    ]
+
 let tests =
     testList "Phase3" [
         raceTests
         crashRepairTests
         attachmentTests
         docPersistenceTests
+        agentStandingTests
         // Interrupt runs over real WebRTC clients: needs ports.
         Tag.needs "Interrupt (Step 17)" [ Tag.Ports; Tag.Native ] (fun () -> interruptTests)
     ]

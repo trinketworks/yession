@@ -52,11 +52,14 @@ module Standing =
 type AgentSituation =
     { /// A turn is running.
       TurnRunning : bool
-      /// The terminals with a command running, by the name people know them by. A command
-      /// still running owes the agent a wake, so it is the agent's work in flight.
+      /// The terminals running a command the agent asked for in the background, by the name
+      /// people know them by (`Projection.awaitedByAgent`). Each owes the agent a wake, so it
+      /// is the agent's work in flight.
       BusyTerminals : string list
-      /// Messages are waiting and no agent is connected to answer them.
-      QueuedWithoutAgent : bool
+      /// No agent can run here: nobody has connected one and the environment holds none.
+      /// Not "a message is waiting for one", because without an agent the queue drains
+      /// straight into the conversation and nothing ever waits.
+      NoAgent : bool
       /// The agent's provider wants somebody to sign in before it can run.
       SignInRequired : bool }
 
@@ -74,7 +77,7 @@ module AgentStatus =
         let say word tone = { Facet = facet; Word = word; Tone = tone }
         if situation.TurnRunning then say "working" ToneBusy
         elif situation.SignInRequired then say "sign in needed" ToneBad
-        elif situation.QueuedWithoutAgent then say "no agent" ToneBad
+        elif situation.NoAgent then say "no agent" ToneBad
         else
             match situation.BusyTerminals with
             | [] -> say "waiting" ToneOk

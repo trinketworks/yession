@@ -552,15 +552,43 @@ let private prHooks : GitHubPrs.PrHooks =
 /// Reconcile BOTH halves from the same fold. The poller and the subscriptions answer to one
 /// source — the log's watches — so they cannot drift into a session that polls a repo it
 /// never subscribed to, or holds a subscription for a watch it stopped.
-/// Tell the Manager where this session's pull requests stand, as the one standing its roster
-/// has room for. Sent only where something MOVED — a watch started or stopped, or a look
-/// found news — so an unchanged standing is not re-posted every fifteen seconds, and the
+/// What this session's agent is doing, as the Host last said it. Kept beside the pull
+/// requests because the Manager is sent the whole list, so whichever of the two moves sends
+/// both.
+let mutable private agentStanding : Standings.Standing option = None
+
+/// Tell the Manager where this session stands: its agent, then its pull requests. Sent only
+/// where something MOVED — the agent's standing changed, a watch started or stopped, or a
+/// look found news — so an unchanged list is not re-posted every fifteen seconds, and the
 /// Manager's own "publish only when it changed" stays the one de-duplication rather than
 /// the second of two.
 let private publishStatus () =
     match reportStatus with
-    | Some report -> Async.StartImmediate (report (PrWatches.summaryOf (prWatchers.Rows ()) |> Option.toList))
+    | Some report ->
+        let prs = PrWatches.summaryOf (prWatchers.Rows ()) |> Option.toList
+        Async.StartImmediate (report (Option.toList agentStanding @ prs))
     | None -> ()
+
+/// Whether every Claude credential this session knows of wants somebody to sign in again,
+/// with none in the environment to fall back on: the agent's next turn would fail.
+let private claudeSignInRequired () =
+    let claude = connectionStatus |> Map.filter (fun target _ -> target.Name = ClaudeConnection.secretName)
+    not envCreds
+    && not (Map.isEmpty claude)
+    && claude
+       |> Map.forall (fun _ status ->
+           match status.Health with
+           | SignInRequired _ -> true
+           | ConnectionUsable -> false)
+
+let private agentReport : Host.AgentReport option =
+    reportStatus
+    |> Option.map (fun _ ->
+        { SignInRequired = claudeSignInRequired
+          Report =
+            fun standing ->
+                agentStanding <- Some standing
+                publishStatus () })
 
 let private reconcileWatches (watches: PrWatch list) =
     prWatchers.Apply watches
@@ -1394,7 +1422,7 @@ Async.StartImmediate (
                     fun terminal ->
                         gitGateway.Retire terminal
                         credentialProxy.Retire terminal } ]
-        let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials (CredentialProxy.provider credentialProxy sandboxBackend gatewayHostFor))) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage port
+        let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials (CredentialProxy.provider credentialProxy sandboxBackend gatewayHostFor))) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity agentReport telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
         // capabilities and the `work_sandboxes` query read is filled here — before the
         // readiness line, and therefore before any turn or any browser can ask.

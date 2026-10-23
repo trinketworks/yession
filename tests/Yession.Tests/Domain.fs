@@ -2009,7 +2009,7 @@ let private prWatchTests =
 
         testCase "what the agent is doing is said in one word" <| fun () ->
             let idle : Standings.AgentSituation =
-                { TurnRunning = false; BusyTerminals = []; QueuedWithoutAgent = false; SignInRequired = false }
+                { TurnRunning = false; BusyTerminals = []; NoAgent = false; SignInRequired = false }
             let say situation =
                 let s = Standings.AgentStatus.standing situation
                 Expect.equal s.Facet Standings.AgentStatus.facet "always under the agent's facet"
@@ -2018,14 +2018,14 @@ let private prWatchTests =
             Expect.equal (say { idle with TurnRunning = true }) ("working", ToneBusy) "a turn is work"
             Expect.equal (say { idle with BusyTerminals = [ "build" ] }) ("running build", ToneBusy) "a command owes a wake"
             Expect.equal (say { idle with BusyTerminals = [ "a"; "b" ] }) ("running 2 commands", ToneBusy) "several are counted"
-            Expect.equal (say { idle with QueuedWithoutAgent = true }) ("no agent", ToneBad) "a message nobody can answer"
+            Expect.equal (say { idle with NoAgent = true }) ("no agent", ToneBad) "nothing here can answer"
             Expect.equal (say { idle with SignInRequired = true }) ("sign in needed", ToneBad) "an agent that cannot run"
             Expect.equal
                 (say { idle with SignInRequired = true; BusyTerminals = [ "build" ] })
                 ("sign in needed", ToneBad)
                 "what needs a person outranks what is under way"
             Expect.equal
-                (say { idle with TurnRunning = true; QueuedWithoutAgent = true; SignInRequired = true })
+                (say { idle with TurnRunning = true; NoAgent = true; SignInRequired = true })
                 ("working", ToneBusy)
                 "a running turn proves an agent is there"
 

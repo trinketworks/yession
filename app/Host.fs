@@ -16,6 +16,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.App.Collab
 open Yession.Domain.Tools
+open Yession.Domain.Standings
 open Yession.Session
 open Yession.App.Codecs
 open Fable.ProseMirror
@@ -117,6 +118,14 @@ type SessionHost =
       Connect : FrameChannel<string> -> unit
       Stop : unit -> Async<unit> }
 
+/// Where this host says what its agent is doing (`AgentStatus`), and the one input to that
+/// it cannot see for itself: whether the credentials it would run on still work, which the
+/// connection broker a layer above knows. Read at every look, because a credential goes
+/// stale without anything here happening.
+type AgentReport =
+    { SignInRequired : unit -> bool
+      Report : Standing -> unit }
+
 /// Start a Session: create the event log and the session's Yjs document, start
 /// HTTP bootstrap + signalling, and run a peer session for every connection. Each
 /// accepted peer receives the full doc state, then incremental updates are relayed
@@ -159,6 +168,8 @@ let startFull
     // Plan 11: report whether this session is in use, so the Manager can stop it when it
     // is not. Absent for a session with no Manager — nothing would be listening.
     (reportActivity: (bool -> Async<unit>) option)
+    // ...and what its agent is doing, for whoever lists it. Absent for the same reason.
+    (reportAgent: AgentReport option)
     // Telemetry sink (Plan 04): the completed-turn usage emitter, threaded to the
     // scheduler. `ignore` in the layered helpers below and whenever telemetry is off.
     (emitUsage: AgentTurnId -> AgentUsage -> unit)
@@ -910,6 +921,30 @@ let startFull
             Clock.every clock activityBeat notifyActivity |> ignore
             DocSync.onAnyUpdate doc notifyActivity
 
+        // What the agent is doing, said only when the answer changed. Looked at on each signal
+        // that can move an input: a turn taking or leaving the slot, an append (a command
+        // starting or ending), a doc update, and the activity beat (a credential connecting or
+        // going stale, which none of those is).
+        match reportAgent with
+        | Some agent ->
+            let mutable lastReported : Standing option = None
+            let look () =
+                let standing =
+                    AgentStatus.standing
+                        { TurnRunning = Option.isSome (scheduler.RunningTurn ())
+                          BusyTerminals = Projection.awaitedByAgent terminalProjection
+                          NoAgent = Option.isNone (runAgent ())
+                          SignInRequired = agent.SignInRequired () }
+                if lastReported <> Some standing then
+                    lastReported <- Some standing
+                    agent.Report standing
+            look ()
+            scheduler.OnTurnChanged look
+            subscribeToChanges look |> ignore
+            DocSync.onAnyUpdate doc look
+            Clock.every clock activityBeat look |> ignore
+        | None -> ()
+
         // Report the collaborative title to the Manager (metadata, not an event) so the
         // session list reflects it. Last-value debounced: only a changed, non-empty title
         // is reported, and Yjs already coalesces keystrokes into transactions. Inert when
@@ -1255,7 +1290,7 @@ let startWithEnvironment
     // No mount: these helpers serve an unfronted, origin-root session. No transcript store
     // either — terminals fall back to the in-memory one, which is the right default for a
     // host with no data directory.
-    startFull Clock.system (fun () -> runAgent) (fun _ -> None) makeSandboxes None baseLog None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false port
+    startFull Clock.system (fun () -> runAgent) (fun _ -> None) makeSandboxes None baseLog None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false port
 
 /// `startWithEnvironment` without an environment — Step 08-era topology.
 let startWith (runAgent: RunAgent option) (sessionId: SessionId) (port: int) : Async<SessionHost> =
