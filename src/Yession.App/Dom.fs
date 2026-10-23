@@ -1004,9 +1004,9 @@ module Dom =
         let commandChip (command: string) (status: string) (terminal: string) =
             sprintf "%s, %s, in %s" command status terminal
         /// The verb a command chip opens with, before its description: "ran Run the unit
-        /// tests" is what a present-tense description would read as. If this word changes,
-        /// change the execute_command guidance in `Yession.Session/AgentTools.fs` with it —
-        /// that prompt tells the agent to write its description to follow this word.
+        /// tests" is what a present-tense description would read as. The agent's guidance
+        /// (`AgentTools.CommandDescription` in Yession.Session) quotes this word, so it
+        /// follows a change here by itself.
         let ran = "ran"
         /// A command the agent asked for, before it has started anywhere: a terminal opening,
         /// a shell starting. The token and the word are one.

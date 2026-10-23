@@ -180,7 +180,7 @@ module FileEdit =
 /// What `search_files` and `find_files` hand back: the sandbox's own lines — `grep -n`'s
 /// `path:line:text`, `find`'s one path per line — bounded, and saying what the bound left
 /// out. The lines are the sandbox's because the two tools are the shell's own `grep` and
-/// `find` behind a typed door: what changes is that the record says what was searched for,
+/// `find` behind a typed interface: what changes is that the record says what was searched for,
 /// not that the answer is reshaped.
 module FileHits =
 
