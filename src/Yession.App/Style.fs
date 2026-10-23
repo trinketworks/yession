@@ -4968,10 +4968,15 @@ module Style =
               Stroke.dividerBottom ]
 
     /// The lockup in that band. On a phone the band is one thumb-sized row, which cannot hold
-    /// 32px type beside a 56px mark — so the mark steps down to the row and the wordmark goes,
-    /// exactly as the session's own phone band drops it (`header`). What is left says the same
-    /// two things: whose product this is, and which page.
+    /// 32px type beside a 56px mark — so the mark steps down to 32px and the wordmark to the
+    /// pivot step (19px to the mark's 32 is the lockup's own ratio, 32 to 56, near enough), and
+    /// the two centre on the row rather than standing on its edge. The wordmark used to go on
+    /// a phone, as the session's own phone band drops it (`header`); but this band has no title
+    /// beside it to say whose product this is, and a mark alone said nothing a reader could
+    /// read.
+    let pageBandLockup = lockup + " phone:items-center"
     let pageBandMark = lockupMark + " phone:w-8 phone:h-8 phone:mb-0"
+    let pageBandWordmark = wordmark + " phone:text-pivot"
 
     /// The page's content rail: the registry's measure, centred, with `spacing-rail` between
     /// its text and the page's edge and the shell's own narrower gutter on a phone. Worn by

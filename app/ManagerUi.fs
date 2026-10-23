@@ -623,13 +623,14 @@ let private hooksTemplate (access: PublicAccess) (endpoints: WebhookRelay.HookEn
 let mcpSection (views: ProcessManager.SessionView list) (declarations: McpDeclaration list) : string =
     Ssr.render (mcpTemplate views declarations)
 
-/// The band's CONTENTS, as one template: the lockup, and beside it which of the Manager's
-/// pages this is. Shared by the registry and by the standalone pages under it, because a
+/// The band's CONTENTS, as one template: the lockup, at every width. Shared by the registry
+/// and by the standalone pages under it, because a
 /// refusal that drew its own head is how the two became two designs — one with a band and a
 /// rail, the other a 32rem column with 4rem of air over it and nothing of the product on it.
 let private bandLockup : TemplateResult =
+    // No page word beside the lockup: the <title> says "manager", and the page shows it.
     html
-        $"""<h1 class="{Style.lockup}"><span class="{Style.pageBandMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.wordmark} phone:hidden">yession</span> <span class="{Style.label} pb-2 phone:pb-0">manager</span></h1>"""
+        $"""<h1 class="{Style.pageBandLockup}"><span class="{Style.pageBandMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.pageBandWordmark}">yession</span></h1>"""
 
 // The page keeps the workspace anatomy: the band every head in the product shares
 // (`Style.pageBand` — `spacing-band`, and one thumb-sized row on a phone, hairline below),
@@ -653,9 +654,8 @@ let private bodyTemplate
                the black page — 168px short of each side at 1440. It is sticky over the
                registry that scrolls under it, and opaque: the one band in the product that
                was frosted grey where every other is black.
-               The wordmark yields on a phone, where the band is one thumb-sized row and the
-               mark steps down into it (`Style.pageBandMark`) — the same trade the session's
-               own phone band makes, and what the heading says there is in the <title>. -->
+               On a phone the band is one thumb-sized row, and the lockup steps down into it
+               (`Style.pageBandMark`, `Style.pageBandWordmark`). -->
           <header class="{Style.pageBand}">
             <div class="{Style.pageRail} w-full">{bandLockup}</div>
           </header>
