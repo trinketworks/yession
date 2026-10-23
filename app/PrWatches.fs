@@ -219,7 +219,7 @@ let renderListing (repo: RepoRef) (query: PrQuery) (rows: PrListed list) : strin
                   | Some how -> yield how
                   | None -> () ]
         sprintf
-            "%s %s — %s -> %s%s; %s"
+            "%s %s (%s -> %s%s): %s"
             (PrRef.render row.Pr)
             row.Title
             row.Head
@@ -240,7 +240,7 @@ let renderListing (repo: RepoRef) (query: PrQuery) (rows: PrListed list) : strin
                 from
                 // A full page may not be all of them, and a reader that assumes it is has
                 // been told less than it thinks. Said, with the two ways to see the rest.
-                (if count = PrQuery.limit query then " — possibly more; narrow with head or raise limit" else "")
+                (if count = PrQuery.limit query then ". There are possibly more. To see them, narrow with head or raise limit" else "")
         String.concat "\n" (header :: List.map line rows)
 
 // --- the poller --------------------------------------------------------------------------
@@ -366,9 +366,9 @@ let create
             match failure with
             | PrUnauthorized -> sprintf "%s rejected this credential" provider
             | PrNotFound ->
-                sprintf "%s cannot see this pull request — it may be gone, or the credential cannot reach it" provider
-            | PrRateLimited (reset, said) -> sprintf "rate limited by %s (%s) — waiting%s" provider said (until reset)
-            | PrHeld at -> sprintf "held back by this session, its reading of the %s budget down to what is kept for people — waiting%s" provider (until (Some at))
+                sprintf "%s cannot see this pull request. It may be gone, or the credential cannot reach it" provider
+            | PrRateLimited (reset, said) -> sprintf "rate limited by %s (%s). The session waits%s" provider said (until reset)
+            | PrHeld at -> sprintf "held back by this session. Its reading of the %s budget is down to what is kept for people. The session waits%s" provider (until (Some at))
             | PrForbidden -> sprintf "%s does not let this credential read this pull request" provider
             | PrUnreadable reason -> sprintf "%s answered with something this session could not read: %s" provider reason
             | PrUnreachable reason -> reason
@@ -501,15 +501,15 @@ let service
         // are the same answer from a provider, so the sentence names both rather than guessing.
         | PrNotFound ->
             sprintf
-                "%s cannot see %s — check it, and whether the connected %s credential can reach that repo"
+                "%s cannot see %s. Check it. Also check whether the connected %s credential can reach that repo"
                 provider
                 what
                 provider
         // "Sign in", not "sign in again": a credential somebody connects is spent ahead of
         // an ambient GITHUB_TOKEN, so signing in is the fix whichever of the two was refused.
-        | PrUnauthorized -> sprintf "%s rejected the credential — sign in to %s on the settings panel" provider provider
+        | PrUnauthorized -> sprintf "%s rejected the credential. Sign in to %s on the settings panel" provider provider
         | PrRateLimited _
-        | PrHeld _ -> sprintf "rate limited by %s — try again shortly" provider
+        | PrHeld _ -> sprintf "rate limited by %s. Try again shortly" provider
         | PrForbidden -> sprintf "%s does not let this credential do that to %s" provider what
         | PrUnreadable reason ->
             sprintf "%s answered with something this session could not read: %s" provider reason
@@ -626,7 +626,7 @@ let service
                         return
                             Ok (
                                 sprintf
-                                    "opened %s — \"%s\", %s into %s"
+                                    "opened %s: \"%s\", %s into %s"
                                     (PrRef.render pr)
                                     draft.Title
                                     draft.Head
@@ -637,7 +637,7 @@ let service
                     return
                         Ok (
                             sprintf
-                                "%s is already open from %s into %s — nothing was created"
+                                "%s is already open from %s into %s. Nothing was created"
                                 (PrRef.render pr)
                                 draft.Head
                                 draft.Base)
@@ -657,8 +657,8 @@ let service
                 let watched (said: string) =
                     async {
                         match! watch authority pr with
-                        | Ok watching -> return Ok (sprintf "%s; %s" said watching)
-                        | Error reason -> return Ok (sprintf "%s; could not watch it: %s" said reason)
+                        | Ok watching -> return Ok (sprintf "%s. %s" said watching)
+                        | Error reason -> return Ok (sprintf "%s. The session could not watch it: %s" said reason)
                     }
                 // A merge that lands at once leaves nothing after it for a watch to see, so a
                 // watch begun afterwards would start from "merged" and never say so. The look
@@ -685,18 +685,18 @@ let service
                     | Some snapshot ->
                         match! watchFrom authority pr snapshot with
                         | Ok () -> return Ok said
-                        | Error reason -> return Ok (sprintf "%s; could not watch it: %s" said reason)
+                        | Error reason -> return Ok (sprintf "%s. The session could not watch it: %s" said reason)
                 // Nothing was done, and the answer says what already stands — which is the
                 // point of asking again rather than an apology for it.
                 | PrMergeUnneeded (pr, already) ->
-                    return Ok (sprintf "%s is already %s — nothing was changed" (PrRef.render pr) already)
+                    return Ok (sprintf "%s is already %s. Nothing was changed" (PrRef.render pr) already)
                 // The way out, named: the tool that undrafts it is in the same hands as this
                 // one, so nobody has to be asked for a click.
                 | PrMergeIsDraft pr ->
                     return
                         Error (
                             sprintf
-                                "%s is a draft, and a draft does not merge — mark it ready for review with ready_pr, then merge it"
+                                "%s is a draft. A draft does not merge. Mark it ready for review with ready_pr. Then merge it"
                                 (PrRef.render pr))
                 | PrMergeRefused said -> return Error (sprintf "%s would not merge it: %s" provider said)
                 | PrMergeFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
@@ -709,7 +709,7 @@ let service
                 | PrMergeDisarmed pr -> return Ok (sprintf "%s will no longer merge on its own" (PrRef.render pr))
                 | PrMergeDequeued pr -> return Ok (sprintf "%s is out of the merge queue" (PrRef.render pr))
                 | PrUnmergeUnneeded (pr, already) ->
-                    return Ok (sprintf "%s is %s — nothing was changed" (PrRef.render pr) already)
+                    return Ok (sprintf "%s is %s. Nothing was changed" (PrRef.render pr) already)
                 | PrUnmergeRefused said -> return Error (sprintf "%s would not take it back: %s" provider said)
                 | PrUnmergeFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
             }
@@ -720,7 +720,7 @@ let service
                 match! readyPr token pr with
                 | PrMarkedReady pr -> return Ok (sprintf "%s is ready for review" (PrRef.render pr))
                 | PrReadyUnneeded (pr, already) ->
-                    return Ok (sprintf "%s is already %s — nothing was changed" (PrRef.render pr) already)
+                    return Ok (sprintf "%s is already %s. Nothing was changed" (PrRef.render pr) already)
                 | PrReadyRefused said -> return Error (sprintf "%s would not mark it ready: %s" provider said)
                 | PrReadyFailed failure -> return Error (cannotReach (PrRef.render pr) failure)
             }
@@ -731,13 +731,13 @@ let service
                 match! draftPr token pr with
                 | PrMarkedDraft pr -> return Ok (sprintf "%s is a draft" (PrRef.render pr))
                 | PrDraftUnneeded (pr, already) ->
-                    return Ok (sprintf "%s is already %s — nothing was changed" (PrRef.render pr) already)
+                    return Ok (sprintf "%s is already %s. Nothing was changed" (PrRef.render pr) already)
                 // The way out, named, as a draft `Merge` refuses names ready_pr.
                 | PrDraftOnItsWayIn (pr, how) ->
                     return
                         Error (
                             sprintf
-                                "%s is %s, and is left there — take it back with unmerge_pr first if it should not land"
+                                "%s is %s, and it stays there. If it should not land, call unmerge_pr on it first"
                                 (PrRef.render pr)
                                 how)
                 | PrDraftRefused said -> return Error (sprintf "%s would not make it a draft: %s" provider said)
@@ -766,16 +766,17 @@ let private queryDef : QueryDef =
     { Name = queryName
       Title = "Pull requests"
       Description =
-        "The pull requests this session is watching, each with the last thing that \
-         happened to it — open, armed, queued, stalled, conflicted, changes requested, \
-         behind, review required, merged or closed — how it is on its way in, the rollup \
-         of its checks, and whose credential the session reads it with. `armed` is auto \
-         merge armed, waiting on what the base branch requires; `queued` is in the merge \
-         queue; `stalled` is either of those and then neither while it is still open — \
-         disarmed, or ejected from the queue without merging. `behind` is a base branch \
-         that requires the head to be up to date with it, and it is not: update the \
-         branch. `review required` is waiting on an approving review. Transitions are \
-         announced on the timeline as they happen; this is the current state."
+        "The pull requests that this session watches. Each row gives the last thing that \
+         happened to it (open, armed, queued, stalled, conflicted, changes requested, \
+         behind, review required, merged or closed). It also gives how the pull request \
+         is on its way in, the rollup of its checks, and whose credential the session \
+         reads it with. `armed` means auto merge is armed and waits on what the base \
+         branch requires. `queued` means it is in the merge queue. `stalled` means it was \
+         armed or queued, and then neither while it is still open: disarmed, or ejected \
+         from the queue without a merge. `behind` means the base branch requires the head \
+         to be up to date with it, and the head is not. To fix that, update the branch. \
+         `review required` means it waits on an approving review. The timeline announces \
+         each transition when it happens. This query gives the current state."
       Shape =
         Rows
             [ QueryColumn.create PrStatus.Columns.pr "pull request"

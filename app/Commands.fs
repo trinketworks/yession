@@ -211,7 +211,7 @@ let private readStartArgs (values: string list) : Result<string * string * Cause
     | other ->
         Error (
             sprintf
-                "start_work_sandbox takes a sandbox, a declaration and an optional cause, got %d arguments"
+                "start_work_sandbox got %d arguments. It takes a sandbox, a declaration and an optional cause"
                 (List.length other))
 
 /// The directory a CAUSED `set_shell_profile` carries: present or absent as a value, because
@@ -252,7 +252,7 @@ let private readProfileArgs (values: string list) : Result<string * string optio
     | other ->
         Error (
             sprintf
-                "set_shell_profile takes a sandbox name and an optional directory, got %d arguments"
+                "set_shell_profile got %d arguments. It takes a sandbox name and an optional directory"
                 (List.length other))
 
 /// How each gated command is actually carried out, by tool name (Plan 15, stage 3b).
@@ -322,11 +322,11 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                         return
                                             Ok (
                                                 sprintf
-                                                    "added %s — and that path is the DEFAULT sandbox's. A sandbox this repo declares sees the checkout somewhere of its own and says where when it starts. It is shared with everyone in this session either way."
+                                                    "added %s. That path is the DEFAULT sandbox's path. A sandbox that this repo declares sees the checkout at a path of its own. That sandbox says the path when it starts. Everyone in this session shares the checkout in both cases."
                                                     (RepoListing.describe listing),
                                                 recorded.RecordedAs)
                                 }))
-                | Some _, other -> return Error (sprintf "add_repo takes one repo, got %d arguments" (List.length other))
+                | Some _, other -> return Error (sprintf "add_repo got %d arguments. It takes one repo" (List.length other))
             }
 
           removeRepoTool,
@@ -367,7 +367,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                         return
                                             Ok (
                                                 sprintf
-                                                    "removed %s — the checkout is gone from this session, and from the work environment.%s"
+                                                    "removed %s. The checkout is gone from this session and from the work environment.%s"
                                                     (RepoRef.value repo)
                                                     profiles,
                                                 // A removal starts nothing for this repo, so
@@ -375,7 +375,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                                 None)
                                 }))
                 | Some _, other ->
-                    return Error (sprintf "remove_repo takes a repo and a flag, got %d arguments" (List.length other))
+                    return Error (sprintf "remove_repo got %d arguments. It takes a repo and a flag" (List.length other))
             }
 
           switchBranchTool,
@@ -397,7 +397,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                         return Ok (sprintf "now on %s" (RepoListing.describe recorded.Answer), recorded.RecordedAs)
                                 }))
                 | Some _, other ->
-                    return Error (sprintf "switch_branch takes a repo, a branch and a flag, got %d arguments" (List.length other))
+                    return Error (sprintf "switch_branch got %d arguments. It takes a repo, a branch and a flag" (List.length other))
             }
 
           createPrTool,
@@ -418,7 +418,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                     return
                         Error (
                             sprintf
-                                "create_pr takes a repo, a head, a base, a title, a flag and an optional body, got %d arguments"
+                                "create_pr got %d arguments. It takes a repo, a head, a base, a title, a flag and an optional body"
                                 (List.length other))
                 | Some service, Ok (repo, head, onto, title, draft, body) ->
                     match RepoRef.create repo with
@@ -453,7 +453,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                 andPublish services PrWatches.queryName (
                                     service.Merge invocation.Authority pr method)
                 | Some _, other ->
-                    return Error (sprintf "merge_pr takes a repo, a number and a method, got %d arguments" (List.length other))
+                    return Error (sprintf "merge_pr got %d arguments. It takes a repo, a number and a method" (List.length other))
             }
 
           unmergePrTool,
@@ -470,7 +470,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         | Error e -> return Error e
                         | Ok pr -> return! service.Unmerge (Authority.credential invocation.Authority) pr
                 | Some _, other ->
-                    return Error (sprintf "unmerge_pr takes a repo and a number, got %d arguments" (List.length other))
+                    return Error (sprintf "unmerge_pr got %d arguments. It takes a repo and a number" (List.length other))
             }
 
           readyPrTool,
@@ -487,7 +487,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         | Error e -> return Error e
                         | Ok pr -> return! service.Ready (Authority.credential invocation.Authority) pr
                 | Some _, other ->
-                    return Error (sprintf "ready_pr takes a repo and a number, got %d arguments" (List.length other))
+                    return Error (sprintf "ready_pr got %d arguments. It takes a repo and a number" (List.length other))
             }
 
           draftPrTool,
@@ -504,7 +504,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         | Error e -> return Error e
                         | Ok pr -> return! service.Draft (Authority.credential invocation.Authority) pr
                 | Some _, other ->
-                    return Error (sprintf "draft_pr takes a repo and a number, got %d arguments" (List.length other))
+                    return Error (sprintf "draft_pr got %d arguments. It takes a repo and a number" (List.length other))
             }
 
           watchPrTool,
@@ -524,7 +524,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                 andPublish services PrWatches.queryName (
                                     service.Watch invocation.Authority pr)
                 | Some _, other ->
-                    return Error (sprintf "watch_pr takes a repo and a number, got %d arguments" (List.length other))
+                    return Error (sprintf "watch_pr got %d arguments. It takes a repo and a number" (List.length other))
             }
 
           unwatchPrTool,
@@ -544,7 +544,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                 andPublish services PrWatches.queryName (
                                     service.Unwatch (Authority.author invocation.Authority) pr)
                 | Some _, other ->
-                    return Error (sprintf "unwatch_pr takes a repo and a number, got %d arguments" (List.length other))
+                    return Error (sprintf "unwatch_pr got %d arguments. It takes a repo and a number" (List.length other))
             }
 
           startWorkSandboxTool,
@@ -628,7 +628,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                                             command
                                                             (Ok outcome.Handle)
                                                             (Authority.author invocation.Authority)
-                                                    return " — running its setup"
+                                                    return ". It is running its setup"
                                                 // Said, never fatal: the sandbox is up, and
                                                 // a setup that could not be QUEUED is worth
                                                 // reading rather than a start that reports
@@ -640,7 +640,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                                             command
                                                             (Error reason)
                                                             (Authority.author invocation.Authority)
-                                                    return sprintf " — its setup could not be queued: %s" reason
+                                                    return sprintf ". Its setup could not be queued: %s" reason
                                             }
                                         | _ -> async { return "" }
                                     let forwarding =
@@ -649,7 +649,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                     return
                                         Ok (
                                             sprintf
-                                                "sandbox '%s' is up on %s, %s — run things in it with execute_command%s"
+                                                "sandbox '%s' is up on %s, %s. Use execute_command to run things in it%s"
                                                 (SandboxRef.render entry.Ref)
                                                 entry.Backend
                                                 forwarding
@@ -669,8 +669,8 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         | Error e -> return Error e
                         | Ok () ->
                             services.Invalidate WorkSandboxes.queryName
-                            return Ok (sprintf "sandbox '%s' is stopped; anything running in it is gone" (SandboxRef.render name))
-                | other -> return Error (sprintf "stop_work_sandbox takes one sandbox name, got %d arguments" (List.length other))
+                            return Ok (sprintf "sandbox '%s' is stopped. Anything that was running in it is gone" (SandboxRef.render name))
+                | other -> return Error (sprintf "stop_work_sandbox got %d arguments. It takes one sandbox name" (List.length other))
             }
 
           setShellProfileTool,
@@ -722,7 +722,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                             edited.Replaced
                                             edited.LinesRemoved
                                             edited.LinesAdded)
-                | other -> return Error (sprintf "edit_file takes a sandbox, a path, two texts and a flag, got %d arguments" (List.length other))
+                | other -> return Error (sprintf "edit_file got %d arguments. It takes a sandbox, a path, two texts and a flag" (List.length other))
             }
 
           writeFileTool,
@@ -736,7 +736,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         match! (services.Files ()).Write (Authority.author invocation.Authority) sandbox path content with
                         | Error reason -> return Error reason
                         | Ok () -> return Ok (sprintf "wrote %s (%d lines)" path (List.length (FileSlice.lines content)))
-                | other -> return Error (sprintf "write_file takes a sandbox, a path and the content, got %d arguments" (List.length other))
+                | other -> return Error (sprintf "write_file got %d arguments. It takes a sandbox, a path and the content" (List.length other))
             }
 
           // Sharing a file with the people here. The gate sees the source path and the name
@@ -752,7 +752,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                     | other ->
                         Error (
                             sprintf
-                                "share_artifact takes a sandbox, a path and an optional name, got %d arguments"
+                                "share_artifact got %d arguments. It takes a sandbox, a path and an optional name"
                                 (List.length other))
                 match named (args) with
                 | Error e -> return Error e
@@ -869,7 +869,7 @@ let launchRepo
                     return
                         Error (
                             sprintf
-                                "this session already has %s — ask the agent to add another"
+                                "this session already has %s. Ask the agent to add another repo"
                                 (RepoRef.value existing.Repo))
                 | Ok [] ->
                     return
@@ -1080,7 +1080,7 @@ let private startAs
             | ambiguous ->
                 Error (
                     sprintf
-                        "'%s' is ambiguous — %s each declare a sandbox by that name; name the one you mean in full"
+                        "'%s' is ambiguous. %s each declare a sandbox with that name. Give the full name of the one you mean"
                         (SandboxName.value (SandboxRef.name name))
                         (ambiguous |> List.map (fst >> SandboxRef.render) |> String.concat ", "))
     | RepoOwned repo ->
@@ -1095,12 +1095,12 @@ let private startAs
             | [] ->
                 Error (
                     sprintf
-                        "%s declares no sandboxes — a repo's work sandbox comes from its yession.yaml, and `repo_config` says what this session made of that file"
+                        "%s declares no sandboxes. A repo's work sandbox comes from its yession.yaml. `repo_config` says what this session made of that file"
                         (RepoRef.value repo))
             | names ->
                 Error (
                     sprintf
-                        "%s declares no sandbox named '%s' — it declares %s"
+                        "%s declares no sandbox named '%s'. It declares %s"
                         (RepoRef.value repo)
                         (SandboxName.value (SandboxRef.name name))
                         (String.concat ", " names))
