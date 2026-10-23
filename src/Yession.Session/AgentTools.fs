@@ -77,7 +77,7 @@ module AgentTools =
             || text.Contains "Permission denied"
             || text.Contains "Read-only file system"
         if mentionsTmp && refused then
-            "\n[a write under /tmp was refused: the sandbox does not let you write there. Your writable scratch directory is $TMPDIR, which is set in every sandbox — rerun writing under $TMPDIR instead.]"
+            "\n[The sandbox refused a write under /tmp. You cannot write there. Your writable scratch directory is $TMPDIR. Every sandbox sets it. Run the command again, and write under $TMPDIR.]"
         else ""
 
     /// A line refused by history expansion, named for what it was. An interactive shell reads
@@ -87,7 +87,7 @@ module AgentTools =
     /// hint on a line that was refused anyway.
     let private historyExpansionHint (said: string) : string =
         if said.Contains "event not found" then
-            " [The shell reads `!` as history expansion, also inside double quotes. Put that text in single quotes, or remove the `!`.]"
+            " [The shell reads `!` as history expansion. It does this inside double quotes too. Put that text in single quotes. Or remove the `!`.]"
         else ""
 
     let renderOutcome (outcome: TerminalCommandOutcome) : string =
@@ -110,7 +110,7 @@ module AgentTools =
                 | OutputEnd.Whole -> "\n" + outcome.Output
                 | OutputEnd.Head ->
                     sprintf
-                        "\n%s\n[the first %d characters; %d more after them%s]"
+                        "\n%s\n[the first %d characters. %d more come after them%s]"
                         outcome.Output
                         outcome.Output.Length
                         outcome.Elided
@@ -154,7 +154,7 @@ module AgentTools =
                 where reason output
         | TerminalCommandEnded reason ->
             sprintf
-                "ENDED in %s with no exit status on record: %s. It is not running; whether it succeeded is not known — read its output.%s"
+                "ENDED in %s with no exit status on record: %s. It is not running. It is not known if it succeeded. Read its output.%s"
                 where reason output
         | TerminalCommandRunning ->
             // How it has been doing, when there is a block to measure: the clause that tells a
@@ -164,7 +164,7 @@ module AgentTools =
                 | Some activity -> sprintf " (%s)" (BlockActivity.describe activity)
                 | None -> ""
             sprintf
-                "STILL RUNNING in %s%s. Not finished; nothing cancelled. For long commands pass background: true and end your turn — you're woken when they finish; otherwise check_pending '%s' for the outcome. Stuck or waiting on input? write_terminal can type in — keys: [\"ctrl-c\"] interrupts.%s"
+                "STILL RUNNING in %s%s. The command is not finished. Nothing was cancelled. For a long command, pass background: true. Then end your turn. The session wakes you when the command finishes. Otherwise, use check_pending '%s' to get the outcome. If the command is stuck or waits for input, use write_terminal to type into it. keys: [\"ctrl-c\"] interrupts it.%s"
                 where activity handle output
         | TerminalCommandSaid waitedFor ->
             let activity =
@@ -172,15 +172,15 @@ module AgentTools =
                 | Some activity -> sprintf " (%s)" (BlockActivity.describe activity)
                 | None -> ""
             sprintf
-                "SAID %s in %s%s — what you were waiting for. It is still running; check_pending '%s' for the rest of it.%s"
+                "SAID %s in %s%s. That is the text you waited for. The command is still running. Use check_pending '%s' to get the rest.%s"
                 waitedFor where activity handle output
         | TerminalCommandStarted ->
             sprintf
-                "STARTED in %s, in the background. Carry on, or end your turn — you're woken when it finishes; check_pending '%s' picks it up sooner, and with wait_for it answers once the command says that (a ready line, a prompt) or ends.%s"
+                "STARTED in %s, in the background. Continue your work, or end your turn. The session wakes you when the command finishes. To get the result sooner, use check_pending '%s'. With wait_for, check_pending answers when the command says that text (a ready line, a prompt). It also answers when the command ends.%s"
                 where handle output
         | TerminalCommandInteractive ->
             sprintf
-                "WAITING FOR A KEYSTROKE in %s. A full-screen program opened, so it won't finish on its own, and the terminal is now YOURS. write_terminal to answer it, read_terminal to see the screen; leaving the program finishes the command. check_pending '%s' for the outcome.%s"
+                "WAITING FOR A KEYSTROKE in %s. A full-screen program opened. It will not finish without input. The terminal is now YOURS. Use write_terminal to answer the program. Use read_terminal to see the screen. When you exit the program, the command finishes. Use check_pending '%s' to get the outcome.%s"
                 where handle output
         // Each hold names its way out. "Somebody is using it, or another command is running
         // there" was true and useless: told that over a terminal its own stuck command was
@@ -188,19 +188,19 @@ module AgentTools =
         // ended the wait was one it had not been pointed at.
         | TerminalCommandAwaitingTerminal BehindBlock ->
             sprintf
-                "WAITING FOR %s — another command runs there and this one is queued behind it; it has NOT run. To run it now beside that: open_terminal, then execute_command with that `terminal`. To end the running one: if it's yours, write_terminal keys: [\"ctrl-c\"] into that terminal; if the terminal is yours, close_terminal ends everything in it. Otherwise check_pending '%s' later."
+                "WAITING FOR %s. Another command runs there. This command is queued behind it. It has NOT run. To run it now in parallel, use open_terminal. Then use execute_command with that `terminal`. If the running command is yours, you can end it. Use write_terminal with keys: [\"ctrl-c\"] in that terminal. If the terminal is yours, close_terminal ends everything in it. Otherwise, use check_pending '%s' later."
                 where handle
         | TerminalCommandAwaitingTerminal BehindQueue ->
             sprintf
-                "WAITING FOR %s — other commands are queued ahead; it has NOT run, and runs when they do. check_pending '%s' later, or open_terminal to run it elsewhere now."
+                "WAITING FOR %s. Other commands are queued ahead of it. It has NOT run. It runs after they run. Use check_pending '%s' later. Or use open_terminal to run it in a different terminal now."
                 where handle
         | TerminalCommandAwaitingTerminal HeldByPerson ->
             sprintf
-                "WAITING FOR %s — somebody is typing there; it has NOT run, and runs when they finish, which is theirs to decide. check_pending '%s' later, or open_terminal to run it elsewhere now."
+                "WAITING FOR %s. Somebody is typing there. The command has NOT run. It runs when that person finishes. That person decides when. Use check_pending '%s' later. Or use open_terminal to run it in a different terminal now."
                 where handle
         | TerminalCommandAwaitingTerminal HeldByProgram ->
             sprintf
-                "WAITING FOR %s — something typed straight into that terminal is still running, so its shell is not at its prompt; it has NOT run, and runs once the shell is back at its prompt. check_pending '%s' later, or open_terminal to run it elsewhere now."
+                "WAITING FOR %s. Something typed directly into that terminal is still running. Its shell is not at its prompt. The command has NOT run. It runs when the shell is at its prompt again. Use check_pending '%s' later. Or use open_terminal to run it in a different terminal now."
                 where handle
         // Refused by the SESSION: that terminal cannot run commands, so nothing can run
         // there (`TerminalQueueDrain.cannotRunReason`). Unlike a classifier's refusal, the way
@@ -213,8 +213,8 @@ module AgentTools =
         | TerminalCommandRefused (by, reason) ->
             let who = ActorRef.token by
             match reason with
-            | Some reason -> sprintf "REFUSED by %s in %s: %s. It did not run — do not try to run it another way." who where reason
-            | None -> sprintf "REFUSED by %s in %s. It did not run — do not try to run it another way." who where
+            | Some reason -> sprintf "REFUSED by %s in %s: %s. It did not run. Do not try to run it another way." who where reason
+            | None -> sprintf "REFUSED by %s in %s. It did not run. Do not try to run it another way." who where
 
     // ---------------------------------------------------------------------------------
     // The bodies. Each takes the raw arguments and answers text. A tool that RAN and went
@@ -255,7 +255,7 @@ module AgentTools =
                 // refusal.
                 match literal, pattern with
                 | Some _, Some _ ->
-                    Error "wait_for and wait_for_pattern are two ways to say the same thing — give one"
+                    Error "wait_for and wait_for_pattern do the same job. Give only one of them"
                 | None, None -> Ok None
                 | Some literal, None -> Ok (Some { Until = MatchLiteral literal; TimeoutSeconds = timeout })
                 | None, Some source ->
@@ -306,7 +306,7 @@ module AgentTools =
             // learn from the outcome.
             let target =
                 match terminal, sandbox with
-                | Some _, Some _ -> Error "name a terminal or a sandbox, not both — a terminal is already in one"
+                | Some _, Some _ -> Error "name a terminal or a sandbox, not both. A terminal is already in a sandbox"
                 | Some t, None -> TerminalId.create t |> Result.mapError (sprintf "not a terminal id: %s") |> Result.map (InTerminal >> Some)
                 | None, Some s -> SandboxRef.parse s |> Result.mapError (sprintf "not a sandbox: %s") |> Result.map (InSandbox >> Some)
                 | None, None -> Ok None
@@ -350,7 +350,7 @@ module AgentTools =
             match outcome.Handle with
             | Some handle ->
                 sprintf
-                    "STILL RUNNING: `%s` not finished; nothing cancelled, nobody waiting on you. check_pending '%s' to pick it up."
+                    "STILL RUNNING: `%s` is not finished. Nothing was cancelled. Nobody is waiting for you. Use check_pending '%s' to get the outcome."
                     outcome.Summary
                     (QueueId.value handle)
             | None -> sprintf "STILL RUNNING: `%s` has not finished. Nothing was cancelled." outcome.Summary
@@ -358,8 +358,8 @@ module AgentTools =
             let who = ActorRef.token by
             match reason with
             | Some reason ->
-                sprintf "REFUSED by %s: %s. `%s` did not happen — do not try another way round it." who reason outcome.Summary
-            | None -> sprintf "REFUSED by %s. `%s` did not happen — do not try another way round it." who outcome.Summary
+                sprintf "REFUSED by %s: %s. `%s` did not happen. Do not try another way around it." who reason outcome.Summary
+            | None -> sprintf "REFUSED by %s. `%s` did not happen. Do not try another way around it." who outcome.Summary
 
     /// `check_pending`: resume a handle, whichever kind of act it named (Plan 15, stage 3b).
     /// ONE verb, because the handle is one type — the alternative is an agent that has to
@@ -394,7 +394,7 @@ module AgentTools =
             | Ok answer ->
                 let spelled =
                     if TerminalKeys.spelledOut data then
-                        " — that is text that SPELLS a key, and the terminal took it as text; to press one, pass it by name in keys, e.g. keys: [\"ctrl-c\"]"
+                        ". That text SPELLS a key. The terminal took it as text, not as a key. To press a key, give its name in keys, e.g. keys: [\"ctrl-c\"]"
                     else ""
                 return sprintf "%s; typed %s%s" answer (TerminalKeys.describe data) spelled
             | Error reason -> return sprintf "could not type into terminal %s: %s" (TerminalId.value id) reason
@@ -424,7 +424,7 @@ module AgentTools =
                         sprintf "lines %d-%d of %d, up to date" tail.From tail.Through tail.Length
                     else
                         sprintf
-                            "lines %d-%d of %d — read on with from: %d"
+                            "lines %d-%d of %d. To read more, use from: %d"
                             tail.From
                             tail.Through
                             tail.Length
@@ -437,7 +437,7 @@ module AgentTools =
                     match tail.Matched, waitFor with
                     | Some false, Some wait ->
                         sprintf
-                            "\n(%s did not appear within %gs — this is what it said instead)"
+                            "\n(%s did not appear within %gs. This is what the terminal said instead.)"
                             (TerminalMatch.describe wait.Until)
                             wait.TimeoutSeconds
                     | _ -> ""
@@ -480,7 +480,7 @@ module AgentTools =
                     return
                         { ToolAnswer.text (
                               sprintf
-                                  "%s — a picture (%s, %d kB), shown to you and to nobody else: the people here see a picture only once share_artifact has copied it, so a reply that rests on this one comes with it"
+                                  "%s: a picture (%s, %d kB). Only you see it. The people here see a picture only after share_artifact copies it. If your reply depends on this picture, share the picture with the reply."
                                   path
                                   image.Type
                                   (ToolImage.kilobytes image)
@@ -516,7 +516,7 @@ module AgentTools =
                     return
                         { ToolAnswer.text (
                               sprintf
-                                  "%s — a picture (%s, %d kB), shown to you; it is shared, so the people here can see it already"
+                                  "%s: a picture (%s, %d kB), shown to you. It is shared. The people here can see it already."
                                   said
                                   image.Type
                                   (ToolImage.kilobytes image)
@@ -797,25 +797,25 @@ module AgentTools =
     let private executeCommandTool (capabilities: AgentCapabilities) : ToolDescriptor * (ToolCall -> Async<Result<ToolAnswer, string>>) =
         toolOfCall
             ToolName.ExecuteCommand
-            "Run a shell command in a session terminal — the only way to run anything, seen by everyone and on the record. Always pass `description`: several words or fewer, in the past tense, saying what the command did. The transcript puts \"running\" or \"ran\" in front of it for you — never write that word yourself (\"checked the build\", not \"ran the build\" or \"Ran the build\"). Not for reading or editing files: use read_file and edit_file, which record WHICH file, unless a dedicated tool genuinely cannot do it — avoid cat, sed, awk, head, tail, grep -n and heredocs here. `sandbox`: a named work sandbox (start_work_sandbox); omit for the default one. `terminal`: a terminal from open_terminal, to run beside something long (each terminal runs one command at a time). For anything long-running pass background: true — it returns a handle at once, you end your turn, and you're woken when it finishes; otherwise it waits and hands back a check_pending handle if the command outlasts the wait. No stdin unless stdin: true (readers get EOF), so pass flags, not prompts. Scratch under $TMPDIR; /tmp is denied. Rewriting a file, write the new content before deleting the old — a delete-then-write can be refused halfway. Read the answer: it says which happened."
+            "Run a shell command in a session terminal. This is the only way to run anything. Everyone sees the command. It is on the record. Always pass `description`: a past-tense phrase of several words or fewer that says what the command did. The transcript puts \"running\" or \"ran\" in front of it for you. Never write that word yourself (\"checked the build\", not \"ran the build\" or \"Ran the build\"). Do not use this tool to read or edit files. Use read_file and edit_file, which record WHICH file. Use the shell for files only when a dedicated tool really cannot do the job. Avoid cat, sed, awk, head, tail, grep -n and heredocs here. `sandbox`: a named work sandbox (start_work_sandbox). Omit it for the default sandbox. `terminal`: a terminal from open_terminal, to run a command in parallel with a long one. Each terminal runs one command at a time. For a long-running command, pass background: true. The tool then returns a handle immediately. End your turn. The session wakes you when the command finishes. Without background, the tool waits. If the command runs longer than the wait, the tool returns a check_pending handle. The command gets no stdin unless you pass stdin: true (readers get EOF). So pass flags, not prompts. Write scratch files under $TMPDIR. /tmp is denied. To rewrite a file, write the new content before you delete the old file. The sandbox can refuse a delete-then-write halfway. Read the answer. It says which of these happened."
             (toolArgs {
                 let! command = ToolArgs.text "command" "the shell command line to run, e.g. \"npm test -- --watch=false\""
-                and! terminal = ToolArgs.textOption "terminal" "the id of a terminal to run in, as open_terminal or list_terminals gave it; omit for your own terminal in the sandbox"
-                and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox to run in — the session's own by name (\"test\"), a repo's as \"owner/repo:name\" (its bare name also finds it when only one repo declares that name); omit for the default one"
+                and! terminal = ToolArgs.textOption "terminal" "the id of a terminal to run in, from open_terminal or list_terminals. Omit it to use your own terminal in the sandbox"
+                and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox to run in. Give a sandbox of the session by its name (\"test\"). Give a repo's sandbox as \"owner/repo:name\". Its bare name also finds it when only one repo declares that name. Omit it for the default sandbox"
                 and! background =
                     ToolArgs.flag
                         "background"
-                        "true to start it and carry on without waiting — use it for long work, and for work that can run alongside other work. You will be told when it finishes."
+                        "true to start the command and continue without waiting. Use it for long work. Use it also for work that can run in parallel with other work. The session tells you when the command finishes."
                 and! stdin =
                     ToolArgs.flag
                         "stdin"
-                        "true to let the command read the terminal's input, for the rare command that has to prompt; omit it and anything that reads stdin gets end-of-file at once"
+                        "true to let the command read the terminal's input. Use it for the rare command that must prompt. If you omit it, anything that reads stdin gets end-of-file immediately"
                 // The transcript prefixes this with "running" or "ran" (`Dom.Text.running` /
                 // `Dom.Text.ran` in Yession.App): change all three together.
                 and! description =
                     ToolArgs.textOption
                         "description"
-                        "several words or fewer, in the past tense, saying what the command did — \"fetched master\", \"built the app\". The transcript already puts \"running\" or \"ran\" in front of it, so don't: not \"ran fetched master\", just \"fetched master\". Pass one on every call."
+                        "a past-tense phrase of several words or fewer that says what the command did. Examples: \"fetched master\", \"built the app\". The transcript already puts \"running\" or \"ran\" in front of it. Do not add that word yourself. Write \"fetched master\", not \"ran fetched master\". Pass one on every call."
                 return command, terminal, sandbox, background, stdin, description
              })
             (fun call (command, terminal, sandbox, background, stdin, description) ->
@@ -830,10 +830,10 @@ module AgentTools =
           // thing on every surface that draws them.
           tool
               "open_terminal"
-              "Open your own terminal and name it for the job (\"tests\", \"docs build\") — everyone reads the name. Use it to run several things at once, since each terminal runs one command at a time. Returns a terminal id; pass it to execute_command as `terminal`. There's a per-sandbox limit — if you've hit it, this says so, and close_terminal makes room."
+              "Open your own terminal, and name it for its job (\"tests\", \"docs build\"). Everyone reads the name. Each terminal runs one command at a time. Open more terminals to run several commands at once. Returns a terminal id. Pass it to execute_command as `terminal`. Each sandbox has a limit on terminals. If you reach it, this tool says so. Use close_terminal to make room."
               (toolArgs {
                   let! name = ToolArgs.text "name" "what this terminal is for, e.g. \"tests\""
-                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox to open it in — \"owner/repo:name\" for a repo's, or its bare name when only one repo declares it; omit for the default one"
+                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox to open it in. Give a repo's sandbox as \"owner/repo:name\". Its bare name also works when only one repo declares it. Omit it for the default sandbox"
                   return name, sandbox
                })
               (fun (name, sandbox) ->
@@ -854,7 +854,7 @@ module AgentTools =
 
           tool
               "close_terminal"
-              "Close a terminal you opened, when you're done with it. Its recording stays for anyone to read; only the shell ends. You can close only your own; the people here can close any, including yours."
+              "Close a terminal that you opened, when you no longer need it. Only the shell ends. Its recording stays for anyone to read. You can close only your own terminals. The people here can close any terminal, including yours."
               (ToolArgs.text "terminal" "the terminal id from open_terminal")
               (fun raw ->
                   async {
@@ -868,7 +868,7 @@ module AgentTools =
 
           tool
               "list_terminals"
-              "See every terminal open in this session — yours and the people's — what each is for, and whether something is running. Use it to see what you have before opening another, and to pick one to run in."
+              "List every open terminal in this session: yours and the people's. For each terminal, it says what the terminal is for and if something is running. Use it to see what you have before you open another terminal. Use it also to choose a terminal to run in."
               ToolArgs.none
               (fun () ->
                   async {
@@ -878,29 +878,29 @@ module AgentTools =
                       | Ok terminals ->
                           let line (t: TerminalSummary) =
                               sprintf
-                                  "%s — %s%s%s%s"
+                                  "%s: %s%s%s%s"
                                   (TerminalId.value t.Terminal)
                                   t.Name
                                   (match t.Sandbox with
                                    | Some s when s <> SandboxRef.defaultRef -> sprintf " in %s" (SandboxRef.render s)
                                    | _ -> "")
                                   (if t.Mine then " (yours)" else "")
-                                  (if t.Busy then " — running something" else "")
+                                  (if t.Busy then ", running something" else "")
                           return Ok (ToolAnswer.text (terminals |> List.map line |> String.concat "\n"))
                   })
 
           tool
               "check_pending"
-              "Pick up whatever a handle named — a long build, a command queued behind a busy terminal, a program waiting on a keystroke. Works for execute_command and anything that said it was still going; returns what the original call would have. A background command needs no polling: end your turn and you're woken when it finishes. To carry on once a running command has SAID something — a server's ready line, a prompt — give `wait_for`: it answers when the output says it, when the command ends (with its exit code and what it printed — a server that died before it was ready says so), or at `timeout_seconds`, whichever is first. Never write a shell loop that waits for a port or a line."
+              "Get the result of what a handle names. A handle can name a long build, a command queued behind a busy terminal, or a program that waits for a keystroke. It works for execute_command and for anything that said it was still going. It returns what the original call would have returned. Do not poll a background command. End your turn. The session wakes you when the command finishes. To continue when a running command has SAID something (a server's ready line, a prompt), give `wait_for`. Then check_pending answers at the first of these events:\n- The output says that text.\n- The command ends. The answer gives its exit code and what it printed. A server that died before it was ready says so.\n- `timeout_seconds` passes.\nNever write a shell loop that waits for a port or a line."
               (toolArgs {
-                  let! handle = ToolArgs.text "handle" "the handle from execute_command, or from a command that said it was still going"
+                  let! handle = ToolArgs.text "handle" "the handle from execute_command, or from another command that said it was still going"
                   // The default timeout is the turn's own bound: a caller naming a ready line
                   // wants it as long as a command may take, not a device's ten seconds.
                   and! until =
                       waitFor
-                          "answer once the command's output contains this exact text, e.g. \"listening on\". Literal text — for a pattern use wait_for_pattern"
-                          "answer once the command's output matches this pattern — the same subset read_terminal takes"
-                          "how long to wait for it before answering with what the command has said so far; default and most 120"
+                          "answer when the command's output contains this exact text, e.g. \"listening on\". This is literal text. For a pattern, use wait_for_pattern"
+                          "answer when the command's output matches this pattern. It takes the same pattern subset as read_terminal"
+                          "how long to wait. After that time, the answer gives what the command said so far. Default 120, and the maximum is 120"
                           120.0
                   return until |> Result.map (fun until -> handle, until)
                })
@@ -908,7 +908,7 @@ module AgentTools =
 
           tool
               "write_terminal"
-              "Type into a terminal you hold the keyboard for: one streaming something live (a device or console — bytes from outside this session), or one running a command of yours (a full-screen program waiting on a key, a stdin: true prompt, or something stuck — keys: [\"ctrl-c\"] interrupts, [\"ctrl-d\"] is end-of-input). Text goes in `data`; keys go BY NAME in `keys`, after the text — never written out as escapes, which arrive as the characters they spell. The answer says what was typed. On a live stream, typing takes the terminal — everyone sees it and can take it back. On a shell terminal it works only while a command of yours runs there; otherwise use execute_command."
+              "Type into a terminal where you hold the keyboard. That terminal is one of these:\n- A terminal that streams something live: a device or a console, with bytes from outside this session.\n- A terminal that runs a command of yours: a full-screen program that waits for a key, a stdin: true prompt, or something stuck. keys: [\"ctrl-c\"] interrupts. [\"ctrl-d\"] is end-of-input.\nPut text in `data`. Put keys BY NAME in `keys`. They go after the text. Never write a key as an escape sequence. An escape arrives as the characters it spells. The answer says what was typed. On a live stream, typing takes the terminal. Everyone sees that. Anyone can take the terminal back. On a shell terminal, this works only while a command of yours runs there. Otherwise, use execute_command."
               (toolArgs {
                   let! terminal = ToolArgs.text "terminal" "the terminal id, from the terminal that was opened for the stream"
                   and! data = ToolArgs.textOption "data" "text to type, e.g. \"AT\""
@@ -916,13 +916,13 @@ module AgentTools =
                       ToolArgs.textList
                           "keys"
                           (sprintf
-                              "keys to press after the text, by name: %s, ctrl-a … ctrl-z — e.g. [\"enter\"], [\"ctrl-c\"]"
+                              "keys to press after the text, by name. The names are %s, ctrl-a … ctrl-z. Examples: [\"enter\"], [\"ctrl-c\"]"
                               (TerminalKeys.named |> List.map fst |> List.filter (fun n -> not (n.StartsWith "ctrl-")) |> String.concat ", "))
                   // At least one; both is text followed by keys, which is how a line and its
                   // enter are said.
                   return
                       match data, keys with
-                      | None, [] -> Error "nothing to type — give data, keys, or both"
+                      | None, [] -> Error "nothing to type. Give data, keys or both"
                       | _ ->
                           TerminalKeys.bytesOf keys
                           |> Result.map (fun bytes -> terminal, String.concat "" (Option.toList data @ [ bytes ]))
@@ -934,16 +934,16 @@ module AgentTools =
 
           tool
               "read_terminal"
-              "Read what a terminal has said, optionally waiting for it to say something. Use it when the answer doesn't come back as a command's output — a live stream, or a shell terminal where a full-screen program waits on a key. `wait_for` holds the read until that text appears (on timeout it answers with what was said, usually the reason it didn't). No `from`: the tail now, capped, saying what it left out. `from`: a page from that line, plus the line to carry into the next call — how you read what was said before you arrived. Every answer says which lines it covers of how many. Reading takes nothing — whoever's typing keeps the terminal. On a shell terminal the tail is yours while a command of yours runs, and `wait_for_pattern` waits for a line of output without polling. Between commands the tail is refused (that output comes back from execute_command), but `from` still pages it."
+              "Read what a terminal has said. Optionally, wait until it says something. Use it when the answer does not come back as the output of a command. Examples: a live stream, or a shell terminal where a full-screen program waits for a key. `wait_for` holds the read until that text appears. On timeout, it answers with what the terminal said. That text usually shows why the text you waited for did not appear. Without `from`, you get the tail now. The tail is capped. The answer says what it left out. With `from`, you get a page from that line. The answer also gives the line for the next call. Use `from` to read what the terminal said before you arrived. Every answer says which lines it covers, and of how many. Reading does not take the terminal. The person who types keeps it. On a shell terminal, you can read the tail while a command of yours runs. There, `wait_for_pattern` waits for a line of output without polling. Between commands, the tail is refused. That output comes back from execute_command. But `from` still pages it."
               (toolArgs {
                   let! terminal = ToolArgs.text "terminal" "the terminal id, from the terminal that was opened for the stream"
                   // Absent is the tail, which is what the optional parameters degrade to.
-                  and! from = ToolArgs.integerOption "from" "the line to read forward from, as reported by a previous read; omit for the tail"
+                  and! from = ToolArgs.integerOption "from" "the line to start the read from, as a previous read reported it. Omit it for the tail"
                   and! until =
                       waitFor
-                          "hold the read until this exact text appears, e.g. \"login: \". Literal text — for a pattern use wait_for_pattern"
-                          "hold the read until output matches this pattern, e.g. \"[#$>] $\" for a shell prompt. Takes literal text, `.`, `[classes]`, `*`, `+`, `?`, `|`, groups, and `^`/`$` anchored to a LINE. No backreferences, lookaround or non-greedy quantifiers"
-                          "how long to hold before answering with what was said instead; default 10"
+                          "hold the read until this exact text appears, e.g. \"login: \". This is literal text. For a pattern, use wait_for_pattern"
+                          "hold the read until output matches this pattern, e.g. \"[#$>] $\" for a shell prompt. The pattern can use literal text, `.`, `[classes]`, `*`, `+`, `?`, `|`, groups, and `^`/`$` anchored to a LINE. It cannot use backreferences, lookaround or non-greedy quantifiers"
+                          "how long to hold the read. After that time, the answer gives what the terminal said instead. Default 10"
                           10.0
                   return until |> Result.map (fun until -> terminal, from, until)
                })
@@ -958,12 +958,12 @@ module AgentTools =
           (let descriptor, body =
               tool
                   ToolName.ReadFile
-                  "Read a file, or a window of it, numbered by line. Prefer this over cat/sed/head/tail in execute_command: it's on the record as a read of THIS file, and the people here see what you looked at. Paths are as a terminal in that sandbox would take them — relative to where its terminals start (the checkout, once add_repo and set_shell_profile have run), or absolute. Every answer says which lines it covers of how many; a long file comes back a page at a time, and the answer says which `offset` reads on. Lines longer than 2000 characters are cut. A picture (.png, .jpg, .gif, .webp) comes back as the picture itself, for you to look at — so look before you describe one."
+                  "Read a file, or a window of it, with line numbers. Use this, not cat/sed/head/tail in execute_command. The record shows a read of THIS file. The people here see what you looked at. Give paths as a terminal in that sandbox would take them. A path is absolute, or relative to where the terminals of that sandbox start. That is the checkout, after add_repo and set_shell_profile have run. Every answer says which lines it covers, and of how many. A long file comes back one page at a time. The answer gives the `offset` for the next page. Lines longer than 2000 characters are cut. A picture (.png, .jpg, .gif, .webp) comes back as the picture itself, for you to look at. Look at a picture before you describe it."
                   (toolArgs {
-                      let! path = ToolArgs.text "path" "the file, e.g. \"src/Program.fs\", \"$TMPDIR/out.log\" — a checkout's path is the one the repos query gives"
-                      and! offset = ToolArgs.integerOption "offset" "the first line to read, 1-based; omit for the top"
-                      and! limit = ToolArgs.integerOption "limit" "how many lines; omit for 2000"
-                      and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox whose files these are; omit for the default one"
+                      let! path = ToolArgs.text "path" "the file, e.g. \"src/Program.fs\" or \"$TMPDIR/out.log\". For a checkout, use the path that the repos query gives"
+                      and! offset = ToolArgs.integerOption "offset" "the first line to read, 1-based. Omit it to start at the top"
+                      and! limit = ToolArgs.integerOption "limit" "how many lines. Omit it for 2000"
+                      and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox whose files these are. Omit it for the default sandbox"
                       return path, offset, limit, sandbox
                    })
                   (fun (path, offset, limit, sandbox) -> answered (readFile capabilities path offset limit sandbox))
@@ -972,12 +972,12 @@ module AgentTools =
           (let descriptor, body =
               tool
                   "search_files"
-                  "Search file contents for a pattern, recursively — `grep -rn` behind a typed door: the record says what you searched for and where. Prefer it over grep in execute_command. Answers `path:line:text` lines, at most 200, saying when more were cut. Extended regular expression (grep -E); `.git` is skipped, and binary files. Paths as read_file takes them."
+                  "Search file contents for a pattern, recursively. It is `grep -rn` behind a typed interface. The record says what you searched for and where. Use it, not grep in execute_command. It answers with `path:line:text` lines, at most 200. The answer says when it cut more lines. The pattern is an extended regular expression (grep -E). It skips `.git` and binary files. Give paths as read_file takes them."
                   (toolArgs {
                       let! pattern = ToolArgs.text "pattern" "an extended regular expression, e.g. \"let (private )?readFile\""
-                      and! path = ToolArgs.textOption "path" "the directory or file to search; omit for where terminals start"
+                      and! path = ToolArgs.textOption "path" "the directory or file to search. Omit it to search where terminals start"
                       and! glob = ToolArgs.textOption "glob" "only files whose NAME matches this glob, e.g. \"*.fs\""
-                      and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox to search in; omit for the default one"
+                      and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox to search in. Omit it for the default sandbox"
                       return pattern, path, glob, sandbox
                    })
                   (fun (pattern, path, glob, sandbox) -> ok (searchFiles capabilities pattern path glob sandbox))
@@ -986,11 +986,11 @@ module AgentTools =
           (let descriptor, body =
               tool
                   "find_files"
-                  "List the files whose names match a glob, recursively — `find` behind a typed door. Prefer it over find/ls in execute_command. One path per line, at most 200; `.git` is skipped. A glob without a slash matches file names anywhere below `path` (\"*.fsproj\"); one with a slash matches the path's tail (\"src/*/View.fs\"). Paths as read_file takes them."
+                  "List the files whose names match a glob, recursively. It is `find` behind a typed interface. Use it, not find/ls in execute_command. It answers with one path per line, at most 200. It skips `.git`. A glob without a slash matches file names anywhere below `path` (\"*.fsproj\"). A glob with a slash matches the end of the path (\"src/*/View.fs\"). Give paths as read_file takes them."
                   (toolArgs {
                       let! glob = ToolArgs.text "glob" "the name pattern, e.g. \"*.fs\" or \"tests/*/Main.fs\""
-                      and! path = ToolArgs.textOption "path" "the directory to look under; omit for where terminals start"
-                      and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox to look in; omit for the default one"
+                      and! path = ToolArgs.textOption "path" "the directory to look under. Omit it to look where terminals start"
+                      and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox to look in. Omit it for the default sandbox"
                       return glob, path, sandbox
                    })
                   (fun (glob, path, sandbox) -> ok (findFiles capabilities glob path sandbox))
@@ -998,13 +998,13 @@ module AgentTools =
 
           tool
               ToolName.EditFile
-              "Replace one exact piece of text in a file with another. Prefer this over sed/awk/heredocs in execute_command: the change is on the record as an edit of THIS file, and the people here see what changed. Read the file first (read_file) and quote `old_string` exactly as it appears — whitespace and indentation included, without the line numbers. It must match ONCE: if it matches more, add surrounding lines until it is unique, or pass replace_all: true to change every occurrence. Answers with what changed, or why nothing did. Paths as read_file takes them."
+              "Replace one exact piece of text in a file with another. Use this, not sed/awk/heredocs in execute_command. The record shows an edit of THIS file. The people here see what changed. Read the file first (read_file). Quote `old_string` exactly as it appears. Include its whitespace and indentation. Do not include the line numbers. It must match ONCE. If it matches more than once, add surrounding lines until it is unique. Or pass replace_all: true to change every occurrence. The answer says what changed, or why nothing changed. Give paths as read_file takes them."
               (toolArgs {
                   let! path = ToolArgs.text "path" "the file to edit, as read_file names it"
                   and! oldText = ToolArgs.text "old_string" "the exact text to replace, as it appears in the file"
                   and! newText = ToolArgs.text "new_string" "the text to put in its place"
-                  and! replaceAll = ToolArgs.flag "replace_all" "true to replace every occurrence; default false, which requires exactly one"
-                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox whose file this is; omit for the default one"
+                  and! replaceAll = ToolArgs.flag "replace_all" "true to replace every occurrence. Default false: then exactly one occurrence must match"
+                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox whose file this is. Omit it for the default sandbox"
                   return path, oldText, newText, replaceAll, sandbox
                })
               (fun (path, oldText, newText, replaceAll, sandbox) ->
@@ -1012,24 +1012,24 @@ module AgentTools =
 
           tool
               ToolName.WriteFile
-              "Write a whole file: create it, or replace everything in it. For a change inside an existing file use edit_file, which records what changed; this records that the file was written. Directories on the way are created. Paths as read_file takes them."
+              "Write a whole file: create it, or replace all of its content. For a change inside an existing file, use edit_file. edit_file records what changed. This tool records only that the file was written. It creates the missing directories on the path. Give paths as read_file takes them."
               (toolArgs {
                   let! path = ToolArgs.text "path" "the file to write, as read_file names it"
                   and! content = ToolArgs.text "content" "the entire new content of the file"
-                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox whose file this is; omit for the default one"
+                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox whose file this is. Omit it for the default sandbox"
                   return path, content, sandbox
                })
               (fun (path, content, sandbox) -> ok (writeFile capabilities path content sandbox))
 
           tool
               ToolName.ShareArtifact
-              "Share a file with the people here — an image you plotted, a screenshot, a report. Takes a path in a sandbox (as read_file takes them) and copies it into the session's artifacts, which everyone can see and nobody has to have a sandbox to read. Answers with the address the copy got, `file:///artifacts/<name>/<version>`: write it in a message, as it is, and the people here see it as the file — a chip that opens it — rather than as a URL. Sharing the same name again does NOT overwrite it — it adds a version, and the older ones stay where they are, so an address you have already written keeps showing what it showed. At most 100 MB a file; the refusal says how big yours is. The `artifacts` query lists what has been shared."
+              "Share a file with the people here: an image you plotted, a screenshot, a report. Give a path in a sandbox, as read_file takes it. The tool copies the file into the artifacts of the session. Everyone can see the artifacts. Nobody needs a sandbox to read them. The answer gives the address of the copy, `file:///artifacts/<name>/<version>`. Write that address in a message as it is. The people here then see the file as a chip that opens it, not as a URL. If you share the same name again, that does NOT overwrite the file. It adds a version. The older versions stay where they are. So an address that you already wrote keeps showing what it showed. The limit is 100 MB for each file. The refusal says how big your file is. The `artifacts` query lists what was shared."
               (toolArgs {
-                  let! path = ToolArgs.text "path" "the file to share, e.g. \"out/chart.png\" — a literal path, as read_file takes one: it is not a shell word, so an environment variable in it is not expanded"
+                  let! path = ToolArgs.text "path" "the file to share, e.g. \"out/chart.png\". This is a literal path, as read_file takes one. It is not a shell word. An environment variable in it is not expanded"
                   // Optional because the file already has one, and carrying it over keeps the
                   // extension the media type is read from.
-                  and! name = ToolArgs.textOption "name" "what to call it here, e.g. \"coverage.png\"; omit to keep the file's own name (which is where the file type is read from)"
-                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox the file is in; omit for the default one"
+                  and! name = ToolArgs.textOption "name" "what to call it here, e.g. \"coverage.png\". Omit it to keep the file's own name (the file type is read from that name)"
+                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox the file is in. Omit it for the default sandbox"
                   return path, name, sandbox
                })
               (fun (path, name, sandbox) -> ok (shareArtifact capabilities path name sandbox))
@@ -1040,11 +1040,11 @@ module AgentTools =
           (let descriptor, body =
               tool
                   "read_artifact"
-                  "Read something shared here: look at a picture, read a report. The other half of share_artifact — these are the SESSION's files, not any sandbox's, so read_file cannot reach them and this reaches nothing else. Takes an address as the artifacts query and share_artifact answer with it: \"file:///artifacts/<name>\" is whatever is latest under that name, and \"file:///artifacts/<name>/<version>\" is one version's bytes for good. A picture comes back as the picture itself, for you to look at. Text comes back a page at a time like read_file, and the answer says which `offset` reads on."
+                  "Read something shared here: look at a picture, or read a report. This is the other half of share_artifact. Artifacts are the SESSION's files, not the files of a sandbox. read_file cannot reach them. This tool reaches nothing else. Give an address as the artifacts query and share_artifact give it. \"file:///artifacts/<name>\" is the latest version under that name. \"file:///artifacts/<name>/<version>\" is the bytes of one version, permanently. A picture comes back as the picture itself, for you to look at. Text comes back one page at a time, like read_file. The answer gives the `offset` for the next page."
                   (toolArgs {
-                      let! artifact = ToolArgs.text "artifact" "the address, e.g. \"file:///artifacts/chart.png\" — the artifacts query lists what there is"
-                      and! offset = ToolArgs.integerOption "offset" "the first line to read, 1-based; omit for the top. Nothing to a picture"
-                      and! limit = ToolArgs.integerOption "limit" "how many lines; omit for 2000. Nothing to a picture"
+                      let! artifact = ToolArgs.text "artifact" "the address, e.g. \"file:///artifacts/chart.png\". The artifacts query lists what there is"
+                      and! offset = ToolArgs.integerOption "offset" "the first line to read, 1-based. Omit it to start at the top. It has no effect on a picture"
+                      and! limit = ToolArgs.integerOption "limit" "how many lines. Omit it for 2000. It has no effect on a picture"
                       return artifact, offset, limit
                    })
                   (fun (artifact, offset, limit) -> answered (readArtifact capabilities artifact offset limit))
@@ -1052,25 +1052,25 @@ module AgentTools =
 
           tool
               "open_tab"
-              "Put a terminal or a file within reach of the people here: it opens as a tab in their side pane's strip, ready to choose — terminals first, then files. Takes an address — a terminal as \"terminal:<id>\", or a file as \"file:///artifacts/<name>\" (what share_artifact answers with; name a version to pin one). It does NOT take anyone's screen: everybody stays on what they were reading, and the tab waits to be chosen — to show somebody something because they asked to see it, use focus_tab. Opening the same address twice is the same one tab. Say in your message what you opened; the tab is how they find it again, not how they learn it exists."
+              "Put a terminal or a file within reach of the people here. It opens as a tab in the strip of their side pane, ready to choose. Terminals come first, then files. Give an address: a terminal as \"terminal:<id>\", or a file as \"file:///artifacts/<name>\". That is the address share_artifact answers with. Name a version to pin one. This does NOT take anyone's screen. Everybody stays on what they were reading. The tab waits until somebody chooses it. To show somebody something because they asked to see it, use focus_tab. If you open the same address twice, you get the same one tab. Say in your message what you opened. The tab is how they find it again, not how they learn that it exists."
               (ToolArgs.text "address" "what to open, e.g. \"file:///artifacts/chart.png\" or \"terminal:01HQ...\"")
               (fun address -> ok (openTab capabilities address false))
 
           tool
               "focus_tab"
-              "Show the people here something, taking their side pane: a terminal or a file opens as a tab if it is not one already and becomes the tab their pane is showing. It REPLACES whatever they were reading. Do this when they have asked to be shown something (\"show me the chart\", \"put it up\"), and not otherwise. If you merely think they will want a terminal next, open_tab puts it in their strip without taking their screen, and that is almost always the right one. Addresses as open_tab takes them."
+              "Show the people here something in their side pane. A terminal or a file opens as a tab, if it is not one already. That tab becomes the tab their pane shows. It REPLACES what they were reading. Do this only when they asked to see something (\"show me the chart\", \"put it up\"). If you only think they will want a terminal next, use open_tab. open_tab puts it in their strip without taking their screen. That is almost always the right tool. Give addresses as open_tab takes them."
               (ToolArgs.text "address" "what to show, as open_tab names it")
               (fun address -> ok (openTab capabilities address true))
 
           tool
               "close_tab"
-              "Take back an open_tab or a focus_tab: the tab goes from the side pane's strip, a file's taking its preview down with it. Use it when what you opened has stopped being useful, rather than leaving it there. Asking is all this does — a terminal somebody is looking at stays on their screen until they move off it. Closing something that is not open is not an error. Addresses as open_tab takes them."
+              "Undo an open_tab or a focus_tab. The tab goes from the strip of the side pane. For a file, its preview closes too. Use it when what you opened is no longer useful. Do not leave it there. This tool only asks. A terminal that somebody looks at stays on their screen until they leave it. If you close something that is not open, that is not an error. Give addresses as open_tab takes them."
               (ToolArgs.text "address" "what to close, as open_tab names it")
               (fun address -> ok (closeTab capabilities address))
 
           tool
               "set_secret"
-              "Store a named secret for this session (WRITE-ONLY: no tool reads it back). To USE it, reference its name as an environment-variable secret ref when an environment starts — the value is injected there and never appears in the conversation."
+              "Store a named secret for this session (WRITE-ONLY: no tool reads it back). To USE it, give its name as an environment-variable secret ref when an environment starts. The session injects the value there. The value never appears in the conversation."
               (toolArgs {
                   let! name = ToolArgs.text "name" "the secret name, e.g. DEPLOY_TOKEN"
                   // The one argument in the repo that must never be recorded, and it says so
@@ -1094,13 +1094,13 @@ module AgentTools =
 
           tool
               "add_repo"
-              "Clone a GitHub repo into this session's shared repos directory (visible to everyone here and inside the work environment). Takes owner/repo, never a URL, and only repos the session's GitHub credential can reach — GitHub says \"not found\" for one it won't show you, so not-found on a repo that exists means nobody has connected GitHub here; say that rather than retrying. Answers with the checkout path as a terminal here reaches it (usually relative to where a terminal starts): use it as given for cd and set_shell_profile, don't rebuild it. Read-only bootstrap — commit or push with execute_command. An already-added repo just reports its state."
+              "Clone a GitHub repo into the shared repos directory of this session. Everyone here can see it. It is also visible inside the work environment. Give owner/repo, never a URL. It takes only repos that the GitHub credential of the session can reach. GitHub says \"not found\" for a repo that it does not show you. So \"not found\" on a repo that exists means that nobody connected GitHub here. Say that. Do not try again. The answer gives the checkout path as a terminal here reaches it (usually relative to where a terminal starts). Use that path as given for cd and set_shell_profile. Do not build the path again yourself. This tool does not commit or push. To commit or push, use execute_command. For a repo that is already added, it only reports its state."
               (repo "the repo as owner/name, e.g. \"octocat/hello-world\"")
               (addRepo capabilities >> ok)
 
           tool
               "remove_repo"
-              "Delete a repo's checkout from this session — everyone here sees it leave the repos list. Use it when add_repo says a checkout is unreadable, or when the session is done with a repo. A checkout with uncommitted changes is REFUSED unless you pass `force`: removing deletes that work, and re-adding brings back the commits and nothing else — read the refusal and decide, don't force by reflex. Terminals set to start in the checkout go back to the sandbox default, and the answer says so. add_repo is the way back."
+              "Delete a repo's checkout from this session. Everyone here sees it leave the repos list. Use it when add_repo says a checkout is unreadable. Use it also when the session no longer needs a repo. A checkout with uncommitted changes is REFUSED unless you pass `force`. Removal deletes that work. If you add the repo again, you get back the commits and nothing else. Read the refusal and decide. Do not use force as a reflex. Terminals set to start in the checkout go back to the sandbox default. The answer says so. Use add_repo to get the repo back."
               (toolArgs {
                   let! repo = repo "the repo as owner/name, e.g. \"octocat/hello-world\""
                   and! force = ToolArgs.flag "force" "true to delete uncommitted changes along with the checkout"
@@ -1110,7 +1110,7 @@ module AgentTools =
 
           tool
               "switch_branch"
-              "Switch a repo's checkout to a branch (optionally creating it). Local only — never touches the remote. Everyone in the session sees the switch in the timeline."
+              "Switch a repo's checkout to a branch (optionally creating it). This is local only. It never touches the remote. Everyone in the session sees the switch in the timeline."
               (toolArgs {
                   let! repo = repo "owner/name"
                   and! branch = ToolArgs.text "branch" "the branch to switch to"
@@ -1130,32 +1130,32 @@ module AgentTools =
           tool "repo_log" "The last 30 commits of a repo checkout, one line each." (repo "owner/name")
               (inspectRepo capabilities.Repos.Log >> ok)
 
-          tool "repo_diff" "The uncommitted diff of a repo checkout (capped; use a terminal for the full thing)." (repo "owner/name")
+          tool "repo_diff" "The uncommitted diff of a repo checkout. It is capped. Use a terminal for the full diff." (repo "owner/name")
               (inspectRepo capabilities.Repos.Diff >> ok)
 
           tool
               ToolName.StartWorkSandbox
-              "Ensure a named work sandbox exists for this session, and return it. Returns the running one unchanged when there is one — safe to call every time. What a sandbox is, and which connections (\"github\" lets git push from a terminal) it forwards, is what its repo's yession.yaml or the operator declared for it; each command run there spends the credentials of whoever's turn it is."
-              (ToolArgs.text "name" "the sandbox name, e.g. \"default\" or \"test\"; a repo's is \"owner/repo:name\"")
+              "Make sure that a named work sandbox exists for this session, and return it. If that sandbox runs already, it returns it unchanged. It is safe to call every time. The repo's yession.yaml or the operator declares what the sandbox is. That declaration also sets which connections it forwards (\"github\" lets git push from a terminal). Each command that runs there uses the credentials of whoever's turn it is."
+              (ToolArgs.text "name" "the sandbox name, e.g. \"default\" or \"test\". A repo's sandbox is \"owner/repo:name\"")
               (fun name -> ok (startWorkSandbox capabilities name))
 
           tool
               "stop_work_sandbox"
-              "Stop a named work sandbox, killing anything running in it."
+              "Stop a named work sandbox. This kills anything that runs in it."
               (ToolArgs.text "name" "the sandbox name")
               (fun name -> ok (stopWorkSandbox capabilities name))
 
           tool
               "set_shell_profile"
-              "Say where terminals opened from now on start. Use it once after add_repo, with the path add_repo gave you, so you stop putting `cd` in front of every command — every terminal opened afterwards starts there, yours and the people's, and it survives a restart. It takes a DIRECTORY, not a script (execute_command is still the only way to run anything), and the directory must already exist in that sandbox — this checks and says so rather than opening a terminal nowhere. A path from add_repo or the repos query goes in as given. Omit `cwd` to clear it. Terminals already open keep their directory, except the one your plain execute_command uses, which is reopened for you."
+              "Say where terminals start that open from now on. Use it once after add_repo, with the path that add_repo gave you. Then you do not need `cd` in front of every command. Every terminal opened after this starts there, yours and the people's. The setting survives a restart. It takes a DIRECTORY, not a script. execute_command is still the only way to run anything. The directory must already exist in that sandbox. This tool checks that. If the directory does not exist, the tool says so. It does not open a terminal nowhere. Give a path from add_repo or the repos query as it is. Omit `cwd` to clear the setting. Terminals already open keep their directory. The exception is the terminal that your plain execute_command uses. The session reopens that one for you."
               (toolArgs {
                   // Both optional: an absent `cwd` is the CLEAR, and an absent `sandbox` the
                   // default one — so a bare call puts the default sandbox back as it was.
                   let! cwd =
                       ToolArgs.textOption
                           "cwd"
-                          "a directory the sandbox has, said the way add_repo and the repos query say it, e.g. \"repos/octocat/hello-world\"; omit it to clear the profile"
-                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox this is about; omit for the default one"
+                          "a directory in the sandbox, as add_repo and the repos query give it, e.g. \"repos/octocat/hello-world\". Omit it to clear the profile"
+                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox this is about. Omit it for the default sandbox"
                   return cwd, sandbox
                })
               (fun (cwd, sandbox) -> ok (setShellProfile capabilities sandbox cwd)) ]
