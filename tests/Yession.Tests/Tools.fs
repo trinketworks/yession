@@ -378,7 +378,7 @@ let private sessionTests =
                     { elided None with
                         Status = TerminalCommandRefused (ActorRef.Session, Some TerminalQueueDrain.cannotRunReason)
                         Output = "" }
-            Expect.isFalse (said.Contains "do not try to run it another way") "running it elsewhere is the point"
+            Expect.isFalse (said.Contains "Do not try to run it another way") "running it elsewhere is the point"
         }
 
         // Two invariants, because they fail at different times and their reds mean different
@@ -765,7 +765,7 @@ let private sessionTests =
                     readingTerminal { Text = "boot\n"; Elided = 0; From = 0; Through = 500; Length = 1200; Matched = None }
                 Expect.equal
                     answer
-                    (Ok (ToolAnswer.text "lines 0-500 of 1200 — read on with from: 500\nboot\n"))
+                    (Ok (ToolAnswer.text "lines 0-500 of 1200. To read more, use from: 500\nboot\n"))
                     "where it got to, and how to continue"
             }
 
@@ -793,7 +793,7 @@ let private sessionTests =
                         call "yession" "read_terminal"
                             ("""{"terminal":"t1","wait_for":"x","wait_for_pattern":"y"}"""))
                 match answer with
-                | Error reason -> Expect.stringContains reason "give one" "and says what to do about it"
+                | Error reason -> Expect.stringContains reason "Give only one" "and says what to do about it"
                 | Ok other -> failwithf "expected a refusal, got %A" other
             }
 
