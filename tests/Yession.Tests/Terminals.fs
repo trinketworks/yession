@@ -918,6 +918,30 @@ let private markTests =
             Expect.isEmpty marks3 "a truncated mark is not one yet"
             Expect.equal out3 "x" "and its bracket travels with the fragment"
             Expect.equal carry3 ("\u0001" + (mark "A").Substring (0, 6)) "to be finished by the next chunk"
+
+        testCase "a bash with no readline prints its own bracket literally, and that is stripped too" <| fun () ->
+            // bash's PS1 carries `\[ … \]` around a mark; readline turns that into the
+            // \001/\002 bytes above, but a bash built without readline (nixpkgs' plain
+            // `bash`, as against `bashInteractive`) does not know the escape and leaves
+            // it exactly as written — the two literal characters `\` and `[` (or `]`),
+            // visibly, around every mark on every prompt.
+            let marks, output, carry = scan1 ("out\\[" + mark "D;0" + mark "A" + "\\]")
+            Expect.equal marks [ MarkCommandDone 0; MarkPromptStart ] "both marks are read"
+            Expect.equal output "out" "and neither literal bracket reaches the transcript"
+            Expect.equal carry "" "nothing hangs"
+            let _, foreignOut, _ = scan1 ("\\[" + foreign "A" + "\\]")
+            Expect.equal foreignOut ("\\[" + foreign "A" + "\\]") "a foreign mark keeps its literal brackets, verbatim"
+
+        testCase "a bash bracket split from its mark is carried with it" <| fun () ->
+            // The pty can hand over the `\` in one read and the `[` with the mark in the
+            // next; held back whole, the same way a split `\001` is.
+            let marks1, out1, carry1 = scan3 "" "x\\"
+            Expect.isEmpty marks1 "not a mark yet, not even a bracket yet"
+            Expect.equal out1 "x" "the lone backslash is held back, in case it is one of ours"
+            let marks2, out2, carry2 = scan3 carry1 ("[" + mark "A" + "\\]y")
+            Expect.equal marks2 [ MarkPromptStart ] "the mark arrives whole"
+            Expect.equal out2 "y" "with both brackets gone"
+            Expect.equal carry2 "" "and nothing left hanging"
     ]
 
 /// Which line a prompt answers, and what the shell said before it — the two things a refused

@@ -196,6 +196,18 @@ module Marks =
     /// with it, and a trailing `\001` is carried like a partial prefix. A `\002` split
     /// from its mark by a chunk boundary is the one byte that gets through, and it is
     /// invisible where it lands.
+    ///
+    /// The `bash` dialect's bracket is `\[ … \]` instead — bash's OWN zero-width marker,
+    /// which `PS1`/`PS2` carry as the four literal characters `\`, `[` (or `]`) and which
+    /// bash's prompt expansion turns into the readline bytes above when it has readline
+    /// compiled in. A bash built without it (nixpkgs' plain `bash`, as opposed to
+    /// `bashInteractive`) does not know that escape and leaves it exactly as written —
+    /// proved with a raw pty: `\e` and `\033` still expand, `\[`/`\]` do not — so the two
+    /// characters print, visibly, around every mark on every prompt. Fixed upstream
+    /// (devenv.nix: `pkgs.bashInteractive`) for a shell this repo controls; stripped here
+    /// too, because the same four characters are exactly as much ours to take off as the
+    /// control bytes they would otherwise have become, and a bash we do not control
+    /// (someone's own image, `dialect: bash`) gets no upstream fix at all.
     let scan (nonce: string) (carry: string) (data: string) : Scanned list * string =
         let input = carry + data
         let out = System.Text.StringBuilder ()
@@ -215,13 +227,24 @@ module Marks =
                     // No mark ahead. Everything is output except a trailing fragment that
                     // could still BECOME our prefix once the next chunk arrives.
                     let keepFrom =
-                        let candidate = max index (input.Length - prefix.Length - 1)
+                        let candidate = max index (input.Length - prefix.Length - 2)
                         // The longest suffix that is a proper prefix of `ESC ] 133 ;`, with
-                        // or without the `\001` the sh dialect puts in front of it.
+                        // or without the bracket a dialect puts in front of it: the sh
+                        // dialect's `\001`, or bash's own `\[` (both strip in `walk` once the
+                        // mark behind them is read; see the module doc comment).
                         [ candidate .. input.Length - 1 ]
                         |> List.tryFind (fun i ->
                             let suffix = input.Substring i
-                            let unbracketed = if suffix.StartsWith "\u0001" then suffix.Substring 1 else suffix
+                            let unbracketed =
+                                // A lone trailing `\` is held back too, on the same
+                                // "empty string is a prefix of anything" reasoning as a
+                                // lone `\u0001`: it is exactly the first half of `\[` and
+                                // the rest of the bracket is what the next chunk might
+                                // bring.
+                                if suffix = "\\" then ""
+                                elif suffix.StartsWith "\u0001" then suffix.Substring 1
+                                elif suffix.StartsWith "\\[" then suffix.Substring 2
+                                else suffix
                             prefix.StartsWith unbracketed)
                         |> Option.defaultValue input.Length
                     out.Append (input.Substring (index, keepFrom - index)) |> ignore
@@ -238,12 +261,16 @@ module Marks =
                         | -1, s -> s
                         | b, -1 -> b
                         | b, s -> min b s
-                    // Where the output before this mark ends. A `\001` directly ahead of the
-                    // mark is its readline bracket and travels with it — carried with a
+                    // Where the output before this mark ends. A `\001` (readline) or `\[`
+                    // (bash with no readline, see the module doc comment) directly ahead of
+                    // the mark is its bracket and travels with it — carried with a
                     // truncated one, dropped with one of ours, left as output with a foreign
                     // one — so nothing is appended until the mark has been read.
-                    let bracketed = start > index && input.[start - 1] = '\u0001'
-                    let textEnd = if bracketed then start - 1 else start
+                    let bracketWidth =
+                        if start > index && input.[start - 1] = '\u0001' then 1
+                        elif start - index >= 2 && input.[start - 2] = '\\' && input.[start - 1] = '[' then 2
+                        else 0
+                    let textEnd = start - bracketWidth
                     if terminator < 0 then
                         // Truncated: carry the whole thing, terminator and all, to the next
                         // chunk. Emitting it as output here would leak a half-written mark
@@ -260,7 +287,10 @@ module Marks =
                             scanned.Add (Marked mark)
                             // Ours, so the closing bracket that may follow it is ours too.
                             let after = terminator + width
-                            let after = if after < input.Length && input.[after] = '\u0002' then after + 1 else after
+                            let after =
+                                if after < input.Length && input.[after] = '\u0002' then after + 1
+                                elif after + 1 < input.Length && input.[after] = '\\' && input.[after + 1] = ']' then after + 2
+                                else after
                             walk after
                         | None ->
                             // Not ours. It is output, verbatim — bracket, terminator and all.
