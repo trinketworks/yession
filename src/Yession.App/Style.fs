@@ -3596,6 +3596,19 @@ module Style =
         "absolute inset-x-0 top-0 h-0.5 bg-grad scale-x-0 origin-left transition-transform "
         + "duration-300 ease-out group-focus-within:scale-x-100 motion-reduce:transition-none"
 
+    /// The terminal command band's own edge, spent on a different gesture than the message
+    /// composer's: focus alone lands a caret in the field with nothing written, which a phone
+    /// does on every tap into it, so a focus-within trigger lit the gradient on a glance into
+    /// an empty line. The terminal has a plainer fact to read instead — whether there is a
+    /// command in the line, the same one Run and the lease bar already read (`hasCommand` at
+    /// the call site) — so the edge answers to actually typing, not merely landing a caret.
+    /// One rule still, not two: `active` is read from the model that already decides Run's
+    /// own weight, rather than this element measuring the field a second time.
+    let terminalBandEdge (active: bool) : string =
+        cls [ "absolute inset-x-0 top-0 h-0.5 bg-grad origin-left transition-transform duration-300 ease-out"
+              "motion-reduce:transition-none"
+              if active then "scale-x-100" else "scale-x-0" ]
+
     /// A ROW, since the actions moved into it: the box was 56px of which 40 was a strip under
     /// the text holding a 93px bordered rectangle that said Send and then drew an arrow saying
     /// it again. The verb belongs at the trailing edge of the line you just wrote, which is
@@ -4549,9 +4562,9 @@ module Style =
     /// it be an attribution — people are told apart by their square, never by a colour, and
     /// the byline above carries that square already.
     ///
-    /// The one green `$` left is the live one: the placeholder of the command line itself
-    /// (`terminalCommand`), where a command will actually run. Two tones of one glyph, and
-    /// the difference is exactly the fact — this prompt is a record, that one is live.
+    /// The command line's own placeholder glyph (`terminalCommand`) wears this same weight
+    /// now too, not a louder one: one tone for the prompt wherever it stands, record or live
+    /// edge alike.
     let terminalPrompt = "shrink-0 font-terminal text-code text-ink-faint select-none"
     /// A command breaks where a shell would let you: at its spaces. `anywhere` is the last resort
     /// for a single token wider than the column (a long path), which must wrap rather than push
@@ -4725,12 +4738,19 @@ module Style =
     /// room at the trailing edge for the 44px Run (`btnInField`) — and the message composer
     /// stands at 44 there too (`draftInput`'s `phone:pt-3`).
     ///
-    /// Its `$` is the one GREEN prompt in the pane, and the only one: this is the live edge of
-    /// a live terminal, which is what green says (docs/visual-design.md, Colour). Every
-    /// recorded command's `$` is a mark on a record and wears `ink-faint` (`terminalPrompt`).
+    /// Its placeholder glyph wears ink-faint now, the same weight the message composer's own
+    /// placeholder wears, rather than the GREEN it used to be: every recorded command's prompt
+    /// already wore ink-faint (terminalPrompt above), and this one agrees with it.
+    ///
+    /// h-10 phone:h-11: an explicit height, not left to padding and the line box alone. A
+    /// native input does not size its content box to line-height the way a block element
+    /// does — measured, the padding-and-line-height arithmetic below lands this field 3px
+    /// taller than the message composer's band on a phone (47px against 44) even though both
+    /// compute the same numbers on paper. The height is stated outright so the two never
+    /// drift apart, on either breakpoint, however a browser rounds a form control's box.
     let terminalCommand =
-        cls [ "w-full"; fieldBare
-              "font-terminal text-code text-ink px-3 py-3 pr-10 phone:py-3.5 phone:pr-13 placeholder:text-green"; touchType ]
+        cls [ "w-full h-10 phone:h-11"; fieldBare
+              "font-terminal text-code text-ink px-3 py-3 pr-10 phone:py-3.5 phone:pr-13 placeholder:text-ink-faint"; touchType ]
     /// What sits at the field's trailing edge, inside its border: whoever else has a caret in
     /// this slot, and the verb.
     let terminalCommandTrail = "absolute right-1 inset-y-0 flex items-center gap-1"
