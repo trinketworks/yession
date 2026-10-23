@@ -4474,10 +4474,13 @@ module View =
     /// The way to HAVE the file, wherever it is offered. `download` names it the way a person
     /// knows it, not the way it is addressed: saved from a pinned version the browser would
     /// otherwise write `0003-7f2a91` to disk.
+    /// `target="_blank"` escapes an iOS PWA's standalone shell: the OS routes `download` there to
+    /// QuickLook with no chrome (no Done, no back), trapping the installed app. Opening in a real
+    /// Safari tab instead gives QuickLook its Done/Share button.
     let private contentDownloadLink (ref: ContentRef) : TemplateResult =
         let url = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative (SessionRoute.Content ref))
         html $"""
-            <a class="{Style.paneToolbarAct}" href="{url}" download="{ContentName.ofRef ref}"
+            <a class="{Style.paneToolbarAct}" href="{url}" download="{ContentName.ofRef ref}" target="_blank"
                data-content-download="{ContentRef.value ref}">{Dom.Text.download}</a>"""
 
     let private paneContentView (ref: ContentRef) : TemplateResult =
