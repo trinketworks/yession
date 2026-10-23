@@ -788,7 +788,9 @@ module Dom =
         /// it on a button, in the sentence case the other actions use. One phrase either
         /// way, because it is one thing to do.
         let signInAgain = "Sign in again"
-        let signInAgainStatus = "sign in again"
+        /// The agent's standing says the same state with the same word, on the Manager's
+        /// roster and in this page's header.
+        let signInAgainStatus = Yession.Domain.Standings.AgentStatus.signInAgain
         /// What a dead credential COSTS, on the prompt over the timeline. The button beside
         /// it already says what to do; this says why doing it matters, which is the half a
         /// status word and a button cannot carry between them.

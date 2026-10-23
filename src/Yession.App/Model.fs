@@ -4579,6 +4579,34 @@ module ClientModel =
                 | None -> None)
         | _ -> []
 
+    /// Whether a Claude credential this person can see wants signing in again. The sidebar's
+    /// agent row and the header's agent standing both ask it, so it is asked here once.
+    let claudeNeedsSignIn (model: ClientModel) : bool =
+        match model.Claude.Status with
+        | Some panel ->
+            [ panel.MineCredential; panel.SessionCredential ]
+            |> List.exists (fun credential ->
+                credential |> Option.map (fun c -> c.SignInRequired.IsSome) |> Option.defaultValue false)
+        | None -> false
+
+    /// Where this session stands, as the header says it: its agent, then its pull requests —
+    /// the order the session reports them to the Manager in, under the same rule
+    /// (`AgentStatus`, `PrStatus.summary`), from the facts this page already holds.
+    ///
+    /// No agent standing before the Claude panel has said anything: whether an agent can run
+    /// at all is the one input the page cannot know until then, and "waiting" over a session
+    /// that cannot answer would be the wrong word for a moment rather than none.
+    let standings (model: ClientModel) : Standings.Standing list =
+        let agent =
+            model.Claude.Status
+            |> Option.map (fun panel ->
+                Standings.AgentStatus.standing
+                    { TurnRunning = Option.isSome model.Agent.ActiveTurn
+                      BusyTerminals = Projection.awaitedByAgent model.Terminals
+                      NoAgent = not panel.AgentAvailable
+                      SignInRequired = panel.AgentAvailable && claudeNeedsSignIn model })
+        Option.toList agent @ Option.toList (PrStatus.summary (prStandings model))
+
     /// What a pull-request watch puts in front of the tab name, for somebody who is not
     /// looking at this tab at all — the only surface that reaches them there.
     ///
@@ -4595,14 +4623,21 @@ module ClientModel =
     ///
     /// The warning wins, because a tab can only say one thing and the one that needs a
     /// person is the one that has stopped moving.
+    ///
+    /// The agent adds one case to the warning and no other: its standing at `ToneBad`, which
+    /// is a sign-in nobody but a person can give. Working, waiting and running a command are
+    /// the agent getting on with it, which is the red suite's reason again.
     let private tabSignal (model: ClientModel) : string =
-        let standings = prStandings model
+        let prs = prStandings model
         // No `live` filter on these two: a watch that stalled or cannot be read is by
         // construction still owed, so asking would be asking a question with one answer.
         let stopped =
-            standings |> List.exists (fun (_, word) -> word = "stalled" || word = PrStatus.unreachable)
-        if stopped then "⚠ "
-        elif standings |> List.exists (fun (_, word) -> word = "merged") then "✓ "
+            prs |> List.exists (fun (_, word) -> word = "stalled" || word = PrStatus.unreachable)
+        let agentStuck =
+            standings model
+            |> List.exists (fun s -> s.Facet = Standings.AgentStatus.facet && s.Tone = ToneBad)
+        if stopped || agentStuck then "⚠ "
+        elif prs |> List.exists (fun (_, word) -> word = "merged") then "✓ "
         else ""
 
     /// What the browser tab is called: the session's own title, falling back to its id, and

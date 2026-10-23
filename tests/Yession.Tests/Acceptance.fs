@@ -1998,6 +1998,35 @@ let private uiChecklistTests =
             let none = Support.render representativeModel
             Expect.isFalse (none.Contains "data-pr-strip") "and a session watching nothing says nothing"
 
+        // The agent's standing rides beside the pull requests' line, under the rule the
+        // Manager is sent (`AgentStatus`), read off what this page already holds.
+        testCase "the header says what the agent is doing" <| fun () ->
+            let said (model: ClientModel) =
+                let html = Support.render model
+                let start = html.IndexOf "data-agent-standing"
+                Expect.isTrue (start > 0) "the agent's standing renders"
+                let dotEnd = html.IndexOf ("</span>", start)
+                html.Substring (start, html.IndexOf ("</span>", dotEnd + 1) - start)
+            let noTurn = { representativeModel with Agent = { representativeModel.Agent with ActiveTurn = None } }
+            let connected = noTurn |> withClaudePanel (fun panel -> { panel with AgentAvailable = true })
+            Expect.stringContains (said connected) "waiting" "idle is the ball with the people"
+            Expect.stringContains (said { connected with Agent = representativeModel.Agent }) "working" "a turn is work"
+            Expect.stringContains (said noTurn) "no agent" "and a session nothing can answer says so"
+
+        // A phone has room for one, so it gets the one that wants a person most; a wide
+        // screen gets them all, worst first.
+        testCase "a phone's header shows only the worst standing" <| fun () ->
+            let model =
+                { (withPullRequests [ prRow 377 "conflicted" (CellStatus ("ok", ToneMuted)) ]) with
+                    Agent = { representativeModel.Agent with ActiveTurn = None } }
+                |> withClaudePanel (fun panel -> { panel with AgentAvailable = true })
+            let html = Support.render model
+            Expect.equal (occurrences "data-phone-shows" html) 1 "one standing for a phone"
+            let phone, prs, agent =
+                html.IndexOf "data-phone-shows", html.IndexOf "data-pr-strip", html.IndexOf "data-agent-standing"
+            Expect.isTrue (agent > 0 && prs > 0) "both are in the band"
+            Expect.isTrue (phone < prs && prs < agent) "the conflicted pull request first, and it is the phone's"
+
         // The one rule the strip applies that the rows do not state outright, and the reason
         // it reads the status cell's TONE rather than its sentence: the words in a health
         // line belong to a provider and change with it.
@@ -2328,6 +2357,19 @@ let private uiChecklistTests =
                     withPullRequests [ prRow 377 "queued" (CellStatus ("github rejected this credential", ToneBad)) ]))
                 "⚠ planning the launch · yession"
                 "and a watch nobody can read has stopped moving too"
+
+        // The one agent state nobody but a person can end. Working and waiting are the agent
+        // getting on with it, for the red suite's reason.
+        testCase "a tab warns when the agent cannot run until somebody signs in again" <| fun () ->
+            let needing = Some { Kind = StaticConnection; SignInRequired = Some "token expired" }
+            let stuck =
+                { representativeModel with Agent = { representativeModel.Agent with ActiveTurn = None } }
+                |> withClaudePanel (fun panel -> { panel with MineCredential = needing; AgentAvailable = true })
+            Expect.equal (ClientModel.tabTitle stuck) "⚠ planning the launch · yession" "a sign-in only a person can give"
+            Expect.equal
+                (ClientModel.tabTitle { stuck with Agent = representativeModel.Agent })
+                "planning the launch · yession"
+                "a running turn proves the agent can run"
 
         testCase "a tab ticks when something merged, until the watch goes away" <| fun () ->
             Expect.equal
