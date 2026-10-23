@@ -338,7 +338,7 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
 /// `archived` was a door with no window, opened to find out — and it is the honest total for
 /// the state, not the number of rows on screen. Beside it, off-screen, the state the chip is
 /// in ("shown" / "hidden"): a link's name should say what following it does, and a lit chip
-/// differs from an unlit one by a border step nothing but an eye can read. Not `aria-current`,
+/// differs from an unlit one by a ground step nothing but an eye can read. Not `aria-current`,
 /// which names THE current item of a set and was being claimed by two chips at once.
 ///
 /// The last lit chip is not a control. `SessionQuery.toggling` has nowhere for it to go — a
@@ -354,7 +354,10 @@ let private filterChip (query: SessionQuery) (count: int) (state: ArchiveState) 
         match state with
         | Active -> "active", "show-active"
         | Archived -> "archived", "show-archived"
-    let face = if shown then Style.filterChipOn else Style.filterChipOff
+    let face =
+        if shown then Style.filterChipOn
+        elif count = 0 then Style.filterChipEmpty
+        else Style.filterChipOff
     let standing = if shown then "shown" else "hidden"
     let label =
         html $"""{word}<span class="{Style.filterChipCount}">{count}</span><span class="sr-only">, {standing}</span>"""

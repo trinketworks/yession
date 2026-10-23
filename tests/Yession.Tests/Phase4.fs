@@ -957,8 +957,8 @@ let private uiRenderTests =
             Expect.isTrue ((chip "show-active").EndsWith ">1") "one active"
             Expect.isTrue ((chip "show-archived").EndsWith ">1") "one archived, though none is on screen"
 
-        // A lit chip differs from an unlit one by a border step. The state has to be in the
-        // link's text too, for anything that cannot see the border.
+        // A lit chip differs from an unlit one by a ground step. The state has to be in the
+        // link's text too, for anything that cannot see the ground.
         testCase "each filter says in words whether its state is shown" <| fun () ->
             let table = ManagerUi.sessionsTable SessionQuery.defaults oneOfEach
             Expect.isTrue (table.Contains "active<span") "the word leads"
