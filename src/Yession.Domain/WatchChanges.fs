@@ -49,7 +49,7 @@ module Lateness =
 
     /// What a change's sentence gains when it was noticed late.
     let phrase (late: TimeSpan) : Phrase =
-        [ Segment.Text (sprintf " — happened %s before it was noticed" (Elapsed.describe late)) ]
+        [ Segment.Text (sprintf " (happened %s before it was noticed)" (Elapsed.describe late)) ]
 
     /// How late a recorded event was noticed, when it keeps the watch contract and was.
     let ofEnvelope (envelope: EventEnvelope<SessionEvent>) : TimeSpan option =

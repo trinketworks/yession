@@ -6506,7 +6506,7 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-pane-preview-close]")
                 let fact = "#shell [data-terminal-block='block-killed-memory'] [data-terminal-block-memory='machine']"
                 do! waitVisible "the block's word on what ran out of memory" page fact
-                do! Wait.until "the block to name the cause" (fun () -> Read.text page fact) (Option.exists (fun t -> t.Contains "the machine ran out of memory"))
+                do! Wait.until "the block to name the cause" (fun () -> Read.text page fact) (Option.exists (fun t -> t.Contains "the machine had no free memory"))
             }
 
         // A command and its status share a line only while the command keeps the line. With

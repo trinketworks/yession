@@ -206,7 +206,7 @@ module Act =
         | Act.SessionResumed _
         | Act.SessionStarted _ -> []
 
-    /// The whole account as ONE sentence: headline, then the particulars after an em-dash,
+    /// The whole account as ONE sentence: headline, then the particulars in parentheses,
     /// semicolon-joined. This is the composition every reader that is not a screen gets
     /// (`ConversationItem.said`), and the one a screen shows a person who asks what the
     /// agent was told — the same phrase, so the two cannot drift by a character. The seam
@@ -219,7 +219,7 @@ module Act =
                 particulars
                 |> List.mapi (fun i p -> if i = 0 then p else Segment.Text "; " :: p)
                 |> List.concat
-            phrase act @ (Segment.Text " — " :: joined)
+            phrase act @ (Segment.Text " (" :: joined) @ [ Segment.Text ")" ]
 
     /// How a run of work counts this act: the verb, and the noun once and many times over —
     /// "edited 1 file", "edited 3 files". A run that holds tool calls and acts together

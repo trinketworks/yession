@@ -287,7 +287,7 @@ let private sessionTests =
             let said =
                 AgentTools.renderOutcome
                     { elidedAs OutputEnd.Whole None with Status = TerminalCommandRan (CommandKilledForMemory MachineOutOfMemory); Output = "" }
-            Expect.stringContains said "the machine ran out of memory" "the cause was outside the sandbox"
+            Expect.stringContains said "the machine had no free memory" "the cause was outside the sandbox"
         }
 
         test "a command still running is told it can be typed into" {
@@ -1298,7 +1298,7 @@ let private editTests =
 
         test "text that is not there is a miss the model is told to re-read for" {
             Expect.equal (FileEdit.apply "abc" "zzz" "y" false) (Error EditFailure.NotFound) "not found"
-            Expect.stringContains (FileEdit.describe "f" EditFailure.NotFound) "read the file again" "and the next move is named"
+            Expect.stringContains (FileEdit.describe "f" EditFailure.NotFound) "Read the file again" "and the next move is named"
         }
 
         test "an edit that changes nothing is refused rather than counted as done" {

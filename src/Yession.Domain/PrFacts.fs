@@ -41,7 +41,7 @@ module PrDraft =
         let trimmed = raw.Trim ()
         if trimmed = "" then Error (sprintf "a pull request needs a %s branch" which)
         elif trimmed |> Seq.exists Char.IsWhiteSpace then
-            Error (sprintf "'%s' is not a branch name — a %s branch has no spaces in it" trimmed which)
+            Error (sprintf "'%s' is not a branch name. A %s branch has no spaces in it" trimmed which)
         else Ok trimmed
 
     /// Assemble one. The refusals here are the ones that are true of a pull request rather
@@ -64,7 +64,7 @@ module PrDraft =
             | _, Error e -> Error e
             | Ok head, Ok onto ->
                 if head = onto then
-                    Error (sprintf "the head and the base are both %s — there would be nothing to merge" head)
+                    Error (sprintf "the head and the base are both %s. There would be nothing to merge" head)
                 else
                     Ok
                         { Repo = repo
@@ -101,7 +101,7 @@ module PrMergeMethod =
         | "squash" -> Ok Squash
         | "merge" -> Ok MergeCommit
         | "rebase" -> Ok Rebase
-        | other -> Error (sprintf "'%s' is not a merge method — squash, merge or rebase" other)
+        | other -> Error (sprintf "'%s' is not a merge method. Use squash, merge or rebase" other)
 
     let render (method: PrMergeMethod) : string =
         match method with
@@ -148,7 +148,7 @@ module PrQuery =
             | Some "closed" -> Ok PrListState.Closed
             | Some "merged" -> Ok PrListState.Merged
             | Some "all" -> Ok PrListState.All
-            | Some other -> Error (sprintf "'%s' is not a pull request state — open, closed, merged or all" other)
+            | Some other -> Error (sprintf "'%s' is not a pull request state. Use open, closed, merged or all" other)
         let limit =
             match limit with
             | None -> Ok defaultLimit
@@ -434,7 +434,7 @@ module PrWatched =
         | CredentialFor.Deployment ->
             Error (
                 sprintf
-                    "%s cannot be watched on the deployment's own credential — a watch keeps looking as somebody, and wakes them"
+                    "%s cannot be watched on the deployment's own credential. A watch keeps looking as somebody. It wakes them"
                     (PrRef.render pr))
 
     let create (messageId: MessageId) (authority: Authority) (pr: PrRef) (initial: PrSnapshot) : Result<PrWatched, string> =

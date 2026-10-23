@@ -115,7 +115,7 @@ module UploadId =
         if s <> "" && s.Length <= 64
            && String.forall (fun c -> (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c = '-') s then
             Ok (UploadId s)
-        else Error "an upload id is 1 to 64 letters, digits and '-'"
+        else Error "an upload id has 1 to 64 characters. Each is a letter, a digit or '-'"
     let value (UploadId s) = s
 
 type MessageId = private MessageId of string
@@ -624,7 +624,7 @@ module SandboxName =
             elif not (startOk name.[0]) then
                 Error (sprintf "'%s' is not a sandbox name (it must start with a lowercase letter or digit)" name)
             elif name |> Seq.forall charOk then Ok (SandboxName name)
-            else Error (sprintf "'%s' is not a sandbox name (lowercase letters, digits, '-' and '_' only)" name)
+            else Error (sprintf "'%s' is not a sandbox name. Use only lowercase letters, digits, '-' and '_'" name)
 
     let value (SandboxName name) = name
 
@@ -649,7 +649,7 @@ module ResourceName =
             elif not (startOk name.[0]) then
                 Error (sprintf "'%s' is not a resource name (it must start with a lowercase letter or digit)" name)
             elif name |> Seq.forall charOk then Ok (ResourceName name)
-            else Error (sprintf "'%s' is not a resource name (lowercase letters, digits, '-' and '_' only)" name)
+            else Error (sprintf "'%s' is not a resource name. Use only lowercase letters, digits, '-' and '_'" name)
 
     let value (ResourceName name) = name
 
@@ -756,7 +756,7 @@ module SandboxRef =
         // forgot the name. Said as that, because the name branch below would otherwise
         // refuse the `/` as a bad character, which is true and beside the point.
         | [| repo |] when repo.Contains '/' ->
-            Error (sprintf "'%s' is a repo, not a sandbox; a repo's sandbox is 'owner/repo:name'" trimmed)
+            Error (sprintf "'%s' is a repo, not a sandbox. A repo's sandbox is 'owner/repo:name'" trimmed)
         | [| name |] -> SandboxName.create name |> Result.map (fun n -> SandboxRef (SessionOwned, n))
         | [| repo; name |] ->
             RepoRef.create repo
@@ -792,6 +792,6 @@ module McpServerName =
             elif name.StartsWith "_" || name.EndsWith "_" then
                 Error (sprintf "'%s' is not a server name (no leading or trailing underscore)" name)
             elif name |> Seq.forall charOk then Ok (McpServerName name)
-            else Error (sprintf "'%s' is not a server name (lowercase, digits and underscore only)" name)
+            else Error (sprintf "'%s' is not a server name. Use only lowercase letters, digits and underscores" name)
 
     let value (McpServerName name) = name

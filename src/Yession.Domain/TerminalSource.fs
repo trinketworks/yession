@@ -146,7 +146,7 @@ module StreamOffer =
         let url = offer.Ticket.Url
         let scheme = url.ToLowerInvariant ()
         if not (scheme.StartsWith "ws://" || scheme.StartsWith "wss://") then
-            Error (sprintf "a stream url must be ws:// or wss://, and this one is '%s'" url)
+            Error (sprintf "a stream url must be ws:// or wss://. This one is '%s'" url)
         elif url.Contains "@" then
             Error "a stream url may not carry credentials"
         else
@@ -155,7 +155,7 @@ module StreamOffer =
             | Some offered, Some declared ->
                 Error (
                     sprintf
-                        "this server is declared at %s and offered a stream on %s; a stream from another host is an operator's declaration, not a tool's answer"
+                        "this server is declared at %s and offered a stream on %s. A stream from another host is an operator's declaration, not a tool's answer"
                         declared
                         offered)
             | _ -> Error (sprintf "'%s' is not a url this session can dial" url)

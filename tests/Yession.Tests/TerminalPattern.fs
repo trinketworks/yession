@@ -119,7 +119,7 @@ let tests =
             | Ok answer -> failwithf "expected the budget to stop it, got %b" answer
             | Error fault ->
                 Expect.stringContains fault "linear" "it names the property that was broken"
-                Expect.stringContains fault "the matcher was" "and says whose fault it is"
+                Expect.stringContains fault "The fault is in the matcher" "and says whose fault it is"
 
         testCase "a budget the simulation can live within answers normally" <| fun () ->
             // The other half: a guard that fired early would turn every honest match into a

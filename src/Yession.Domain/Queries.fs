@@ -38,7 +38,7 @@ module QueryName =
             elif name.StartsWith "_" || name.EndsWith "_" then
                 Error (sprintf "'%s' is not a query name (no leading or trailing underscore)" name)
             elif name |> Seq.forall charOk then Ok (QueryName name)
-            else Error (sprintf "'%s' is not a query name (lowercase, digits and underscore only)" name)
+            else Error (sprintf "'%s' is not a query name. Use only lowercase letters, digits and underscores" name)
 
     let value (QueryName name) = name
 
@@ -253,7 +253,7 @@ module QueryDef =
             | Fields columns ->
                 sprintf "Answers with one record: %s." (columns |> List.map (fun c -> c.Label) |> String.concat ", ")
             | Rows columns ->
-                sprintf "Answers with zero or more rows of: %s." (columns |> List.map (fun c -> c.Label) |> String.concat ", ")
+                sprintf "Answers with zero or more rows. Each row has: %s." (columns |> List.map (fun c -> c.Label) |> String.concat ", ")
         // The legend follows the shape because it is about the values rather than the
         // question — a model that has decided to call this still has to read the answer.
         // One sentence per entry, ended by its own full stop rather than joined by a
@@ -264,7 +264,7 @@ module QueryDef =
             | [] -> ""
             | entries ->
                 entries
-                |> List.map (fun (shape, meaning) -> sprintf "%s — %s." shape meaning)
+                |> List.map (fun (shape, meaning) -> sprintf "%s means %s." shape meaning)
                 |> String.concat " "
                 |> sprintf " How to read the values: %s"
         sprintf "%s %s Read-only.%s" def.Description shape legend

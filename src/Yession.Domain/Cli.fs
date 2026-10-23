@@ -322,7 +322,7 @@ let rec private walk (spec: Spec) (hits: Hit list) (rest: string list) : Result<
     // `--` introduces bare words, and no bin here takes one — so it is refused as the
     // separator it is, rather than reported as an option nobody declared.
     | [] -> Ok (List.rev hits)
-    | "--" :: _ -> refuse "-- introduces bare words, and no bin here takes one"
+    | "--" :: _ -> refuse "-- introduces bare words. No bin here takes a bare word"
     | token :: rest when token.StartsWith "--" ->
         let name, inlineValue = splitAtEquals (token.Substring 2)
         match longNamed spec name with
@@ -330,13 +330,13 @@ let rec private walk (spec: Spec) (hits: Hit list) (rest: string list) : Result<
         | Some opt ->
             match opt.Takes, inlineValue with
             | Nothing _, Some _ ->
-                refuse (sprintf "--%s is a switch: it is given or not, and takes no value" name)
+                refuse (sprintf "--%s is a switch and takes no value. A switch is given or not given" name)
             | Nothing _, None -> walk spec ({ Of = opt; Value = None } :: hits) rest
             | AValue _, Some given -> walk spec ({ Of = opt; Value = Some given } :: hits) rest
             | AValue (placeholder, _), None ->
                 match rest with
                 | given :: rest -> walk spec ({ Of = opt; Value = Some given } :: hits) rest
-                | [] -> refuse (sprintf "--%s takes a value, and was given none: --%s <%s>" name name placeholder)
+                | [] -> refuse (sprintf "--%s takes a value. No value was given. Write --%s <%s>" name name placeholder)
     // A short group is its letters, each a switch — see `Takes` for why there is no other
     // kind of short to consider here.
     | token :: rest when token.StartsWith "-" && token.Length > 1 ->
@@ -348,7 +348,7 @@ let rec private walk (spec: Spec) (hits: Hit list) (rest: string list) : Result<
                 | Some opt -> shorts ({ Of = opt; Value = None } :: hits) letters
                 | None -> refuse (sprintf "unknown option -%c" letter)
         shorts hits (List.ofSeq (token.Substring 1))
-    | token :: _ -> refuse (sprintf "%s is not an option, and no bin here takes a bare word" token)
+    | token :: _ -> refuse (sprintf "%s is not an option. No bin here takes a bare word" token)
 
 /// What the operator WROTE, before any option's vocabulary has had a say: each option they
 /// gave, with the values they gave it, in declaration order.
@@ -374,7 +374,7 @@ let private tokenised (spec: Spec) (args: string array) : Result<Given, string> 
         // kept above rather than folded into a map that keeps the last.
         match given |> List.tryFind (fun (opt, vs) -> not (repeatable opt) && List.length vs > 1) with
         | Some (opt, vs) ->
-            Error (complaint spec (sprintf "--%s was given %d times, and takes one value" opt.Long (List.length vs)))
+            Error (complaint spec (sprintf "--%s was given %d times. It takes one value" opt.Long (List.length vs)))
         | None -> Ok given
 
 /// Every declared option's vocabulary, run. Over every DECLARED option rather than every

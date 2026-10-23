@@ -1109,7 +1109,7 @@ let private timelineTests =
             | [ item ] ->
                 Expect.equal
                     (ConversationItem.said item)
-                    "pushed to github:octo/hello for user:ada — holding the terminal"
+                    "pushed to github:octo/hello for user:ada (holding the terminal)"
                     "whose, where, and that it was typed rather than queued"
             | other -> failwithf "expected one note, got %A" other
 

@@ -33,7 +33,7 @@ module SandboxBackend =
         | "host" -> Ok HostBackend
         | "srt" -> Ok SrtBackend
         | "docker" -> Ok DockerBackend
-        | other -> Error (sprintf "unknown sandbox backend '%s' (expected host, srt, or docker)" other)
+        | other -> Error (sprintf "unknown sandbox backend '%s'. Expected host, srt or docker" other)
 
     let describe (backend: SandboxBackend) : string =
         match backend with
@@ -47,7 +47,7 @@ module SandboxBackend =
     let parseAgent (raw: string) : Result<SandboxBackend, string> =
         parse raw
         |> Result.bind (function
-            | DockerBackend -> Error "docker is a work-sandbox backend only — the agent sandbox is host or srt"
+            | DockerBackend -> Error "docker is a backend for the work sandbox only. The agent sandbox is host or srt"
             | backend -> Ok backend)
 
 /// Whether a sandbox confines the FILESYSTEM at all. Egress, env and process
@@ -419,9 +419,9 @@ module MemoryWatch =
             | Some kill -> Ok (SandboxKilledForMemory kill)
             | None -> Ok run
         | SandboxExited code, Error reason, _ when code = CommandResult.sigkillExit ->
-            Error (sprintf "exit %d, and the counters before it could not be read: %s" code reason)
+            Error (sprintf "exit %d. The counters before it could not be read: %s" code reason)
         | SandboxExited code, _, Error reason when code = CommandResult.sigkillExit ->
-            Error (sprintf "exit %d, and the counters after it could not be read: %s" code reason)
+            Error (sprintf "exit %d. The counters after it could not be read: %s" code reason)
         | _ -> Ok run
 
     /// `spawn`, with every process it starts watched. The first read starts before the
@@ -558,20 +558,20 @@ module SandboxVerification =
             let readable (path: string) =
                 { What = sprintf "%s cannot be read" path
                   Probe = sprintf "test -r %s" (quoted path)
-                  Because = "it was granted to this sandbox, and something that was granted and is not held is the fault this check exists for" }
+                  Because = "It was granted to this sandbox. A grant that is not held is the fault this check exists for." }
             [ match home with
               | Some path ->
                   yield writable "the sandbox's home" path
-                            "every toolchain keeps state under $HOME, and a tool given a home it cannot touch fails where a tool given none would have fallen back"
+                            "Every toolchain keeps state under $HOME. A tool given a home it cannot touch fails where a tool given none would have fallen back."
               | None -> ()
               match tmp with
               | Some path ->
                   yield writable "the sandbox's temporary directory" path
-                            "anything that writes a temporary file — a compiler, an archive tool, a package manager — writes here"
+                            "Anything that writes a temporary file writes here. Examples are a compiler, an archive tool and a package manager."
               | None -> ()
               for path in policy.WritePaths do
                   yield writable "a granted path" path
-                            "it was granted writable, and a grant that is not held is the fault this check exists for"
+                            "It was granted writable. A grant that is not held is the fault this check exists for."
               // Read paths after the writable ones, because everything writable is also
               // readable and a read that fails on a path that could not be written says the
               // less useful half of the same thing.
@@ -612,10 +612,10 @@ module SandboxVerification =
         match System.Int32.TryParse said with
         | true, index when index >= 0 && index < List.length checks ->
             let check = List.item index checks
-            sprintf "%s — %s. Nothing after that was checked." check.What check.Because
+            sprintf "%s. %s Nothing after that was checked." check.What check.Because
         | _ ->
             sprintf
-                "a start-up check failed and did not say which: %s"
+                "a start-up check failed without saying which: %s"
                 (if said = "" then "it printed nothing" else said)
 
 /// One confined place to run processes. Created by, and dying with, its session.

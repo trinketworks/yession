@@ -160,7 +160,7 @@ module ContainerMemory =
         let digits = text |> Seq.takeWhile Char.IsDigit |> Seq.length
         let number, unit = text.Substring (0, digits), text.Substring(digits).Trim ()
         let refuse () =
-            Error (sprintf "memory: '%s' is not a size — a whole number and an optional unit (b, k, m, g), like 4g" raw)
+            Error (sprintf "memory: '%s' is not a size. Write a whole number with an optional unit, like 4g. The units are b, k, m and g" raw)
         let scale =
             if unit = "" then Some 1L
             else units |> List.tryFind (fun (u, _) -> u = unit) |> Option.map snd
@@ -210,7 +210,7 @@ module ContainerMemory =
         | Some (ContainerMemory b) when b > daemonTotal ->
             Error (
                 sprintf
-                    "the container declares memory: %s, and the docker daemon has %s in all — a ceiling the host runs out before reaching contains nothing. Give the daemon more memory (Colima: `colima start --memory <GiB>`) or declare less"
+                    "the container declares memory: %s. The docker daemon has %s in all. The host exhausts its memory before it reaches that ceiling. So the ceiling contains nothing. Give the daemon more memory (Colima: `colima start --memory <GiB>`). As an alternative, declare less"
                     (render (ContainerMemory b))
                     (describe daemonTotal))
         | Some declared -> Ok declared
@@ -242,7 +242,7 @@ module OomScoreAdj =
         if n < 0 || n > 1000 then
             Error (
                 sprintf
-                    "oom-score-adj: %d is not from 0 to 1000 — a sandbox can make its processes a more likely OOM victim, not a less likely one than the daemon's own"
+                    "oom-score-adj: %d is not from 0 to 1000. A sandbox can make its processes a more likely OOM victim. It cannot make them a less likely victim than the daemon's own"
                     n)
         else Ok (OomScoreAdj n)
 
@@ -271,7 +271,7 @@ module PidsLimit =
     /// Docker reads 0 and below as no limit, so they are refused, not passed through:
     /// a limit that is not a limit must not look like one.
     let ofInt (n: int) : Result<PidsLimit, string> =
-        if n < 1 then Error (sprintf "pids-limit: %d is not a limit — write a number of processes, 1 or more" n)
+        if n < 1 then Error (sprintf "pids-limit: %d is not a limit. Write a number of processes, 1 or more" n)
         else Ok (PidsLimit n)
 
     /// What a container is created with: what it declared, or `standard`. Never docker's
@@ -329,7 +329,7 @@ module CgroupParent =
         | Some (CgroupParent path) when driver = "systemd" && not (path.EndsWith ".slice") ->
             Error (
                 sprintf
-                    "the container declares cgroup-parent: %s, and the docker daemon uses the systemd cgroup driver, which takes only a slice name, like yession.slice. A bare name, like yession, works under both drivers"
+                    "the container declares cgroup-parent: %s. The docker daemon uses the systemd cgroup driver. That driver takes only a slice name, like yession.slice. A bare name (like yession) works under both drivers"
                     path)
         | declared -> Ok declared
 
@@ -477,7 +477,7 @@ module SandboxRuntime =
         | RepoOwned repo, Confinement ->
             Error (
                 sprintf
-                    "a repo's work sandbox is a container, and %s declares none — add a `container:` block (an image, or a build) to its yession.yaml"
+                    "a repo's work sandbox is a container. %s declares no container. Add a `container:` block to its yession.yaml. The block holds an image or a build"
                     (RepoRef.value repo))
         | scope, _ -> Ok (scopedBackend configured scope)
 
@@ -501,7 +501,7 @@ module HomePath =
         let path = raw.Trim ()
         if path = "" then Error "a seeded file needs a path inside the sandbox's home"
         elif path.StartsWith "/" then
-            Error (sprintf "'%s' is an absolute path; a seeded file is written inside the sandbox's own home, so name it relative to that" path)
+            Error (sprintf "'%s' is an absolute path. A seeded file is written inside the sandbox's own home. Name it relative to that home" path)
         elif path.Contains "\\" then
             Error (sprintf "'%s' uses a backslash; paths here are separated by '/' on every platform" path)
         elif path.EndsWith "/" then

@@ -46,7 +46,7 @@ module ViewRef =
     /// reads this is an agent that has to get it right on the next try.
     let read (raw: string) : Result<ViewRef, string> =
         let trimmed = raw |> Option.ofObj |> Option.map (fun r -> r.Trim ()) |> Option.defaultValue ""
-        if trimmed = "" then Error "name something to show: a file as file:///artifacts/<name>, or a terminal as terminal:<id>"
+        if trimmed = "" then Error "name something to show. Name a file as file:///artifacts/<name>. Name a terminal as terminal:<id>"
         elif trimmed.StartsWith terminalPrefix then
             TerminalId.create (trimmed.Substring terminalPrefix.Length) |> Result.map ViewingTerminal
         else

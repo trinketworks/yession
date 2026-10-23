@@ -69,7 +69,7 @@ module ToolStreams =
 
     let private opened (id: TerminalId) =
         sprintf
-            "Opened as terminal %s — people in this session can see it and type into it."
+            "Opened as terminal %s. People in this session can see it and type into it."
             (TerminalId.value id)
 
     /// The session's stream attacher. The url→terminal map lives here, for the SESSION,

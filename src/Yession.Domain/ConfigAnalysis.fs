@@ -100,7 +100,7 @@ module Analyzers =
                       Finding.Path = KeyPath.sandbox name @ [ KeyStep.Key "wants"; KeyStep.Index index ]
                       Finding.Message =
                         sprintf
-                            "'%s' is under both uses and wants: uses already requires it, so this want says nothing — keep the one you mean (uses refuses on a host that does not offer it, wants does not)"
+                            "'%s' is under both uses and wants. uses already requires it. This want says nothing. Keep the one you mean. uses refuses on a host that does not offer it. wants does not refuse there"
                             (ResourceName.value wanted) }))
 
     /// Each variable a declaration sets, with where it is written.
@@ -136,7 +136,7 @@ module Analyzers =
                           Finding.Path = path
                           Finding.Message =
                             sprintf
-                                "%s sends HTTPS through the credential proxy, and nothing here trusts the proxy's authority — a client that trusts only its image's roots refuses every host the proxy answers; add SSL_CERT_FILE: ${proxy.ca-file}, or ${proxy.ca-dir} composed into SSL_CERT_DIR"
+                                "%s sends HTTPS through the credential proxy. Nothing here trusts the proxy's authority. A client that trusts only its image's roots refuses every host the proxy answers. Add SSL_CERT_FILE: ${proxy.ca-file}. As an alternative, compose ${proxy.ca-dir} into SSL_CERT_DIR"
                                 variable }))
 
     /// A token lent with no proxy URL beside it. A stand-in is worth something only on its way
@@ -159,7 +159,7 @@ module Analyzers =
                                   Finding.Path = path
                                   Finding.Message =
                                     sprintf
-                                        "%s is lent a stand-in for %s, which is worth something only through the credential proxy — in a container or on the host, add HTTPS_PROXY: ${proxy.https} (srt reaches the proxy without it)"
+                                        "%s is lent a stand-in for %s. The stand-in is worth something only through the credential proxy. A sandbox in a container needs HTTPS_PROXY: ${proxy.https}. A sandbox on the host needs it too. Under srt, the sandbox reaches the proxy without it"
                                         variable
                                         (ConnectionName.value connection) }
                         | _ -> None))
@@ -184,7 +184,7 @@ module Analyzers =
                               Finding.Path = path
                               Finding.Message =
                                 sprintf
-                                    "%s is the proxy's authority directory and nothing else, which holds that one authority — every other host's certificate would fail; compose it over what is there (${env.%s}:${proxy.ca-dir}), or use ${proxy.ca-file}, which carries every root"
+                                    "%s is the proxy's authority directory and nothing else. That directory holds only the proxy's authority. Every other host's certificate would fail. Compose it over what is there (${env.%s}:${proxy.ca-dir}). As an alternative, use ${proxy.ca-file}. It carries every root"
                                     variable
                                     variable }
                     | _ -> None))

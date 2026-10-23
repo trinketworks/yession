@@ -85,7 +85,7 @@ module FileSlice =
                 sprintf "%s lines %d-%d of %d" path slice.From slice.Through slice.Total
             else
                 sprintf
-                    "%s lines %d-%d of %d — read on with offset: %d"
+                    "%s lines %d-%d of %d. To read more, use offset: %d"
                     path
                     slice.From
                     slice.Through
@@ -155,11 +155,11 @@ module FileEdit =
     let describe (path: string) (failure: EditFailure) : string =
         match failure with
         | EditFailure.NotFound ->
-            sprintf "old_string was not found in %s — read the file again before retrying; the text may have moved or differ in whitespace" path
+            sprintf "old_string was not found in %s. Read the file again before you retry. The text may have moved or its whitespace may differ" path
         | EditFailure.Ambiguous count ->
-            sprintf "old_string occurs %d times in %s — include more surrounding text so it matches once, or pass replace_all: true to change every one" count path
-        | EditFailure.NoChange -> "old_string and new_string are the same, so there is nothing to change"
-        | EditFailure.EmptyOld -> "old_string is empty — to create a file or replace it whole, use write_file"
+            sprintf "old_string occurs %d times in %s. Include more surrounding text so that it matches once. Pass replace_all: true to change every occurrence" count path
+        | EditFailure.NoChange -> "old_string and new_string are the same. There is nothing to change"
+        | EditFailure.EmptyOld -> "old_string is empty. Use write_file to create a file or to replace a whole file"
 
     /// The one line the gate and the record read for an edit, BEFORE anything runs: which
     /// file, and how many lines go out and come in. Counted from the two texts alone,
@@ -197,4 +197,4 @@ module FileHits =
         elif lines.Length <= cap then String.Join ("\n", lines)
         else
             String.Join ("\n", Array.truncate cap lines)
-            + sprintf "\n[%d more not shown — narrow the search]" (lines.Length - cap)
+            + sprintf "\n[%d more not shown: narrow the search]" (lines.Length - cap)

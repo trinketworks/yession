@@ -110,13 +110,13 @@ module EnvTemplate =
                     let unknown () =
                         Error (
                             sprintf
-                                "'${%s}' is not a reference this build knows (it knows %s) — write '$${' for a literal '${'"
+                                "'${%s}' is not a reference this build knows (it knows %s). Write '$${' for a literal '${'"
                                 inner
                                 (namespaces |> List.map (sprintf "${%s}") |> String.concat ", "))
                     match inner.Split ([| '.' |], 2) with
                     | [| "env"; name |] ->
                         if name <> "" && Seq.forall isNameChar name then go (close + 1) (TemplatePart.Beneath name :: acc)
-                        else Error (sprintf "'${%s}' names no variable an environment could carry (letters, digits and '_')" inner)
+                        else Error (sprintf "'${%s}' names no variable an environment could carry. A name holds only letters, digits and '_'" inner)
                     | [| "proxy"; field |] ->
                         match ProxyValue.all |> List.tryFind (fun (name, _) -> name = field) with
                         | Some (_, value) -> go (close + 1) (TemplatePart.Proxy value :: acc)
@@ -130,12 +130,12 @@ module EnvTemplate =
                     | [| _; "token" |] ->
                         Error (
                             sprintf
-                                "'${%s}' is lent to each command for the act it runs as, and returned when the next one starts, so it can only be a variable's whole value — see 'A lent token rotates per command' in docs/GAPS.md"
+                                "'${%s}' is lent to each command for the act it runs as. It is returned when the next command starts. So it can only be a variable's whole value. See 'A lent token rotates per command' in docs/GAPS.md"
                                 inner
                         )
                     | [| _; _ |] -> unknown ()
                     | _ ->
-                        Error (sprintf "'${%s}' is not a reference — write '${env.NAME}', or '$${' for a literal '${'" inner)
+                        Error (sprintf "'${%s}' is not a reference. Write '${env.NAME}', or '$${' for a literal '${'" inner)
             else go (at + 1) (literal acc (string text.[at]))
         go 0 []
 
