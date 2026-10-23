@@ -44,10 +44,15 @@ module private Col =
     /// ids were set in whatever monospace a box happened to have, and the switch to a shipped
     /// face made them 6px too wide for it. The first thing to go on a phone.
     let id = "w-[210px] phone:hidden"
-    /// The MCP table's audience column. It was the session table's status column too, until
-    /// status moved in with the name (`stateLine`) — where it has the name's whole width on a
-    /// wide screen and the end of the name's line on a phone, instead of a 100px cell on a
-    /// phone holding the word and nothing else.
+    /// The session's state, as a column of its own on a wide screen, so every row's state
+    /// starts on one rail and a scan down the column finds the exception. Wide enough for the
+    /// longest state word (`failed to start`, with its dot) and some of the tail after it — a
+    /// running session's summary, a failed launch's reason — which clips rather than wraps.
+    /// Yields on a phone, where a column holding one dot (or, for a row at rest, nothing) is
+    /// chrome spending the name's room; there the state rides the END of the name's line
+    /// instead (`rowTemplate`, `Style.recordRowState`).
+    let status = "w-[240px] phone:hidden"
+    /// The MCP table's audience column.
     let reaches = "w-[256px] max-xl:w-[100px]"
     /// `2026-08-18 09:12Z` in the 12px mono face, plus the cell's gutter. MEASURED like the
     /// id beside it: 17 characters of 12px Monaspace Neon is 123px, and the caps header over
@@ -78,10 +83,11 @@ module private Col =
     /// Unarchive — so the two tables agree on one width rather than on nearly one.
     let rail = "w-[100px] phone:w-[113px]"
 
-/// The row's second line: the session's state, and beside it the one line the session says
-/// about ITSELF. Plain small text, at every width — this is the answer to the question the
-/// page exists for (which of six sessions wants me), and it used to yield below `xl`, which
-/// is to say on the phone the page is most often opened from.
+/// The session's state, and beside it the one line the session says about ITSELF. Plain
+/// small text, at every width — this is the answer to the question the page exists for
+/// (which of six sessions wants me), and it used to yield below `xl`, which is to say on the
+/// phone the page is most often opened from. On a wide screen it is the row's status column
+/// (`Col.status`); on a phone it rides the end of the name's line (`rowTemplate`).
 ///
 /// A STATUS, in the product's one voice for one: the caps label step, in its role's colour,
 /// leading with a dot (docs/visual-design.md, Colour — "a status is text in its colour, and it
@@ -135,9 +141,8 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
     let nothing = html $""""""
     // ONE shape for every state, so no state can arrive wearing a voice of its own: the status
     // word in its role's face, leading with its dot, then whatever this row has to add in the
-    // line's own small voice. Where it starts a line its dot hangs in the gutter left of the
-    // rail, and where it rides the end of the name's line it does not — `Style.recordRowState`
-    // holds both, and says why (docs/visual-design.md, Space).
+    // line's own small voice. No block of its own: the cell or the line it is rendered into
+    // carries the voice and the clipping (`rowTemplate`).
     let line (voice: PhoneVoice) (face: string) (dot: string) (hook: string) (word: string) (rest: TemplateResult) =
         let mark = html $"""<span class="{dot}" aria-hidden="true"></span>"""
         let said =
@@ -145,8 +150,7 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
             | Spoken -> html $"""{mark}{word}"""
             | Mark -> html $"""{mark}<span class="{Style.recordRowWord}">{word}</span>"""
             | Silent -> html $"""<span class="{Style.recordRowWord}">{mark}{word}</span>"""
-        html
-            $"""<div class="{Style.recordRowState}"><span class="{face}" data-status="{hook}">{said}</span>{rest}</div>"""
+        html $"""<span class="{face}" data-status="{hook}">{said}</span>{rest}"""
     match view.Record.ArchivedAt, view.Status with
     // An operator's decision, not a process state — but it belongs on this line, because
     // "archived" is the answer a reader wants here and "stopped" for a session that can no
@@ -280,20 +284,23 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
 
 /// One session row — an action's swap unit: a stop replaces it wholesale, so the markup is
 /// always a pure function of the Manager's current view. (Live status replaces the whole table
-/// instead; see the rows stream.) The human name leads (content is the interface), with the
-/// state under it, or at the end of its line on a phone; the minted id is plumbing, faint
-/// mono, and yields on narrow screens with the created column. Actions anchor the right edge,
-/// so the row reads name → state → verb.
+/// instead; see the rows stream.) The human name leads (content is the interface), then the
+/// state; the minted id is plumbing, faint mono, and yields on narrow screens with the created
+/// column. Actions anchor the right edge, so the row reads name → state → verb.
 ///
-/// A row is the same height whatever its state, and on a PHONE it is ONE line: the name, then
-/// the state word at the line's trailing edge. It was two lines everywhere, 24px of name over
-/// 16px of state, which on a phone spent a fifth of the list's height on a column of the word
-/// "stopped" under four names whose own ink already said so. A wide screen keeps the two,
-/// because there the name column is wide enough that a state at its trailing edge lands under
-/// the ID head and reads as the id (`Style.recordRowLine`). Either way the state is rendered
-/// in every arm, so no row is shorter for having nothing to add. The table is fixed-layout
-/// (`Col`), each text cell clips rather than wraps, and the rail holds nothing taller than its
-/// 24px verbs. Rows that jump as
+/// A row is ONE line at every width, and the same height whatever its state. On a wide screen
+/// the state is a column of its own (`Col.status`), so every row's state starts on one rail.
+/// It was a second line under the name, its dot hung in the gutter — the one thing on the page
+/// hanging there, so it read as misaligned rather than as a rail — and 24px of name over 16px
+/// of state spent a fifth of the list's height on the word "stopped" under names whose own
+/// ink already said so. On a PHONE the column yields (a cell holding a dot, or nothing, is
+/// chrome spending the name's room) and the state rides the end of the name's line instead.
+///
+/// So the state is rendered TWICE, and each copy is painted on exactly one side of the
+/// `phone:` / `wide:` pair (`Col.status`, `Style.recordRowState`): `display:none` takes the
+/// other copy out of the accessibility tree as well as off the screen, so a reader meets one
+/// state per row at every width. The table is fixed-layout (`Col`), each text cell clips
+/// rather than wraps, and the rail holds nothing taller than its 24px verbs. Rows that jump as
 /// processes start and stop make a list you cannot keep your place in, and put a control
 /// under a pointer that was aimed at its neighbour.
 ///
@@ -303,17 +310,17 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
 /// two facts. A named session shows both, because then they are two. The cell stays, empty:
 /// the table is fixed-layout, and a row that dropped a cell would move every one after it.
 ///
-/// The cell's hit area is the WHOLE cell, the state word beside the name included, not just
-/// the name's own glyphs — one `<a>` (`Style.recordRowLink`) wraps the line when there is
-/// somewhere to go, same open route the name always linked to. An archived row has no way in (`/open` refuses
-/// it, and a link whose only outcome is a refusal is worse than no link), so its cell stays
-/// unwrapped, exactly as it was.
+/// The name cell's hit area is the WHOLE cell, the state word beside the name on a phone
+/// included, not just the name's own glyphs — one `<a>` (`Style.recordRowLink`) wraps the
+/// line when there is somewhere to go, same open route the name always linked to. An archived
+/// row has no way in (`/open` refuses it, and a link whose only outcome is a refusal is worse
+/// than no link), so its cell stays unwrapped, exactly as it was.
 let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
     let id = SessionId.value view.Record.SessionId
     let idCell = if SessionRecord.isNamed view.Record then id else ""
     let cell =
         html
-            $"""<div class="{Style.recordRowLine}"><div class="{Style.recordRowName}">{nameText view}</div>{stateLine view}</div>"""
+            $"""<div class="{Style.recordRowLine}"><div class="{Style.recordRowName}">{nameText view}</div><div class="{Style.recordRowState}">{stateLine view}</div></div>"""
     let nameCell =
         match view.Record.ArchivedAt with
         | Some _ -> cell
@@ -325,6 +332,7 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
           <td class="{Style.tableCell}" title="{view.Record.DisplayName}">
             {nameCell}
           </td>
+          <td class="{Style.tableCell} {Style.small} truncate {Col.status}">{stateLine view}</td>
           <td class="{Style.tableCell} {Style.monoFaint} truncate {Col.yields}">{idCell}</td>
           <td class="{Style.tableCell} {Style.monoFaint} tabular-nums truncate {Col.yields}">{createdView view.Record.CreatedAt}</td>
           <td class="{Style.tableCellRail}">{actions view}</td>
@@ -438,6 +446,7 @@ let private tableTemplate
             <thead>
               <tr class="{Style.tableRule}">
                 <th scope="col" class="{Style.tableHead}">name</th>
+                <th scope="col" class="{Style.tableHead} {Col.status}">status</th>
                 <th scope="col" class="{Style.tableHead} {Col.id}">id</th>
                 <th scope="col" class="{Style.tableHead} {Col.created}" aria-sort="{sortedBy}">
                   <a class="{Style.sortHeader}" href="{sortHref}" data-filter="sort">created {sortMark}</a>

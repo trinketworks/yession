@@ -673,43 +673,38 @@ module Style =
     /// can press to get it.
     let recordRowLink = cls [ "block no-underline"; focusRing ]
 
-    /// A listed record's line. On a PHONE it is one line: the name, then the state at the
-    /// line's trailing edge. Elsewhere it stays two, 24px of name over 16px of state.
+    /// A listed record's name line: the name and, on a PHONE, the state after it. On a wide
+    /// screen the state is a column of its own and the copy on this line is not painted
+    /// (`recordRowState`), so the line is the name alone.
     ///
-    /// The phone is where the second line cost something. Four rows of a five-row list said
-    /// "stopped" under four names, a column of one word spending a fifth of the list's height
-    /// to repeat what the name's own ink already says. A wide screen has the room, and there
-    /// the state keeps its own line because the name column is wide enough that a state at its
-    /// trailing edge lands under the ID head beside it and reads as the id.
-    ///
-    /// Centred on a phone, and `items-baseline` is the one thing it may not be. The doctrine's
-    /// baseline rule is about one row against the next; this is two runs on ONE line, and a
-    /// flex item that clips (`recordRowName` carries `truncate`, so `overflow` is not
-    /// `visible`) synthesizes its baseline from its margin box instead of its text. Aligning
-    /// to that baseline would hang the state word off the BOTTOM of the name. Centred, the two
-    /// line boxes share a centre and the clipping cannot move them.
-    let recordRowLine = "phone:flex phone:items-center phone:gap-3"
+    /// Centred, and `items-baseline` is the one thing it may not be. The doctrine's baseline
+    /// rule is about one row against the next; this is two runs on ONE line, and a flex item
+    /// that clips (`recordRowName` carries `truncate`, so `overflow` is not `visible`)
+    /// synthesizes its baseline from its margin box instead of its text. Aligning to that
+    /// baseline would hang the state word off the BOTTOM of the name. Centred, the two line
+    /// boxes share a centre and the clipping cannot move them.
+    let recordRowLine = "flex items-center gap-3"
 
     /// The name inside that line. `min-w-0` is load-bearing on a phone: a flex child's
     /// `min-width` is `auto`, so without it the name refuses to shrink below its longest word,
-    /// pushes the state off the row, and takes the page wider than the phone it is on. Both
-    /// utilities do nothing to the block this is on a wide screen.
-    let recordRowName = "flex-1 min-w-0 truncate"
+    /// pushes the state off the row, and takes the page wider than the phone it is on. No
+    /// `flex-1`: the state follows the name as one phrase rather than sitting at the line's
+    /// trailing edge against the rail of verbs.
+    let recordRowName = "min-w-0 truncate"
 
-    /// The state. On a wide screen it starts a line, so its dot hangs in the gutter left of
-    /// the rail (`-ml-3` is the mark's 6px and the 6px after it) and the word stands on the
-    /// same rail as the name above it. On a phone it rides the END of the name's line, where
-    /// there is no rail to hang off: the mark leads the word it belongs to, and the words it
-    /// would have pushed in are the name's, which sit before it. It does not shrink, so the
-    /// name is what clips — a clipped name still says which row it is, a clipped state does
-    /// not (docs/visual-design.md, Space).
+    /// The state's copy on the name line — the one a PHONE paints; `wide:hidden` is
+    /// `display:none`, which takes it out of the accessibility tree too, so on a wide screen
+    /// the status column (`ManagerUi.Col.status`) is the one state a reader meets. The mark
+    /// leads the word it belongs to, and the words it would have pushed in are the name's,
+    /// which sit before it. It does not shrink, so the name is what clips — a clipped name
+    /// still says which row it is, a clipped state does not (docs/visual-design.md, Space).
     ///
     /// The WORD stays on a phone, where the first instinct is to drop it and let the dot carry
     /// the state. The dot cannot. `stopped`, `archived`, `failed to start` and `exited` all
     /// draw one solid dot, and the last two draw it in one colour, so without the word two
     /// states are one picture and the rest differ by colour alone (WCAG 2.0 SC 1.4.1). What
     /// the phone drops instead is the TAIL (`recordRowAside`).
-    let recordRowState = cls [ small; "truncate shrink-0 -ml-3 phone:ml-0" ]
+    let recordRowState = cls [ small; "truncate shrink-0 wide:hidden" ]
 
     /// A state word a phone does not paint, because the row already says that state another
     /// way: `running` by one green mark beside a full-ink name, `stopped` by a dimmed name
