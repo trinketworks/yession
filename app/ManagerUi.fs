@@ -169,7 +169,11 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
                     said
                     |> List.map (fun s ->
                         html $"""<span> · </span><span class="{Style.toneInk s.Tone}" {Dom.Manager.standing}="{s.Facet}">{s.Word}</span>""")
-                html $"""<span class="{Style.recordRowAside}">{each}</span>"""
+                // A phone has room for one, so it says the worst where the `running` word
+                // would have been; the screen reader hears it after that word, as said.
+                let worst = List.head said
+                html
+                    $"""<span class="{Style.recordRowWorst} {Style.toneInk worst.Tone}" title="{worst.Word}"><span class="sr-only">, </span>{worst.Word}</span><span class="{Style.recordRowAside}">{each}</span>"""
         line Mark Style.statusOk Style.statusDotLiveLead Dom.Manager.statusRunning "running" standings
     | None, ProcessManager.Launching ->
         line Spoken Style.statusWait Style.statusDotBeat Dom.Manager.statusStarting "starting" nothing
