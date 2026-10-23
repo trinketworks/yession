@@ -30,6 +30,13 @@ the loop. Report it to the user.
 document in this repository. Put what is worth keeping next to the code it governs, where a test
 can contradict it.
 
+## Principles
+
+[docs/technical-design.md §1](docs/technical-design.md#1-core-principles) lists the design
+principles, and [§5](docs/technical-design.md#5-architectural-invariants) the numbered
+invariants that follow from them. Read both before a change that adds a component, a
+dependency, an option, a test or a rule. The sections below say how to work by them here.
+
 ## Bootstrap
 
 **devenv.nix** declares the dev environment (Node 24 + .NET SDK 10), the tasks (devenv `scripts`)
