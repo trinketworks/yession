@@ -431,13 +431,82 @@ let private storeTests =
                 let path = freshPath "wrongkek"
                 let! first = openDurable path (KeyStore.inMemory ())
                 let! _ = first.Set (sid (SessionScope sessionA) "deploy-token") "v"
-                // A different key store = a different KEK (the first one is lost).
-                let! reopened = SecretStore.openStore (Some path) (KeyStore.inMemory ())
+                // A key store holding a different KEK (the first one is lost).
+                let! reopened = SecretStore.openStore (Some path) (KeyStore.random ())
                 match reopened with
                 | Error (SecretStore.SealedByDifferentKey _ as e) ->
                     Expect.isTrue ((SecretStore.OpenError.describe e).Contains "sealed by a different key") "distinct wording"
                 | Error other -> failwithf "expected SealedByDifferentKey, got %A" other
                 | Ok _ -> failwith "expected the open to fail"
+            }
+
+        testCaseAsync "a key store with no key over a sealed file fails, and never mints or sets a key" <|
+            async {
+                // A locked macOS keychain reads as empty: the real KEK is still there, and
+                // a minted one would overwrite it once the keychain unlocked.
+                let path = freshPath "lockedkeychain"
+                let! first = openDurable path (KeyStore.inMemory ())
+                let! _ = first.Set (sid (SessionScope sessionA) "deploy-token") "v"
+                let mutable sets = 0
+                let empty = KeyStore.inMemory ()
+                let counting = { empty with Set = fun value -> async { sets <- sets + 1; return! empty.Set value } }
+                let! reopened = SecretStore.openStore (Some path) counting
+                match reopened with
+                | Error (SecretStore.KeyStoreFailure detail) ->
+                    Expect.isTrue (detail.Contains "has no key") "says the key is missing"
+                    Expect.isTrue (detail.Contains "locked keychain reads as empty") "names the locked keychain"
+                | Error other -> failwithf "expected KeyStoreFailure, got %A" other
+                | Ok _ -> failwith "expected the open to fail"
+                Expect.equal sets 0 "the key store is never written"
+                let! stillEmpty = empty.Get ()
+                Expect.equal (expect stillEmpty) None "no key was minted"
+            }
+
+        testCaseAsync "a corrupt file with no key fails as corrupt without minting a key" <|
+            async {
+                let path = freshPath "corruptnokey"
+                Fs.writeTextAtomic path "{ not json"
+                let keyStore = KeyStore.inMemory ()
+                let! opened = SecretStore.openStore (Some path) keyStore
+                match opened with
+                | Error (SecretStore.CorruptStore _) -> ()
+                | other -> failwithf "expected CorruptStore, got %A" (other |> Result.map ignore)
+                let! stored = keyStore.Get ()
+                Expect.equal (expect stored) None "no key was minted"
+            }
+
+        testCaseAsync "the boot open waits out a key store with no key, and opens once the key is back" <|
+            async {
+                let path = freshPath "waitforkey"
+                let real = KeyStore.inMemory ()
+                let! first = openDurable path real
+                let id = sid (SessionScope sessionA) "deploy-token"
+                let! _ = first.Set id "hunter2"
+                let! kek = real.Get ()
+                // Locked: reads as empty. Unlocked on the third read.
+                let mutable reads = 0
+                let mutable sets = 0
+                let mutable waits = 0
+                let locking =
+                    { real with
+                        Get = fun () -> async { reads <- reads + 1; return if reads < 3 then Ok None else Ok (expect kek) }
+                        Set = fun value -> async { sets <- sets + 1; return! real.Set value } }
+                let! opened = SecretStore.openStoreWaiting 1 (fun _ -> waits <- waits + 1) (Some path) locking
+                let store = expect (opened |> Result.mapError SecretStore.OpenError.describe)
+                let! resolved = store.Resolve id
+                Expect.equal (expect resolved) (Some "hunter2") "the real key opened the file"
+                Expect.isFalse store.KekMinted "loaded, not minted"
+                Expect.equal reads 3 "retried until the key was there"
+                Expect.equal waits 1 "the same failure is said once"
+                Expect.equal sets 0 "the key store is never written"
+            }
+
+        testCaseAsync "the boot open does not wait on a corrupt file" <|
+            async {
+                let path = freshPath "waitcorrupt"
+                Fs.writeTextAtomic path "{ not json"
+                let! opened = SecretStore.openStoreWaiting 1 (fun _ -> failwith "must not wait") (Some path) (KeyStore.inMemory ())
+                Expect.isError opened "fails at once"
             }
 
         testCaseAsync "the ephemeral store works without any file and reports non-durable" <|

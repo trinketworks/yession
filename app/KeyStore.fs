@@ -12,7 +12,8 @@ type KeyStore =
     { Name : string
       /// Cheap probe: is the backing credential store actually usable here?
       Available : unit -> Async<bool>
-      /// The stored KEK payload; None when absent (first run).
+      /// The stored KEK payload; None when absent — a first run, or a LOCKED macOS keychain,
+      /// which reads as empty. `SecretStore.openStore` tells the two apart by its file.
       Get : unit -> Async<Result<string option, string>>
       Set : string -> Async<Result<unit, string>> }
 
