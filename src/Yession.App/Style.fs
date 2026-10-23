@@ -4011,23 +4011,32 @@ module Style =
               "transition-opacity duration-200 ease-out motion-reduce:transition-none"
               "phone:[.term-closed_&]:opacity-0 phone:[.term-closed_&]:pointer-events-none"; focusRing ]
 
-    /// The column's head is the header band (`spacing-band`) in two rows: this strip of tabs,
-    /// and under it the toolbar of whatever is on screen (`paneToolbar`), whose hairline is the
-    /// band's, level with the chat header's.
+    /// The column's head claims the band itself (`spacing-band`, `spacing-band-phone` on a
+    /// phone) rather than owing it to the ARITHMETIC of two `spacing-touch` rows. That used to
+    /// be 44+44=88, which matched the chat header's band only while a toolbar row
+    /// (`paneToolbar`) was there to carry the second 44 — an empty pane has no toolbar
+    /// (`paneUnderStrip`'s `None, None`), so the strip alone sat at 44 against the header's 88,
+    /// and on a PHONE the sum was 88 against the header's 56 in every state. Both are the
+    /// mismatch `docs/visual-design.md`'s "a head with two rows is taller... its hairline lines
+    /// up with nothing" names and accepts for a two-row head in general; this one head instead
+    /// pins its FIRST row to the token, so it needs no second row to land on the band.
     ///
-    /// The strip is the ground (`bg`), black like the chat's head beside it, and the selected
-    /// tab wears the pane's own ground (`panel`), so it runs on into the toolbar and the body
-    /// under it: the chrome says which tab the page belongs to, before a word is read
-    /// (docs/visual-design.md, principle 2). Every control in it is `spacing-touch`, so the
-    /// strip is a thumb's height on a phone and the same on a desktop, and it needs no padding
-    /// of its own.
+    /// `items-end` + `pb-5` (`phone:items-center` + `phone:pb-[11px]`) are not reinvented —
+    /// they are the chat header's OWN alignment (`header`), copied so the strip's content sits
+    /// where the header's does: bottom-anchored with the header's 20px gap to the hairline on a
+    /// wide screen, centred with its 11px gap on a phone. Every control in the strip is still
+    /// `spacing-touch` and keeps its 44px target; only where that 44px box SITS in the now
+    /// taller row has changed. The strip is the ground (`bg`), black like the chat's head
+    /// beside it, and the selected tab wears the pane's own ground (`panel`), so it runs on
+    /// into whatever is under it: the chrome says which tab the page belongs to, before a word
+    /// is read (docs/visual-design.md, principle 2).
     ///
-    /// Two of those rows are `spacing-band` exactly, which is the head this column owes the
-    /// hairline. On a PHONE the band is `spacing-band-phone` and these two rows are 88 against
-    /// its 56: the touch target is the floor, the band is the grid, and the floor is first in
-    /// the Deciding order, so the rows keep their height and the band gives. Written as the
-    /// token rather than as `h-11`, which is the same 44px spelled a second way (principle 5).
-    let panePivotRow = "shrink-0 h-touch flex items-stretch bg-bg"
+    /// `paneToolbar`, where there is one, is now the column's own second row underneath —
+    /// `spacing-touch` tall and no longer asked to land on the band. Its hairline is its own,
+    /// the ordinary case the "two rows" clause describes.
+    let panePivotRow =
+        "shrink-0 h-band flex items-end pb-5 bg-bg "
+        + "phone:h-band-phone phone:items-center phone:pb-[11px]"
     /// The tablist: `all`, then the scroller of tabs. `all` stays put at the row's head however
     /// many tabs follow it. `min-w-0` so the scroller is what gives way when the names outgrow
     /// the row.
