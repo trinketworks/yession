@@ -26,242 +26,84 @@ build, fix, refactor or change something. It decides how the work is split, and 
 that afterwards. It owns the process from split to green master. A deviation from the request stops
 the loop. Report it to the user.
 
-**Plans are not artifacts.** Say the shape of the work to the user before you start. Write no plan
-document in this repository. Put what is worth keeping next to the code it governs, where a test
-can contradict it.
+Say the shape of the work to the user before you start. Write no plan document in this repository.
 
 ## Principles
 
 [docs/technical-design.md §1](docs/technical-design.md#1-core-principles) lists the design
 principles, and [§5](docs/technical-design.md#5-architectural-invariants) the numbered
 invariants that follow from them. Read both before a change that adds a component, a
-dependency, an option, a test or a rule. The sections below say how to work by them here.
+dependency, an option, a test or a rule. §1 owns colocation, one mechanism per requirement,
+type safety, narrowing a type across call sites, and fixing a bug at both ends.
 
 ## Bootstrap
 
-**devenv.nix** declares the dev environment (Node 24 + .NET SDK 10), the tasks (devenv `scripts`)
-and the build outputs (devenv `outputs`). `devenv shell` puts `node`, `dotnet` and the task scripts
-on PATH.
+`devenv.nix` declares the dev environment (Node 24 and .NET SDK 10), the tasks and the build
+outputs. `devenv shell` puts them on PATH. Run a task with `devenv shell -- <task>`, or bare
+inside the shell.
 
-**Inside a yession work sandbox** (`YESSION_SANDBOX` is set): the entrypoint in `yession.yaml` has
-already assembled the devshell. `check`, `build` and the other tasks are on PATH as written. Put
-nothing in front of them. Do NOT install devenv, because the devshell exists. Do NOT run
-`.claude/setup.sh`, because it targets Claude Code containers.
+- **In a yession work sandbox** (when `YESSION_SANDBOX` has a value), the devshell exists. Run the
+  tasks bare. Do NOT install devenv. Do NOT run `.claude/setup.sh`.
+- **In a Claude Code container**, the SessionStart hook runs `.claude/setup.sh --hook`. Its
+  comments own the rest.
+- **Heavy verbs take a build slot.** A verb that prints `build slot: waiting for another
+  session's build …` is waiting, not hung. Do not kill it or retry it. The comment above
+  `withBuildSlot` in `tasks.fsx` owns the lock.
 
-**Heavy verbs take a build slot.** `check`, `verify`, `build`, `compile`, `stage`, `package`,
-`lint`, `bench`, `example` and `crash-repro` (and the build step of `start`, `probe` and `frames`)
-first lock a slot under `/nix/var/yession/build-slots`. When other builds hold every slot, the
-verb prints `build slot: waiting for another session's build (held by …) …` and waits. That is
-not a hang. Do not kill it or retry it. `yession.yaml` sets `TASKS_BUILD_SLOTS` (the slot count)
-for `dev` and `gate`. The comment above `withBuildSlot` in `tasks.fsx` owns the why, the lock and the
-environment variables.
-
-**In a Claude Code container**, the SessionStart hook runs `.claude/setup.sh --hook`. When devenv is
-missing, it starts the full setup in the background and prints where the log is. The script's
-comments own the rest (the gitignored `devenv.local.yaml` past the proxy). A laptop or CI uses the
-committed `devenv.yaml`.
-
-Run the task scripts with `devenv shell -- <task>`, or bare inside the shell. The main ones are
-`check`, `build` and `verify`. They run `restore` for you. Never run `dotnet`, `fable` or
-`esbuild` directly. The scripts match tool versions and PATH to CI (`.claude/direct-tool-hook.sh`
-enforces it).
-
-A Claude Code container has Chromium (`$PLAYWRIGHT_BROWSERS_PATH`) and the `node-datachannel`
-addon preinstalled. The `Browser`, `Chromium` and `Native` capabilities work (see Testing).
+Never run `dotnet`, `fable` or `esbuild` directly. The tasks match tool versions and PATH to CI
+(`.claude/direct-tool-hook.sh` enforces it).
 
 ## Build interface
 
-`tasks.fsx` is the complete, standalone build interface, and its header says so. The devenv
-scripts, the GitHub Actions workflows and the Nix `outputs` are thin wrappers. `dotnet fsi tasks.fsx
-<verb>` drives everything without them.
-
-To add a build step, add a `Target` and its `needs` (the `Target` doc comment has the detail). Do
-not add a call in a verb's body. The next verb cannot know an order written only there.
-
-`nix/worktree.nix` builds `nix/packages.nix` from the working tree, and its header says why.
-`check Nix NixBuild` drives it.
-
-**No belt-and-braces.** Two mechanisms may meet the same requirement, such as two config locations
-or a fallback beside a primary. Keep ONLY the one verified working here. Remove the other. A spare
-hides which path is live, rots unverified, and turns the next failure into an archaeology dig.
-
-## Colocation
-
-**A rule lives with the state it governs.** An invariant that holds only because a CALLER
-remembered to ask first is not an invariant. The next caller has not read it.
-
-[technical-design.md §1](docs/technical-design.md#composition-at-the-top) says composition happens
-at the top. This is the other half: what composes at the top must have nothing left to DECIDE. A
-composition root that computes (a bound, a fallback, a refusal, a subtraction) moves a decision
-from where a cheap test reaches it to where no test does.
-
-The tell is a member exported for no local reason. `SessionTerminals` once exported an
-`Instrumented` predicate that only `Host.fs` used, to subtract a line window and cap the answer. No
-cheap test saw that arithmetic, and a bug lived in it.
-
-Ask three questions. Any `no` means the rule is in the wrong place:
-
-- **Can a caller break it by not calling something first?** Then those calls are one verb.
-- **Would testing it mean building the composition root?** Then move it down to where the state
-  is. A rule the cheap tier cannot reach is a rule nobody re-checks.
-- **Does a sibling operation on the same state live somewhere else?** Then one of them has moved.
-
-A seam belongs where it is USED. Pass state downward. Do not reach upward for it.
-
-## Fixing bugs
-
-**Fix the root cause upstream. Harden against the symptom downstream. Do both, not either.** The
-upstream fix stops THIS fault. The downstream guard stops the next, different fault from becoming a
-plausible wrong answer at the same place.
-
-This is not belt-and-braces (two mechanisms for ONE requirement at one point). It is one mechanism
-each at two points. They go red at different times: upstream while the diagnosis still exists,
-downstream before anything publishes the damage.
-
-Example, the version regression. `echo "version=$(...)"` discarded the exit status of a failed
-`devenv shell -- version`. The step went green with an empty version, and the release job tagged the
-commit `v`. That tag matched `--match 'v*'` and restarted the 6.13.1 line at 1.0.0.
-
-- Upstream: capture under `pipefail` and refuse an empty result.
-- Downstream: `--match 'v[0-9]*'`, and refuse a nearest tag of the wrong shape.
-
-The tell that you did half: the fault reads as a chain (X failed, so Y saw nothing, so Z published
-garbage), and your change touches one link. Ask what the other links do given a different X.
-
-## Examples
-
-`examples/` holds standalone integrations, built the way somebody OUTSIDE this repository would
-build them. Read `examples/AGENTS.md` before you change one.
-
-## UI baseline
-
-Read `docs/visual-design.md` BEFORE you change a surface. WCAG 2.0 AA is the floor for every
-surface, not a follow-up. `src/Yession.App/AGENTS.md` lists what the tests do not pin.
-
-## Versioning
-
-The commit history determines the version. No file stores it. Every green master push publishes
-`1.0.0-beta.<n>`. To move the triple, put a marker such as `+semver: minor` in the commit message,
-on a line with nothing else on it. The version comment and `bumpOf` in `tasks.fsx` own the markers,
-their parse rules, and the trap of a marker table pasted bare.
-
-**When to bump.** A breaking change to the Manager ↔ Session API is a major bump. That API is the
-protocol between the `yession-manager` and `yession-session` bins, and the Manager tolerates
-anything but a MAJOR mismatch. Otherwise use standard semver: new user-facing capability → minor,
-bug fix → patch. The same policy applies once the version leaves beta. A plain `feat:` subject
-does NOT bump.
-
-**Commit / PR messages.** Subjects follow conventional-commit style (`feat:`, `fix:`, `ci:`,
-`refactor:`, ...). That is a convention for readers, not the version input. A PR squash-merges as
-PR TITLE + PR DESCRIPTION, and branch commit messages are discarded. So put the marker in the
-description. Write the description as the commit message it becomes, wrapped at 72 columns.
-GitHub re-wraps a wider line, and a re-wrap can fold a marker into prose.
-
-What a build reports of itself: `app/Version.fs` lists the values, and `app/Telemetry.fs` states
-why `service.version` is a code default.
-
-## Finding F# symbols
-
-Never search for a bare name. F# reuses one identifier across several unrelated symbols.
-`SessionId` is a type, its companion module, a DU case constructor, and twelve record fields.
-`rg '\bSessionId\b'` returns 321 hits. Only 97 are the type.
-
-Search for the **declaration form** instead:
-
-```
-rg '^type SessionId\b'                      # the type
-rg '^module SessionId\b'                    # its companion module (usually just below)
-rg '^\s*(type|module|let|and)\s+Foo\b'      # any declaration of Foo, when unsure which
-```
-
-Then scope to the owning file, because short member names repeat across sibling modules.
-`rg '^\s+let value\b' src/Yession.Domain/Identity.fs` returns nine hits, one per identity type.
-
-- **Compile order is explicit.** Each `.fsproj` lists `<Compile Include>` in order. A symbol is
-  declared in that file or an earlier one. Read the `.fsproj` to bound the search.
-- **Scoping is strictly top-down.** Within a file, going down, the first match is the declaration.
-
-Text search cannot recover a type F# inferred rather than wrote (`let x = foo bar`). Follow the
-right-hand side to its declaration, or write the type you expect and let `check` tell you.
-
-## Refactoring across call sites
-
-**Narrow the type. Let the compiler enumerate the sites.** Change a field's type, a parameter's
-type or a union's cases. Every place that no longer fits is a compile error, all at once. The
-number of call sites is no reason to keep a looser type. It is the list of places the looser type
-was letting something through.
-
-`MessageSent.Author` stayed `ActorRef` because it had sixty-five sites. The turn's principal rode
-BESIDE the message instead: two values, consistent by discipline and not by type. Narrowing it took
-one edit and forty minutes of compiler errors in fixtures. The sites were never the cost. The
-aliasing was.
-
-- Change the declaration (`Identity.fs`, a facts file) and nothing else. Build. Every error is a
-  site, and there are no others.
-- Fix each site with the value it already had, never with a default: `Principal.toActor p` where
-  the site wants an actor. A site with nothing of the right type to give is the finding. Examples: a
-  caller that passed `None` because it could, an event that recorded the author instead of the
-  owner. Give those a case, a constructor, or a refusal, not `Option.defaultValue`.
-- A test that pinned the old shape ("an agent act with no owner still decodes") is not a
-  regression guard when the shape was the bug. Remove it. Say in its place what the type now says.
-
-Do not keep a bridging alias, a second constructor, or an `option` "for now". A build that goes red
-at every site is the tool working. A bridge is the fault coming back with a name that says it is
-fine.
-
-## Type safety
-
-F# is the type system. JavaScript is only what it compiles to. Each construct below re-opens the
-hole Fable closed. Do not introduce any of these, and remove them from code you are already
-changing. Where a rule reports one, the doc comment of its module in `analyzers/Yession.Analyzers/`
-says why. The rest is on the author.
-
-- **A JavaScript program in a string.** An `[<Emit>]` outside `src/Fable.*` (YES011), an inline
-  `<script>` body, a CDP `Runtime.evaluate` source, a Playwright `EvaluateAsync` program (YES012
-  holds the suite's few fixed ones to `PageScript`). Nothing type-checks the string. Write F#
-  through Fable, behind a binding project if it reaches an API we do not own. In the browser
-  suite, write a probe in `Yession.App.Probes`.
-- **Dynamic access: `?` and `?<-`** (YES015). Bind the module. Key the map with a type.
-- **`unbox`, `!!`, `:?>` on a value you did not just construct** (YES016 reports `unbox`, `!!` and
-  a `:?>` from `obj`, `Event` or `EventTarget`. A downcast from another declared type is yours to
-  judge). Decode it, or type whatever produced it. Narrow an event or its target with `Events` and
-  `EventTargets` (Fable.BrowserExtras).
-- **`obj` in a signature** (YES017, in a function's or a member's). If it crosses a wire, use a
-  codec. If it configures a binding, use that binding's options type.
-- **`createObj`, `==>` or `[<AllowNullLiteral>]` outside a binding project** (YES013).
-- **A decode that cannot refuse.** `Option.defaultValue ""` over a field read (YES009). Answer
-  `None`, or say in the code why the default is the right answer.
-
-The escape is one of three: a **binding project** (an API we do not own), a **codec** (a wire), a
-**typed options interface** (a bag). Where none applies, keep the cast on the line that needs it,
-mark that line for its rule (`analyzers/AGENTS.md`, "A justified exception"), and give the result a
-type immediately. Never carry `obj` onward. Example: the DOM's `querySelector` answers `Element`
-and no other shape is available.
+`tasks.fsx` is the complete build interface. Its header and its verb table (`help`) say so.
+devenv, the workflows and the Nix `outputs` are thin wrappers. To add a build step, add a
+`Target` and its `needs`, not a call in a verb's body (the `Target` doc comment says why).
 
 ## Testing
 
-[tests/AGENTS.md](tests/AGENTS.md) owns testing: capability notes, running a tier this box cannot
-host (`verify.yml`), and the rules for writing tests. [analyzers/AGENTS.md](analyzers/AGENTS.md)
-owns work on the F# analyzers that `lint` runs.
+[tests/AGENTS.md](tests/AGENTS.md) owns testing: the capabilities, running a tier this box cannot
+host, and the rules for writing tests. [analyzers/AGENTS.md](analyzers/AGENTS.md) owns the F#
+analyzers that `lint` runs.
 
-Capabilities gate suites, not folders (`tests/Yession.Tests/Tags.fs`). Pass the capabilities THIS
-box has. Run `help` for the verbs and capabilities. `check --only "<text>"` narrows a run to the
-cases whose full name contains `<text>`. To eyeball a rich-editor change, run `check Browser`.
+- Pass the capabilities THIS box has. `help` lists them. A Claude Code container has `Browser`,
+  `Chromium` and `Native`.
+- `check --only "<text>"` runs only the cases whose full name contains `<text>`.
+- To screenshot a UI change, use `frames --boot --still` (`--desktop` for 1280x800), never
+  `chrome --headless --screenshot`. [ui-exploration](.agents/skills/ui-exploration/SKILL.md)
+  owns the camera.
+- As root, Chromium needs `--no-sandbox`. `frames` adds it (PR #1281).
+- To script Playwright by hand, import `$PLAYWRIGHT_CORE/index.mjs` (the dev shell sets it to
+  the build that matches its Chromium), and launch with `channel: "chromium"`.
 
-To screenshot ANY UI change, use the camera (`frames --boot --still`, `--desktop` for 1280x800) in
-the dev shell. Do NOT use `chrome --headless --screenshot`.
-[ui-exploration](.agents/skills/ui-exploration/SKILL.md) owns the options, why headless pictures
-lie, and the full loop.
+## UI baseline
 
-- As root (a sandbox), Chromium needs `--no-sandbox`. `frames` adds it by itself (PR #1281). If a run as
-  root fails with "never wrote DevToolsActivePort", your checkout is older than that.
+Read [docs/visual-design.md](docs/visual-design.md) BEFORE you change a surface. WCAG 2.0 AA is
+the floor. [src/Yession.App/AGENTS.md](src/Yession.App/AGENTS.md) lists what the tests do not pin.
 
-For a question the camera cannot ask, script Playwright by hand. `node_modules` has no
-`playwright`. The dev shell sets `$PLAYWRIGHT_CORE` to the `playwright-core` that matches its
-Chromium. Import it, and call `launch` with `channel: "chromium"`, because the shell has no
-headless shell build:
+## Examples
+
+Read [examples/AGENTS.md](examples/AGENTS.md) before you change an example.
+
+## Versioning
+
+The commit history determines the version. Every green master push publishes `1.0.0-beta.<n>`.
+A PR squash-merges as its title and description, so put a bump marker (`+semver: minor`, alone
+on its line) in the description, and wrap the description at 72 columns. The version comment and
+`bumpOf` in `tasks.fsx` own the markers.
+
+- A breaking change to the Manager ↔ Session API is a major bump.
+- New user-facing capability is a minor bump. A bug fix is a patch. A plain `feat:` subject does
+  NOT bump.
+
+## Finding F# symbols
+
+Never search for a bare name. F# reuses one identifier for a type, its module, a union case and
+record fields. Search for the declaration form, then scope to the owning file:
 
 ```
-const { chromium } = await import(process.env.PLAYWRIGHT_CORE + "/index.mjs")
-const browser = await chromium.launch({ channel: "chromium" })
+rg '^\s*(type|module|let|and)\s+Foo\b'
 ```
+
+Each `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an
+earlier one. Text search cannot find an inferred type. Follow the right-hand side to its
+declaration, or write the type you expect and let `check` tell you.
