@@ -1650,16 +1650,32 @@ module Style =
     /// On a wide screen with the pane SHUT, nothing else claims the row, so `flex-1` alone
     /// hands this column the whole width the sidebar leaves — a header hairline, a timeline
     /// and a composer band all stretched to whatever the monitor happens to be. Capped and
-    /// centered instead, at the same measure the open pane already holds it to
+    /// centered instead, near the measure the open pane already holds it to
     /// (`PaneSplit.chatReadable`, Model.fs: the reading column's 38rem plus the 32px rail on
-    /// each side — a chat wider than that is a blank strip beside the conversation, pane or
-    /// no pane). `[.term-closed_&]` only: the open pane already derives this column's width
+    /// each side) with one more rail's worth of room on each side again, so the timeline still
+    /// has somewhere to show a row's ground stopping short of the column's own edge — flush to
+    /// the measure, every row's highlight would reach exactly as far as the text, which reads
+    /// as a box drawn round the words rather than as the row (the invariant
+    /// `Browser.fs`'s "a message's ground stops at the reading column, not the window" holds
+    /// desktop to). `[.term-closed_&]` only: the open pane already derives this column's width
     /// from the same number, through room a reader can drag past it on purpose
     /// (`PaneSplit.resolve`), and a static cap here would fight that drag.
+    ///
+    /// MARGIN, not `max-w` + `mx-auto`: the pane's own width animates shut over 200ms
+    /// (`contentPanel`'s `wide:transition-[width]`), and an auto margin centers within
+    /// whatever space is free AT THAT INSTANT — so as the pane closed, this column visibly
+    /// RECENTERED under the words every frame, sliding the conversation sideways while it
+    /// read, which is the one thing this shell promises never to do (see `contentPanel`'s own
+    /// doc). The margin here is a `calc` off `100vw` instead: fixed the moment `.term-closed`
+    /// lands, same on every frame of the pane's close, so the column's left edge — where every
+    /// word starts — never moves. Only its right edge does, keeping pace with the pane as it
+    /// closes, which is the pane sliding, not the column. `max(0px, …)` is the floor for a
+    /// `wide` screen too narrow to hold the cap at all: the margin collapses to nothing and
+    /// `flex-1` alone takes what the sidebar leaves, same as an uncapped column always did.
     let mainColumn =
         "flex-1 flex flex-col min-w-0 h-full " + degradedBarRoomPad
         + " phone:transition-[padding-top] phone:duration-200 phone:ease-out motion-reduce:transition-none"
-        + " wide:[.term-closed_&]:max-w-[calc(var(--spacing-measure)+var(--spacing-rail)*2)] wide:[.term-closed_&]:mx-auto"
+        + " wide:[.term-closed_&]:mx-[max(0px,calc((100vw-var(--spacing-side)-(var(--spacing-measure)+var(--spacing-rail)*4))/2))]"
 
     /// The phone's band is a ROW, not a compressed copy of the desktop's stack: the two
     /// chevrons a phone always has in this band — the sidebar's and the terminals' — and the
