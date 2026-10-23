@@ -1635,9 +1635,20 @@ module Style =
     /// On a phone this column sits under the fixed degradation bar, so it pays for it in
     /// padding — but only while the bar is there (`degradedShell`), and at the pace the bar
     /// unfolds at, so the conversation moves down with it rather than in one frame.
+    ///
+    /// On a wide screen with the pane SHUT, nothing else claims the row, so `flex-1` alone
+    /// hands this column the whole width the sidebar leaves — a header hairline, a timeline
+    /// and a composer band all stretched to whatever the monitor happens to be. Capped and
+    /// centered instead, at the same measure the open pane already holds it to
+    /// (`PaneSplit.chatReadable`, Model.fs: the reading column's 38rem plus the 32px rail on
+    /// each side — a chat wider than that is a blank strip beside the conversation, pane or
+    /// no pane). `[.term-closed_&]` only: the open pane already derives this column's width
+    /// from the same number, through room a reader can drag past it on purpose
+    /// (`PaneSplit.resolve`), and a static cap here would fight that drag.
     let mainColumn =
         "flex-1 flex flex-col min-w-0 h-full " + degradedBarRoomPad
         + " phone:transition-[padding-top] phone:duration-200 phone:ease-out motion-reduce:transition-none"
+        + " wide:[.term-closed_&]:max-w-[calc(var(--spacing-measure)+var(--spacing-rail)*2)] wide:[.term-closed_&]:mx-auto"
 
     /// The phone's band is a ROW, not a compressed copy of the desktop's stack: the two
     /// chevrons a phone always has in this band — the sidebar's and the terminals' — and the
