@@ -39,7 +39,7 @@ let majorSkewBetween (managerVersion: string) (sessionVersion: string option) : 
         | Some ours, Some theirs when ours <> theirs ->
             Some (
                 sprintf
-                    "version skew: this manager is %s and the session binary is %s — their control protocol may disagree, so the launch was refused. Restart the manager on the matching build."
+                    "version skew: this manager is %s and the session binary is %s. Their control protocol may disagree, so the launch was refused. Restart the manager on the matching build."
                     managerVersion
                     session
             )

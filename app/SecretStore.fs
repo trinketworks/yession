@@ -45,7 +45,7 @@ module OpenError =
         | KeyStoreFailure detail -> detail
         | CorruptStore (path, detail) -> sprintf "corrupt secrets store %s: %s" path detail
         | SealedByDifferentKey (path, fileKekId, hostKekId) ->
-            sprintf "secrets store %s was sealed by a different key (%s, this host's is %s) — restore that key or delete the file" path fileKekId hostKekId
+            sprintf "secrets store %s was sealed by a different key (%s, this host's is %s). Restore that key, or delete the file." path fileKekId hostKekId
 
     let kind (error: OpenError) : string =
         match error with
@@ -94,7 +94,7 @@ let openStore (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async
                 Error (
                     keyStoreFailure (
                         sprintf
-                            "the credential manager has no key, but %s is sealed under key %s — not minting a new one over it. A locked keychain reads as empty: unlock it (on macOS, log in to this Mac)"
+                            "the credential manager has no key, but %s is sealed under key %s. This Manager does not mint a new key over it. A locked keychain reads as empty. Unlock it (on macOS, log in to this Mac)."
                             path
                             file.KekId
                     )
@@ -443,9 +443,9 @@ module Audit =
             [ "yession.secrets.mode", StringValue "ephemeral"
               "yession.secrets.reason", StringValue (if chosen then "operator" else "no-credential-manager") ]
             (if chosen then
-                "secrets: --secrets ephemeral — secrets are IN-MEMORY ONLY and die with this Manager"
+                "secrets: --secrets ephemeral is set. Secrets are IN-MEMORY ONLY. They die with this Manager."
              else
-                "secrets: no OS credential manager available — secrets are IN-MEMORY ONLY and die with this Manager")
+                "secrets: no OS credential manager is available. Secrets are IN-MEMORY ONLY. They die with this Manager.")
 
     /// A durable file this run will not open. Says only what is true either way — the
     /// CAUSE is carried by the `storeEphemeral` record printed immediately before it, and
@@ -454,7 +454,7 @@ module Audit =
         make "yession.secrets.store_open" Severity.warn
             [ "yession.secrets.mode", StringValue "ephemeral"
               "yession.secrets.path", StringValue path ]
-            (sprintf "secrets: %s exists but this run's store is in-memory — its entries stay unread (and untouched)" path)
+            (sprintf "secrets: %s exists, but this run's store is in-memory. This run does not read its entries (or change them)." path)
 
     let storeOpenFailed (kind: string) (detail: string) : Record =
         make "yession.secrets.store_open_failed" Severity.error

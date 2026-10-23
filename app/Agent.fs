@@ -516,7 +516,7 @@ let registryFor (capabilities: AgentCapabilities) : ToolRegistry =
         match ToolRegistry.mergeAll (own :: capabilities.Tools.Foreign) with
         | Ok registry -> registry
         | Error reason ->
-            eprintfn "mcp: two registries claim one namespace (%s); using the session's own tools" reason
+            eprintfn "mcp: two registries claim one namespace (%s). The turn uses the session's own tools." reason
             own
     merged |> ToolUseLog.wrap capabilities.Tools.Record
 

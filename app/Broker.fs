@@ -321,7 +321,7 @@ let create
                 // provider saying `invalid_grant` is the only way this is ever known.
                 // Without it a revoked grant retried forever behind a green panel.
                 if failure.Final then
-                    let! _ = reject target "the provider refused this sign-in — it may have been revoked"
+                    let! _ = reject target "the provider refused this sign-in. It may have been revoked."
                     ()
                 else observe (RefreshFailed (target, failure.Message))
                 return Error (sprintf "token refresh failed: %s" failure.Message)
@@ -372,7 +372,7 @@ let create
                 // trip and refuses the same way whatever the other clock says.
                 match BrokerFlow.beyondRefresh (now ()) credential with
                 | Some why ->
-                    let reason = why + " — sign in again"
+                    let reason = why + ". Sign in again."
                     observe (RefreshFailed (target, reason))
                     return Error reason
                 | None ->

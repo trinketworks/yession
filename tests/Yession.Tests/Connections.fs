@@ -534,7 +534,7 @@ let private githubTests =
             Expect.equal (GitHubConnection.pollOutcome 5 """{"error":"slow_down"}""") (GitHubConnection.PollPending 10) "slow_down widens by the spec's 5s"
             Expect.equal
                 (GitHubConnection.pollOutcome 5 """{"error":"expired_token"}""")
-                (GitHubConnection.PollFailed "the device code expired — start the sign-in again")
+                (GitHubConnection.PollFailed "the device code expired. Start the sign-in again.")
                 "expiry is terminal"
             Expect.equal
                 (GitHubConnection.pollOutcome 5 """{"error":"access_denied"}""")
@@ -996,7 +996,7 @@ let private brokerTests =
                 let! _ = store.Set t (BrokeredCredentialCodec.toString finished)
                 let! resolved = broker.Resolve t
                 match resolved with
-                | Error reason -> Expect.stringContains reason "sign in again" "the refusal says what to DO"
+                | Error reason -> Expect.stringContains reason ". Sign in again." "the refusal says what to DO"
                 | Ok _ -> failwith "a lapsed refresh token cannot resolve"
                 Expect.equal endpoint.Requests.Count 0 "and nothing was asked of the provider"
             }
@@ -1025,7 +1025,7 @@ let private brokerTests =
                           Dialect = FormEncoded }
                 let! _ = store.Set t (BrokeredCredentialCodec.toString finished)
                 match! broker.Resolve t with
-                | Error reason -> Expect.stringContains reason "sign in again" "the refusal says what to DO"
+                | Error reason -> Expect.stringContains reason ". Sign in again." "the refusal says what to DO"
                 | Ok _ -> failwith "a grant that cannot rotate cannot resolve, however fresh its access token"
                 Expect.equal endpoint.Requests.Count 0 "and nothing was asked of the provider"
             }

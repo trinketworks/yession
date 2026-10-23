@@ -675,7 +675,7 @@ let startFull
                             // which is the asymmetry worth having: a human can always stop
                             // the machine.
                             if not (terminals.OpenedByAgent id) then
-                                return Error "that terminal is not yours — it belongs to someone in this session"
+                                return Error "that terminal is not yours. It belongs to someone in this session."
                             else return! terminals.Close id ActorRef.Agent "the agent finished with it"
                         }
                   List =

@@ -1678,7 +1678,7 @@ let private proxyTests =
                 | Ok _ -> failwith "expected a refusal"
                 | Error e ->
                     Expect.stringContains e "'github' was refused it: an srt sandbox takes a connection by git alone" "the reason it was refused"
-                    Expect.isFalse (e.Contains "select a resource") "and not advice to select it again"
+                    Expect.isFalse (e.Contains "Select a resource") "and not advice to select it again"
                     Expect.isEmpty fake.Asked "and the proxy never heard of it"
             }
 

@@ -44,7 +44,7 @@ open Yession.Session
 let private canonicalPaths (file: ProfileFile) : Result<ProfileFile, string> =
     let offence (kind: string) (written: string) (real: string) =
         sprintf
-            "%s %s is reached through a symlink — a sandbox is granted %s and denied %s, so write %s here (and in anything that points at it)"
+            "%s %s is reached through a symlink. A sandbox is granted %s and denied %s. Write %s here (and in anything that points at it)."
             kind written real written real
     ResourceProfile.ceiling file.Resources
     |> Set.toList
@@ -108,10 +108,10 @@ let private queryDef : QueryDef =
     { Name = queryName
       Title = "resources"
       Description =
-        "What this host offers a sandbox, as the operator declared it. Each row is a name a \
-         repo may select, and what selecting it finally grants — which is the whole closure, \
-         not the line written beside the name. A resource is sensitive when something it \
-         reaches is, however deeply."
+        "What this host offers a sandbox, as the operator declared it. Each row is a name that a \
+         repo may select. The row shows all that selecting the name grants in the end: the whole \
+         closure, not only the line written beside the name. A resource is sensitive when \
+         anything it reaches is sensitive, at any depth."
       Shape =
         Rows
             [ QueryColumn.create "resource" "resource"

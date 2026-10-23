@@ -1320,7 +1320,7 @@ let private sandboxPolicyTests =
         // The same rule on the backend that briefly forgot it: the host backend CLAIMED
         // `OverlayMounts` while its own comment said no backend does, so an overlay grant
         // realised as-asked and died downstream with an internal-bug sentence — "reached a
-        // policy without being realised" — where the operator's mistake deserved the
+        // policy, but it was not realised" — where the operator's mistake deserved the
         // withheld one. A union mount is a provision, like a named volume: not something
         // an unconfined backend can permit into existence.
         testCase "the host backend withholds an overlay with the operator-facing refusal" <| fun () ->
@@ -1334,7 +1334,7 @@ let private sandboxPolicyTests =
             | Ok _ -> failwith "expected a refusal"
             | Error e ->
                 Expect.isTrue (e.Contains "read or write") (sprintf "what to write instead, said: %s" e)
-                Expect.isFalse (e.Contains "without being realised") (sprintf "never the internal-bug sentence, said: %s" e)
+                Expect.isFalse (e.Contains "was not realised") (sprintf "never the internal-bug sentence, said: %s" e)
 
         // A toolchain the operator named is the one that answers, so its directory goes in
         // FRONT. This is the first step away from the toolchain being present by accident.

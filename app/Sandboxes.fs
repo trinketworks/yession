@@ -665,7 +665,7 @@ let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
                 | ResourceMountMode.Overlay ->
                     Error (
                         sprintf
-                            "%s reached a policy without being realised against this host — an overlay is withheld, never granted"
+                            "%s reached a policy, but it was not realised against this host. An overlay is withheld, never granted."
                             mount.From)
             // Its own axis, not two file grants. Connecting to a unix socket is a
             // permission of its own — macOS wants `network-outbound` on the path — and the
@@ -1521,7 +1521,7 @@ module DockerSandbox =
                             if said.ToString().Contains startedMark then settle (Ok ()))
                         Readables.text stderr (fun text -> said.Append text |> ignore)
                         stream.onEnd (fun () ->
-                            settle (Error (sprintf "the container's start command ended before it reported itself started; it said: %s" (said.ToString().Trim ()))))
+                            settle (Error (sprintf "the container's start command ended before it reported a start. It said: %s" (said.ToString().Trim ()))))
                         stream.onError (fun error -> settle (Error (StreamError.describe error))))
                 return outcome
             with ex -> return Error (sprintf "could not follow the container's output: %s" ex.Message)
@@ -1661,7 +1661,7 @@ module DockerSandbox =
                         return
                             Error
                                 (sprintf
-                                    "no shell a terminal can instrument%s: looked for %s on PATH and found none. It said: %s"
+                                    "no shell that a terminal can instrument%s. It looked for %s on PATH and found none. It said: %s"
                                     where
                                     (String.concat ", " asked)
                                     (let text = said.ToString().Trim () in if text = "" then "nothing" else text))
@@ -2413,7 +2413,7 @@ module SrtSandbox =
             match resolveSrt () with
             | "" ->
                 Error
-                    "cannot locate @anthropic-ai/sandbox-runtime's own files, which every confined command execs"
+                    "cannot locate @anthropic-ai/sandbox-runtime's own files. Every confined command execs them."
             | srtPackage ->
                 Ok
                     { Bwrap = named "YESSION_BIN_BWRAP"
@@ -2526,7 +2526,7 @@ module SrtSandbox =
     /// that contradicts it.
     let probeDidNotRun (config: SrtConfig) (attempts: int) (reason: string) : string =
         sprintf
-            "srt refused to start %d times running: %s. Every tool it needs is executable in this process (%s), so what failed is srt's own dependency probe — a forked `which` under a one-second timeout, which reports a fork it could not take as a tool that is not there — and not the tool it names."
+            "srt refused to start %d times running: %s. Every tool it needs is executable in this process (%s). The failure is thus in srt's own dependency probe, not in the tool it names. That probe is a forked `which` under a one-second timeout. When it cannot take a fork, it reports the tool as not there."
             attempts
             reason
             (namedTools config |> String.concat ", ")
@@ -2752,7 +2752,7 @@ module SrtSandbox =
                         | Error reason -> say (HostWire.Refused reason)
                     }
                     |> Async.StartImmediate
-                | HostWire.Start _, Some _ -> eprintfn "srt host: a second start was ignored; this host confines one sandbox"
+                | HostWire.Start _, Some _ -> eprintfn "srt host: a second start was ignored. This host confines one sandbox."
                 | HostWire.Wrap (id, _, _), None -> say (HostWire.Unconfined (id, "the srt host has not been started"))
                 | HostWire.Wrap (id, command, cwd), Some started ->
                     async {
@@ -3264,10 +3264,10 @@ let forBackend (backend: SandboxBackend) (name: string) (spec: EnvironmentSpec) 
     | (HostBackend | SrtBackend), Container container ->
         Error (
             sprintf
-                "this session's work sandbox is %s, which runs no container%s — a container needs the docker backend"
+                "this session's work sandbox is %s, which runs no container.%s A container needs the docker backend."
                 (SandboxBackend.describe backend)
                 (match container.Command with
-                 | Some command -> sprintf " and so has nothing to run '%s' as" command
+                 | Some command -> sprintf " It thus has nothing to run '%s' as." command
                  | None -> ""))
     | HostBackend, Confinement -> Ok (HostSandbox.create ())
     // Docker always IS a container; a spec that asked for nothing in particular gets the

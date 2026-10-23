@@ -443,9 +443,9 @@ let private queryDef : QueryDef =
     { Name = queryName
       Title = "MCP servers"
       Description =
-        "The MCP servers this session was given, each with where it is, whether this \
-         session is connected to it, and how many tools it is contributing. Read from the \
-         connections themselves, so an unreachable server says so rather than being absent."
+        "The MCP servers this session was given. Each row shows where the server is, whether \
+         this session is connected to it, and how many tools it contributes. The rows come from \
+         the connections themselves. An unreachable server is thus a row that says so. It is not absent."
       Shape =
         Rows
             [ QueryColumn.create "name" "name"

@@ -59,6 +59,6 @@ let assignedIn (retirements: Retirement list) (text: string) : Retirement list =
 let complaint (found: Retirement list) : string =
     let lines = found |> List.map (fun r -> sprintf "  %s is now %s" r.Was r.Now) |> String.concat "\n"
     sprintf
-        "the environment sets %d variable(s) this bin no longer reads:\n%s\n\nSet the option instead. Refused rather than ignored, because a setting that is read by nobody is the behaviour you asked for silently not happening."
+        "the environment sets %d variable(s) that this bin no longer reads:\n%s\n\nSet the option instead. This bin refuses them and does not ignore them. If nothing reads a setting, the behaviour you asked for silently does not happen."
         (List.length found)
         lines

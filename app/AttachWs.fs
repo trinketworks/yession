@@ -328,7 +328,7 @@ let private connect
                     JS.console.warn (
                         "attach "
                         + describing ticket
-                        + ": ignoring a TEXT frame — text frames are control, device output goes in BINARY frames (docs/streams.md)"
+                        + ": ignoring a TEXT frame. Text frames are control. Device output goes in BINARY frames (docs/streams.md)."
                     )
             // A control frame of a type this build does not know is a provider written against
             // a later spec, doing what `docs/streams.md` MAY 9 asks of THIS end: ignored, and

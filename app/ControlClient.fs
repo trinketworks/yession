@@ -175,12 +175,12 @@ let activityReporter (baseUrl: string) (secret: string) : bool -> Async<unit> =
                     |> Interop.awaitPromise
                 if reply.status <> 200 then
                     eprintfn
-                        "[activity] the manager refused an activity report (HTTP %d: %s) — this session will be stopped when its idle window elapses"
+                        "[activity] the manager refused an activity report (HTTP %d: %s). The manager will stop this session when its idle window elapses."
                         reply.status
                         (reply.body.Trim ())
             with e ->
                 eprintfn
-                    "[activity] could not reach the manager to report activity (%s) — this session will be stopped when its idle window elapses"
+                    "[activity] could not reach the manager to report activity (%s). The manager will stop this session when its idle window elapses."
                     e.Message
         }
 

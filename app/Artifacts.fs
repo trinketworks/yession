@@ -153,7 +153,7 @@ let private settle
             return
                 Error (
                     sprintf
-                        "%s grew to %s while it was being shared, past the %s an artifact may be"
+                        "%s grew to %s while it was shared. That is past the %s an artifact may be."
                         said
                         (ContentSize.render landedBytes)
                         capSaid)
@@ -187,7 +187,7 @@ type UploadRefusal =
 
 let private tooBig (name: string) (bytes: int64) =
     UploadRefusal.Refused (
-        sprintf "%s is %s, and an artifact may be at most %s" name (ContentSize.render bytes) capSaid)
+        sprintf "%s is %s. An artifact may be at most %s." name (ContentSize.render bytes) capSaid)
 
 /// Stream a request body into `part` (in `dir`, made if it is not there), and answer with how
 /// many bytes landed. The one way a browser's bytes reach this disk, for an artifact and for a
@@ -378,9 +378,9 @@ let private queryDef : QueryDef =
     { Name = queryName
       Title = "artifacts"
       Description =
-        "What has been shared into this session as an artifact: every version of every name, \
-         with the address to point at it by. A name is never overwritten — sharing it again \
-         adds a version, and the one marked latest is what the name on its own resolves to."
+        "What was shared into this session as an artifact. Each row is one version of one name, \
+         with the address that points at it. Sharing a name again never overwrites it. It adds \
+         a version. The name alone resolves to the version marked latest."
       Shape =
         Rows
             [ QueryColumn.create "artifact" "artifact"
@@ -474,7 +474,7 @@ let resolve (artifactsDir: string) (ref: ContentRef) : Result<ArtifactRef, strin
     | Ok (ArtifactAddress.Name name) ->
         match latestOf artifactsDir name with
         | Some latest -> Ok latest
-        | None -> Error (sprintf "nothing is shared here under the name '%s' — the artifacts query lists what there is" name)
+        | None -> Error (sprintf "nothing is shared here under the name '%s'. The artifacts query lists what there is." name)
 
 /// One artifact for a reader that is not a browser: its text, or — for a picture — the
 /// picture, so an agent can look at what it shared rather than describe it from its name.
@@ -505,7 +505,7 @@ let read (artifactsDir: string) (ref: ContentRef) : Async<Result<FileContent, st
                     return
                         Error (
                             sprintf
-                                "%s is %s, past the %s this can carry back — it is served whole at %s"
+                                "%s is %s. That is past the %s this can carry back. The whole file is served at %s."
                                 name
                                 (ContentSize.render bytes)
                                 (ContentSize.render cap)
@@ -593,7 +593,7 @@ let routes
                 match actor, ArtifactAddress.ofContent ref with
                 | Error why, _ -> refuse 400 why
                 | Ok _, Ok (ArtifactAddress.Version _) ->
-                    refuse 409 "a version's bytes never change — send the name, and the store adds the next version"
+                    refuse 409 "the bytes of a version never change. Send the name, and the store adds the next version."
                 | Ok _, Error why -> refuse 404 why
                 | Ok actor, Ok (ArtifactAddress.Name name) ->
                     Async.StartImmediate (
@@ -691,13 +691,13 @@ let weighed (sandbox: SandboxRef) (path: string) (code: int, out: string, err: s
     | 3 ->
         Error (
             sprintf
-                "there is no %s in sandbox '%s' — share a path that exists there, and name the sandbox if the file is in another one"
+                "there is no %s in sandbox '%s'. Share a path that exists there. If the file is in another sandbox, name that sandbox."
                 path
                 (SandboxRef.render sandbox))
     | 4 ->
         Error (
             sprintf
-                "%s is a directory, and an artifact is one file — share the file inside it, or archive it and share that"
+                "%s is a directory. An artifact is one file. Share a file inside it, or share an archive of it."
                 path)
     | 5 -> Error (sprintf "%s is not readable in sandbox '%s'" path (SandboxRef.render sandbox))
     | _ ->
@@ -811,7 +811,7 @@ let create
                     return
                         Error (
                             sprintf
-                                "%s is %s, and an artifact may be at most %s — share a smaller cut of it, or leave it in the sandbox and say where it is"
+                                "%s is %s. An artifact may be at most %s. Share a smaller part of it, or keep it in the sandbox and say where it is."
                                 source
                                 (ContentSize.render bytes)
                                 capSaid)
@@ -835,7 +835,7 @@ let create
                             return
                                 Error (
                                     sprintf
-                                        "nothing arrived for %s: sandbox '%s' reported copying it to %s, and there is nothing at %s on this side"
+                                        "nothing arrived for %s. Sandbox '%s' reported a copy to %s, but there is nothing at %s on this side."
                                         name
                                         (SandboxRef.render sandbox)
                                         target

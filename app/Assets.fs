@@ -108,7 +108,7 @@ let load (fallbackDir: string) : AssetSet =
             | Error Missing.Absent -> None
             | Error (Missing.Unreadable (path, reason)) ->
                 failwithf
-                    "declared asset %s is there and unreadable at %s: %s"
+                    "declared asset %s exists, but it is not readable at %s: %s"
                     (AssetFile.path file)
                     path
                     reason)
