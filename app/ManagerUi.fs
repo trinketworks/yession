@@ -419,12 +419,13 @@ let private tableTemplate
     // about the new session from the rows stream anyway.
     html $"""
         <section class="flex flex-col gap-3" data-sessions data-stream="{ManagerRoute.path ManagerRoute.SessionRows}">
-          <!-- On a phone the chips, now carrying counts, take a line of their own UNDER the
-               label and Create rather than wrapping wherever the width happens to break:
-               `basis-full` + `order-last` is a decision, a wrap is luck. -->
-          <div class="flex items-center gap-y-3 gap-x-2.5 flex-wrap">
-            <span class="{Style.label}">sessions</span>
-            <div class="flex items-center gap-1.5 ml-2 phone:ml-0 phone:basis-full phone:order-last" role="group" aria-label="Show sessions">
+          <!-- No "sessions" label: the chips name the content and the band names the page, so
+               chips and Create share one line at every width (three stacked lines of caps
+               before the first row was the wall of text docs/visual-design.md, Type, warns of).
+               The chip group pulls back by its own padding so the lit word sits on the
+               column's rail, as a selected pivot tab does. -->
+          <div class="flex items-center gap-x-2.5">
+            <div class="flex items-center gap-1.5 -ml-2" role="group" aria-label="Show sessions">
               {filterChip query (countOf Active) Active}
               {filterChip query (countOf Archived) Archived}
             </div>
@@ -435,7 +436,9 @@ let private tableTemplate
             </form>
           </div>
           <table class="{Col.table}">
-            <thead>
+            <!-- On a phone the only head left standing would be `name`, over a column whose
+                 content is plainly a name, so the head row yields with the columns it labels. -->
+            <thead class="phone:hidden">
               <tr class="{Style.tableRule}">
                 <th scope="col" class="{Style.tableHead}">name</th>
                 <th scope="col" class="{Style.tableHead} {Col.id}">id</th>
