@@ -196,7 +196,7 @@ module ToolUseLog =
 
     let private cappedResult (text: string) : string =
         if text.Length <= resultCap then text
-        else text.Substring (0, resultCap) + sprintf "\n… (%d more characters — read the full answer in a terminal)" (text.Length - resultCap)
+        else text.Substring (0, resultCap) + sprintf "\n… (%d more characters: read the full answer in a terminal)" (text.Length - resultCap)
 
     let wrap (log: ToolUseLog) (registry: ToolRegistry) : ToolRegistry =
         { registry with

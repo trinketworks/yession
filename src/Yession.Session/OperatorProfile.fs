@@ -66,7 +66,7 @@ module OperatorProfile =
             | "overlay" -> Decode.succeed ResourceMountMode.Overlay
             | other ->
                 Decode.fail (
-                    sprintf "'%s' is not a mount mode — a mount is read, write or overlay" other))
+                    sprintf "'%s' is not a mount mode. A mount is read, write or overlay" other))
 
     /// `from` is required; `at` defaults to it, because the common case is a path that means
     /// the same on both sides and writing it twice is how the two drift.
@@ -94,7 +94,7 @@ module OperatorProfile =
             else
                 let value = float digits
                 match unit with
-                | _ when value = 0.0 -> Decode.fail (sprintf "'%s' renews continuously — an interval must be greater than zero" raw)
+                | _ when value = 0.0 -> Decode.fail (sprintf "'%s' renews continuously. An interval must be greater than zero" raw)
                 | "s" -> Decode.succeed (TimeSpan.FromSeconds value)
                 | "m" -> Decode.succeed (TimeSpan.FromMinutes value)
                 | "h" -> Decode.succeed (TimeSpan.FromHours value)
@@ -153,7 +153,7 @@ module OperatorProfile =
             | Some e -> Error (sprintf "%s: %s" connection e)
             | None ->
                 match raw |> List.choose (ConnectionRoute.parse >> Result.toOption) |> List.distinct with
-                | [] -> Error (sprintf "%s names no route, so it forwards nothing — name git, api or both" connection)
+                | [] -> Error (sprintf "%s names no route and forwards nothing. Name git, api or both" connection)
                 | routes -> Ok (routes |> List.map (fun route -> Connection (connection, route)))
         Decode.oneOf [
             Decode.keyValuePairs stringList |> Decode.map Choice1Of2
@@ -168,7 +168,7 @@ module OperatorProfile =
             | Choice2Of2 names ->
                 Decode.fail (
                     sprintf
-                        "a connection names the routes it is forwarded by — write `connection: { %s }` with the routes this resource grants"
+                        "a connection names the routes that forward it. Write `connection: { %s }` with the routes this resource grants"
                         (names |> List.map (sprintf "%s: [git, api]") |> String.concat ", ")))
 
     /// A leaf declares primitives directly, and may declare several: the things that make one
@@ -209,7 +209,7 @@ module OperatorProfile =
             // none — the same failure an unknown key would be, arriving by a different route.
             failIf
                 (List.isEmpty leaves)
-                "this resource grants nothing — name at least one of mount, socket, endpoint, env, exec, volume or connection"
+                "this resource grants nothing. Name at least one of: mount, socket, endpoint, env, exec, volume or connection"
                 (Decode.succeed (ResourceDecl.Leaf (leaves, sensitivity))))
 
     /// An ARRAY is a composition. Sensitivity is deliberately not a key here: a composite is
@@ -274,7 +274,7 @@ module OperatorProfile =
                     |> Result.bind (fun (taken: Map<string, VolumeMaintenance>) ->
                         match Map.tryFind name taken with
                         | Some existing when existing <> m ->
-                            Error (sprintf "volume '%s' is maintained two different ways — declare its maintain once" name)
+                            Error (sprintf "volume '%s' has two different maintain declarations. Declare its maintain once" name)
                         | _ -> Ok (Map.add name m taken)))
                 (Ok Map.empty)
             |> function
@@ -301,7 +301,7 @@ module OperatorProfile =
         Decode.string
         |> Decode.map (fun text -> text.Trim ())
         |> Decode.andThen (fun text ->
-            failIf (text = "") "agent guidance says nothing — write what the agent should know about this host, or leave 'guidance' out" (Decode.succeed text))
+            failIf (text = "") "agent guidance says nothing. Write what the agent should know about this host. Otherwise, remove 'guidance'" (Decode.succeed text))
 
     /// A strategy, by the name `PromptStrategy.name` gives it. A name this build does not have
     /// is refused with the ones it does, so a typo cannot run the agent on a prompt nobody chose.
@@ -331,7 +331,7 @@ module OperatorProfile =
         |> Decode.andThen (fun (words, strategy) ->
             match words, strategy with
             | None, None ->
-                Decode.fail "the agent block says nothing — give it guidance (what the agent should know about this host) or a prompt strategy, or leave the block out"
+                Decode.fail "the agent block says nothing. Give it guidance (what the agent should know about this host) or a prompt strategy. Otherwise, remove the block"
             | _ ->
                 Decode.succeed
                     { Guidance = words
@@ -347,7 +347,7 @@ module OperatorProfile =
             failIf
                 (List.contains "default" keys)
                 (sprintf
-                    "'default' is now 'always' in %s — every sandbox on this host holds what it names and no repo can decline it, which is not what a default is"
+                    "'default' is now 'always' in %s. Every sandbox on this host holds what it names. No repo can decline it. That is not what a default is"
                     FileName)
                 (Decode.succeed ()))
 

@@ -115,7 +115,7 @@ module ConfigFile =
             | reserved ->
                 Decode.fail (
                     sprintf
-                        "%s is reserved and a repo may not set it: %s"
+                        "%s is reserved. A repo may not set it: %s"
                         ReservedPrefix
                         (String.concat ", " (List.sort reserved))))
 
@@ -140,9 +140,9 @@ module ConfigFile =
             let segments = path.Split ([| '/'; '\\' |]) |> List.ofArray
             if path = "" then Decode.fail (sprintf "%s cannot be blank" what)
             elif path.StartsWith "/" || path.StartsWith "\\" then
-                Decode.fail (sprintf "%s must be inside the checkout, and '%s' is absolute" what path)
+                Decode.fail (sprintf "%s must be inside the checkout. '%s' is absolute" what path)
             elif segments |> List.contains ".." then
-                Decode.fail (sprintf "%s must be inside the checkout, and '%s' climbs out of it" what path)
+                Decode.fail (sprintf "%s must be inside the checkout. '%s' climbs out of it" what path)
             else Decode.succeed path)
 
     /// `repos:` — where the session's checkouts appear in this sandbox.
@@ -164,7 +164,7 @@ module ConfigFile =
             if path = "" then Decode.fail "repos cannot be blank"
             elif not (path.StartsWith "/") then
                 Decode.fail (
-                    sprintf "repos is where the checkouts appear inside the sandbox, so it must be absolute, and '%s' is not" path)
+                    sprintf "repos must be absolute: it is where the checkouts appear inside the sandbox. '%s' is not absolute" path)
             elif segments |> List.contains ".." then
                 Decode.fail (sprintf "repos cannot climb, and '%s' does" path)
             else Decode.succeed path)
@@ -206,7 +206,7 @@ module ConfigFile =
             | source ->
                 Decode.fail (
                     sprintf
-                        "'%s' is not a source a %s may name — say 'workspace'; a shared named volume is the operator's to offer as a `volume:` resource, selected with `uses:`"
+                        "'%s' is not a source a %s may name. Write 'workspace'. The operator offers a shared named volume as a `volume:` resource. Select it with `uses:`"
                         source
                         FileName))
 
@@ -230,7 +230,7 @@ module ConfigFile =
               Decode.string
               |> Decode.andThen (fun raw ->
                   match ShellWords.split raw with
-                  | Ok [] -> Decode.fail (sprintf "%s is empty — write the words to run, or leave it out" field)
+                  | Ok [] -> Decode.fail (sprintf "%s is empty. Write the words to run. Otherwise, remove the key" field)
                   | Ok words -> Decode.succeed words
                   | Error reason -> Decode.fail (sprintf "%s: %s" field reason)) ]
 
@@ -287,7 +287,7 @@ module ConfigFile =
                 (cmd, command)))
         |> Decode.andThen (fun (spec, (cmd, command)) ->
             match cmd, command with
-            | Some _, Some _ -> Decode.fail "`cmd` and `command` are one key by two names — write one of them"
+            | Some _, Some _ -> Decode.fail "`cmd` and `command` are two names for one key. Write only one of them"
             | _ -> Decode.succeed spec)
 
     let private sandboxKeys =
@@ -302,7 +302,7 @@ module ConfigFile =
         |> Decode.andThen (function
             | Some _ ->
                 Decode.fail
-                    "`forward:` is gone — a connection is a resource now: the operator offers it (`github: { connection: { github: [git, api] } }`) and a sandbox selects it under `uses` or `wants`"
+                    "`forward:` no longer exists. A connection is a resource now. The operator offers it (`github: { connection: { github: [git, api] } }`). A sandbox selects it under `uses` or `wants`"
             | None -> Decode.succeed ())
 
     /// `dialect:` — one of the shells a terminal can instrument, by name.
@@ -314,7 +314,7 @@ module ConfigFile =
             else
                 Decode.fail
                     (sprintf
-                        "'%s' is not a shell dialect a terminal can instrument — one of %s"
+                        "'%s' is not a shell dialect that a terminal can instrument. Use one of %s"
                         raw
                         (String.concat ", " TerminalShell.dialects)))
 
@@ -362,7 +362,7 @@ module ConfigFile =
             // such choice — the session's own shell is what it gets — so the key is refused
             // there rather than read and ignored.
             match dialect, container with
-            | Some _, None -> Decode.fail "`dialect` chooses a container's shell — this sandbox declares no `container`"
+            | Some _, None -> Decode.fail "`dialect` chooses a container's shell. This sandbox declares no `container`"
             | _ -> Decode.succeed decl)
 
     /// Sandbox names, refusing a clash INSIDE one file.

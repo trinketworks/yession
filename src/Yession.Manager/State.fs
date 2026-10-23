@@ -78,7 +78,7 @@ module ManagerState =
         match tryFind sessionId state with
         | None -> Error (sprintf "unknown session %s" (SessionId.value sessionId))
         | Some record when record.ArchivedAt.IsSome ->
-            Error (sprintf "session %s is archived — unarchive it to start it" (SessionId.value sessionId))
+            Error (sprintf "session %s is archived. Unarchive it to start it" (SessionId.value sessionId))
         | Some record -> Ok record
 
     /// Archive a session. Idempotent — the FIRST archival's timestamp stands, because "when
