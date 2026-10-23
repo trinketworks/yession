@@ -122,6 +122,8 @@ type internal MkdirOptions =
 type internal RmOptions =
     abstract recursive : bool with get, set
     abstract force : bool with get, set
+    abstract maxRetries : int with get, set
+    abstract retryDelay : int with get, set
 
 [<AutoOpen>]
 module Files =
@@ -176,6 +178,19 @@ module Files =
             (jsOptions<RmOptions> (fun o ->
                 o.recursive <- true
                 o.force <- true))
+
+    /// `removeTree`, for a tree something may still be writing into as it goes: Node retries
+    /// the removal (`maxRetries`, waiting `retryDelay` ms more each time) when a directory it
+    /// emptied is found not empty (`ENOTEMPTY`), or busy. The waits block: this is for a tree
+    /// whose writers are already ending, not one that is still in use.
+    let removeTreeRetrying (retries: int) (delayMs: int) (path: string) : unit =
+        rmSyncWithOptions
+            path
+            (jsOptions<RmOptions> (fun o ->
+                o.recursive <- true
+                o.force <- true
+                o.maxRetries <- retries
+                o.retryDelay <- delayMs))
 
     /// Copy a file, overwriting the destination. `Fable.Node` does not type `copyFileSync`.
     [<Import("copyFileSync", "node:fs")>]

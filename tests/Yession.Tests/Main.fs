@@ -104,6 +104,7 @@ let all =
         // Whether the browser agrees takes the browser, on Node: the launcher the camera uses.
         Tag.needs "Finding Chromium" [] (fun () -> CdpChromium.findingTests)
         Tag.needs "The CDP client against a real Chromium" [ Tag.Chromium ] (fun () -> CdpChromium.tests)
+        Tag.needs "Closing Chromium" [ Tag.Chromium ] (fun () -> CdpChromium.closingTests)
         Tag.needs "Node platform bindings, aborting and relaying" [] (fun () -> NodeExtras.eventTests)
         Tag.needs "Node platform bindings, a given environment" [ Tag.Ports ] (fun () -> NodeExtras.seamTests)
         Tag.needs "Editor" [] (fun () -> Editor.tests)
