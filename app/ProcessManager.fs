@@ -842,15 +842,24 @@ let createWithUi
     let audit : SecretStore.Audit.Sink = SecretStore.Audit.stdout
 
     // The secret store (Plan 06). A corrupt durable store fails the boot loudly — it
-    // must never look empty. The ephemeral mode says so at boot and leaves any durable
-    // file from a previous run untouched (unread, never deleted).
+    // must never look empty. A credential manager that cannot give the key yet — a locked
+    // keychain, read before anyone has logged in — is waited out instead: exiting would
+    // only have the supervisor restart into the same lock every few seconds, and the
+    // Manager comes up by itself once the keychain unlocks. The ephemeral mode says
+    // so at boot and leaves any durable file from a previous run untouched (unread,
+    // never deleted).
     let secretsPath = sprintf "%s/secrets.json" options.DataDir
     let! secretStore =
         async {
             match options.Secrets with
             | None -> return None
             | Some (DurableSecrets keyStore) ->
-                match! SecretStore.openStore (Some secretsPath) keyStore with
+                let waitingForKey (e: SecretStore.OpenError) =
+                    audit (SecretStore.Audit.storeOpenFailed (SecretStore.OpenError.kind e) (SecretStore.OpenError.describe e))
+                    eprintfn
+                        "Yession Manager: waiting for the OS credential manager to give the secrets key (retrying every 30 s): %s"
+                        (SecretStore.OpenError.describe e)
+                match! SecretStore.openStoreWaiting 30_000 waitingForKey (Some secretsPath) keyStore with
                 | Ok store ->
                     audit (SecretStore.Audit.storeOpen "durable" keyStore.Name store.KekMinted store.EntriesAtOpen)
                     return Some store

@@ -64,16 +64,44 @@ type ResolveSecret = SessionId -> SecretName -> Async<Result<string, string>>
 /// (created on first run, durable in the credential manager BEFORE first use), file
 /// loaded through the codec (missing = empty; corrupt = loud Error; KekId mismatch =
 /// distinct loud Error). Ephemeral when `None`: same semantics, zero file I/O.
+///
+/// A KEK is minted ONLY when there is no durable file. A key store that answers "no
+/// key" while a sealed file exists is a failure, never a first run: a locked macOS
+/// keychain reads exactly like an empty one, and minting there would overwrite the real
+/// key the moment the keychain unlocked, leaving every entry in the file unreadable.
 let openStore (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async<Result<SecretStore, OpenError>> =
     async {
+        // The durable file is read first: whether a missing key may be minted depends on it.
+        let existing : Result<(string * SecretsFile) option, OpenError> =
+            match persistPath with
+            | Some path when Fs.exists path ->
+                match SecretsCodec.fromString (Fs.readText path) with
+                | Error e -> Error (CorruptStore (path, e))
+                | Ok file -> Ok (Some (path, file))
+            | _ -> Ok None
+        match existing with
+        | Error e -> return Error e
+        | Ok existing ->
+
         // Resolve (or mint) the KEK — the only moment the raw key bytes are in scope.
         let! stored = keyStore.Get ()
-        match stored |> Result.bind (function
-                        | Some raw -> KeyStore.splitPayload raw |> Result.map (fun p -> p, false)
-                        | None ->
-                            let fresh = Interop.randomSecret (), SecretsCipher.generateKek ()
-                            Ok (fresh, true)) with
-        | Error e -> return Error (KeyStoreFailure (sprintf "secrets key store (%s): %s" keyStore.Name e))
+        let keyStoreFailure detail = KeyStoreFailure (sprintf "secrets key store (%s): %s" keyStore.Name detail)
+        let resolved =
+            match stored, existing with
+            | Error e, _ -> Error (keyStoreFailure e)
+            | Ok (Some raw), _ -> KeyStore.splitPayload raw |> Result.map (fun p -> p, false) |> Result.mapError keyStoreFailure
+            | Ok None, Some (path, file) ->
+                Error (
+                    keyStoreFailure (
+                        sprintf
+                            "the credential manager has no key, but %s is sealed under key %s — not minting a new one over it. A locked keychain reads as empty: unlock it (on macOS, log in to this Mac)"
+                            path
+                            file.KekId
+                    )
+                )
+            | Ok None, None -> Ok ((Interop.randomSecret (), SecretsCipher.generateKek ()), true)
+        match resolved with
+        | Error e -> return Error e
         | Ok ((kekId, kekB64u), minted) ->
             let persist (result: Result<unit, string>) =
                 async {
@@ -87,22 +115,17 @@ let openStore (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async
                 }
             let! persisted = persist (Ok ())
             match persisted with
-            | Error e -> return Error (KeyStoreFailure (sprintf "secrets key store (%s): could not persist the key: %s" keyStore.Name e))
+            | Error e -> return Error (keyStoreFailure (sprintf "could not persist the key: %s" e))
             | Ok () ->
 
             let! cipher = SecretsCipher.importKey kekB64u
 
-            // Load (or initialise) the envelope.
+            // The envelope: the file read above, or a fresh one.
             let initial : Result<SecretsFile, OpenError> =
-                match persistPath with
+                match existing with
                 | None -> Ok (SecretsFile.empty kekId)
-                | Some path when not (Fs.exists path) -> Ok (SecretsFile.empty kekId)
-                | Some path ->
-                    match SecretsCodec.fromString (Fs.readText path) with
-                    | Error e -> Error (CorruptStore (path, e))
-                    | Ok file when file.KekId <> kekId ->
-                        Error (SealedByDifferentKey (path, file.KekId, kekId))
-                    | Ok file -> Ok file
+                | Some (path, file) when file.KekId <> kekId -> Error (SealedByDifferentKey (path, file.KekId, kekId))
+                | Some (_, file) -> Ok file
 
             match initial with
             | Error e -> return Error e
@@ -157,6 +180,23 @@ let openStore (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async
                       EntriesAtOpen = loaded.Entries.Length }
                 return Ok store
     }
+
+/// `openStore`, waiting out a credential manager that cannot answer yet instead of
+/// failing. Every `KeyStoreFailure` is retried every `retryEveryMs` — above all a locked
+/// keychain, which unlocks by itself when the person logs in — while a corrupt or
+/// differently-sealed file still fails at once: no amount of waiting fixes those.
+/// `onWait` hears each distinct failure once, not every attempt.
+let openStoreWaiting (retryEveryMs: int) (onWait: OpenError -> unit) (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async<Result<SecretStore, OpenError>> =
+    let rec attempt (lastSaid: OpenError option) =
+        async {
+            match! openStore persistPath keyStore with
+            | Error (KeyStoreFailure _ as e) ->
+                if lastSaid <> Some e then onWait e
+                do! Async.Sleep retryEveryMs
+                return! attempt (Some e)
+            | result -> return result
+        }
+    attempt None
 
 /// Secret resolution for environment injection (Plan 06): which value a `SecretRef`
 /// means for THIS session, in precedence order — the session's own scoped secret, then
