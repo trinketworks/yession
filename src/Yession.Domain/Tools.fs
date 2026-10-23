@@ -189,7 +189,7 @@ module ToolImage =
                 with _ -> [||]
             match sniff head with
             | Some mediaType -> Ok { MediaType = mediaType; Base64 = encoded }
-            | None -> Error "its bytes are not a PNG, JPEG, GIF or WebP, whatever its name says"
+            | None -> Error "its bytes are not a PNG, JPEG, GIF or WebP. Its name does not change that"
 
     /// Roughly how big, for the sentence beside it.
     let kilobytes (image: ToolImage) : int = image.Data.Length / 4 * 3 / 1000

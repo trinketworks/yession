@@ -53,7 +53,7 @@ module MemoryKill =
     let cause (kill: MemoryKill) : string =
         match kill with
         | SandboxLimit -> "the sandbox reached its memory limit"
-        | MachineOutOfMemory -> "the machine ran out of memory, and the kernel picked this process"
+        | MachineOutOfMemory -> "the machine had no free memory and the kernel picked this process"
 
     /// How it ended, said after "was": "the shell was killed for memory (…)".
     let described (kill: MemoryKill) : string = sprintf "killed for memory (%s)" (cause kill)
@@ -62,7 +62,7 @@ module MemoryKill =
     /// try again when the other work is done.
     let advice (kill: MemoryKill) : string =
         match kill with
-        | SandboxLimit -> "Use less memory (for example, fewer parallel build jobs), or ask for a higher limit."
+        | SandboxLimit -> "Use less memory (for example, fewer parallel build jobs). As an alternative, ask for a higher limit."
         | MachineOutOfMemory -> "Other work on the machine used the memory, often in another sandbox. Running it again later may work."
 
     /// A stable token for each cause, for a hook to read.

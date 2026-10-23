@@ -86,7 +86,7 @@ module ConnectionRoute =
         | None ->
             Error (
                 sprintf
-                    "'%s' is not a route — a connection is forwarded by %s"
+                    "'%s' is not a route. A connection is forwarded by %s"
                     raw
                     (all |> List.map name |> String.concat " or ")
             )
@@ -452,14 +452,14 @@ module RealisedClosure =
                 Some (
                     HostDistinction.OverlayMounts,
                     LeafRealisation.Withheld
-                        "no backend on this host has a union mount, so declare it read or write rather than let it silently become one")
+                        "no backend on this host has a union mount. Declare it read or write. Do not let it silently become one of them")
             | ResourceMountMode.Read
             | ResourceMountMode.Write -> None
         | Volume _ ->
             Some (
                 HostDistinction.NamedVolumes,
                 LeafRealisation.Withheld
-                    "only a container backend has named volumes — grant this where the sandbox is a container, not here")
+                    "only a container backend has named volumes. Grant this where the sandbox is a container, not here")
         | Variable _
         | Exec _
         // Whether this backend can be reached by the connection's route is the credential
@@ -584,13 +584,13 @@ module GrantNotation =
         match leaf with
         | Mount _ ->
             "path:PATH[>AT]:ro|rw|ovl",
-            "a file or directory, read-only, writable, or writable over a read-only copy, \
-             with >AT the place the sandbox sees it"
+            "a file or directory. ro is read-only. rw is writable. ovl is writable over a \
+             read-only copy. >AT is the place the sandbox sees it"
         | Socket _ -> "sock:PATH", "a unix socket"
         | Endpoint _ -> "net:HOST", "that host may be reached over the network"
         | Volume _ ->
             "vol:NAME>AT",
-            "a named volume at AT, which persists and is shared with every sandbox on this \
+            "a named volume at AT. It persists. It is shared with every sandbox on this \
              host that holds it"
         | Variable _ ->
             "env:NAME=VALUE",
@@ -599,9 +599,9 @@ module GrantNotation =
         | Exec _ -> "exec:PATH", "an executable, on PATH"
         | Connection _ ->
             "conn:NAME/ROUTE",
-            "a connection this session forwards by one route — git through the gateway, api \
-             through the credential proxy — spent as whoever each command runs for, and never \
-             its credential"
+            "a connection this session forwards by one route. git goes through the gateway. \
+             api goes through the credential proxy. It is spent as whoever each command runs \
+             for. It is never spent as its credential"
 
     /// One leaf per kind. What makes `kind` a total match over the vocabulary rather than a
     /// list somebody keeps in step with it.
@@ -630,11 +630,11 @@ module GrantNotation =
     /// other what this host made of it. Last, because that is the order a line is read in.
     let private marks : ((string -> bool) * (string * string)) list =
         [ (fun (line: string) -> line.StartsWith "!"),
-          ("!GRANT", "sensitive, which is the operator saying this one is worth being told about")
+          ("!GRANT", "sensitive. The operator says this grant is worth being told about")
           (fun (line: string) -> line.Contains " ~> "),
           ("GRANT ~> OTHER",
-           "this host cannot scope GRANT, so the sandbox gets OTHER instead, where * is any of \
-            that kind, and \"~> nothing\" is not granted here followed by why") ]
+           "this host cannot scope GRANT. The sandbox gets OTHER instead. * is any grant of \
+            that kind. \"~> nothing\" means not granted here. The reason follows it") ]
 
     /// Every entry, in reading order, beside the question "does this line use it".
     let private entries : ((string -> bool) * (string * string)) list =
@@ -678,19 +678,19 @@ module ResourceProfile =
         match left, right with
         | Mount a, Mount b when a.At = b.At ->
             sprintf
-                "%s mounts %s two ways at once — %s and %s — so one target has one mode"
+                "%s mounts %s two ways at once (%s and %s). One target has one mode"
                 whose
                 a.At
                 (ResourceLeaf.describe (Mount a))
                 (ResourceLeaf.describe (Mount b))
         | Variable (name, a), Variable (_, b) ->
             sprintf
-                "%s sets %s to '%s' and to '%s' at once, and a variable has one value"
+                "%s sets %s to '%s' and to '%s' at once. A variable has one value"
                 whose
                 name
                 (VariableValue.render a)
                 (VariableValue.render b)
-        | a, b -> sprintf "%s asks for %s and %s at once, and they cannot both hold" whose (ResourceLeaf.describe a) (ResourceLeaf.describe b)
+        | a, b -> sprintf "%s asks for %s and %s at once. They cannot both hold" whose (ResourceLeaf.describe a) (ResourceLeaf.describe b)
 
     /// Depth-first walk yielding either every name reachable from `start`, or the path of a
     /// cycle. The path, not the fact: "there is a cycle" is a refusal nobody can act on by
@@ -701,7 +701,7 @@ module ResourceProfile =
                 let cycle = (path |> List.rev |> List.skipWhile (fun step -> step <> name)) @ [ name ]
                 Error (
                     sprintf
-                        "the resource '%s' contains itself: %s — a resource may not compose a resource that composes it"
+                        "the resource '%s' contains itself: %s. A resource may not compose a resource that composes it"
                         (render name)
                         (cycle |> List.map render |> String.concat " -> "))
             elif Set.contains name seen then Ok seen
@@ -710,7 +710,7 @@ module ResourceProfile =
                 | None ->
                     Error (
                         sprintf
-                            "the resource '%s' composes '%s', which this profile does not declare — a composition may only name resources declared beside it (declared: %s)"
+                            "the resource '%s' composes '%s'. This profile does not declare it. A composition may only name resources declared beside it (declared: %s)"
                             (path |> List.tryHead |> Option.map render |> Option.defaultValue (render name))
                             (render name)
                             (listed (declarations |> Map.toList |> List.map fst)))
@@ -763,7 +763,7 @@ module ResourceProfile =
             |> List.filter (fun (_, n) -> n > 1)
             |> List.map fst
         if not (List.isEmpty duplicates) then
-            Error (sprintf "these resources are declared twice: %s — a name has one meaning in a profile" (listed duplicates))
+            Error (sprintf "these resources are declared twice: %s. A name has one meaning in a profile" (listed duplicates))
         else
 
         let byName = Map.ofList declarations
@@ -799,7 +799,7 @@ module ResourceProfile =
                             | (variable, connection) :: _ ->
                                 Error (
                                     sprintf
-                                        "the resource '%s' lends %s '${%s.token}' and does not forward %s by api, which is the route a token is lent through — grant `connection: { %s: [ api ] }` beside it"
+                                        "the resource '%s' lends %s '${%s.token}' but does not forward %s by api. A token is lent through the api route. Grant `connection: { %s: [ api ] }` beside it"
                                         (render name)
                                         variable
                                         connection
@@ -847,7 +847,7 @@ module ResourceProfile =
         | missing :: _ ->
             Error (
                 sprintf
-                    "this asks for the resource '%s', which this session's operator does not declare — the resources are: %s"
+                    "this asks for the resource '%s'. This session's operator does not declare it. The resources are: %s"
                     (render missing)
                     (listed (declarations |> Map.toList |> List.map fst)))
         | [] ->

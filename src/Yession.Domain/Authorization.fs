@@ -84,7 +84,7 @@ module Policy =
             else Deny "user is not signed in to this session"
         let localAccess () =
             if request.Subject.Local then Permit
-            else Deny "this deployment attributes its users, so it has no local credential"
+            else Deny "this deployment attributes its users. It has no local credential"
         match request.Action, request.Resource with
         // Connection credentials (Plan 08): every action — including the write — is
         // permitted exactly where the caller IS the scope's owner: its own session

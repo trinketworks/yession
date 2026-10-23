@@ -175,7 +175,7 @@ module SandboxDecl =
             | Some dir, None ->
                 Error (
                     sprintf
-                        "'%s' is relative to a checkout, and this sandbox is the session's own rather than a repo's                          — set_shell_profile moves where its terminals start"
+                        "'%s' is relative to a checkout. This sandbox is the session's own, not a repo's. set_shell_profile moves where its terminals start"
                         dir)
         // The context leaves here HOST-absolute — the address the daemon client will
         // actually read — under the same clamp as `workdir`: nothing this arithmetic can
@@ -194,7 +194,7 @@ module SandboxDecl =
                 | Some build, None ->
                     Error (
                         sprintf
-                            "a build context ('%s') is relative to a checkout, and this sandbox is the session's own rather than a repo's"
+                            "a build context ('%s') is relative to a checkout. This sandbox is the session's own, not a repo's"
                             build.ContextPath)
         match workingDirectory, runtime with
         | Error e, _ -> Error e

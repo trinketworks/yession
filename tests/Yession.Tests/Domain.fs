@@ -858,7 +858,7 @@ let private shellProfileTests =
                 Expect.equal (ConversationItem.headline item) "set shell profile for default" "the line says what"
                 Expect.equal
                     (ConversationItem.said item)
-                    "set shell profile for default — terminals start in /repos/octo/hello"
+                    "set shell profile for default (terminals start in /repos/octo/hello)"
                     "the particular says where"
                 Expect.equal item.Author ActorRef.Agent "attributed to whoever set it"
             | other -> failwithf "expected one act-note, got %A" other
@@ -1104,7 +1104,7 @@ let private repoTests =
             match (ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty |> fst).Items with
             | [ item ] ->
                 Expect.equal item.Status Complete "complete"
-                Expect.equal (ConversationItem.said item) "added repo github:octo/hello — on branch main" "and said as before"
+                Expect.equal (ConversationItem.said item) "added repo github:octo/hello (on branch main)" "and said as before"
             | other -> failwithf "one item expected, got %A" other
 
         testCase "repo events fold into the timeline as attributed notes" <| fun () ->
@@ -1192,7 +1192,7 @@ let private repoTests =
                   Woke = None; CausedBy = None }
             Expect.equal
                 (ConversationItem.said note)
-                "added repo github:octo/hello — on branch main"
+                "added repo github:octo/hello (on branch main)"
                 "both halves, in one sentence"
 
         // And nothing invented where there is no second half: a seam printed over an item
@@ -2750,7 +2750,7 @@ let private configTests =
             Expect.equal (CgroupParent.forDriver (Some nested) "cgroupfs") (Ok (Some nested)) "a path as written"
             match CgroupParent.forDriver (Some nested) "systemd" with
             | Ok _ -> failwith "a path is still refused under systemd"
-            | Error reason -> Expect.stringContains reason "A bare name, like yession" "the refusal says which spelling works under both"
+            | Error reason -> Expect.stringContains reason "A bare name (like yession)" "the refusal says which spelling works under both"
 
         // A repo saying where the session's checkouts should appear in its own container.
         testCase "a sandbox can say where it wants the checkouts" <| fun () ->
@@ -4382,7 +4382,7 @@ let private artifactTests =
                 "prose gets the address it can quote back"
             Expect.equal
                 (Act.sentence (act (chart 3)) |> Phrase.said)
-                "updated artifact file:///artifacts/chart.png/0003-7f2a91 (1.50 kB) — version 4"
+                "updated artifact file:///artifacts/chart.png/0003-7f2a91 (1.50 kB) (version 4)"
                 "and an update says which version, because the old ones are still there"
             Expect.equal (Act.counted (act (chart 0))) ("shared", "artifact", "artifacts") "a run counts the shares"
             Expect.equal (Act.counted (act (chart 3))) ("updated", "artifact", "artifacts") "separately from the updates"

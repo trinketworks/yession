@@ -269,7 +269,7 @@ module Pattern =
             |> Result.map (fun node -> { Program = compileNode node })
             |> Result.mapError (fun construct ->
                 sprintf
-                    "%s is not something this matcher supports — it takes literal text, `.`, `[classes]`, `*`, `+`, `?`, `|`, groups and the line anchors `^` and `$`"
+                    "%s is not something this matcher supports. It takes literal text, `.`, `[classes]`, `*`, `+`, `?`, `|`, groups and the line anchors `^` and `$`"
                     construct)
 
     // --- running ----------------------------------------------------------------------
@@ -338,7 +338,7 @@ module Pattern =
             if not matched then addThread current 0 at
         if exhausted then
             Error
-                "this matcher ran past the work a linear match can take — the pattern was not the problem, the matcher was"
+                "this matcher did more work than a linear match can take. The fault is in the matcher, not in the pattern"
         else Ok matched
 
     /// The ordinary way to ask, with the budget a correct simulation cannot reach.

@@ -97,12 +97,12 @@ module SessionTemplate =
         elif UrlShape.hasWhitespace trimmed then Error "contains whitespace"
         else
             match UrlShape.unknownPlaceholder known trimmed with
-            | Some token -> Error (sprintf "has unknown placeholder %s — use {id} or {port}" token)
+            | Some token -> Error (sprintf "has unknown placeholder %s. Use {id} or {port}" token)
             | None ->
                 match UrlShape.split trimmed with
                 | Error e -> Error e
                 | Ok _ when not (known |> List.exists trimmed.Contains) ->
-                    Error "has no {id} or {port} placeholder, so every session would share one address"
+                    Error "has no {id} or {port} placeholder. Every session would share one address"
                 // A session must know the path it is mounted under BEFORE it binds a port
                 // — the shell's `<base href>`, its cookie's `Path`, and the prefix it
                 // strips off requests are all fixed at boot. So the mount may depend on
@@ -110,8 +110,8 @@ module SessionTemplate =
                 // untouched: that is port mirroring, where the mount is empty anyway.
                 | Ok (_, _, path) when path.Contains "{port}" ->
                     Error
-                        "puts {port} in its path — a path-mounted session is addressed by \
-                         {id}, because it must know its mount before it has a port"
+                        "puts {port} in its path. A path-mounted session is addressed by {id}. \
+                         The session must know its mount before it has a port"
                 | Ok _ -> Ok (SessionTemplate trimmed)
 
     /// The path a session is served under: `/s/01hx…` path-mounted, `""` at an origin
@@ -147,7 +147,7 @@ module PublicAccess =
             | Some token ->
                 Error (
                     sprintf
-                        "YESSION_MANAGER_URL has placeholder %s — the Manager is one address, so placeholders mean nothing here"
+                        "YESSION_MANAGER_URL has placeholder %s. The Manager is one address. Placeholders mean nothing here"
                         token)
             | None ->
                 match UrlShape.split trimmed with
@@ -159,7 +159,7 @@ module PublicAccess =
                 | Ok (_, _, path) when path <> "" ->
                     Error (
                         sprintf
-                            "YESSION_MANAGER_URL has path %s — the Manager must be fronted at an origin root"
+                            "YESSION_MANAGER_URL has path %s. The Manager must be fronted at an origin root"
                             path)
                 | Ok (scheme, authority, _) -> Ok (ManagerOrigin (scheme + authority))
 
@@ -171,15 +171,15 @@ module PublicAccess =
         | "", "" -> Ok Loopback
         | "", _ ->
             Error
-                "YESSION_SESSION_URL is set but YESSION_MANAGER_URL is not: sessions would be \
-                 reachable remotely while the Manager that authorizes their users answers only \
-                 on loopback, so every remote login would bounce to 127.0.0.1. Set both, or neither."
+                "YESSION_SESSION_URL is set. YESSION_MANAGER_URL is not set. Sessions would be \
+                 reachable remotely. The Manager that authorizes their users would answer only \
+                 on loopback. So every remote login would bounce to 127.0.0.1. Set both, or neither."
         | _, "" ->
             Error
-                "YESSION_MANAGER_URL is set but YESSION_SESSION_URL is not: sessions would \
-                 answer on loopback ports while the Manager is public, so every session \
-                 address — and the OAuth callback each session registers against that public \
-                 issuer — would name 127.0.0.1. Set both, or neither."
+                "YESSION_MANAGER_URL is set. YESSION_SESSION_URL is not set. Sessions would \
+                 answer on loopback ports. The Manager would be public. So every session \
+                 address would name 127.0.0.1. The OAuth callback that each session registers \
+                 against that public issuer would name 127.0.0.1 too. Set both, or neither."
         | manager, sessions ->
             managerOrigin manager
             |> Result.bind (fun origin ->

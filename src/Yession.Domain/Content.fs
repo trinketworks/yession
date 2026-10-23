@@ -62,7 +62,7 @@ module ContentRef =
             else
                 Error (
                     sprintf
-                        "'%s' is not a content path: segments of letters, digits, '-', '_' and '.', none starting with a dot"
+                        "'%s' is not a content path. Each segment holds only letters, digits, '-', '_' and '.'. No segment starts with a dot"
                         path
                 )
 
@@ -375,7 +375,7 @@ module ArtifactAddress =
         | _ ->
             Error (
                 sprintf
-                    "'%s' is not an artifact: file:///artifacts/<name> is whatever is latest under that name, and file:///artifacts/<name>/<version> is one version for good"
+                    "'%s' is not an artifact. file:///artifacts/<name> is whatever is latest under that name. file:///artifacts/<name>/<version> is one version for good"
                     (ContentRef.value ref))
 
 /// What a piece of content is CALLED, and what the pane can make of it — one answer, for every

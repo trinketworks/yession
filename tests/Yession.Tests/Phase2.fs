@@ -735,7 +735,7 @@ let private sandboxPolicyTests =
         testCase "a failure it cannot place still says something" <| fun () ->
             let checks = SandboxVerification.plan { Support.emptyPolicy with Env = Map.ofList [ "HOME", "/h" ] }
             let said = SandboxVerification.explain checks ""
-            Expect.isTrue (said.Contains "did not say which") (sprintf "said: %s" said)
+            Expect.isTrue (said.Contains "without saying which") (sprintf "said: %s" said)
 
         // --- and what happens when one of them says no --------------------------------------
 

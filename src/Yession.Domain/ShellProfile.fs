@@ -141,5 +141,5 @@ module ConfiguredProfile =
                     |> List.sort
                 repo,
                 sprintf
-                    "%s also declare session.shell-profile, so none of them applies and new terminals in default start where the sandbox puts them; set_shell_profile chooses"
+                    "%s also declare session.shell-profile. None of them applies. New terminals in default start where the sandbox puts them. set_shell_profile chooses"
                     (String.concat ", " others))

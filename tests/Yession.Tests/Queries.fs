@@ -97,7 +97,7 @@ let private shapeTests =
         // in the words, so this pins that it is.
         testCase "the tool description states the shape and the read-only contract" <| fun () ->
             let described = QueryDef.toolDescription (def "repos" rowsShape)
-            Expect.isTrue (described.Contains "rows of: repo, uncommitted changes") "the columns are named"
+            Expect.isTrue (described.Contains "Each row has: repo, uncommitted changes") "the columns are named"
             Expect.isTrue (described.Contains "Read-only") "the contract is stated"
 
         // A model reading an answer written in a vocabulary has no panel beside it to read
@@ -106,7 +106,7 @@ let private shapeTests =
             let described =
                 QueryDef.toolDescription
                     { def "resources" rowsShape with Legend = [ "sock:PATH", "a unix socket" ] }
-            Expect.isTrue (described.Contains "sock:PATH — a unix socket.") "the entry is spelled out"
+            Expect.isTrue (described.Contains "sock:PATH means a unix socket.") "the entry is spelled out"
 
         // The other half, and the reason the first is not vacuous: a query whose values are
         // words says nothing about how to read them. An empty legend that still announced

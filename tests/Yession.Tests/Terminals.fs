@@ -6345,7 +6345,7 @@ let private memoryKillTests =
             let ended = MemoryWatch.ended (Error "cat ended SandboxExited 126") (Ok (counters 0L 1L)) (SandboxExited 137)
             Expect.equal
                 ended
-                (Error "exit 137, and the counters before it could not be read: cat ended SandboxExited 126")
+                (Error "exit 137. The counters before it could not be read: cat ended SandboxExited 126")
                 "no cause is said without both readings, and why not is"
 
         testCase "a memory kill crosses the wire" <| fun () ->
@@ -6410,7 +6410,7 @@ let private memoryKillTests =
                 let! ended, _, unread = endingUnder (SandboxExited 137) [ Ok (counters 0L 0L); Error "the exec did not start: busy" ]
                 Expect.equal
                     (ended, unread)
-                    (SandboxExited 137, [ "exit 137, and the counters after it could not be read: the exec did not start: busy" ])
+                    (SandboxExited 137, [ "exit 137. The counters after it could not be read: the exec did not start: busy" ])
                     "the exit as it was, and the reason heard"
             }
 

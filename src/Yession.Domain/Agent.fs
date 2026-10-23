@@ -499,7 +499,7 @@ module TerminalKeys =
                     | None ->
                         Error (
                             sprintf
-                                "no key named %s — the names are %s, and ctrl-a to ctrl-z"
+                                "no key named %s. The names are %s. The names ctrl-a to ctrl-z are also keys."
                                 name
                                 (named |> List.map fst |> List.filter (fun n -> not (n.StartsWith "ctrl-")) |> String.concat ", "))))
             (Ok "")
