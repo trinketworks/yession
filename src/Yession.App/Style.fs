@@ -4698,12 +4698,21 @@ module Style =
     /// their own padding (`terminalBandRow`).
     ///
     /// `composerBand`, above, kept as one token rather than a matching string, so the tone
-    /// and the rule can never quietly drift from the message composer's. The bottom
-    /// clearance is its own, though (`phone:pb-4`, plain thumb room): Run stays on the
-    /// command line rather than dropping below it the way Send does, so this band never
-    /// needs its room — which is also the clearance the message composer falls back to when
-    /// its own row is not showing (`composer`, above).
-    let terminalComposer = composerBand + " phone:pb-4"
+    /// and the rule can never quietly drift from the message composer's.
+    ///
+    /// The bottom clearance is NOT just `composer`'s own `pb-4`, though: on a phone the
+    /// message composer always carries a second row under its line (the model picker and
+    /// attach, `draftActionsRow`) even when nothing in it needs pressing, and this band has
+    /// nothing of its own to put there — Run stays on the command line rather than dropping
+    /// below it the way Send does. Matching only the PADDING (both at `pb-4`) left the two
+    /// bars 45px apart in total height, measured, which is exactly that row's own height: a
+    /// terminal beside a chat column, both idle, read as two different-sized objects. The
+    /// padding spends what the row would have, on a phone only, so the two bars land at one
+    /// height — `h-11` command line (44) + `pb-[3.8125rem]` (61 = the row's 45 + the shared
+    /// `pb-4`'s 16) = 105, `composer`'s own total there. Desktop needs nothing extra:
+    /// `draftActionsRow` is `wide:contents` there, adding no row and no height, so the shared
+    /// `pb-4` alone already matches (`h-10` + 16 = 56, both bands).
+    let terminalComposer = composerBand + " pb-4 phone:pb-[3.8125rem]"
 
     /// A row in the band that is not the command line — the lease bar, the cannot-run
     /// notice. They used to inherit the section's padding; the band has none.
