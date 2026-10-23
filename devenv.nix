@@ -67,8 +67,18 @@ in
   # that hook outside this shell, so it reads jq from this shell's profile, which devenv links
   # at $DEVENV_DOTFILE/profile on every entry, and never from PATH. Declared here and not assumed
   # of the box: without one the hook fails open and says nothing.
+  #
+  # bashInteractive, explicitly: without it, the first `bash` this shell's PATH finds is
+  # nixpkgs' plain `bash` — a dependency some other package pulled in for its own wrapper
+  # scripts, built with no readline. yession.yaml's docker sandbox execs exactly that bash
+  # as the terminal's shell ("the devshell's bash"), and readline is what turns a PS1's
+  # `\[ … \]` into the zero-width bytes a prompt hook needs: without it they print as the
+  # four literal characters, once per bootstrap prompt, ahead of every block (and so does
+  # devenv's own `(devenv)` prompt branding, which assumes the same thing). Declaring it
+  # here puts it ahead of the incidental one on PATH.
   packages =
-    [ pkgs.git pkgs.gh pkgs.actionlint pkgs.uv pkgs.python312 pkgs.caddy pkgs.zsh pkgs.jq ]
+    [ pkgs.git pkgs.gh pkgs.actionlint pkgs.uv pkgs.python312 pkgs.caddy pkgs.zsh pkgs.jq
+      pkgs.bashInteractive ]
     ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux
          [ pkgs.dbus pkgs.gnome-keyring pkgs.bubblewrap pkgs.socat pkgs.ripgrep pkgs.eudev pkgs.procps ];
 
