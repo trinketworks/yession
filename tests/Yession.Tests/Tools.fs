@@ -685,8 +685,8 @@ let private sessionTests =
                             said <- request.Description
                             return Ok (ran request.Command)
                         }))
-                let! _ = registry.Invoke (call "yession" "execute_command" """{"command":"dotnet test","description":"Run the unit tests"}""")
-                Expect.equal said (Some "Run the unit tests") "the agent's words reach the request"
+                let! _ = registry.Invoke (call "yession" "execute_command" """{"command":"dotnet test","description":"tested the solution"}""")
+                Expect.equal said (Some "tested the solution") "the agent's words reach the request"
             }
 
         // Optional in the schema: a model that leaves it out still gets its command run, and

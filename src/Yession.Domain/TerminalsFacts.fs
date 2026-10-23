@@ -119,7 +119,7 @@ module TerminalTitle =
         | Some _
         | None -> text
 
-/// What the author of a command said it is FOR, in a few words — "Run the unit tests" — the
+/// What the author of a command said it does, in a few words — "tested the solution" — the
 /// name a block wears on every surface in place of its command line (`BlockLabel.ofBlock`).
 ///
 /// The agent writes one with each command it runs; a person typing into a composer does

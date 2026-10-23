@@ -52,6 +52,14 @@ module AgentTools =
         [<Literal>]
         let ShareArtifact = "share_artifact"
 
+    /// What a command's `description` is, said once. The `description` parameter of
+    /// execute_command reads it, and the tool's own description and the system prompt point
+    /// to that parameter rather than restating it. The transcript's words come from
+    /// `Dom.Text`, so the guidance names the word the chip actually puts in front.
+    module CommandDescription =
+        let guidance =
+            $"a past-tense phrase of several words or fewer that says what the command did. Examples: \"fetched master\", \"built the app\". The transcript already puts \"{Yession.App.Dom.Text.running}\" or \"{Yession.App.Dom.Text.ran}\" in front of it. Do not add that word yourself. Write \"fetched master\", not \"{Yession.App.Dom.Text.ran} fetched master\". Pass one on every call."
+
     /// One outcome, rendered as tool text (Plan 13, stage 3b).
     ///
     /// Every case says WHICH state it is in, and the wording is load-bearing rather than
@@ -797,7 +805,7 @@ module AgentTools =
     let private executeCommandTool (capabilities: AgentCapabilities) : ToolDescriptor * (ToolCall -> Async<Result<ToolAnswer, string>>) =
         toolOfCall
             ToolName.ExecuteCommand
-            "Run a shell command in a session terminal. This is the only way to run anything. Everyone sees the command. It is on the record. Always pass `description`: a past-tense phrase of several words or fewer that says what the command did. The transcript puts \"running\" or \"ran\" in front of it for you. Never write that word yourself (\"checked the build\", not \"ran the build\" or \"Ran the build\"). Do not use this tool to read or edit files. Use read_file and edit_file, which record WHICH file. Use the shell for files only when a dedicated tool really cannot do the job. Avoid cat, sed, awk, head, tail, grep -n and heredocs here. `sandbox`: a named work sandbox (start_work_sandbox). Omit it for the default sandbox. `terminal`: a terminal from open_terminal, to run a command in parallel with a long one. Each terminal runs one command at a time. For a long-running command, pass background: true. The tool then returns a handle immediately. End your turn. The session wakes you when the command finishes. Without background, the tool waits. If the command runs longer than the wait, the tool returns a check_pending handle. The command gets no stdin unless you pass stdin: true (readers get EOF). So pass flags, not prompts. Write scratch files under $TMPDIR. /tmp is denied. To rewrite a file, write the new content before you delete the old file. The sandbox can refuse a delete-then-write halfway. Read the answer. It says which of these happened."
+            "Run a shell command in a session terminal. This is the only way to run anything. Everyone sees the command. It is on the record. Always pass `description`. That parameter says what to write. Do not use this tool to read or edit files. Use read_file and edit_file, which record WHICH file. Use the shell for files only when a dedicated tool really cannot do the job. Avoid cat, sed, awk, head, tail, grep -n and heredocs here. `sandbox`: a named work sandbox (start_work_sandbox). Omit it for the default sandbox. `terminal`: a terminal from open_terminal, to run a command in parallel with a long one. Each terminal runs one command at a time. For a long-running command, pass background: true. The tool then returns a handle immediately. End your turn. The session wakes you when the command finishes. Without background, the tool waits. If the command runs longer than the wait, the tool returns a check_pending handle. The command gets no stdin unless you pass stdin: true (readers get EOF). So pass flags, not prompts. Write scratch files under $TMPDIR. /tmp is denied. To rewrite a file, write the new content before you delete the old file. The sandbox can refuse a delete-then-write halfway. Read the answer. It says which of these happened."
             (toolArgs {
                 let! command = ToolArgs.text "command" "the shell command line to run, e.g. \"npm test -- --watch=false\""
                 and! terminal = ToolArgs.textOption "terminal" "the id of a terminal to run in, from open_terminal or list_terminals. Omit it to use your own terminal in the sandbox"
@@ -810,12 +818,7 @@ module AgentTools =
                     ToolArgs.flag
                         "stdin"
                         "true to let the command read the terminal's input. Use it for the rare command that must prompt. If you omit it, anything that reads stdin gets end-of-file immediately"
-                // The transcript prefixes this with "running" or "ran" (`Dom.Text.running` /
-                // `Dom.Text.ran` in Yession.App): change all three together.
-                and! description =
-                    ToolArgs.textOption
-                        "description"
-                        "a past-tense phrase of several words or fewer that says what the command did. Examples: \"fetched master\", \"built the app\". The transcript already puts \"running\" or \"ran\" in front of it. Do not add that word yourself. Write \"fetched master\", not \"ran fetched master\". Pass one on every call."
+                and! description = ToolArgs.textOption "description" CommandDescription.guidance
                 return command, terminal, sandbox, background, stdin, description
              })
             (fun call (command, terminal, sandbox, background, stdin, description) ->

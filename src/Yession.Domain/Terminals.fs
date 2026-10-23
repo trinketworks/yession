@@ -491,9 +491,9 @@ module Projection =
 /// A non-empty command never gets an empty label: if nothing is left, it is the command,
 /// trimmed. The BODY that shows a command keeps all of it; this is for what NAMES one.
 ///
-/// That rule is the fallback. A block whose author said what it is FOR
+/// That rule is the fallback. A block whose author said what it does
 /// (`Block.Description`, which the agent writes with every command it runs) is called that
-/// instead — "Run the unit tests" says more than any part of the command line can, and it
+/// instead — "tested the solution" says more than any part of the command line can, and it
 /// is the one name a person reading a phone needs. A person's own commands carry none and
 /// keep the rule.
 module BlockLabel =
