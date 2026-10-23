@@ -1743,9 +1743,9 @@ module View =
                     </div>
                     <div class="{Style.draftCommit}">
                       <span class="{Style.draftEditors}">{editors target}</span>
-                      <button type="button" class="{sendClass}" aria-keyshortcuts="Control+Enter"
+                      <button type="button" class="{sendClass}" aria-label="send" aria-keyshortcuts="Control+Enter"
                               title="{Dom.Text.composerKeys}"
-                              data-send-draft="{PeerId.value target}" data-send-ready="{if hasContent then "yes" else "no"}" @click={Ev(fun _ -> actions.SendDraft target)}>send</button>
+                              data-send-draft="{PeerId.value target}" data-send-ready="{if hasContent then "yes" else "no"}" @click={Ev(fun _ -> actions.SendDraft target)}>{Icon.send}</button>
                     </div>
                   </div>
                 </article>"""
@@ -4260,7 +4260,7 @@ module View =
         html $"""
             <section class="{Style.terminalComposer}">
               <span class="{Style.bandRail}"></span>
-              <span class="{Style.bandEdge}"></span>
+              <span class="{Style.terminalBandEdge hasCommand}"></span>
               {stop}
               {lostBanner}
               {terminalQueue actions dispatch model terminal}
