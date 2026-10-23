@@ -733,6 +733,21 @@ let private uiRenderTests =
             let busy = running.IndexOf "working"
             Expect.isTrue (bad >= 0 && busy > bad) "the bad standing before the busy one"
 
+        // A phone drops the tail, and until it had a slot of its own a phone showed no
+        // standing at all. It gets one: the worst, in its tone, where the word was.
+        testCase "a phone's running row says the worst standing alone" <| fun () ->
+            let running =
+                ManagerUi.sessionRow
+                    { Record = uiRecord
+                      Status = ProcessManager.Running (8199, 42, None)
+                      Standings = [ working; stalled ] }
+            let slot = running.IndexOf Style.recordRowWorst
+            Expect.isTrue (slot >= 0) "the row has the phone's slot"
+            let phone = running.Substring(slot, running.IndexOf(Style.recordRowAside, slot) - slot)
+            Expect.isTrue (phone.Contains Style.toneBad) "in the worst standing's tone"
+            Expect.isTrue (phone.Contains "3 PRs · 1 stalled") "saying the worst standing"
+            Expect.isFalse (phone.Contains "working") "and only that one"
+
         testCase "a session's standings cross the control channel as they were said" <| fun () ->
             let said = [ stalled; working ]
             Expect.equal

@@ -732,6 +732,14 @@ module Style =
     /// the content — it is why a reader is on that row. A failed row clips its name instead.
     let recordRowAside = "hidden wide:inline"
 
+    /// What a phone says in the tail's place: the running session's WORST standing, alone, in
+    /// the slot the `running` word leaves when it goes to the screen reader. One, because the
+    /// row rides one line and a second standing would spend the name's room; the worst,
+    /// because it is the one a list is scanned for. Capped, so a long word clips itself rather
+    /// than the name — the state block does not shrink. Gone where the full tail shows, so a
+    /// wide screen and a screen reader on it never hear the worst twice.
+    let recordRowWorst = "wide:hidden inline-block align-bottom max-w-[10rem] truncate ml-1.5"
+
     /// A filter over a listed registry — which archive states the management page is showing.
     /// Real links, because the filter IS the page's location, so these are chips only in how
     /// they look; everything about how they behave comes free from `<a>`.
