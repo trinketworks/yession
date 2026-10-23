@@ -504,9 +504,9 @@ let tests =
             // `--detailed` needing `--check`, an environment still setting a variable that
             // moved onto one. An operator must not hear a different voice for those, so the
             // wording has one author, and the Host adds only the stopping.
-            let message = Cli.complaint spec "--detailed says what a --check report means, so it needs --check"
+            let message = Cli.complaint spec "--detailed needs --check. It says what a --check report means."
             Expect.isTrue (message.StartsWith "yession-manager: ") "names the bin, as a parse failure does"
-            Expect.isTrue (message.Contains "it needs --check") "says what was wrong"
+            Expect.isTrue (message.Contains "--detailed needs --check") "says what was wrong"
             Expect.isTrue (message.Contains "usage: yession-manager") "and carries the usage under it"
 
         testCase "a bin with no options of its own still answers version and help" <| fun () ->

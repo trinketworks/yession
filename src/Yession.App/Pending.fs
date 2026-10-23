@@ -48,7 +48,7 @@ module Pending =
     /// be a lie and a retry prompt would be worse, because retrying a stored credential
     /// stores it again. What is true is that this panel never saw it.
     [<Literal>]
-    let unseen = "saved — this panel has not seen it yet"
+    let unseen = "saved (this panel has not seen it yet)"
 
     /// The query spoke. A wait ends when what it said is what the command was waiting for,
     /// and otherwise STANDS: a status that has not caught up yet is not a status that

@@ -798,7 +798,7 @@ module Dom =
         let retryNow = "Try again"
         /// What every degraded state promises: this is a local-first client, so a lost leg
         /// costs sync, not the ability to work.
-        let localFallback = "Your work is saved on this device and will sync when the session is back."
+        let localFallback = "Your work is saved on this device. It will sync when the session is back."
         /// The same promise where it cannot be kept (Plan 13): this deployment addresses
         /// sessions by port, so a session that restarts comes back at a new origin — and a
         /// browser partitions storage by origin, which strands anything written here in the
@@ -808,7 +808,7 @@ module Dom =
         /// Nobody needs the browser's storage model to understand what it costs them — but
         /// the reader who wonders why a local-first client would lose anything is owed it.
         let ephemeralAddress =
-            "This session reopens at a new address, and a browser keeps saved work separately for each address."
+            "This session reopens at a new address. A browser keeps saved work separately for each address."
         /// The model picker's state token, and its first option, for when nobody has chosen:
         /// the provider decides. Named rather than blank because "no model is set" and
         /// "whatever the provider picks" are the same fact, and only one of them is a
@@ -821,8 +821,8 @@ module Dom =
         /// from a bug. The remedy is the operator's, and it is one flag, so name it.
         let historyNotKept = "This session's history will not be kept on this device."
         let historyNotKeptWhy =
-            "It is served over plain HTTP, and a browser withholds storage of this kind outside a "
-            + "secure context. Serving it over HTTPS restores it."
+            "It is served over plain HTTP. A browser withholds storage of this kind outside a secure "
+            + "context. Serving it over HTTPS restores it."
         /// What the composer's keys do, shown in the composer while you are in it. Enter
         /// stays a prose key, same as a plain textarea, because a phone's return key has no
         /// modifier to reach for; sending is the explicit second key beside it, reachable
@@ -872,7 +872,7 @@ module Dom =
         /// What the card says when it could not list the person's own repositories before they
         /// asked for anything. Quiet, and pointing at what still works, because nobody did
         /// anything wrong; the provider's own reason follows it, as the detail.
-        let repoPickerUnlisted = "could not list your repositories here; search github, or paste a link"
+        let repoPickerUnlisted = "could not list your repositories here. Search github, or paste a link."
         let repoPickerConnect = "Connect GitHub"
         let repoPickerCloning = "cloning…"
         /// What stands where history this device does not hold would be (Plan 20). Said only
@@ -1175,11 +1175,11 @@ module Dom =
         let turnWoke = "woke"
         /// The same fact, at length, for the reader who wants it. Never the visible label:
         /// the chat's meta line is three short words wide.
-        let turnWokeCommandFinished = "The agent picked this up on its own: a command it left running in the background finished."
-        let turnWokeStreamEnded = "The agent picked this up on its own: the stream behind a terminal it was working in has ended."
+        let turnWokeCommandFinished = "The agent started this on its own: a command it left running in the background finished."
+        let turnWokeStreamEnded = "The agent started this on its own: the stream behind a terminal it was working in has ended."
         let turnWokeIntegrationLost = "The agent started on its own. A terminal where the agent had work cannot run commands."
-        let turnWokePrChanged = "The agent picked this up on its own: a pull request watched here changed state."
-        let turnWokeCutOff = "The agent picked this up on its own: its previous turn was cut off when the session stopped, so it is resuming."
+        let turnWokePrChanged = "The agent started this on its own: a pull request watched here changed state."
+        let turnWokeCutOff = "The agent started this on its own. The session stopped during its previous turn. The agent is resuming that turn."
         /// Stands where the quoted message would be when the ref points past the loaded page —
         /// the reply is real, its cause simply is not on screen yet.
         let replyRefMissing = "earlier message"
