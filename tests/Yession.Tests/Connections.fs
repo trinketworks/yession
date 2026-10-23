@@ -2477,7 +2477,7 @@ let private prPollTests =
                     clock <- clock.AddMinutes 16.0
                 Expect.equal
                     (List.ofSeq readability)
-                    [ prOne, Some "rate limited by github (403, a secondary limit, 4950 left) — waiting for the window to reset"
+                    [ prOne, Some "rate limited by github (403, a secondary limit, 4950 left). The session waits for the window to reset"
                       prOne, None ]
                     "the refusal as github gave it, once, then the recovery"
             }
@@ -3927,7 +3927,7 @@ let private prWatchVerbTests =
                 let! stub = startStubGitHubApi ()
                 let service, _, _ = serviceOver stub
                 let! outcome = service.Create adaHerself topicDraft
-                Expect.equal outcome (Ok "opened octo/hello#7 — \"Add feature\", topic into master") "the number, and the work it names"
+                Expect.equal outcome (Ok "opened octo/hello#7: \"Add feature\", topic into master") "the number, and the work it names"
             }
 
         // Opening one is a place in the session worth coming back to, so it is a fact of its
@@ -3964,7 +3964,7 @@ let private prWatchVerbTests =
                 let! outcome = service.Create adaHerself topicDraft
                 Expect.equal
                     outcome
-                    (Ok "octo/hello#4 is already open from topic into master — nothing was created")
+                    (Ok "octo/hello#4 is already open from topic into master. Nothing was created")
                     "a repeated ask is a question"
             }
 

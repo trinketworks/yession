@@ -796,7 +796,7 @@ let mergeOver (apiBase: string) (spending: Spending) : MergePr =
                     if standing.Merged then return PrMergeUnneeded (pr, "merged")
                     // Closed is GitHub's own state, read a moment ago; asking it to merge one
                     // would cost a request to be told the same thing in its words.
-                    elif standing.Closed then return PrMergeRefused "it is closed — reopen it first"
+                    elif standing.Closed then return PrMergeRefused "it is closed. Reopen it first"
                     // Asked before any mutation, like closed: every route below refuses a
                     // draft, and GitHub's sentence for it names the state, not the way out.
                     elif standing.IsDraft then return PrMergeIsDraft pr
@@ -962,7 +962,7 @@ let draftOver (apiBase: string) (spending: Spending) : DraftPr =
                 | Error refusal -> return refused refusal
                 | Ok standing ->
                     if standing.Merged then return PrDraftUnneeded (pr, "merged")
-                    elif standing.Closed then return PrDraftRefused "it is closed — reopen it first"
+                    elif standing.Closed then return PrDraftRefused "it is closed. Reopen it first"
                     elif standing.IsDraft then return PrDraftUnneeded (pr, "a draft")
                     elif standing.InQueue then return PrDraftOnItsWayIn (pr, "in the merge queue")
                     elif standing.AutoMergeArmed then return PrDraftOnItsWayIn (pr, "armed to merge when its checks pass")
@@ -995,7 +995,7 @@ let readyOver (apiBase: string) (spending: Spending) : ReadyPr =
                 | Error refusal -> return refused refusal
                 | Ok standing ->
                     if standing.Merged then return PrReadyUnneeded (pr, "merged")
-                    elif standing.Closed then return PrReadyRefused "it is closed — reopen it first"
+                    elif standing.Closed then return PrReadyRefused "it is closed. Reopen it first"
                     elif not standing.IsDraft then return PrReadyUnneeded (pr, "ready for review")
                     else
                         match! ask markReady [ "id", Encode.string standing.Id ] done' with
@@ -1071,7 +1071,7 @@ let hooks
                             | Ok id ->
                                 held <- held |> List.map (fun (r, current) -> if r = repo then r, Some id else r, current)
                             | Error e ->
-                                eprintfn "hook subscription for %s failed, falling back to polling: %s" (RepoRef.value repo) e
+                                eprintfn "hook subscription for %s failed. The session polls the repo instead. Reason: %s" (RepoRef.value repo) e
                                 held <- held |> List.filter (fun (r, _) -> r <> repo)
                         })
             for repo, id in held |> List.filter (fun (r, _) -> not (List.contains r wanted)) do
@@ -1227,12 +1227,12 @@ let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string 
     let tool = AgentTools.tool
     [ tool
           "list_prs"
-          "List a repository's pull requests on GitHub as they stand right now — any of them, whoever opened them, watched or not: number, title, branches, author, and for an open one whether it is a draft, its checks, whether it conflicts, and whether it is on its way in (armed to merge, or in the merge queue). Most recently updated first. A look, not a watch: it changes nothing and says nothing further — watch_pr is how to be told when one changes, and the pull_requests query is the ones this session already watches. Reads with the GitHub credential of whoever's turn this is, so a \"cannot see it\" on a repo that exists means their credential cannot reach it."
+          "List the pull requests of a repository on GitHub as they are now. The list has all of them, whoever opened them, watched or not. For each one, it gives the number, title, branches and author. For an open one, it also says whether it is a draft, and it gives its checks. It also says whether an open one conflicts, and whether it is on its way in (armed to merge, or in the merge queue). The most recently updated come first. This tool only looks. It changes nothing and says nothing later. To be told when one changes, use watch_pr. The pull_requests query gives the ones that this session already watches. This tool reads with the GitHub credential of the person whose turn this is. A \"cannot see it\" on a repo that exists means that their credential cannot reach it."
           (toolArgs {
               let! repo = ToolArgs.text "repo" "owner/name"
               and! state = ToolArgs.textOption "state" "\"open\" (the default), \"closed\", \"merged\" or \"all\""
               and! head = ToolArgs.textOption "head" "only those from this branch, e.g. \"claude/fix-the-thing\""
-              and! limit = ToolArgs.integerOption "limit" "how many, 1 to 50; 20 unless said"
+              and! limit = ToolArgs.integerOption "limit" "how many, from 1 to 50. The default is 20"
               // Read into a `PrQuery` by the domain, which is where a state word or a limit
               // is refused.
               return PrQuery.create state head limit |> Result.map (fun query -> repo, query)
@@ -1240,7 +1240,7 @@ let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string 
           (AgentTools.whenValid (fun (repo, query) -> ok (listPrs capabilities repo query)))
       tool
           "create_pr"
-          "Open a pull request on GitHub, from a branch that is already pushed. The commits have to be up there first — push from a terminal with execute_command; this opens the pull request and nothing else. It answers with the number, as `owner/repo#n`, which is what watch_pr takes: this session says nothing further about a pull request nobody watches. Opening one that is already open from the same branch onto the same base changes nothing and reports the one that exists, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is, so a \"cannot see it\" on a repo that exists means their credential cannot reach that repo — say so rather than retrying; everyone in the session sees the pull request open in the timeline. What GitHub will not open it says why in its own words — no commits between the two branches, a head branch it cannot find — and that sentence is what comes back."
+          "Open a pull request on GitHub from a branch that is already pushed. The commits must be on GitHub first. Push them from a terminal with execute_command. This tool opens the pull request and does nothing else. It answers with the number as `owner/repo#n`, which is the form that watch_pr takes. This session says nothing more about a pull request that nobody watches. If one is already open from the same branch onto the same base, this tool changes nothing and reports that one. So it is safe to call it twice. It spends the GitHub credential of the person whose turn this is. A \"cannot see it\" on a repo that exists means that their credential cannot reach that repo. Say so, and do not retry. Everyone in the session sees the pull request open in the timeline. When GitHub will not open it, GitHub says why in its own words, and that sentence comes back. Examples: no commits between the two branches, or a head branch that GitHub cannot find."
           (toolArgs {
               let! repo = ToolArgs.text "repo" "owner/name"
               // The two branches are read as they were written and turned into a draft by
@@ -1248,52 +1248,52 @@ let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string 
               and! head =
                   ToolArgs.text
                       "head"
-                      "the branch the work is on, e.g. \"claude/fix-the-thing\"; \"owner:branch\" for a branch on a fork"
-              and! onto = ToolArgs.text "base" "the branch it is for, e.g. \"master\" — there is no default, name it"
+                      "the branch that has the work, e.g. \"claude/fix-the-thing\". For a branch on a fork, use \"owner:branch\""
+              and! onto = ToolArgs.text "base" "the branch it is for, e.g. \"master\". It has no default. Always name it"
               and! title = ToolArgs.text "title" "the pull request title, e.g. \"fix: a closed terminal ends its block\""
-              and! body = ToolArgs.textOption "body" "the description, in markdown; omit for none"
+              and! body = ToolArgs.textOption "body" "the description, in markdown. Omit it for no description"
               and! draft =
                   ToolArgs.flag
                       "draft"
-                      "true to open it as a draft — on the record, and explicitly not asking for review yet. A draft cannot merge: ready_pr undrafts it when it is ready"
+                      "true to open it as a draft. A draft is on the record, but it explicitly does not ask for review yet. A draft cannot merge. When it is ready, ready_pr undrafts it"
               return repo, head, onto, title, body, draft
            })
           (fun (repo, head, onto, title, body, draft) -> ok (createPr capabilities repo head onto title body draft))
       tool
           "ready_pr"
-          "Mark a draft pull request on GitHub ready for review — the undoing of create_pr's draft flag, and what a draft needs before merge_pr can take it; draft_pr is the other way. One that is not a draft, or has merged, is reported as such and nothing is changed, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words, and that sentence is what comes back."
+          "Mark a draft pull request on GitHub ready for review. This undoes the draft flag of create_pr. A draft needs this before merge_pr can take it. draft_pr does the opposite. If the pull request is not a draft, or has merged, the answer says so and nothing changes. So it is safe to call it twice. It spends the GitHub credential of the person whose turn this is. Everyone in the session sees the act in the timeline. When GitHub will not do it, GitHub says why in its own words, and that sentence comes back."
           repoNumber
           (fun (repo, number) -> ok (readyPr capabilities repo number))
       tool
           "draft_pr"
-          "Turn an open pull request on GitHub back into a draft — ready_pr the other way: still on the record, no longer asking for review. Not how to hold a merge: a pull request nobody calls merge_pr on does not merge. One on its way in (auto merge armed, or in the merge queue) is left there and the answer says so — take it back with unmerge_pr first. One that is already a draft, or has merged, is reported as such and nothing is changed, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words, and that sentence is what comes back."
+          "Change an open pull request on GitHub back into a draft. This is the opposite of ready_pr. The pull request stays on the record, but it no longer asks for review. Do not use this to hold a merge. A pull request does not merge if nobody calls merge_pr on it. If it is on its way in (auto merge armed, or in the merge queue), it stays there, and the answer says so. To stop it first, call unmerge_pr. If it is already a draft, or has merged, the answer says so and nothing changes. So it is safe to call it twice. It spends the GitHub credential of the person whose turn this is. Everyone in the session sees the act in the timeline. When GitHub will not do it, GitHub says why in its own words, and that sentence comes back."
           repoNumber
           (fun (repo, number) -> ok (draftPr capabilities repo number))
       tool
           "merge_pr"
-          "Merge a pull request on GitHub, by whichever route its state allows: if its checks are still running it is set to merge automatically when they pass (auto merge, which watch_pr then reports as armed); if it is mergeable now and the base branch has a merge queue it goes into the queue (reported as queued, as is an armed one once its checks pass and GitHub enqueues it); if it is mergeable now with no queue it is merged at once. The answer says which happened, and the session starts watching it (as watch_pr would) so the timeline says when it lands — or when a merge queue ejects it, which reads as stalled. One already armed, queued or merged is reported as such and nothing is changed, so calling it twice is safe. A draft does not merge: undraft it with ready_pr first. It spends the GitHub credential of whoever's turn this is: what lands on the base branch is theirs, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words — auto merge not allowed on the repository, a review still required, the method not allowed — and that sentence is what comes back."
+          "Merge a pull request on GitHub by the route that its state allows. If its checks are still running, it is set to merge automatically when they pass. This is auto merge, and watch_pr then reports it as armed. If it is mergeable now and the base branch has a merge queue, it goes into the queue. That is reported as queued. An armed one is also reported as queued after its checks pass and GitHub enqueues it. If it is mergeable now and there is no queue, it merges at once. The answer says which route happened. The session then starts to watch it (as watch_pr would), so the timeline says when it lands. The timeline also says when a merge queue ejects it, which reads as stalled. If it is already armed, queued or merged, the answer says so and nothing changes. So it is safe to call it twice. A draft does not merge. Undraft it with ready_pr first. It spends the GitHub credential of the person whose turn this is. What lands on the base branch is theirs. Everyone in the session sees the act in the timeline. When GitHub will not do it, GitHub says why in its own words, and that sentence comes back. Examples: auto merge is not allowed on the repository, a review is still required, or the method is not allowed."
           (toolArgs {
               let! repo, number = repoNumber
               // `squash` unless said otherwise, for `PrMergeMethod.create`'s reason.
               and! method =
                   ToolArgs.textOption
                       "method"
-                      "how the commits land: \"squash\" (the default), \"merge\" for a merge commit, or \"rebase\""
+                      "how the commits land. Give \"squash\" (the default), \"merge\" (a merge commit) or \"rebase\""
               return repo, number, method |> Option.defaultValue "squash"
            })
           (fun (repo, number, method) -> ok (mergePr capabilities repo number method))
       tool
           "unmerge_pr"
-          "Take a pull request on GitHub back off its way in: if auto merge is armed it is disarmed, and if it sits in the merge queue it is pulled out. The undoing of merge_pr — and the only one there is, since what has merged has merged: one already merged, or never on its way in, is reported as such and nothing is changed. A watch on it then reports stalled, which is what it is. It spends the GitHub credential of whoever's turn this is, and everyone in the session sees the act in the timeline."
+          "Stop a pull request on GitHub on its way in. If auto merge is armed, this tool disarms it. If the pull request is in the merge queue, this tool removes it from the queue. This tool undoes merge_pr. It is the only undo, because a merged pull request stays merged. If the pull request already merged, or was never on its way in, the answer says so and nothing changes. A watch on it then reports stalled, which is its true state. It spends the GitHub credential of the person whose turn this is. Everyone in the session sees the act in the timeline."
           repoNumber
           (fun (repo, number) -> ok (unmergePr capabilities repo number))
       tool
           "watch_pr"
-          "Watch a pull request on GitHub. The session polls it and announces on the timeline when it merges, closes, reopens, when its checks pass or fail, when auto merge is armed (armed), when it enters the merge queue (queued), and when it stops being on either while it is still open (stalled — disarmed, or ejected from the queue without merging, which nothing else reports); the current state of every watched pull request is the pull_requests query. Reads it with the credential of whoever's turn this is, so a \"cannot see it\" on a pull request that exists means their GitHub credential cannot reach that repo. Watching one already watched reports its state and changes nothing."
+          "Watch a pull request on GitHub. The session polls it. The timeline announces when it merges, closes or reopens, and when its checks pass or fail. The timeline also announces when auto merge is armed (armed) and when it enters the merge queue (queued). It also announces when the pull request is on neither while it is still open (stalled). Stalled means disarmed, or ejected from the queue without a merge. Nothing else reports a stall. The pull_requests query gives the current state of every watched pull request. This tool reads it with the credential of the person whose turn this is. A \"cannot see it\" on a pull request that exists means that their GitHub credential cannot reach that repo. If the pull request is already watched, the answer gives its state and nothing changes."
           repoNumber
           (fun (repo, number) -> ok (watchPr capabilities repo number))
       tool
           "unwatch_pr"
-          "Stop watching a pull request. The session stops polling it and says nothing further about it; everyone sees the stop in the timeline."
+          "Stop watching a pull request. The session stops polling it and says nothing more about it. Everyone sees the stop in the timeline."
           repoNumber
           (fun (repo, number) -> ok (unwatchPr capabilities repo number)) ]
