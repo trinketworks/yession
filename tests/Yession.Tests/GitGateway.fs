@@ -535,7 +535,7 @@ let private portsTests =
                         let! run = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (sandboxEnv gateway cap)
                         Expect.isTrue (run.Status <> 0) "it fails"
                         Expect.isTrue (run.Stderr.Contains "remote error:") (sprintf "on the remote-error channel: %s" run.Stderr)
-                        Expect.isTrue (run.Stderr.Contains "run it as a command") "saying how a request gets a credential here"
+                        Expect.isTrue (run.Stderr.Contains "Run git as a command") "saying how a request gets a credential here"
                         Expect.equal upstream.Authorizations.Count 0 "and github.com was not asked"
                     })
             do! upstream.Close ()

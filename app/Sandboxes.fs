@@ -1661,7 +1661,7 @@ module DockerSandbox =
                         return
                             Error
                                 (sprintf
-                                    "no shell that a terminal can instrument%s. None of %s is on PATH. It said: %s"
+                                    "no shell that a terminal can instrument%s. It looked for %s on PATH and found none. It said: %s"
                                     where
                                     (String.concat ", " asked)
                                     (let text = said.ToString().Trim () in if text = "" then "nothing" else text))

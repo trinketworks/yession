@@ -763,7 +763,7 @@ let private resolveCredential (actor: CredentialFor) : Async<Result<(string * st
                 return
                     Error (
                         sprintf
-                            "no Claude account is connected for %s. Open Connections to sign in."
+                            "no Claude account connected for %s. Open Connections to sign in."
                             (ClaudeConnection.actorLabel actor))
     }
 
