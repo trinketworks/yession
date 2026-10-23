@@ -744,27 +744,31 @@ module Style =
     /// Real links, because the filter IS the page's location, so these are chips only in how
     /// they look; everything about how they behave comes free from `<a>`.
     ///
-    /// They are NOT a third face at a height of their own. They were — a bordered pair at
-    /// 24px, one tone of ring for the selected chip and a quieter one for the rest — which
-    /// is two bordered faces, and there is one. So the SELECTED chip is that one face, and
-    /// the others are bare words: selection is said by the ring appearing at all rather than
-    /// by a second tone of it, which is chrome showing structure (principle 2 — blur the
-    /// screen until no word reads, and the selection is still visible). `Stroke.clear` keeps
-    /// the border box on the bare ones, so choosing a filter moves no text.
+    /// Told apart by GROUND, as the pane's pivot tabs are (`pivotItemOn`): the lit chip wears
+    /// the `panel` step, the rest are bare words. Not by a ring. A bordered rectangle on this
+    /// page means a standalone act on the ground — Declare — and the lit chip is a state,
+    /// not an act; blurred, a ringed chip beside the filled Create read as a second button.
+    /// The ground is chrome showing structure (principle 2 — blur the screen until no word
+    /// reads, and the selection is still visible), and it is the ONE way this product says
+    /// "the selected one of these". Choosing a filter moves no text: no face has a border.
     ///
     /// `h-control`, and a thumb's height on a phone, like every other control: a row of
     /// chips beside the page's Create button is a row of things of one height.
     ///
     /// No fill on any of them — the filled weight on this page belongs to Create.
     let private filterChipBase =
-        cls [ caps; "h-control phone:h-touch px-2 inline-flex items-center no-underline"
-              "whitespace-nowrap transition-colors"; Stroke.ring; focusRing ]
+        cls [ caps; "h-control phone:h-touch px-2 inline-flex items-center no-underline border-0"
+              "whitespace-nowrap transition-colors"; focusRing ]
 
-    let filterChipOn = cls [ filterChipBase; Stroke.rim; "cursor-pointer text-ink" ]
+    let filterChipOn = cls [ filterChipBase; "bg-panel text-ink cursor-pointer" ]
     /// The count a chip wears, in the chip's own voice and colour — the word is the filter,
     /// the number is what it holds, and they light and dim together.
     let filterChipCount = "ml-1.5 tabular-nums"
-    let filterChipOff = cls [ filterChipBase; Stroke.clear; bareInk ]
+    let filterChipOff = cls [ filterChipBase; bareInk ]
+    /// An unlit chip with nothing behind it (its count is 0) wears the waiting face
+    /// (docs/visual-design.md, State): still pressable, since showing an empty state is a
+    /// legitimate ask, but a step quieter than a chip that would show something.
+    let filterChipEmpty = cls [ filterChipBase; "cursor-pointer text-ink-faint hover:text-ink" ]
 
     /// A sortable column header. Wears the header's own caps-faint voice so a sortable column
     /// does not shout over the ones that are not, and comes up to ink under the pointer — the
