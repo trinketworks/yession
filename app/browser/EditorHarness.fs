@@ -1373,7 +1373,11 @@ let private queueModel : ClientModel =
     let entries =
         queued
         |> List.mapi (fun i (id, author, _) -> id, ({ QueueId = id; Author = author; Order = float (i + 1) } : QueuedMessage))
-    { withPeople shellModel with Synced = { shellModel.Synced with Queue = Map.ofList entries } }
+    { withPeople shellModel with
+        Synced = { shellModel.Synced with Queue = Map.ofList entries }
+        // Past the wait (`ClientModel.QueueShown`) already — this fixture is for a camera
+        // on the band itself, not on the flash the wait exists to hide.
+        QueueShown = entries |> List.map fst |> Set.ofList }
 
 /// What the other two people are writing, which the mount seeds into their draft bodies.
 let private draftBodies : (PeerId * string) list =

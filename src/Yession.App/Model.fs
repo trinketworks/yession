@@ -1998,6 +1998,19 @@ type ClientModel =
       /// (`ClientModel.timers`) — an arm nobody confirms must not stay armed forever, the way
       /// a menu left open or a copy's confirmation left showing would be wrong too.
       QueueDeleteArmed : QueueId option
+      /// Which entries of `Synced.Queue` have sat long enough to be worth drawing
+      /// (`ClientModel.catchUpQuietMs`, the same round trip `EffortSlowMsg` already
+      /// names). A send almost always drains before this fires — the entry appears in
+      /// the doc the instant it is enqueued, and the Session (same machine, usually)
+      /// removes it again within the round trip — so most entries are never added here
+      /// at all. Without the wait the queue band flashed open and shut on every ordinary
+      /// send. View state, not shared: a round trip is a fact about THIS client's link,
+      /// and a peer's own copy of the doc settles on its own clock.
+      ///
+      /// An id lingering here after its entry drained is harmless (the view reads
+      /// `Synced.Queue` first and this only narrows it) and short-lived: `Client.decodeModel`
+      /// prunes it to the doc's own keys on every snapshot it reads back.
+      QueueShown : Set<QueueId>
       /// What this client has just put on the clipboard, named by the hook of the box it
       /// came out of (`Dom.Hooks.githubUserCode` and whatever joins it). View state, local
       /// and transient for the same reason the menu above is: copying is one person's act
@@ -2273,6 +2286,12 @@ type ClientMsg =
     /// `None` is sent back by the entry's own wait (`armedMs`) when nobody
     /// confirms it, the same shape as `CopiedMsg`'s expiry.
     | ArmQueueDeleteMsg of QueueId option
+    /// A queued entry has sat long enough to be worth drawing (`ClientModel.QueueShown`,
+    /// `ClientModel.catchUpQuietMs`). Fired by the timer `ClientModel.timers` declares for
+    /// it, never by anything else — the entry may be long gone by the time this arrives, and
+    /// the fold is then a no-op (`ClientModel.QueueShown` only ever narrows what `Synced.Queue`
+    /// already says).
+    | QueueShownMsg of QueueId
     /// A fresh /claude status probe result (Plan 08).
     | ClaudeStatusMsg of ClaudePanel
     /// The Claude sign-in flow moved (the authorize tab opened, or the person cancelled).
@@ -2900,6 +2919,7 @@ module ClientModel =
           OpenFolds = Set.empty
           DatedBreaks = Set.empty
           QueueDeleteArmed = None
+          QueueShown = Set.empty
           Copied = None
           Uploads = []
           Claude =
@@ -4814,6 +4834,20 @@ module ClientModel =
                     After = armedMs
                     Fire = ArmQueueDeleteMsg None } ]
             | None -> []
+        // One wait per entry still in the doc and not yet shown, on the same clock as
+        // `effort`'s `catchUpQuietMs` — the cause is the one it already names (a send one
+        // round trip behind itself). An id already shown needs no more waiting for, and one
+        // whose entry is gone is not here to ask for it.
+        let queueShown =
+            model.Synced.Queue
+            |> Map.toList
+            |> List.choose (fun (queueId, _) ->
+                if Set.contains queueId model.QueueShown then None
+                else
+                    Some
+                        { Key = [ "queue-shown"; QueueId.value queueId ]
+                          After = catchUpQuietMs
+                          Fire = QueueShownMsg queueId })
         let killArmed =
             match model.KillArmed with
             | Some terminal ->
@@ -4831,7 +4865,7 @@ module ClientModel =
                           After = int Pending.deadlineMillis
                           Fire = PendingWaitedMsg (since + Pending.deadlineMillis) }
                 | Pending.Ready | Pending.Sending | Pending.Refused _ -> None)
-        effort @ waited @ dwell @ copied @ queueDeleteArmed @ killArmed @ pending @ quiet @ GitHubPoll.timer model.GitHub
+        effort @ waited @ dwell @ copied @ queueDeleteArmed @ queueShown @ killArmed @ pending @ quiet @ GitHubPoll.timer model.GitHub
 
     /// Fold a message into the model — the state half of `update`, its only caller.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
@@ -5307,6 +5341,8 @@ module ClientModel =
             model |> withSynced { model.Synced with Queue = Map.remove queueId model.Synced.Queue }
         | ArmQueueDeleteMsg next ->
             { model with QueueDeleteArmed = next }
+        | QueueShownMsg queueId ->
+            { model with QueueShown = Set.add queueId model.QueueShown }
         | ClaudeStatusMsg status ->
             // A connected credential ends the wait for the human in the other tab (the
             // callback completed there); otherwise the flow is untouched by a mere probe.
