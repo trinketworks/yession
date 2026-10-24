@@ -5691,6 +5691,11 @@ let editorTests =
         editorCaseIn 1440 900 "a message's ground stops at the reading column, not the window" <| fun page ->
             async {
                 do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-id]"
+                // The chat column's own width settles over the harness's first animation
+                // frames (the pane's `wide:transition-[width]` easing shut on mount, same as
+                // every later close): a measurement taken before it ends catches a column
+                // narrower than its final, centred width, and `spare` reads short.
+                do! Probe.settled page
                 let! spare = groundSpare page
                 Expect.isTrue
                     (spare > 100.0)
