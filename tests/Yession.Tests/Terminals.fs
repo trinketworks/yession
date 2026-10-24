@@ -264,7 +264,7 @@ let private projectionTests =
             Expect.equal a.Blocks.Head.Status (BlockFinished (CommandSucceeded 0)) "with its exit code"
             Expect.equal a.Blocks.Head.ToSeq (Some 4) "and the transcript range it produced"
 
-        // What the agent's standing calls "running <terminal>": only a command that owes the
+        // What the agent's standing calls "running": only a command that owes the
         // agent a wake, so not one a person is running and not one that has finished.
         testCase "the agent awaits only its own background commands still running" <| fun () ->
             let background event =
