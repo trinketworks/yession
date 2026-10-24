@@ -2016,8 +2016,8 @@ let private prWatchTests =
                 s.Word, s.Tone
             Expect.equal (say idle) ("waiting", ToneOk) "idle is the ball with the people, and that is fine"
             Expect.equal (say { idle with TurnRunning = true }) ("working", ToneBusy) "a turn is work"
-            Expect.equal (say { idle with BusyTerminals = [ "build" ] }) ("running build", ToneBusy) "a command owes a wake"
-            Expect.equal (say { idle with BusyTerminals = [ "a"; "b" ] }) ("running 2 commands", ToneBusy) "several are counted"
+            Expect.equal (say { idle with BusyTerminals = [ "build" ] }) ("running", ToneBusy) "a command owes a wake, and is not named"
+            Expect.equal (say { idle with BusyTerminals = [ "a"; "b" ] }) ("running", ToneBusy) "nor are several counted"
             Expect.equal (say { idle with NoAgent = true }) ("no agent", ToneBusy) "a wait, in the doctrine's words"
             Expect.equal (say { idle with SignInRequired = true }) ("sign in again", ToneBad) "the sidebar's word for it"
             Expect.equal

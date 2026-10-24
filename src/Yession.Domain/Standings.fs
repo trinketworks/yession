@@ -81,13 +81,14 @@ module AgentStatus =
     /// A running turn is work whatever else holds, because it proves an agent is there and
     /// signed in. Otherwise the two that need a person outrank a command still running,
     /// which is under way and needs nobody.
+    ///
+    /// "running" names no command. A command's name is a sentence of its own, and it took
+    /// the roster row's and the header's room; the composer's tray names it, one press from
+    /// the terminal.
     let standing (situation: AgentSituation) : Standing =
         let say word tone = { Facet = facet; Word = word; Tone = tone }
         if situation.TurnRunning then say "working" ToneBusy
         elif situation.SignInRequired then say signInAgain ToneBad
         elif situation.NoAgent then say noAgent ToneBusy
-        else
-            match situation.BusyTerminals with
-            | [] -> say "waiting" ToneOk
-            | [ terminal ] -> say (sprintf "running %s" terminal) ToneBusy
-            | several -> say (sprintf "running %d commands" (List.length several)) ToneBusy
+        elif List.isEmpty situation.BusyTerminals then say "waiting" ToneOk
+        else say "running" ToneBusy
