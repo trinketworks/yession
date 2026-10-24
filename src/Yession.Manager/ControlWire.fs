@@ -54,19 +54,19 @@ module ControlWire =
                 Encode.object
                     [ "facet", Encode.string s.Facet
                       "word", Encode.string s.Word
-                      "tone", Encode.string (QueryTone.name s.Tone) ]
+                      "attention", Encode.string (Attention.name s.Attention) ]
           Decode =
             Decode.object (fun get ->
                 { Standing.Facet = get.Required.Field "facet" Decode.string
                   Standing.Word = get.Required.Field "word" Decode.string
-                  Standing.Tone =
+                  Standing.Attention =
                     get.Required.Field
-                        "tone"
+                        "attention"
                         (Decode.string
                          |> Decode.andThen (fun raw ->
-                             match QueryTone.parse raw with
-                             | Some tone -> Decode.succeed tone
-                             | None -> Decode.fail (sprintf "Unknown tone: %s" raw))) }) }
+                             match Attention.parse raw with
+                             | Some attention -> Decode.succeed attention
+                             | None -> Decode.fail (sprintf "Unknown attention: %s" raw))) }) }
 
     /// What a session says about ITSELF, reported child→Manager so the roster can show it:
     /// every standing it holds, the whole set each time, so an empty list clears them.

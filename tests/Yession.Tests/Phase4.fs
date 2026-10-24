@@ -596,8 +596,8 @@ let private controlRpcTests =
 // real child processes is verify tier.
 // -----------------------------------------------------------------------------
 
-let private stalled : Yession.Domain.Standings.Standing = { Facet = "prs"; Word = "3 PRs · 1 stalled"; Tone = ToneBad }
-let private working : Yession.Domain.Standings.Standing = { Facet = "agent"; Word = "working"; Tone = ToneBusy }
+let private stalled : Yession.Domain.Standings.Standing = { Facet = "prs"; Word = "3 PRs · 1 stalled"; Attention = Yession.Domain.Standings.Wrong }
+let private working : Yession.Domain.Standings.Standing = { Facet = "agent"; Word = "working"; Attention = Yession.Domain.Standings.Moving }
 
 let private uiRecord : SessionRecord =
     { SessionId = SessionId.create "ui-render" |> expect
@@ -754,12 +754,17 @@ let private uiRenderTests =
                 (ControlWire.toString ControlWire.sessionStatusReport said
                  |> ControlWire.fromString ControlWire.sessionStatusReport)
                 (Ok said)
-                "every facet, word and tone, in order"
+                "every facet, word and attention, in order"
             Expect.isError
                 (ControlWire.fromString
                     ControlWire.sessionStatusReport
-                    """{"standings":[{"facet":"prs","word":"#1 open","tone":"loud"}]}""")
-                "a tone the Manager has no ink for is refused, not guessed"
+                    """{"standings":[{"facet":"prs","word":"#1 open","attention":"loud"}]}""")
+                "an attention the Manager cannot draw is refused, not guessed"
+            Expect.isError
+                (ControlWire.fromString
+                    ControlWire.sessionStatusReport
+                    """{"standings":[{"facet":"prs","word":"#1 open","tone":"bad"}]}""")
+                "a tone is the old shape, and is not read as one"
 
         // A standing describes work in FLIGHT. A row that went on showing one after its
         // session stopped would be claiming something no process is doing.

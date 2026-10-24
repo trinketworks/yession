@@ -4618,7 +4618,7 @@ module ClientModel =
         agentStanding model
         |> Option.map (fun standing ->
             if claudeNeedsSignIn model && standing.Word <> Standings.AgentStatus.noAgent then
-                { standing with Word = Standings.AgentStatus.signInAgain; Tone = ToneBad }
+                { standing with Word = Standings.AgentStatus.signInAgain; Attention = Standings.Wrong }
             else
                 standing)
 
@@ -4644,7 +4644,7 @@ module ClientModel =
     /// The warning wins, because a tab can only say one thing and the one that needs a
     /// person is the one that has stopped moving.
     ///
-    /// The agent adds one case to the warning and no other: its standing at `ToneBad`, which
+    /// The agent adds one case to the warning and no other: its standing at `Wrong`, which
     /// is a sign-in nobody but a person can give. Working, waiting and running a command are
     /// the agent getting on with it, which is the red suite's reason again.
     let private tabSignal (model: ClientModel) : string =
@@ -4655,7 +4655,7 @@ module ClientModel =
             prs |> List.exists (fun (_, word) -> word = "stalled" || word = PrStatus.unreachable)
         let agentStuck =
             standings model
-            |> List.exists (fun s -> s.Facet = Standings.AgentStatus.facet && s.Tone = ToneBad)
+            |> List.exists (fun s -> s.Facet = Standings.AgentStatus.facet && s.Attention = Standings.Wrong)
         if stopped || agentStuck then "⚠ "
         elif prs |> List.exists (fun (_, word) -> word = "merged") then "✓ "
         else ""
