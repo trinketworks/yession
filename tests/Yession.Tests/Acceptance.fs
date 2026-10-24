@@ -2007,7 +2007,7 @@ let private uiChecklistTests =
         testCase "each attention level draws its own face, and only Moving beats" <| fun () ->
             let levels =
                 [ Standings.Rest; Standings.Absent; Standings.Moving; Standings.Wanted; Standings.Wrong ]
-            let drawn level = Support.renderTemplate (Yession.App.Icon.attention level)
+            let drawn level = Support.renderTemplate (Icon.attention level)
             // The face, with the box and ink stripped: what is left is the shape alone.
             let shape (html: string) = html.Substring (html.IndexOf "viewBox")
             let faces = levels |> List.map (drawn >> shape)
