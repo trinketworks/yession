@@ -4053,9 +4053,14 @@ module Style =
     /// `paneToolbar`, where there is one, is now the column's own second row underneath —
     /// `spacing-touch` tall and no longer asked to land on the band. Its hairline is its own,
     /// the ordinary case the "two rows" clause describes.
+    ///
+    /// Its OWN hairline (`Stroke.dividerBottom`) is the one visual-design.md already promises
+    /// ("the hairline under it runs across every column at one height") and the one the chat
+    /// header wears for the same band — this row had the height but drew no line, so the
+    /// header's rule stopped dead at the pane's divider instead of running on into it.
     let panePivotRow =
-        "shrink-0 h-band flex items-end pb-5 bg-bg "
-        + "phone:h-band-phone phone:items-center phone:pb-[11px]"
+        cls [ "shrink-0 h-band flex items-end pb-5 bg-bg "
+              + "phone:h-band-phone phone:items-center phone:pb-[11px]"; Stroke.dividerBottom ]
     /// The tablist: `all`, then the scroller of tabs. `all` stays put at the row's head however
     /// many tabs follow it. `min-w-0` so the scroller is what gives way when the names outgrow
     /// the row.
@@ -4072,8 +4077,13 @@ module Style =
     /// On a phone the tabs sit a step closer (`gap-1`; each item's own padding still parts
     /// the names by 16px): the row there is 390px for `all`, the tabs and the way back, and
     /// at `gap-2` it showed under two of them.
+    /// `divide-x divide-hair` between the tabs themselves: the same hairline the row's own
+    /// bottom rule draws (`panePivotRow`), run upright, between every pair — so a reader who
+    /// cannot tell the selected tab's one-step fill from the strip's ground at a glance still
+    /// sees where one tab ends and the next begins. `divide-x` skips the first child, so there
+    /// is no stray edge against `all` on one side or the strip's fade mask on the other.
     let panePivotScroller =
-        cls [ "min-w-0 flex items-stretch overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        cls [ "min-w-0 flex items-stretch divide-x divide-hair overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               "data-[pane-strip-hidden=end]:[mask-image:linear-gradient(to_right,#000_calc(100%_-_1.5rem),transparent)]"
               "data-[pane-strip-hidden=start]:[mask-image:linear-gradient(to_left,#000_calc(100%_-_1.5rem),transparent)]"
               "data-[pane-strip-hidden=both]:[mask-image:linear-gradient(to_right,transparent,#000_1.5rem,#000_calc(100%_-_1.5rem),transparent)]" ]
@@ -4084,9 +4094,18 @@ module Style =
     /// Told apart by GROUND: the selected tab wears the pane's (`panel`), the rest the strip's,
     /// and lift a step (`surface`) under the hand. Ink follows, a step quieter on the tabs not
     /// chosen; both inks clear 4.5:1 on every ground here (Phase4). Selecting moves no text.
+    ///
+    /// `text-small`, not the body size: a name here is truncated to 28ch already
+    /// (`pivotName`), so the body size bought the row height back for words it never shows in
+    /// full. The caption size reads as chrome rather than prose, which is what a tab's own
+    /// name is.
+    /// No `border-0`: a `div role="tab"` has no native border to reset, and `border-0` here
+    /// cancelled the scroller's `divide-x` — a bare utility beats `:where()`'s zero specificity
+    /// however it is ordered (measured live: `border-0` present, `border-right-width` 0 on
+    /// every tab; removed, 1px, matching `divide-hair`).
     let private pivotItemBase =
-        cls [ "shrink-0 border-0 cursor-pointer h-touch min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5"
-              "font-ui font-normal text-body whitespace-nowrap transition-colors duration-150 ease-out"
+        cls [ "shrink-0 cursor-pointer h-touch min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5"
+              "font-ui font-normal text-small whitespace-nowrap transition-colors duration-150 ease-out"
               "motion-reduce:transition-none"; focusRingInset ]
     let pivotItem = cls [ pivotItemBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
     let pivotItemOn = cls [ pivotItemBase; "bg-panel text-ink" ]
@@ -4121,7 +4140,7 @@ module Style =
     /// strip, at least as wide, its figures in the tabs' type so they read as one line.
     let private paneListButtonBase =
         cls [ "shrink-0 h-touch min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5 border-0 cursor-pointer"
-              "font-ui font-normal text-body tabular-nums transition-colors motion-reduce:transition-none"; focusRingInset ]
+              "font-ui font-normal text-small tabular-nums transition-colors motion-reduce:transition-none"; focusRingInset ]
     let paneListButton = cls [ paneListButtonBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
     /// The same with its sheet down: the sheet's own ground (`allSheet`), flush with it, so
     /// the button reads as the sheet's tab and is the one lit thing in the strip.
