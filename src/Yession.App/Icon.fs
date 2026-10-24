@@ -14,7 +14,9 @@ open Yession.Domain.Content
 ///
 /// Drawn instead: one 16-unit grid, `currentColor` (so `hover:`/`active:` colour them like
 /// text), square caps — Metro's geometry, no curves, no fills. `aria-hidden` because every icon
-/// here sits inside a control that carries its own accessible name.
+/// here sits inside a control that carries its own accessible name. The attention mark is the
+/// exception by kind, not by taste: it is a POINT, and the point is always round
+/// (docs/visual-design.md, Form).
 ///
 /// A mark is a BOX and a WEIGHT, and the two are not independent: see `Box` and `Weight`.
 module Icon =
@@ -278,8 +280,42 @@ module Icon =
         | ContentKind.Image _ -> imageSm
         | ContentKind.Download -> fileSm
 
-    /// GitHub's mark, as GitHub draws it: the one FILLED shape in this file, and the one
-    /// exception to its vocabulary, because a brand's mark is not ours to redraw in strokes
+    /// How much something wants a person (docs/visual-design.md, Attention). A POINT, not an
+    /// icon, so it is round and may be filled; the five faces share one geometry — a 10-unit
+    /// box, centre (5,5), a ring of radius 4 at a 2px stroke — so they differ in what is
+    /// inside the ring and in nothing else, and they rank by shape alone, in greyscale and
+    /// under a blur:
+    ///
+    /// - Rest: the ring.
+    /// - Absent: the ring broken into six dashes, one centred on each side and corner.
+    /// - Moving: the ring half filled.
+    /// - Wanted: filled.
+    /// - Wrong: the ring with a core, a target.
+    ///
+    /// `data-attention` spells the level for a test (`Attention.name`). `aria-hidden`: the word
+    /// beside it, or the name of the control it sits in, says the state.
+    let attention (level: Yession.Domain.Standings.Attention) =
+        let box = Style.attentionMark level
+        let name = Yession.Domain.Standings.Attention.name level
+        match level with
+        | Yession.Domain.Standings.Rest ->
+            html
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="2"></circle></svg>"""
+        | Yession.Domain.Standings.Absent ->
+            html
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="2.0944 2.0944" stroke-dashoffset="1.0472"></circle></svg>"""
+        | Yession.Domain.Standings.Moving ->
+            html
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="2"></circle><path d="M5 1 A4 4 0 0 0 5 9 Z" fill="currentColor"></path></svg>"""
+        | Yession.Domain.Standings.Wanted ->
+            html
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><circle cx="5" cy="5" r="5" fill="currentColor"></circle></svg>"""
+        | Yession.Domain.Standings.Wrong ->
+            html
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="2"></circle><circle cx="5" cy="5" r="1.5" fill="currentColor"></circle></svg>"""
+
+    /// GitHub's mark, as GitHub draws it: the one FILLED shape in this file that is not a
+    /// point, and the one exception to its vocabulary, because a brand's mark is not ours to redraw in strokes
     /// — a reader knows this shape, and a Metro-stroked octocat would be a different thing
     /// wearing its name. `currentColor`, so it takes the ink of the name beside it. The
     /// mark a `github` connection wears wherever a sentence points at one. `box14.Cls`, like

@@ -360,8 +360,10 @@ module Style =
     /// The one disc every mark in the product is drawn as: 6px, round, inline. The point is
     /// the second of the two primitives and it is always round (docs/visual-design.md, Form);
     /// written once, here, because it had been spelled out at nine sites, each free to arrive
-    /// a pixel off. What a mark MEANS is the colour and the motion composed onto it below —
-    /// never its size, and never its shape.
+    /// a pixel off. What a status's mark MEANS is the colour and the motion composed onto it
+    /// below — never its size, and never its shape. The one point that ranks by shape is the
+    /// attention mark (`attentionMark`, `Icon.attention`), which answers a different question:
+    /// not what state a thing is in, but how much it wants a person.
     let private disc = "inline-block w-1.5 h-1.5 rounded-full"
 
     /// How a mark that LEADS a word sits: in the gutter to its left, on the text's baseline,
@@ -1578,6 +1580,20 @@ module Style =
         | Yession.Domain.Standings.Absent -> toneBusy
         | Yession.Domain.Standings.Wrong -> toneBad
         | Yession.Domain.Standings.Rest -> toneMuted
+
+    /// The attention mark's box and ink (`Icon.attention`): 10px, because its SHAPE carries
+    /// the rank and a 6px disc has no room inside it for a ring, a half or a core. Moving
+    /// beats in colour like every wait (`beat-mark`, the `color` twin of `beat-wait`, since
+    /// an SVG paints with `currentColor` and not a background), and stands still in its ink
+    /// under reduced motion.
+    let markBeat = "animate-beat-mark motion-reduce:animate-none"
+
+    let attentionMark (attention: Yession.Domain.Standings.Attention) : string =
+        let beat =
+            match attention with
+            | Yession.Domain.Standings.Moving -> [ markBeat ]
+            | _ -> []
+        cls ([ "block shrink-0 w-2.5 h-2.5"; attentionInk attention ] @ beat)
 
     /// A value, with no colour of its own. A base that carried one could not be recoloured
     /// by appending: two Tailwind text utilities on one element resolve by stylesheet order
