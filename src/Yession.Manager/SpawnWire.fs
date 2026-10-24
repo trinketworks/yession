@@ -27,8 +27,33 @@ open Thoth.Json.Net
 /// A PAIR, because it has only ever been used as one — a url with no secret cannot be
 /// called, and a secret with no url has nowhere to go.
 type LaunchControl =
-    { Url : string
+    { Endpoint : ControlEndpoint
       Secret : string }
+
+/// Where the Manager's control endpoint answers, as a session dials it. The Manager's own
+/// listener decides which (`ProcessManager.Listener`): a TCP port answers at a url, and a
+/// unix socket at a path, which nothing but this process tree's own user can open.
+and [<RequireQualifiedAccess>] ControlEndpoint =
+    | Address of url: string
+    | Socket of path: string
+
+[<RequireQualifiedAccess>]
+module ControlEndpoint =
+
+    /// The url a route is joined onto. A socket request carries a url too, for its path and
+    /// its `host` header; the host names nothing a resolver is asked about.
+    let baseUrl (endpoint: ControlEndpoint) : string =
+        match endpoint with
+        | ControlEndpoint.Address url -> url
+        | ControlEndpoint.Socket _ -> "http://yession-manager"
+
+    /// The Manager's own url, where a browser could follow it — none for a socket, which no
+    /// browser dials. A session behind a socket has the public origin to send people to
+    /// (`PublicAccess.managerUrlOr`), and the Manager refuses a socket without one.
+    let url (endpoint: ControlEndpoint) : string option =
+        match endpoint with
+        | ControlEndpoint.Address url -> Some url
+        | ControlEndpoint.Socket _ -> None
 
 /// Everything the Manager mints for one launch, decoded once at the process boundary and
 /// passed downward from there. Nothing reaches back up to the environment for a piece of it.
@@ -73,7 +98,10 @@ module Launch =
 
     let private controlDecoder : Decoder<LaunchControl> =
         Decode.object (fun get ->
-            { Url = get.Required.Field "url" Decode.string
+            { Endpoint =
+                get.Optional.Field "socket" Decode.string
+                |> Option.map ControlEndpoint.Socket
+                |> Option.defaultWith (fun () -> ControlEndpoint.Address (get.Required.Field "url" Decode.string))
               Secret = get.Required.Field "secret" Decode.string })
 
     let private decoder : Decoder<Launch> =
@@ -95,7 +123,11 @@ module Launch =
         let control =
             match launch.Control with
             | Some c ->
-                [ "control", Encode.object [ "url", Encode.string c.Url; "secret", Encode.string c.Secret ] ]
+                let endpoint =
+                    match c.Endpoint with
+                    | ControlEndpoint.Address url -> "url", Encode.string url
+                    | ControlEndpoint.Socket path -> "socket", Encode.string path
+                [ "control", Encode.object [ endpoint; "secret", Encode.string c.Secret ] ]
             | None -> []
         Encode.object
             ([ "session", Encode.string (SessionId.value launch.Session)

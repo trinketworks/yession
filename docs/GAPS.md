@@ -48,13 +48,26 @@ The last section holds trust boundaries as sharp as the first section's.
   - Peer display names stay self-asserted.
   - The client UI renders a bare `UserId.value`, with no names or avatars from verified claims.
     The session carries and records `UserClaims` but does not display them.
-- **BYO authorization trusts plaintext headers** (Plan 07). `--auth trusted-headers` trusts
-  canonical `x-yession-*` identity headers from an operator-run authenticating proxy
-  ([deployment.md](deployment.md#the-header-scheme)). Anyone who can reach the loopback port
-  directly can forge them, the same trust boundary as `--auth localhost`. The proxy MUST strip
-  inbound `x-yession-*` headers and be the only non-local path in. The recorded hardening
-  follow-up is a signed-JWT header strategy that verifies against an operator JWKS.
-  `Fable.Jose.jwtVerify` is already bound.
+- **BYO authorization trusts plaintext headers, over a socket only the proxy opens** (Plan 07).
+  `--auth trusted-headers` trusts canonical `x-yession-*` identity headers from an operator-run
+  authenticating proxy ([deployment.md](deployment.md#the-header-scheme)). The Manager serves
+  it on a unix socket and refuses a TCP port at boot (`Listener.admits`), because every local
+  process, and a container that reaches the host loopback, dials a loopback port as loopback.
+  The example proxy listens on a socket too, so `serve` is the only peer that can assert
+  `Tailscale-User-Login` ([§5 rule 18](technical-design.md#5-architectural-invariants)).
+  Remaining:
+  - **The socket's permissions are the boundary, so the boundary is the uid.** A process of the
+    Manager's own user, unconfined, opens the socket. That includes a `host` work sandbox and
+    the agent CLI under its default `host` backend (below). srt denies the path, and a
+    container has none.
+  - **The proxy is still trusted.** The design that trusts nothing between tailscaled and the
+    Manager is a strategy `--auth tailscale` that asks tailscaled's LocalAPI `whois` about the
+    connection's peer, so the subject comes from the connection and not from a header. The
+    recorded alternative is a signed-JWT header strategy against an operator JWKS
+    (`Fable.Jose.jwtVerify` is already bound).
+  - **The socket ingress is not yet verified on a live tailnet.** It needs a root `serve` on
+    Tailscale 1.98.9 or later, and not the sandboxed macOS app
+    ([deployment.md](deployment.md#authorizing-1)).
 - **No `nonce` in ID tokens yet, and the flow makes that tolerable.** The ID token never passes
   through the browser. The confidential RP redeems the code over its own back channel, with its
   client secret plus the PKCE verifier, so no injected-token path exists for a nonce to close. A
@@ -114,8 +127,9 @@ The last section holds trust boundaries as sharp as the first section's.
   every session, so the boundary is the same. Authors stay `PeerRef`, so event ATTRIBUTION does
   not change. [deployment.md](deployment.md#what---auth-localhost-costs-here) gives both exits
   (`--secrets ephemeral`, `--auth trusted-headers`).
-- **No transport encryption guarantees beyond WebRTC/DTLS.** Everything binds 127.0.0.1. Loopback
-  HTTP is the RFC 8252 pattern. Nothing here is LAN-safe without the operator's proxy in front.
+- **No transport encryption guarantees beyond WebRTC/DTLS.** Everything binds 127.0.0.1, or a
+  unix socket under `trusted-headers`. Loopback HTTP is the RFC 8252 pattern. Nothing here is
+  LAN-safe without the operator's proxy in front.
 - **The Manager and Process read plaintext**, per the stated Phase 1–2 threat model. The design
   allows command-to-container encryption, but no code does it yet.
 - **The authentication strategy gates the management UI** (Plan 07). A `Denied` outcome is a 401

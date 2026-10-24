@@ -614,6 +614,11 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     [Acyclic dependencies](#acyclic-dependencies). `Yession.Domain` refers to no other project
     and no package but FSharp.Core (`DomainReferences` in `tests/` pins it).
 17. The composition root composes and decides nothing.
+18. Nothing on a TCP port believes its peer. An identity arrives through a door only its
+    asserter can open, a unix socket, and a listener whose strategy reads headers refuses a
+    port (`Listener.admits`). A container may reach the host loopback (a VM daemon gives it
+    no other way to the host), so everything there authenticates by capability, cookie or
+    token.
 
 Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
 roots, keyed by `BodyKey`, that the app co-manages outside the encoded tree, and the structural

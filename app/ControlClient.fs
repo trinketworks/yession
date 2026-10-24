@@ -18,14 +18,22 @@ open Yession.Manager
 open Yession.Oidc
 open Yession.App
 
+/// How a request reaches `endpoint`.
+let private transportOf (endpoint: ControlEndpoint) : Http.Transport =
+    match endpoint with
+    | ControlEndpoint.Address _ -> Http.Transport.Tcp
+    | ControlEndpoint.Socket path -> Http.Transport.UnixSocket path
+
 /// One control POST: the per-launch secret is the whole authentication, and the body is
-/// always this repository's own JSON.
-let private post (url: string) (secret: string) (body: string) : JS.Promise<Fetch.Types.Response> =
-    Fetch.fetchUnsafe
-        url
-        [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST
-          Http.headers [ "x-yession-control", secret; "content-type", "application/json" ]
-          Fetch.Types.RequestProperties.Body (Fable.Core.U3.Case3 body) ]
+/// always this repository's own JSON. The endpoint decides the transport.
+let private post (endpoint: ControlEndpoint) (route: ControlRoute) (secret: string) (body: string) : JS.Promise<Fetch.Types.Response> =
+    Http.fetchOver
+        (transportOf endpoint)
+        (ControlRoute.at (ControlEndpoint.baseUrl endpoint) route)
+        { Method = Fetch.Types.HttpMethod.POST
+          Headers = [ "x-yession-control", secret; "content-type", "application/json" ]
+          Body = Some body
+          Signal = None }
 
 /// One control call's body, or a rejection naming the status that refused it.
 ///
@@ -34,15 +42,19 @@ let private post (url: string) (secret: string) (body: string) : JS.Promise<Fetc
 /// non-200 — so the promise carries the body and nothing else. The rejection stays a
 /// rejection, in the tick the response arrives, because every caller is already written
 /// around one.
-let private postJson (url: string) (secret: string) (body: string) : JS.Promise<string> =
-    post url secret body
+let private postJson (endpoint: ControlEndpoint) (route: ControlRoute) (secret: string) (body: string) : JS.Promise<string> =
+    post endpoint route secret body
     |> Promise.bind (fun response ->
         if response.Ok then response.text ()
         else failwithf "control rpc failed: %d" response.Status)
 
 /// The control-leg case of `Sse.subscribe`: the per-launch secret is the whole authentication.
-let private openEventStream (url: string) (secret: string) (onData: Sink<string>) : Subscription =
-    Sse.subscribe url [ "x-yession-control", secret ] onData
+let private openEventStream (endpoint: ControlEndpoint) (route: ControlRoute) (secret: string) (onData: Sink<string>) : Subscription =
+    Sse.subscribeOver
+        (transportOf endpoint)
+        (ControlRoute.at (ControlEndpoint.baseUrl endpoint) route)
+        [ "x-yession-control", secret ]
+        onData
 
 /// Turn a typed sink into a frame sink: decode each frame with `codec`, and log-and-skip a
 /// malformed one — a bad frame is never fatal to the stream, because the next one may be fine and
@@ -56,9 +68,9 @@ let private decoding (what: string) (codec: Codec<'a>) (sink: Sink<'a>) : Sink<s
 /// Subscribe to the Manager's notification stream. Each decoded `SessionNotification` is
 /// handed to `onNotification`; a malformed frame is logged and skipped (never fatal to the
 /// stream). Returns a cancel that stops the subscription and closes the connection.
-let subscribeNotifications (baseUrl: string) (secret: string) (onNotification: Sink<SessionNotification>) : Subscription =
+let subscribeNotifications (endpoint: ControlEndpoint) (secret: string) (onNotification: Sink<SessionNotification>) : Subscription =
     openEventStream
-        (ControlRoute.at baseUrl ControlRoute.Notifications)
+        endpoint ControlRoute.Notifications
         secret
         (decoding "notification" ControlWire.sessionNotification onNotification)
 
@@ -70,9 +82,9 @@ let subscribeNotifications (baseUrl: string) (secret: string) (onNotification: S
 /// The secret names the launch, and the Manager resolves the session from it — so this
 /// stream carries the servers THIS session may reach, never the Manager's whole
 /// configuration.
-let subscribeMcp (baseUrl: string) (secret: string) (onSet: Sink<McpServerSet>) : Subscription =
+let subscribeMcp (endpoint: ControlEndpoint) (secret: string) (onSet: Sink<McpServerSet>) : Subscription =
     openEventStream
-        (ControlRoute.at baseUrl ControlRoute.McpServers)
+        endpoint ControlRoute.McpServers
         secret
         (decoding "mcp server set" McpWire.serverSet onSet)
 
@@ -96,13 +108,13 @@ let subscribeSessions (baseUrl: string) (onFrame: Sink<ControlWire.SessionRegist
 /// Report the session's display name (its collaborative title) to the Manager, so the
 /// session list reflects it. Best-effort: a transport failure is swallowed — a title that
 /// fails to reach the list is cosmetic, never a reason to disturb the session.
-let nameReporter (baseUrl: string) (secret: string) : string -> Async<unit> =
+let nameReporter (endpoint: ControlEndpoint) (secret: string) : string -> Async<unit> =
     fun name ->
         async {
             try
                 let! _ =
                     postJson
-                        (ControlRoute.at baseUrl ControlRoute.Name)
+                        endpoint ControlRoute.Name
                         secret
                         (ControlWire.toString ControlWire.sessionNameReport name)
                     |> Interop.awaitPromise
@@ -114,13 +126,13 @@ let nameReporter (baseUrl: string) (secret: string) : string -> Async<unit> =
 /// `nameReporter` and for the same reason: standings that fail to arrive leave the roster
 /// showing the last ones, which is stale rather than wrong, and never a reason to disturb
 /// the session.
-let statusReporter (baseUrl: string) (secret: string) : Standing list -> Async<unit> =
+let statusReporter (endpoint: ControlEndpoint) (secret: string) : Standing list -> Async<unit> =
     fun standings ->
         async {
             try
                 let! _ =
                     postJson
-                        (ControlRoute.at baseUrl ControlRoute.Status)
+                        endpoint ControlRoute.Status
                         secret
                         (ControlWire.toString ControlWire.sessionStatusReport standings)
                     |> Interop.awaitPromise
@@ -129,8 +141,8 @@ let statusReporter (baseUrl: string) (secret: string) : Standing list -> Async<u
         }
 
 /// The same call, keeping the status beside the body rather than rejecting on it.
-let private postJsonReply (url: string) (secret: string) (body: string) : JS.Promise<{| status: int; body: string |}> =
-    post url secret body
+let private postJsonReply (endpoint: ControlEndpoint) (route: ControlRoute) (secret: string) (body: string) : JS.Promise<{| status: int; body: string |}> =
+    post endpoint route secret body
     |> Promise.bind (fun response ->
         response.text ()
         |> Promise.map (fun said -> {| status = response.Status; body = said |}))
@@ -140,7 +152,7 @@ let private postJsonReply (url: string) (secret: string) (body: string) : JS.Pro
 /// unreachable Manager is a value like any other failure. Shared by the secrets and
 /// connections families, whose calls are this and a codec each.
 let private postRoute
-    (baseUrl: string)
+    (endpoint: ControlEndpoint)
     (secret: string)
     (route: ControlRoute)
     (body: string)
@@ -148,7 +160,7 @@ let private postRoute
     : Async<Result<'a, string>> =
     async {
         try
-            let! reply = postJsonReply (ControlRoute.at baseUrl route) secret body |> Interop.awaitPromise
+            let! reply = postJsonReply endpoint route secret body |> Interop.awaitPromise
             if reply.status = 200 then return decode reply.body
             else return Error (sprintf "%s refused (%d): %s" (ControlRoute.path route) reply.status reply.body)
         with e ->
@@ -163,13 +175,13 @@ let private postRoute
 /// correct — a session which cannot reach its supervisor is already unsupervised, and the
 /// repeat-while-busy cadence means no single delivery has to succeed — but it must never be
 /// SILENT, or the reap minutes later has no visible cause.
-let activityReporter (baseUrl: string) (secret: string) : bool -> Async<unit> =
+let activityReporter (endpoint: ControlEndpoint) (secret: string) : bool -> Async<unit> =
     fun busy ->
         async {
             try
                 let! reply =
                     postJsonReply
-                        (ControlRoute.at baseUrl ControlRoute.Activity)
+                        endpoint ControlRoute.Activity
                         secret
                         (ControlWire.toString ControlWire.sessionActivityReport busy)
                     |> Interop.awaitPromise
@@ -196,10 +208,10 @@ type SessionSecretsCapabilities =
       ListSecrets : unit -> Async<Result<SecretMetadata list, string>>
       DeleteSecret : SecretName -> Async<Result<bool, string>> }
 
-let secretsCapabilities (baseUrl: string) (secret: string) (sessionId: SessionId) : SessionSecretsCapabilities =
+let secretsCapabilities (endpoint: ControlEndpoint) (secret: string) (sessionId: SessionId) : SessionSecretsCapabilities =
     let scope = SessionScope sessionId
     let post (route: ControlRoute) (body: string) (decode: string -> Result<'a, string>) : Async<Result<'a, string>> =
-        postRoute baseUrl secret route body decode
+        postRoute endpoint secret route body decode
     { SetSecret =
         fun name value ->
             post ControlRoute.SetSecret
@@ -219,10 +231,10 @@ let secretsCapabilities (baseUrl: string) (secret: string) (sessionId: SessionId
 /// Resolve one referenced secret value at sandbox spawn — the one value-returning
 /// secrets call. Session-internal: the value goes into the sandbox's policy env and is
 /// dropped; it never reaches the agent loop (no agent tool wraps this).
-let resolveSecret (baseUrl: string) (secret: string) : SecretName -> Async<Result<string, string>> =
+let resolveSecret (endpoint: ControlEndpoint) (secret: string) : SecretName -> Async<Result<string, string>> =
     fun name ->
         postRoute
-            baseUrl
+            endpoint
             secret
             ControlRoute.ResolveSecret
             (ControlWire.toString ControlWire.resolveSecretRequest { Name = name })
@@ -247,9 +259,9 @@ type SessionConnections =
       Reject : SecretId -> string -> Async<Result<bool, string>>
       Resolve : SecretId -> Async<Result<ConnectionKind * string, string>> }
 
-let connections (baseUrl: string) (secret: string) : SessionConnections =
+let connections (endpoint: ControlEndpoint) (secret: string) : SessionConnections =
     let post (route: ControlRoute) (body: string) (decode: string -> Result<'a, string>) : Async<Result<'a, string>> =
-        postRoute baseUrl secret route body decode
+        postRoute endpoint secret route body decode
     { Begin =
         fun request ->
             post ControlRoute.BeginConnection
@@ -290,9 +302,9 @@ let connections (baseUrl: string) (secret: string) : SessionConnections =
 /// caller's current readable statuses arrive immediately, then a fresh list on every
 /// change; metadata only, never values. A malformed frame is logged and skipped.
 /// Returns a cancel that stops the subscription and closes the connection.
-let subscribeConnections (baseUrl: string) (secret: string) (onList: Sink<ConnectionStatusList>) : Subscription =
+let subscribeConnections (endpoint: ControlEndpoint) (secret: string) (onList: Sink<ConnectionStatusList>) : Subscription =
     openEventStream
-        (ControlRoute.at baseUrl ControlRoute.ConnectionStatuses)
+        endpoint ControlRoute.ConnectionStatuses
         secret
         (decoding "connection status" ControlWire.connectionStatusList onList)
 
@@ -301,12 +313,12 @@ let subscribeConnections (baseUrl: string) (secret: string) (onList: Sink<Connec
 /// The filter is DATA — the Manager stores it and compares, never interprets it — so what
 /// this session knows about its provider stays in this session. Answers the subscription
 /// id, which is what a delivery names when it arrives on the notification leg.
-let subscribeHook (baseUrl: string) (secret: string) (filter: DeliveryFilter) : Async<Result<string, string>> =
+let subscribeHook (endpoint: ControlEndpoint) (secret: string) (filter: DeliveryFilter) : Async<Result<string, string>> =
     async {
         try
             let! text =
                 postJson
-                    (ControlRoute.at baseUrl ControlRoute.SubscribeHook)
+                    endpoint ControlRoute.SubscribeHook
                     secret
                     (ControlWire.toString ControlWire.subscribeHookRequest { Filter = filter })
                 |> Interop.awaitPromise
@@ -318,12 +330,12 @@ let subscribeHook (baseUrl: string) (secret: string) (filter: DeliveryFilter) : 
 /// Stop one of this session's subscriptions. `false` when the Manager had no such
 /// subscription for this launch — which a restart makes ordinary, since a launch's
 /// subscriptions die with it.
-let unsubscribeHook (baseUrl: string) (secret: string) (id: string) : Async<Result<bool, string>> =
+let unsubscribeHook (endpoint: ControlEndpoint) (secret: string) (id: string) : Async<Result<bool, string>> =
     async {
         try
             let! text =
                 postJson
-                    (ControlRoute.at baseUrl ControlRoute.UnsubscribeHook)
+                    endpoint ControlRoute.UnsubscribeHook
                     secret
                     (ControlWire.toString ControlWire.unsubscribeHookRequest { ControlWire.UnsubscribeHookRequest.Id = id })
                 |> Interop.awaitPromise
@@ -336,12 +348,12 @@ let unsubscribeHook (baseUrl: string) (secret: string) (id: string) : Async<Resu
 /// Called after the session's server listens — the redirect URI needs the OS-assigned
 /// port. NOT best-effort: a session that cannot register cannot authorize users, so the
 /// failure is returned for the caller to treat as fatal.
-let registerClient (baseUrl: string) (secret: string) (redirectUri: string) : Async<Result<RegisterClientResponse, string>> =
+let registerClient (endpoint: ControlEndpoint) (secret: string) (redirectUri: string) : Async<Result<RegisterClientResponse, string>> =
     async {
         try
             let! text =
                 postJson
-                    (ControlRoute.at baseUrl ControlRoute.RegisterClient)
+                    endpoint ControlRoute.RegisterClient
                     secret
                     (Wire.toString Wire.registerClientRequest { RedirectUri = redirectUri })
                 |> Interop.awaitPromise

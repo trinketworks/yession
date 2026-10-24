@@ -55,7 +55,7 @@ let private dataDir = Fs.absolute launch.DataDir
 // AND this launch's OAuth client registration all authenticate with the same
 // per-launch secret. Absent (a bare `yession-session` run), the session runs
 // unsupervised and its HTTP surface is ungated.
-let private controlChannel = launch.Control |> Option.map (fun c -> c.Url, c.Secret)
+let private controlChannel = launch.Control |> Option.map (fun c -> c.Endpoint, c.Secret)
 
 // The session-owned WorkSandbox (the sandbox seam): the backend comes from
 // `YESSION_SESSION_WORK_BACKEND`, parsed fail-closed at boot — a typo refuses the start rather
@@ -407,7 +407,7 @@ let private sessionMount = PublicAccess.sessionMount sessionId publicAccess
 let private ephemeralStorage = not (PublicAccess.sessionAddressIsStable publicAccess)
 
 let private managerOrigin =
-    PublicAccess.managerUrlOr (controlChannel |> Option.map fst) publicAccess
+    PublicAccess.managerUrlOr (controlChannel |> Option.bind (fst >> ControlEndpoint.url)) publicAccess
 
 // User authorization: with a Manager, this session is an OIDC client of it; the RP
 // configuration completes after listen (the redirect URI needs the bound port).
@@ -425,14 +425,14 @@ let private telemetry = Telemetry.fromEnv sessionId
 // session simply runs without it (nothing pushes notifications in-process).
 let private subscribeNotifications =
     launch.Control
-    |> Option.map (fun c -> fun handler -> ControlClient.subscribeNotifications c.Url c.Secret handler)
+    |> Option.map (fun c -> fun handler -> ControlClient.subscribeNotifications c.Endpoint c.Secret handler)
 
 // This session's MCP server set over the same control channel (Plan 17): the resolved set
 // on subscribe, then a fresh whole set on every change. Absent a control channel there is
 // nobody to declare a server, so the session runs with none — which is an ordinary session.
 let private subscribeMcp =
     launch.Control
-    |> Option.map (fun c -> fun handler -> ControlClient.subscribeMcp c.Url c.Secret handler)
+    |> Option.map (fun c -> fun handler -> ControlClient.subscribeMcp c.Endpoint c.Secret handler)
 
 /// A built-in diagnostic runner (`YESSION_SESSION_AGENT=diagnostic`): exercises the session's
 /// command capability end to end — open a terminal, queue, drain, run, read the output back —

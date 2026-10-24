@@ -80,6 +80,19 @@ let private publicAccess =
     | Ok access -> access
     | Error e -> Interop.abort e
 
+// Where the endpoint listens, as the strategy's door allows (`Listener.admits` owns the
+// rule): under `trusted-headers`, a unix socket and never a TCP port.
+let private listener =
+    match
+        ProcessManager.Listener.admits
+            strategy.Door
+            (if Cli.isSet ManagerCli.portOption args then Some managerPort else None)
+            (Cli.valueOf ManagerCli.socketOption args)
+            publicAccess
+    with
+    | Ok listener -> listener
+    | Error e -> Interop.abort e
+
 let private nodePath : string = Node.Api.``process``.execPath
 
 // The session process command: this Node running the session entry. `--spawn-bin` overrides
@@ -120,7 +133,10 @@ let private checkReport () =
             (match ProcessManager.SecretsMode.describe secretsMode with
              | Some spelling -> spelling, ManagerCli.Chosen
              | None -> "durable or in-memory", ManagerCli.Default)
-          Port = string managerPort, origin ManagerCli.portOption
+          Listen =
+            ProcessManager.Listener.describe listener,
+            (if Cli.isSet ManagerCli.portOption args || Cli.isSet ManagerCli.socketOption args then ManagerCli.Chosen
+             else ManagerCli.Default)
           DataDir = dataDir, origin ManagerCli.dataDirOption
           DefaultSession = defaultSession, origin ManagerCli.defaultSessionOption
           IdleTimeout =
@@ -188,7 +204,7 @@ Async.StartImmediate(
             ProcessManager.createWithUi
                 { ProcessManager.Options.defaults dataDir sessionCommand sessionArgs with
                     IdleTimeout = idleTimeout
-                    ManagerPort = Some managerPort
+                    Listen = listener
                     // Behind an authenticating proxy the issuer must be the proxy's
                     // origin, or off-host browsers cannot follow the authorize bounce.
                     Public = publicAccess
@@ -229,7 +245,12 @@ Async.StartImmediate(
                     sessionPort
                     dataDir
 
-        match manager.EndpointPort with
-        | Some uiPort -> printfn "Yession Manager: management UI at http://127.0.0.1:%d/" uiPort
-        | None -> ()
+        match listener, manager.EndpointPort with
+        | ProcessManager.Listener.Socket path, _ ->
+            // `Listener.admits` gave a socket only beside a public origin, which is where a
+            // browser reaches this Manager.
+            PublicAccess.managerUrl publicAccess
+            |> Option.iter (fun url -> printfn "Yession Manager: management UI at %s/, through the proxy on socket %s" url path)
+        | _, Some uiPort -> printfn "Yession Manager: management UI at http://127.0.0.1:%d/" uiPort
+        | _, None -> ()
     })

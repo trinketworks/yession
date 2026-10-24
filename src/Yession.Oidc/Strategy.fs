@@ -48,8 +48,27 @@ module GrantedIdentity =
         | Unattributed subject -> Some { Subject = subject; Claims = None }
         | Denied _ -> None
 
+/// What a strategy's verdict rests on besides the request: the door it must have arrived
+/// through for the verdict to be true. The Manager's listener answers it
+/// (`ProcessManager.Listener.admits`), so a strategy and a listener that cannot be believed
+/// together refuse the boot rather than authenticate anyone.
+[<RequireQualifiedAccess>]
+type Door =
+    /// Any listener: the verdict reads nothing about the connection.
+    | Any
+    /// A TCP port on loopback: the verdict reads the peer address, which only a TCP
+    /// connection has.
+    | LoopbackPort
+    /// A unix socket that only the authenticating proxy can open. The verdict reads headers,
+    /// and a header is true only if nothing but the proxy could have sent it. A TCP port on
+    /// loopback cannot say that: every process on the host, and every container whose
+    /// network reaches the host loopback, dials it as loopback.
+    | ProxyOnly
+
 type AuthenticationStrategy =
     { Name : string
+      /// The door this strategy's verdict needs.
+      Door : Door
       Authenticate : AuthenticationContext -> Async<AuthenticationOutcome> }
 
 module Strategy =
@@ -59,6 +78,7 @@ module Strategy =
     /// endpoint can never fall back to an unintended trust rule.
     let none : AuthenticationStrategy =
         { Name = "none"
+          Door = Door.Any
           Authenticate = fun _ -> async { return Denied "no authentication strategy configured (start the Manager with --auth)" } }
 
     let private loopback = Set.ofList [ "127.0.0.1"; "::1"; "::ffff:127.0.0.1" ]
@@ -68,6 +88,7 @@ module Strategy =
     /// shares that subject. Locality is the security boundary, made explicit here.
     let localhost : AuthenticationStrategy =
         { Name = "localhost"
+          Door = Door.LoopbackPort
           Authenticate =
             fun context ->
                 async {
@@ -82,6 +103,8 @@ module Strategy =
     /// The proxy in front of the Manager translates whatever its authenticator gives it
     /// (e.g. Tailscale serve identity headers) into these, and MUST strip them from
     /// inbound client requests — anything that reaches this strategy is trusted verbatim.
+    /// That is why the strategy's door is `ProxyOnly`: the Manager serves it on a unix
+    /// socket the proxy alone can open, never on a TCP port.
     [<Literal>]
     let SubjectHeader = "x-yession-user"
     [<Literal>]
@@ -104,6 +127,7 @@ module Strategy =
     /// would authenticate header-less requests as the local user.
     let trustedHeaders : AuthenticationStrategy =
         { Name = "trusted-headers"
+          Door = Door.ProxyOnly
           Authenticate =
             fun context ->
                 async {

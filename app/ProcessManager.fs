@@ -145,6 +145,16 @@ type ProcessManager =
       /// Stop every running child and the Manager endpoint (Manager shutdown).
       StopAll : unit -> Async<unit> }
 
+/// Where the Manager's one endpoint (control, OIDC provider, management UI) listens.
+[<RequireQualifiedAccess>]
+type Listener =
+    /// A TCP port on loopback; `0` lets the OS choose.
+    | Port of int
+    /// A unix socket at this path, readable and writable by the owner and the group
+    /// (`0660`). Who can open it is the filesystem's answer: the operator's proxy, and
+    /// nothing a sandbox or a container holds a path to.
+    | Socket of path: string
+
 type Options =
     { /// This Manager instance's data directory (state file + session stores).
       DataDir : string
@@ -156,11 +166,11 @@ type Options =
       LaunchTimeoutMs : int
       /// SIGTERM → SIGKILL escalation grace.
       StopGraceMs : int
-      /// Fixed port for the Manager's own endpoint (control + management UI);
-      /// None = OS-assigned. A management UI wants a bookmarkable address, so the
-      /// product default is fixed — a second Manager instance must choose its own
-      /// (the bind fails loudly on conflict, never a silent fallback).
-      ManagerPort : int option
+      /// Where the Manager's own endpoint (control + management UI) listens. A management
+      /// UI wants a bookmarkable address, so the product default is a fixed port — a
+      /// second Manager instance must choose its own (the bind fails loudly on conflict,
+      /// never a silent fallback). `Listener.admits` decides which the strategy allows.
+      Listen : Listener
       /// How this deployment is reached from outside: the
       /// Manager's public origin — its OIDC issuer and every URL derived from it — and
       /// where each session's port is reachable. `Loopback` is the single-machine
@@ -240,7 +250,7 @@ module Options =
           SessionArgs = sessionArgs
           LaunchTimeoutMs = 15000
           StopGraceMs = 3000
-          ManagerPort = None
+          Listen = Listener.Port 0
           Public = Loopback
           OnEvent = (fun _ _ -> ())
           Strategy = None
@@ -273,6 +283,38 @@ module ManagerPort =
             match System.Int32.TryParse (given.Trim ()) with
             | true, port when port >= 0 && port < 65536 -> Ok port
             | _ -> Error (sprintf "'%s' is not a port number (0-65535, where 0 lets the OS choose)" given)
+
+module Listener =
+
+    /// The listener a command line asks for — `port` and `socket` as given, `None` where
+    /// not — or why it cannot be believed beside the strategy's door and the deployment's
+    /// addressing. Every refusal is a boot that never listens, which is the point: a Manager
+    /// that listens where its strategy's verdict is false authenticates whoever dials it.
+    let admits (door: Door) (port: int option) (socket: string option) (access: PublicAccess) : Result<Listener, string> =
+        match port, socket with
+        | Some _, Some _ -> Error "--port and --socket name two doors for one endpoint. Give one."
+        | _, Some path ->
+            match door, access with
+            | Door.LoopbackPort, _ ->
+                Error
+                    "--auth localhost reads the peer address of a TCP connection, and a unix socket has none. Use --port, or --auth trusted-headers behind a proxy."
+            | _, Loopback ->
+                Error
+                    "--socket needs YESSION_MANAGER_URL and YESSION_SESSION_URL: a browser cannot dial a unix socket, so it reaches this Manager only through the proxy's origin."
+            | _ -> Ok (Listener.Socket path)
+        | given, None ->
+            match door with
+            | Door.ProxyOnly ->
+                Error
+                    "--auth trusted-headers believes the x-yession-user header, which is true only if nothing but the proxy could send it. Every process on this host can dial a TCP port, and so can a container whose network reaches the host loopback. Give --socket <path>, and point the proxy at it."
+            | Door.Any
+            | Door.LoopbackPort -> Ok (Listener.Port (defaultArg given ManagerPort.Default))
+
+    /// How `--check` prints it.
+    let describe (listener: Listener) : string =
+        match listener with
+        | Listener.Port port -> sprintf "port %d" port
+        | Listener.Socket path -> sprintf "socket %s" path
 
 module SecretsMode =
 
@@ -832,6 +874,22 @@ let createWithUi
     // endpoint-less mode. The port is only known once the server listens, and the
     // provider reads the issuer lazily, so the mutable slot resolves cleanly.
     let mutable endpointUrl : string option = None
+    // Where a session dials this endpoint: the url over a port, the path of a socket.
+    let mutable controlEndpoint : ControlEndpoint option = None
+    // A socket file outlives a Manager that died without closing it, and `listen` refuses
+    // a path that exists. Removed only when nothing answers on it: a second Manager on the
+    // same path is refused by the `listen` below rather than handed the first one's door.
+    let clearStaleSocket (path: string) : Async<unit> =
+        if not (Node.Api.fs.existsSync (Fable.Core.U2.Case1 path)) then async.Zero ()
+        else
+            Async.FromContinuations (fun (cont, _, _) ->
+                let probe = connectPath path
+                probe.onceConnect (fun () ->
+                    probe.destroy ()
+                    cont ())
+                probe.onError (fun _ ->
+                    (try Node.Api.fs.unlinkSync (Fable.Core.U2.Case1 path) with _ -> ())
+                    cont ()))
     let issuerOf () =
         match PublicAccess.managerUrl options.Public with
         | Some url -> url
@@ -1070,13 +1128,30 @@ let createWithUi
                     res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                     res.``end`` "not found"
             let server = createServer handler
-            let! listening =
-                Async.FromContinuations (fun (cont, _, _) ->
-                    server.listen (defaultArg options.ManagerPort 0, "127.0.0.1", fun () -> cont server) |> ignore)
-            endpointUrl <- Some (sprintf "http://127.0.0.1:%d" (serverPort listening))
-            return Some listening
+            match options.Listen with
+            | Listener.Port port ->
+                let! listening =
+                    Async.FromContinuations (fun (cont, _, _) ->
+                        server.listen (port, "127.0.0.1", fun () -> cont server) |> ignore)
+                endpointUrl <- Some (sprintf "http://127.0.0.1:%d" (serverPort listening))
+                controlEndpoint <- endpointUrl |> Option.map ControlEndpoint.Address
+                return Some listening
+            | Listener.Socket given ->
+                let path = Node.Api.path.resolve given
+                do! clearStaleSocket path
+                let! listening =
+                    Async.FromContinuations (fun (cont, fail, _) ->
+                        server.onceError (fun error ->
+                            fail (exn (sprintf "the Manager cannot listen on %s: %s" path (StreamError.describe error))))
+                        server.listen (path, fun () -> cont server) |> ignore)
+                // Owner and group, and nobody else: the proxy runs as one or the other. Node
+                // creates the socket by the umask, which for a connect means write permission
+                // the owner alone usually has — this widens it to the group, and no further.
+                Node.Api.fs.chmodSync (Fable.Core.U2.Case1 path, "660")
+                controlEndpoint <- Some (ControlEndpoint.Socket path)
+                return Some listening
         }
-    let controlUrl () = endpointUrl
+    let controlUrl () = controlEndpoint
 
     let createSession (sessionId: string) (displayName: string) : Result<SessionRecord, string> =
         match SessionId.create sessionId with
@@ -1133,7 +1208,7 @@ let createWithUi
                     | Some url ->
                         let secret = Interop.randomSecret ()
                         secretSessions <- Map.add secret record.SessionId secretSessions
-                        Some { Url = url; Secret = secret }
+                        Some { Endpoint = url; Secret = secret }
                     | None -> None
                 // Telemetry: the child is a direct OTel emitter. The Manager does NOT collect;
                 // it passes its own OTEL_* environment through (Spawn merges over `process.env`,
@@ -1392,7 +1467,10 @@ let createWithUi
           McpSetFor = fun sessionId -> mcp.Current sessionId
           UsersOf = usersOf
           LocalOf = localOf
-          EndpointPort = controlServer |> Option.map serverPort
+          EndpointPort =
+            match options.Listen with
+            | Listener.Port _ -> controlServer |> Option.map serverPort
+            | Listener.Socket _ -> None
           Public = options.Public
           HookEndpoints = hookRelay.Endpoints
           StopAll =

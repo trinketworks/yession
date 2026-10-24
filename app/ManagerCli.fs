@@ -41,6 +41,12 @@ let portOption =
         "the port the Manager listens on; 0 lets the OS choose (default 8321)"
         ProcessManager.ManagerPort.ofName
 
+let socketOption =
+    Cli.value
+        "socket"
+        "path"
+        "listen on this unix socket instead of a TCP port; --auth trusted-headers requires it"
+
 let dataDirOption =
     Cli.value "data-dir" "path" "where this Manager keeps its state (default .yession)"
 
@@ -109,6 +115,7 @@ let spec =
     |> Cli.accepts authOption
     |> Cli.accepts secretsOption
     |> Cli.accepts portOption
+    |> Cli.accepts socketOption
     |> Cli.accepts dataDirOption
     |> Cli.accepts idleTimeoutOption
     |> Cli.accepts defaultSessionOption
@@ -182,7 +189,8 @@ type Report =
     { Version : string
       TrustRule : string * Origin
       Secrets : string * Origin
-      Port : string * Origin
+      /// Where the Manager listens: a port, or a socket (`Listener.describe`).
+      Listen : string * Origin
       DataDir : string * Origin
       DefaultSession : string * Origin
       IdleTimeout : string * Origin
@@ -232,8 +240,8 @@ module Report =
                 "The Manager identifies the user behind each request with this rule."
               setting "secrets" report.Secrets
                 "The Manager stores connected credentials this way. It uses the OS credential manager where this host has one."
-              setting "port" report.Port
-                "The Manager listens on this port."
+              setting "listen" report.Listen
+                "The Manager listens here. Under --auth trusted-headers it is a socket only the proxy can open."
               setting "data dir" report.DataDir
                 "The Manager writes its state to this directory."
               setting "default session" report.DefaultSession
