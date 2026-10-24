@@ -963,6 +963,29 @@ module NetworkInterfaces =
     let addresses () : string list =
         flatten (byInterface ()) |> Array.map (fun assigned -> assigned.address) |> List.ofArray
 
+/// `node:dns/promises`'s `lookup`, asked for EVERY address a name has — the resolver
+/// `connect` itself would ask, so the answer is the one a connection would use. `Fable.Node`
+/// types `lookup` with a callback and a single answer.
+module Resolver =
+
+    type private Found =
+        abstract address : string
+
+    [<AllowNullLiteral>]
+    type private LookupOptions =
+        abstract all : bool with get, set
+
+    [<Import("lookup", "node:dns/promises")>]
+    let private lookupWith (host: string) (options: LookupOptions) : JS.Promise<Found[]> = jsNative
+
+    [<Emit("$0.then(found => found.map(f => f.address))")>]
+    let private addressesIn (found: JS.Promise<Found[]>) : JS.Promise<string[]> = jsNative
+
+    /// Every address `host` resolves to, in the resolver's order. An address literal answers
+    /// itself. A name that does not resolve rejects.
+    let addressesOf (host: string) : JS.Promise<string[]> =
+        addressesIn (lookupWith host (jsOptions<LookupOptions> (fun o -> o.all <- true)))
+
 [<AutoOpen>]
 module WebCrypto =
 

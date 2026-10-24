@@ -133,6 +133,51 @@ let private carryTests =
             | WorkSandboxes.CredentialForwarding.Unforwardable reason -> failwithf "a container was refused: %s" reason
     ]
 
+// --- where a tunnel may go -----------------------------------------------------------------
+//
+// The TCP door tunnels a host no route declares, and this process reaches what a container
+// must not: the Manager, every session's port, the tailnet. One case per range, so a red
+// names the range.
+
+let private refused (address: string) = refusedTunnel "target.test" [ address ] []
+
+let private egressTests =
+    testList "where a tunnel may go" [
+        testCase "a public address is tunnelled" <| fun () ->
+            Expect.isNone (refused "140.82.112.3") "the internet"
+        testCase "a public IPv6 address is tunnelled" <| fun () ->
+            Expect.isNone (refused "2606:50c0:8000::153") "the internet"
+        testCase "loopback is refused" <| fun () ->
+            Expect.isSome (refused "127.0.0.1") "the Manager and every session live here"
+        testCase "all of 127/8 is refused" <| fun () ->
+            Expect.isSome (refused "127.0.0.2") "loopback on Linux is the whole /8"
+        testCase "IPv6 loopback is refused" <| fun () ->
+            Expect.isSome (refused "::1") "loopback"
+        testCase "an IPv4-mapped loopback is refused" <| fun () ->
+            Expect.isSome (refused "::ffff:127.0.0.1") "the same address, spelled as IPv6"
+        testCase "a NAT64 spelling of a private address is refused" <| fun () ->
+            Expect.isSome (refused "64:ff9b::a00:1") "10.0.0.1 inside"
+        testCase "RFC 1918 is refused" <| fun () ->
+            for address in [ "10.1.2.3"; "172.16.0.1"; "172.31.255.255"; "192.168.1.1" ] do
+                Expect.isSome (refused address) address
+        testCase "CGNAT, which holds the tailnet, is refused" <| fun () ->
+            Expect.isSome (refused "100.101.102.103") "a tailnet address"
+        testCase "link-local, which holds the cloud metadata address, is refused" <| fun () ->
+            Expect.isSome (refused "169.254.169.254") "metadata"
+        testCase "IPv6 link-local is refused, zone and all" <| fun () ->
+            Expect.isSome (refused "fe80::1%en0") "link-local"
+        testCase "a ULA is refused" <| fun () ->
+            Expect.isSome (refused "fd7a:115c:a1e0::1") "a tailnet's IPv6"
+        testCase "the unspecified address is refused" <| fun () ->
+            Expect.isSome (refused "0.0.0.0") "this host, on Linux"
+        testCase "an address of this host is refused, public or not" <| fun () ->
+            Expect.isSome (refusedTunnel "target.test" [ "203.0.113.7" ] [ "203.0.113.7" ]) "a listener on every interface answers there"
+        testCase "a name with one internal answer among public ones is refused" <| fun () ->
+            Expect.isSome (refusedTunnel "target.test" [ "140.82.112.3"; "127.0.0.1" ] []) "the next lookup may pick the second"
+        testCase "a name with no answer is refused" <| fun () ->
+            Expect.isSome (refusedTunnel "target.test" [] []) "nothing to dial"
+    ]
+
 // --- [Ports]: a real client, through a real proxy -------------------------------------------
 
 /// A stand-in for a provider's API: records the `authorization` of every request that
@@ -239,14 +284,19 @@ let private lenderOf (lend: Lend) : Lender =
       Resolve = fun () -> async { return lend.Token }
       Refused = fun () -> async { lend.Refusals <- lend.Refusals + 1 } }
 
-/// A proxy for both routes in front of `upstream`, on a port of its own, for `body`.
-let private withProxy (upstream: Upstream) (body: Proxy -> Async<unit>) : Async<unit> =
+/// Egress that resolves as the session's does and refuses nothing: the suite's upstream is on
+/// loopback, which `Egress.internet` refuses.
+let private anywhere : Egress = { Egress.internet with Refuse = fun _ _ -> None }
+
+/// A proxy for both routes in front of `upstream`, on a port of its own, for `body`, with
+/// `egress` as its tunnel policy.
+let private withProxyTo (egress: Egress) (upstream: Upstream) (body: Proxy -> Async<unit>) : Async<unit> =
     async {
         // Canonical, as the session's own is (`SessionLayout.prepareTrustBundle`).
         let dir =
             let made = TestFiles.tempDir "yession-credproxy-"
             Fs.canonical made |> Option.defaultValue made
-        let! proxy = CredentialProxy.start [ route; other ] (fun _ -> upstream.Origin) (dir + "/trust.pem") ignore
+        let! proxy = CredentialProxy.start [ route; other ] egress (fun _ -> upstream.Origin) (dir + "/trust.pem") ignore
         try
             do! body proxy
         finally
@@ -258,6 +308,9 @@ let private withProxy (upstream: Upstream) (body: Proxy -> Async<unit>) : Async<
                 }
             )
     }
+
+/// The same, tunnelling anywhere.
+let private withProxy (upstream: Upstream) (body: Proxy -> Async<unit>) : Async<unit> = withProxyTo anywhere upstream body
 
 let private reply (outcome: Result<Reply, string>) : Reply =
     match outcome with
@@ -335,6 +388,42 @@ let private portsTests =
                                     ))
                             Expect.stringContains said "octo" "the other host answered, through the tunnel"
                             Expect.equal (List.ofSeq upstream.Authorizations) [ Some "token ysn_passing" ] "and nothing was swapped on the way"
+                    })
+        }
+
+        // The audit's route A: a container holding the capability asked the door for the
+        // Manager's loopback port, and the door dialled it. The session's own policy refuses.
+        testCaseAsync "a CONNECT to this host's loopback is refused, and nothing is dialled" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxyTo Egress.internet upstream (fun proxy ->
+                    async {
+                        let capability = proxy.Admit DockerBackend admitted |> expect
+                        match! connectThrough proxy (Some capability) (upstream.Origin.Replace ("http://", "")) with
+                        | Error e -> failwithf "the door did not answer: %s" e
+                        | Ok (status, raw) ->
+                            raw.destroy ()
+                            Expect.stringContains status "403" "refused"
+                    })
+        }
+
+        // Resolved once and dialled by the address that was judged: a name nothing else can
+        // resolve reaches the upstream only if the tunnel dialled the policy's answer.
+        testCaseAsync "a tunnel dials the address the policy judged, not the name again" <| async {
+            let! upstream = startUpstream ()
+            let port = upstream.Origin.Substring (upstream.Origin.LastIndexOf ':' + 1)
+            let judged : Egress =
+                { Resolve = fun _ -> async { return Ok [ "127.0.0.1" ] }
+                  Refuse = fun _ _ -> None }
+            do!
+                withProxyTo judged upstream (fun proxy ->
+                    async {
+                        let capability = proxy.Admit DockerBackend admitted |> expect
+                        match! connectThrough proxy (Some capability) (sprintf "nowhere.invalid:%s" port) with
+                        | Error e -> failwithf "the door did not answer: %s" e
+                        | Ok (status, raw) ->
+                            raw.destroy ()
+                            Expect.stringContains status "200" "the judged address answered"
                     })
         }
 
@@ -499,5 +588,6 @@ let private portsTests =
 let tests =
     testList "The credential proxy" [
         carryTests
+        egressTests
         Tag.needs "The credential proxy, driven by a client" [ Tag.Ports ] (fun () -> portsTests)
     ]

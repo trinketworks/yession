@@ -983,6 +983,22 @@ After the fixes land, one pass rewrites it to what still reproduces.
     block's environment like the git loan, with the same transcript caveat. Unlike the gateway,
     the proxy admits every request to a declared host, so a live stand-in is the lender's whole
     API token.
+  - **The proxy tunnels an admitted container to any host on the internet, and to nothing
+    else.** A `CONNECT` to a host no route declares is tunnelled, because a tool that honours
+    `HTTPS_PROXY` sends every host this way (this repository's own `yession.yaml` build fetches
+    from cache.nixos.org, yession.cachix.org, npm, NuGet and GitHub's tarball hosts through
+    it). The name is resolved once and every answer judged. Loopback, link-local, RFC 1918,
+    CGNAT (the tailnet), ULA, multicast and this host's own addresses are refused, and the
+    tunnel dials the judged address, never the name again (`refusedTunnel` and `Egress` in
+    `app/CredentialProxy.fs`). Before this, a container holding the capability reached the
+    Manager's loopback port through it.
+    - **The design direction is operator-declared egress.** The operator declares the hosts a
+      sandbox may reach, and the proxy tunnels those and nothing else. It was not chosen yet
+      because the hosts a build reaches are many and move (Nix substituters and flake inputs,
+      registries and their CDNs), and the list would be this repository's to keep for every
+      operator. The refusal above stays under it as the floor.
+    - **It is a policy on the proxy, not on the container.** A container's own direct egress
+      is the Docker network's, and reaches what that network reaches.
   - **The AgentSandbox has no grants.** The agent CLI runs with no built-in tools. Every command
     it issues runs in a work sandbox, under that sandbox's grants. Its own process holds no
     connection and no proxy, and nothing in the profile can give it one. If the CLI ever runs
