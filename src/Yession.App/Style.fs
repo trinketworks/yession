@@ -4067,15 +4067,20 @@ module Style =
     /// up with nothing" names and accepts for a two-row head in general; this one head instead
     /// pins its FIRST row to the token, so it needs no second row to land on the band.
     ///
-    /// `items-end` + `pb-5` (`phone:items-center` + `phone:pb-[11px]`) are not reinvented —
-    /// they are the chat header's OWN alignment (`header`), copied so the strip's content sits
-    /// where the header's does: bottom-anchored with the header's 20px gap to the hairline on a
-    /// wide screen, centred with its 11px gap on a phone. Every control in the strip is still
-    /// `spacing-touch` and keeps its 44px target; only where that 44px box SITS in the now
-    /// taller row has changed. The strip is the ground (`bg`), black like the chat's head
-    /// beside it, and the selected tab wears the pane's own ground (`panel`), so it runs on
-    /// into whatever is under it: the chrome says which tab the page belongs to, before a word
-    /// is read (docs/visual-design.md, principle 2).
+    /// `items-stretch`, not the chat header's own `items-end` + `pb-5` (`phone:items-center` +
+    /// `phone:pb-[11px]`) copied at first, because that alignment is the header's TEXT settling
+    /// short of the hairline with room a title doesn't need to fill. A tab is not text: a
+    /// `h-touch` chip centred or end-anchored in the now-taller row left its own fill — the
+    /// thing that is supposed to say which tab the page belongs to (`pivotItemOn`'s `bg-panel`)
+    /// — stopping short of the row's rule, a visible band of the strip's bare `bg` between the
+    /// chip and the hairline it should run into. `items-stretch`, and no explicit height on
+    /// `pivotItemBase` (`min-w-touch` still bounds its width, never its height), lets every
+    /// entry fill the row edge to edge instead, so the selected tab's own ground runs all the
+    /// way to the hairline with nothing of the strip's showing between them. The three controls
+    /// outside the scroller (`paneListButtonBase`, `paneStripAct`) keep their own `h-touch`, so
+    /// a bare `items-stretch` would snap them to the row's top instead of leaving them centred
+    /// as before — they carry `self-center` for that. The `+` cell's own wrapper (`terminalTabNewCell`)
+    /// already centres its one button with its own `items-center`, so it needs no such tag.
     ///
     /// `paneToolbar`, where there is one, is now the column's own second row underneath —
     /// `spacing-touch` tall and no longer asked to land on the band. Its hairline is its own,
@@ -4086,8 +4091,7 @@ module Style =
     /// header wears for the same band — this row had the height but drew no line, so the
     /// header's rule stopped dead at the pane's divider instead of running on into it.
     let panePivotRow =
-        cls [ "shrink-0 h-band flex items-end pb-5 bg-bg "
-              + "phone:h-band-phone phone:items-center phone:pb-[11px]"; Stroke.dividerBottom ]
+        cls [ "shrink-0 h-band flex items-stretch bg-bg phone:h-band-phone"; Stroke.dividerBottom ]
     /// The tablist: `all`, then the scroller of tabs. `all` stays put at the row's head however
     /// many tabs follow it. `min-w-0` so the scroller is what gives way when the names outgrow
     /// the row.
@@ -4131,7 +4135,7 @@ module Style =
     /// however it is ordered (measured live: `border-0` present, `border-right-width` 0 on
     /// every tab; removed, 1px, matching `divide-hair`).
     let private pivotItemBase =
-        cls [ "shrink-0 cursor-pointer h-touch min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5"
+        cls [ "shrink-0 cursor-pointer min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5"
               "font-ui font-normal text-small whitespace-nowrap transition-colors duration-150 ease-out"
               "motion-reduce:transition-none"; focusRingInset ]
     let pivotItem = cls [ pivotItemBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
@@ -4160,13 +4164,13 @@ module Style =
     /// A square act at the strip's end — `+`, and the way back to the chat: the strip's
     /// height square, its glyph in the tabs' resting ink.
     let paneStripAct =
-        cls [ "shrink-0 w-touch h-touch grid place-items-center bg-transparent border-0 cursor-pointer p-0"
+        cls [ "shrink-0 self-center w-touch h-touch grid place-items-center bg-transparent border-0 cursor-pointer p-0"
               "text-ink-dim hover:text-ink hover:bg-surface transition-colors motion-reduce:transition-none"; focusRingInset ]
     /// The list button: the list's glyph and how many terminals it holds — on a phone only
     /// one tab fits, and the count is the one clue that there are others. As tall as the
     /// strip, at least as wide, its figures in the tabs' type so they read as one line.
     let private paneListButtonBase =
-        cls [ "shrink-0 h-touch min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5 border-0 cursor-pointer"
+        cls [ "shrink-0 self-center h-touch min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5 border-0 cursor-pointer"
               "font-ui font-normal text-small tabular-nums transition-colors motion-reduce:transition-none"; focusRingInset ]
     let paneListButton = cls [ paneListButtonBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
     /// The same with its sheet down: the sheet's own ground (`allSheet`), flush with it, so
