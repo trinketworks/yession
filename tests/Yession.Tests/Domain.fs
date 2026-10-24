@@ -1995,17 +1995,32 @@ let private prWatchTests =
             Expect.equal (PrStatus.summary [ at 1 "merged" ]) None "silence is no standing"
             let said = PrStatus.summary [ at 1 "queued"; at 2 "conflicted"; at 3 "merged" ] |> Option.get
             Expect.equal said.Word "2 PRs · 1 conflicted" "the summary's own line"
-            Expect.equal said.Tone ToneBad "at its worst live word's volume"
+            Expect.equal said.Attention Standings.Wrong "at its worst live word's attention"
             Expect.equal said.Facet PrStatus.facet "under the pull requests' facet"
+            let pending = PrStatus.summary [ at 1 "queued" ] |> Option.get
+            Expect.equal pending.Attention Standings.Moving "on its way in asks for nobody"
+            let opened = PrStatus.summary [ at 1 "open" ] |> Option.get
+            Expect.equal opened.Attention Standings.Rest "an ordinary word rests"
 
         testCase "the standing shown alone is the one that wants a person most" <| fun () ->
-            let at facet tone : Standings.Standing = { Facet = facet; Word = facet; Tone = tone }
-            let fine, busy, bad = at "a" ToneOk, at "b" ToneBusy, at "c" ToneBad
+            let at facet attention : Standings.Standing = { Facet = facet; Word = facet; Attention = attention }
+            let rest, absent, moving, wanted, wrong =
+                at "a" Standings.Rest, at "b" Standings.Absent, at "c" Standings.Moving, at "d" Standings.Wanted, at "e" Standings.Wrong
             Expect.equal (Standings.Standing.worst []) None "nothing reported is nothing to show"
-            Expect.equal (Standings.Standing.worst [ fine; busy; bad ]) (Some bad) "bad over busy over ok"
-            Expect.equal (Standings.Standing.worst [ fine; busy ]) (Some busy) "busy over ok"
-            Expect.equal (Standings.Standing.worst [ at "x" ToneOk; fine ]) (Some (at "x" ToneOk)) "a tie goes to the earlier"
-            Expect.equal (Standings.Standing.byConcern [ fine; bad; busy ]) [ bad; busy; fine ] "all of them, worst first"
+            Expect.equal (Standings.Standing.worst [ rest; absent; moving; wanted; wrong ]) (Some wrong) "wrong over everything"
+            Expect.equal (Standings.Standing.worst [ moving; wanted ]) (Some wanted) "a person's turn over work under way"
+            Expect.equal (Standings.Standing.worst [ absent; moving ]) (Some moving) "work under way over nobody there"
+            Expect.equal (Standings.Standing.worst [ rest; absent ]) (Some absent) "nobody there over nothing to say"
+            Expect.equal (Standings.Standing.worst [ at "x" Standings.Rest; rest ]) (Some (at "x" Standings.Rest)) "a tie goes to the earlier"
+            Expect.equal
+                (Standings.Standing.byConcern [ rest; wrong; absent; wanted; moving ])
+                [ wrong; wanted; moving; absent; rest ]
+                "all of them, worst first"
+
+        testCase "an attention survives the wire's spelling of it" <| fun () ->
+            for attention in [ Standings.Rest; Standings.Absent; Standings.Moving; Standings.Wanted; Standings.Wrong ] do
+                Expect.equal (Standings.Attention.parse (Standings.Attention.name attention)) (Some attention) (Standings.Attention.name attention)
+            Expect.equal (Standings.Attention.parse "bad") None "a tone is not an attention"
 
         testCase "what the agent is doing is said in one word" <| fun () ->
             let idle : Standings.AgentSituation =
@@ -2013,24 +2028,24 @@ let private prWatchTests =
             let say situation =
                 let s = Standings.AgentStatus.standing situation
                 Expect.equal s.Facet Standings.AgentStatus.facet "always under the agent's facet"
-                s.Word, s.Tone
-            Expect.equal (say idle) ("waiting", ToneOk) "idle is the ball with the people, and that is fine"
-            Expect.equal (say { idle with TurnRunning = true }) ("working", ToneBusy) "a turn is work"
-            Expect.equal (say { idle with BusyTerminals = [ "build" ] }) ("running", ToneBusy) "a command owes a wake, and is not named"
-            Expect.equal (say { idle with BusyTerminals = [ "a"; "b" ] }) ("running", ToneBusy) "nor are several counted"
-            Expect.equal (say { idle with NoAgent = true }) ("no agent", ToneBusy) "a wait, in the doctrine's words"
-            Expect.equal (say { idle with SignInRequired = true }) ("sign in again", ToneBad) "the sidebar's word for it"
+                s.Word, s.Attention
+            Expect.equal (say idle) ("waiting", Standings.Wanted) "idle is the ball with the people: their turn"
+            Expect.equal (say { idle with TurnRunning = true }) ("working", Standings.Moving) "a turn is work"
+            Expect.equal (say { idle with BusyTerminals = [ "build" ] }) ("running", Standings.Moving) "a command owes a wake, and is not named"
+            Expect.equal (say { idle with BusyTerminals = [ "a"; "b" ] }) ("running", Standings.Moving) "nor are several counted"
+            Expect.equal (say { idle with NoAgent = true }) ("no agent", Standings.Absent) "nobody there, by choice"
+            Expect.equal (say { idle with SignInRequired = true }) ("sign in again", Standings.Wrong) "the sidebar's word for it"
             Expect.equal
                 (say { idle with SignInRequired = true; BusyTerminals = [ "build" ] })
-                ("sign in again", ToneBad)
+                ("sign in again", Standings.Wrong)
                 "what needs a person outranks what is under way"
             Expect.equal
                 (say { idle with NoAgent = true; BusyTerminals = [ "build" ] })
-                ("no agent", ToneBusy)
+                ("no agent", Standings.Absent)
                 "no agent outranks a command it can never be woken by"
             Expect.equal
                 (say { idle with TurnRunning = true; NoAgent = true; SignInRequired = true })
-                ("working", ToneBusy)
+                ("working", Standings.Moving)
                 "a running turn proves an agent is there"
 
         testCase "a watch cannot be built on the deployment's own credential" <| fun () ->

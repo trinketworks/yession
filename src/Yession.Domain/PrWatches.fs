@@ -170,14 +170,24 @@ module PrStatus =
     /// The facet a session's pull requests are reported under.
     let facet = "prs"
 
-    /// The summary as a standing: the line, said as loudly as its worst live word. `None`
+    /// How much a status word wants a person, from its tone: a loud word wants somebody to
+    /// act, a busy one is on its way in, and the rest ask nothing. A pull request is never a
+    /// person's TURN the way an idle agent is, so no word here is `Wanted`.
+    let attention (word: string) : Attention =
+        match tone word with
+        | ToneBad -> Wrong
+        | ToneBusy -> Moving
+        | ToneOk
+        | ToneMuted -> Rest
+
+    /// The summary as a standing: the line, at the attention of its worst live word. `None`
     /// exactly when the summary is silent.
     let summary (standings: (string * string) list) : Standing option =
         match summarize standings with
         | "" -> None
         | line ->
             let worst = standings |> List.map snd |> List.filter live |> List.reduce worse
-            Some { Facet = facet; Word = line; Tone = tone worst }
+            Some { Facet = facet; Word = line; Attention = attention worst }
 
     /// How a pull request is named in a one-line summary: its number, because the surface
     /// showing it belongs to one session and a session's watches are rarely spread over

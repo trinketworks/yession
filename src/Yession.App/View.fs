@@ -511,8 +511,8 @@ module View =
             // of the panel now.
             match model.Claude.Status |> Option.map (fun panel -> panel.AgentAvailable), ClientModel.agentRowStanding model with
             | Some true, Some standing ->
-                let dot = if standing.Tone = ToneBusy then Style.statusDotBeat else Style.statusDot
-                html $"""<div class="{Style.person}" data-agent-presence="live"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]}"></span>agent<span class="{Style.headerAgentStanding (Style.toneInk standing.Tone)} ml-auto" data-agent-row-standing><span class="{dot}"></span>{standing.Word}</span></div>"""
+                let dot = if standing.Attention = Standings.Moving then Style.statusDotBeat else Style.statusDot
+                html $"""<div class="{Style.person}" data-agent-presence="live"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]}"></span>agent<span class="{Style.headerAgentStanding (Style.attentionInk standing.Attention)} ml-auto" data-agent-row-standing><span class="{dot}"></span>{standing.Word}</span></div>"""
             // One roster row, like the live one: the dimmed avatar says nobody is here, and the
             // bare verb at the right says what to do about it. It used to hang a full-width
             // bordered button under the row with a rule beside it, which took the roster's
@@ -1338,11 +1338,15 @@ module View =
             let said =
                 if standing.Facet = PrStatus.facet then
                     html $"""
-                        <button type="button" class="{Style.prStripIn (ink standing.Tone)}" aria-label="Pull requests"
+                        <button type="button" class="{Style.prStripIn (Style.attentionInk standing.Attention)}" aria-label="Pull requests"
                                 data-pr-strip @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>{standing.Word}</button>"""
                 else
-                    let dot = if standing.Tone = ToneBusy then Style.statusDotBeat else Style.statusDot
-                    html $"""<span class="{Style.headerAgentStanding (ink standing.Tone)}" data-agent-standing><span class="{dot}"></span>{standing.Word}</span>"""
+                    let dot =
+                        match standing.Attention with
+                        | Standings.Moving
+                        | Standings.Absent -> Style.statusDotBeat
+                        | _ -> Style.statusDot
+                    html $"""<span class="{Style.headerAgentStanding (Style.attentionInk standing.Attention)}" data-agent-standing><span class="{dot}"></span>{standing.Word}</span>"""
             html $"""<span class="{seat}" ?data-phone-shows={seat = Style.headerStandingOffSidebar}>{said}</span>"""
         html $"""{standings |> List.map slot}"""
 

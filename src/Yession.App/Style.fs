@@ -1568,6 +1568,17 @@ module Style =
         | Yession.Domain.Tools.ToneBad -> toneBad
         | Yession.Domain.Tools.ToneMuted -> toneMuted
 
+    /// The ink a standing's attention asks for. A person's turn is green, because green is
+    /// the people; work under way and an absent agent are a wait, dim; wrong is red; rest
+    /// recedes.
+    let attentionInk (attention: Yession.Domain.Standings.Attention) : string =
+        match attention with
+        | Yession.Domain.Standings.Wanted -> toneOk
+        | Yession.Domain.Standings.Moving
+        | Yession.Domain.Standings.Absent -> toneBusy
+        | Yession.Domain.Standings.Wrong -> toneBad
+        | Yession.Domain.Standings.Rest -> toneMuted
+
     /// A value, with no colour of its own. A base that carried one could not be recoloured
     /// by appending: two Tailwind text utilities on one element resolve by stylesheet order
     /// rather than by the order they are written here, so the colour is always the last
