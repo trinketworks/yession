@@ -1410,7 +1410,11 @@ module View =
 
     let private queue (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let synced = model.Synced
-        let entries = QueueOrder.sorted synced.Queue
+        // Only entries the wait has cleared (`ClientModel.QueueShown`) — most sends drain
+        // before it fires, so the band that used to open and shut on every ordinary send now
+        // stays closed for them. A reorder or a delete press still reaches an entry fresh
+        // off this filter: both read `synced.Queue` by id, never this list's order.
+        let entries = QueueOrder.sorted synced.Queue |> List.filter (fun entry -> Set.contains entry.QueueId model.QueueShown)
         let head =
             match entries with
             | [] -> Lit.nothing

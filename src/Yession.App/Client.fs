@@ -24,7 +24,14 @@ module Client =
         Decode.object {
             let! model = Decode.ask
             let! synced = SyncedStateSync.decode
-            return { model with Synced = synced }
+            return
+                { model with
+                    Synced = synced
+                    // Pruned to the doc's own keys here, the one place every snapshot this
+                    // client reads passes through: an id the wait already marked shown
+                    // (`ClientModel.QueueShown`) outlives its entry otherwise, forever, once
+                    // the entry drains.
+                    QueueShown = model.QueueShown |> Set.filter (fun id -> Map.containsKey id synced.Queue) }
         }
 
     /// Run the waits the model declares (`ClientModel.timers`) on `clock`, beside whatever the

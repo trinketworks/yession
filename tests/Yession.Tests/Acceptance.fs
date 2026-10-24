@@ -237,6 +237,9 @@ let private representativeModel : ClientModel =
       OpenFolds = Set.empty
       DatedBreaks = Set.empty
       QueueDeleteArmed = None
+      // Past the wait (`ClientModel.QueueShown`) already: this fixture is the checklist's
+      // camera on the mount itself, not on the flash the wait exists to hide.
+      QueueShown = Set.ofList [ queueId ]
       Copied = None
       Uploads = []
       // The pane shows a TAB by default; the list is what the cases below turn on.
