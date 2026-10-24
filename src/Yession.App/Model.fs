@@ -4594,23 +4594,38 @@ module ClientModel =
                 credential |> Option.map (fun c -> c.SignInRequired.IsSome) |> Option.defaultValue false)
         | None -> false
 
-    /// Where this session stands, as the header says it: its agent, then its pull requests —
-    /// the order the session reports them to the Manager in, under the same rule
-    /// (`AgentStatus`, `PrStatus.summary`), from the facts this page already holds.
+    /// What the agent is doing, as the sidebar's agent row and the header both say it, under
+    /// the rule the session reports to the Manager by (`AgentStatus`), from the facts this
+    /// page already holds.
     ///
-    /// No agent standing before the Claude panel has said anything: whether an agent can run
-    /// at all is the one input the page cannot know until then, and "waiting" over a session
-    /// that cannot answer would be the wrong word for a moment rather than none.
+    /// None before the Claude panel has said anything: whether an agent can run at all is the
+    /// one input the page cannot know until then, and "waiting" over a session that cannot
+    /// answer would be the wrong word for a moment rather than none.
+    let agentStanding (model: ClientModel) : Standings.Standing option =
+        model.Claude.Status
+        |> Option.map (fun panel ->
+            Standings.AgentStatus.standing
+                { TurnRunning = Option.isSome model.Agent.ActiveTurn
+                  BusyTerminals = Projection.awaitedByAgent model.Terminals
+                  NoAgent = not panel.AgentAvailable
+                  SignInRequired = panel.AgentAvailable && claudeNeedsSignIn model })
+
+    /// What the sidebar's agent row says. A running turn outranks a credential that stopped
+    /// working in `AgentStatus` (the turn is what the agent is doing right now), but this row
+    /// is the one place a person reads the agent's own health, and "working" over a sign-in
+    /// the next turn will fail on is the "ready" this row used to lie with.
+    let agentRowStanding (model: ClientModel) : Standings.Standing option =
+        agentStanding model
+        |> Option.map (fun standing ->
+            if claudeNeedsSignIn model && standing.Word <> Standings.AgentStatus.noAgent then
+                { standing with Word = Standings.AgentStatus.signInAgain; Tone = ToneBad }
+            else
+                standing)
+
+    /// Where this session stands, as the header says it: its agent, then its pull requests —
+    /// the order the session reports them to the Manager in.
     let standings (model: ClientModel) : Standings.Standing list =
-        let agent =
-            model.Claude.Status
-            |> Option.map (fun panel ->
-                Standings.AgentStatus.standing
-                    { TurnRunning = Option.isSome model.Agent.ActiveTurn
-                      BusyTerminals = Projection.awaitedByAgent model.Terminals
-                      NoAgent = not panel.AgentAvailable
-                      SignInRequired = panel.AgentAvailable && claudeNeedsSignIn model })
-        Option.toList agent @ Option.toList (PrStatus.summary (prStandings model))
+        Option.toList (agentStanding model) @ Option.toList (PrStatus.summary (prStandings model))
 
     /// What a pull-request watch puts in front of the tab name, for somebody who is not
     /// looking at this tab at all — the only surface that reaches them there.

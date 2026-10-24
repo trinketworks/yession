@@ -456,8 +456,8 @@ module View =
     /// Who is in this session — and, when the agent is not, the ONE place the product asks for
     /// a connection. A missing member belongs in the membership list, so all three agent states
     /// wear the SAME roster row — avatar cell, name, right-aligned status — and only the words
-    /// (and the prompt hanging under the row) change. Connecting flips "no agent" to "ready" in
-    /// place; the roster never jumps.
+    /// (and the prompt hanging under the row) change. Connecting flips "no agent" to what the agent is
+    /// doing in place; the roster never jumps.
     /// How to read what is BELOW it. ONE renderer, used by the generated panels and by the
     /// consent prompt, because a legend that read one way where a grant is listed and
     /// another where it is agreed to would be two vocabularies wearing one name.
@@ -501,16 +501,18 @@ module View =
         // working left this reading "ready" in green over a credential the next turn would
         // fail on. The status word follows the credential's health; the gate does not, so
         // the no-agent prompt keeps meaning "nothing is connected" rather than doubling up.
-        let claudeNeedsSignIn = ClientModel.claudeNeedsSignIn model
+        //
+        // A live agent's word is what it is doing (`ClientModel.agentRowStanding`): working,
+        // waiting, running, or "sign in again". It used to say "ready", and the header said
+        // what the agent was doing beside it; this row is where a phone has room for that.
         let agentRow =
             // `None` is the stream not having said yet, which is the one state this row has
             // nothing to say in — it was a third case of a `bool option` and is the absence
             // of the panel now.
-            match model.Claude.Status |> Option.map (fun panel -> panel.AgentAvailable) with
-            | Some true when claudeNeedsSignIn ->
-                html $"""<div class="{Style.person}" data-agent-presence="live"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]}"></span>agent<span class="{Style.statusErr} ml-auto"><span class="{Style.statusDot}"></span>{Dom.Text.signInAgainStatus}</span></div>"""
-            | Some true ->
-                html $"""<div class="{Style.person}" data-agent-presence="live"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]}"></span>agent<span class="{Style.statusOk} ml-auto"><span class="{Style.statusDot}"></span>ready</span></div>"""
+            match model.Claude.Status |> Option.map (fun panel -> panel.AgentAvailable), ClientModel.agentRowStanding model with
+            | Some true, Some standing ->
+                let dot = if standing.Tone = ToneBusy then Style.statusDotBeat else Style.statusDot
+                html $"""<div class="{Style.person}" data-agent-presence="live"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]}"></span>agent<span class="{Style.headerAgentStanding (Style.toneInk standing.Tone)} ml-auto" data-agent-row-standing><span class="{dot}"></span>{standing.Word}</span></div>"""
             // One roster row, like the live one: the dimmed avatar says nobody is here, and the
             // bare verb at the right says what to do about it. It used to hang a full-width
             // bordered button under the row with a rule beside it, which took the roster's
@@ -519,10 +521,11 @@ module View =
             // message does meanwhile (recorded, unanswered — `Scheduler.create`, a `None`
             // runner at drain time) is behaviour the queue itself shows, not a sentence to
             // hang here.
-            | Some false ->
+            | Some false, _ ->
                 html $"""
                     <div class="{Style.person}" data-agent-presence="absent" data-no-agent><span class="{Style.cls [ Style.avatar; Style.agentAvatarAbsent; Style.personAvatar ]}"></span><span class="text-ink-faint">agent</span><button type="button" class="{Style.cls [ Style.btnBare; Style.rosterVerb ]}" data-settings-toggle="prompt" data-no-agent-connect @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>connect</button></div>"""
-            | None ->
+            | None, _
+            | Some true, None ->
                 html $"""<div class="{Style.person}" data-agent-presence="unknown"><span class="{Style.cls [ Style.avatar; Style.agentAvatarAbsent; Style.personAvatar ]}"></span><span class="text-ink-faint">agent</span></div>"""
 
         // What a checkout asks for, when somebody still has to decide about it.
@@ -1314,21 +1317,24 @@ module View =
 
     /// Where this session stands, in the header band — the same standings the Manager's
     /// roster shows for it, on the page somebody is actually looking at, worst first
-    /// (`ClientModel.standings`). A wide screen draws them all; a phone draws the worst alone
-    /// (`Style.headerStandingSlot`).
+    /// (`ClientModel.standings`), where a wide screen has room for them.
+    ///
+    /// A phone's band says none of them but the two that stop the agent ("no agent", "sign in
+    /// again"). The band is the title's room there, the conversation already shows what the
+    /// agent is doing, and the sidebar's agent row says it one swipe away.
     ///
     /// The pull requests' line is a control, because it GOES somewhere: the rows behind it
     /// are one press away in settings. It is silent when nothing is owed, so a line that IS
-    /// there is worth looking at. The agent's line is a status and not pressable; the two of
-    /// its states that need a person ("no agent", "sign in again") are the sidebar agent
-    /// row's to act on, so the band says them only while that row is off screen.
+    /// there is worth looking at. The agent's line is a status and not pressable, and it is
+    /// the sidebar agent row's word, so the band says it only while that row is off screen.
     let private headerStandings (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let standings = ClientModel.standings model |> Standings.Standing.byConcern
-        let worst = Standings.Standing.worst standings
         let slot (standing: Standings.Standing) =
-            let followsSidebar =
-                standing.Facet = Standings.AgentStatus.facet
-                && (standing.Word = Standings.AgentStatus.noAgent || standing.Word = Standings.AgentStatus.signInAgain)
+            let seat =
+                if standing.Facet <> Standings.AgentStatus.facet then Style.headerStandingWide
+                elif standing.Word = Standings.AgentStatus.noAgent || standing.Word = Standings.AgentStatus.signInAgain then
+                    Style.headerStandingOffSidebar
+                else Style.headerStandingOffWideSidebar
             let said =
                 if standing.Facet = PrStatus.facet then
                     html $"""
@@ -1337,8 +1343,7 @@ module View =
                 else
                     let dot = if standing.Tone = ToneBusy then Style.statusDotBeat else Style.statusDot
                     html $"""<span class="{Style.headerAgentStanding (ink standing.Tone)}" data-agent-standing><span class="{dot}"></span>{standing.Word}</span>"""
-            let phoneShows = worst = Some standing
-            html $"""<span class="{Style.headerStandingSlot phoneShows followsSidebar}" ?data-phone-shows={phoneShows}>{said}</span>"""
+            html $"""<span class="{seat}" ?data-phone-shows={seat = Style.headerStandingOffSidebar}>{said}</span>"""
         html $"""{standings |> List.map slot}"""
 
     /// The way back into the content column once it is shut. Present only while it IS

@@ -2013,19 +2013,31 @@ let private uiChecklistTests =
             Expect.stringContains (said { connected with Agent = representativeModel.Agent }) "working" "a turn is work"
             Expect.stringContains (said noTurn) "no agent" "and a session nothing can answer says so"
 
-        // A phone has room for one, so it gets the one that wants a person most; a wide
+        // A phone's band is the title's room. It says only what stops the agent; a wide
         // screen gets them all, worst first.
-        testCase "a phone's header shows only the worst standing" <| fun () ->
-            let model =
+        testCase "a phone's header says only what stops the agent" <| fun () ->
+            let noTurn =
                 { (withPullRequests [ prRow 377 "conflicted" (CellStatus ("ok", ToneMuted)) ]) with
                     Agent = { representativeModel.Agent with ActiveTurn = None } }
-                |> withClaudePanel (fun panel -> { panel with AgentAvailable = true })
-            let html = Support.render model
-            Expect.equal (occurrences "data-phone-shows" html) 1 "one standing for a phone"
-            let phone, prs, agent =
-                html.IndexOf "data-phone-shows", html.IndexOf "data-pr-strip", html.IndexOf "data-agent-standing"
-            Expect.isTrue (agent > 0 && prs > 0) "both are in the band"
-            Expect.isTrue (phone < prs && prs < agent) "the conflicted pull request first, and it is the phone's"
+            let connected = noTurn |> withClaudePanel (fun panel -> { panel with AgentAvailable = true })
+            let html = Support.render connected
+            let prs, agent = html.IndexOf "data-pr-strip", html.IndexOf "data-agent-standing"
+            Expect.isTrue (prs > 0 && agent > prs) "both are in the band, the conflicted pull request first"
+            Expect.equal (occurrences "data-phone-shows" html) 0 "and neither is a phone's"
+            let absent = Support.render noTurn
+            Expect.equal (occurrences "data-phone-shows" absent) 1 "no agent is"
+
+        // The sidebar's agent row is where a phone reads what the agent is doing.
+        testCase "the sidebar's agent row says what the agent is doing" <| fun () ->
+            let said (model: ClientModel) =
+                let html = Support.render model
+                let start = html.IndexOf "data-agent-row-standing"
+                Expect.isTrue (start > 0) "the agent row carries a standing"
+                html.Substring (start, min 200 (html.Length - start))
+            let noTurn = { representativeModel with Agent = { representativeModel.Agent with ActiveTurn = None } }
+            let connected = noTurn |> withClaudePanel (fun panel -> { panel with AgentAvailable = true })
+            Expect.stringContains (said connected) "waiting" "idle"
+            Expect.stringContains (said { connected with Agent = representativeModel.Agent }) "working" "a turn"
 
         // The one rule the strip applies that the rows do not state outright, and the reason
         // it reads the status cell's TONE rather than its sentence: the words in a health

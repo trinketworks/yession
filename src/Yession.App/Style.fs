@@ -1674,7 +1674,7 @@ module Style =
         "absolute left-0 -bottom-px h-0.5 bg-blue pointer-events-none "
         + "transition-[width] duration-500 ease-linear motion-reduce:transition-none"
 
-    /// The header's right-hand group: the session's standings (`headerStandingSlot`) and the
+    /// The header's right-hand group: the session's standings (`headerStandingWide`) and the
     /// way back to the terminals. `pb-[1px]` is optical, not rhythm: it drops the 11px caps line's
     /// baseline onto the wordmark/title baseline (pb-1 left it 3px high, measured live). On a
     /// phone there is no wordmark to meet: the group centres on the title's line instead.
@@ -1690,7 +1690,7 @@ module Style =
     /// wears the caps voice of its neighbours and takes its colour from the tone of the worst
     /// thing it is reporting, so the band gains a word rather than a control.
     ///
-    /// No display of its own: the slot it sits in (`headerStandingSlot`) decides where it
+    /// No display of its own: the slot it sits in (`headerStandingWide`) decides where it
     /// is drawn, the same as for the agent's standing beside it.
     let prStripIn (tone: string) =
         "bg-transparent border-0 cursor-pointer " + caps + " transition-colors " + focusRing + " " + tone
@@ -1702,26 +1702,28 @@ module Style =
     /// call to action for the two that need a person is on the sidebar's own agent row.
     let headerAgentStanding (tone: string) = caps + " " + tone
 
-    /// Where one of the header's standings is drawn. Every one of them on a wide screen,
-    /// worst first; on a phone only the worst, in the seat "no agent" alone used to take,
-    /// so the 56px band (geometry-pinned: `Browser.fs` measures that the bar never covers
-    /// the header under it) gains no third thing.
+    /// Where the header's standings are drawn. A wide screen has room for them; a phone's
+    /// 56px band (geometry-pinned: `Browser.fs` measures that the bar never covers the header
+    /// under it) is the title's, and gives a seat only to the agent's "no agent" and "sign in
+    /// again", the one it gave before standings existed.
     ///
-    /// `followsSidebar` is for a standing the sidebar already says where it is on screen —
-    /// the agent's "no agent" and "sign in again", which its agent row carries. Those are
-    /// shown only while that column is collapsed or off-canvas (on a phone, most of the
-    /// time), so the band relocates them rather than repeating them. Same visibility rule
-    /// as `navReopen`, for the same reason.
+    /// The agent's standings are the sidebar agent row's word, so the band says them only
+    /// while that column is collapsed or off-canvas, relocating rather than repeating. Same
+    /// visibility rule as `navReopen`, for the same reason.
     ///
     /// `inline` and not a flex box, so a status's dot keeps the seat `discLead` gives it on
     /// every other status in the product: in the gutter to the left of the word.
-    let headerStandingSlot (worstOnPhone: bool) (followsSidebar: bool) =
-        cls [ "shrink-0 whitespace-nowrap"
-              match followsSidebar, worstOnPhone with
-              | false, true -> "inline"
-              | false, false -> "hidden wide:inline"
-              | true, true -> "hidden wide:[.nav-alt_&]:inline phone:inline phone:[.nav-alt_&]:hidden"
-              | true, false -> "hidden wide:[.nav-alt_&]:inline" ]
+    let private headerStanding = "shrink-0 whitespace-nowrap hidden"
+
+    /// A standing the sidebar does not say: the pull requests' line. Wide screens only.
+    let headerStandingWide = cls [ headerStanding; "wide:inline" ]
+
+    /// The agent's standing while it is under way or fine: wide screens, with the sidebar shut.
+    let headerStandingOffWideSidebar = cls [ headerStanding; "wide:[.nav-alt_&]:inline" ]
+
+    /// The agent's standing when it stops the agent: with the sidebar shut, on a phone too.
+    let headerStandingOffSidebar =
+        cls [ headerStanding; "wide:[.nav-alt_&]:inline phone:inline phone:[.nav-alt_&]:hidden" ]
 
     /// The nav column's own mount of the connection report. Hidden on a phone, where the bar
     /// above every pane carries it — the two mounts are complementary by construction, so
@@ -1750,8 +1752,8 @@ module Style =
         cls [ "relative grid grid-cols-[var(--spacing-rail)_minmax(0,1fr)_auto] items-center px-8 py-2 bg-surface"
               Stroke.dividerBottom
               // Where the column IS on screen, the column says it. Where it is not — a
-              // collapsed nav, or any phone — this does. Same rule as `headerStandingSlot`'s
-              // `followsSidebar`.
+              // collapsed nav, or any phone — this does. Same rule as
+              // `headerStandingOffSidebar`.
               "hidden wide:[.nav-alt_&]:grid phone:grid"
               // Over the header that follows it, so the disclosure's lines, which open below
               // the bar, are not painted under it.
@@ -3911,7 +3913,7 @@ module Style =
     // above the composer, and the settings copy); repetition made it wallpaper, not a prompt.
     //
     // The absent state is the SAME roster row as the live one — same avatar cell, same
-    // right-aligned slot — so connecting an agent flips the bare `connect` verb to "ready" in
+    // right-aligned slot — so connecting an agent flips the bare `connect` verb to its standing in
     // place; nothing moves and no box appears or collapses. (It was a boxed card, then a row
     // with a full-width button hanging under it; both took the roster's second slot for good.)
     // The block below is the PROMPT shape the other two asks still wear — a session that has
