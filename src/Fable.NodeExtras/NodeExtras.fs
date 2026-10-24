@@ -1527,7 +1527,7 @@ module HttpClient =
     /// A WHATWG `Response` over an answer `node:http` received: the status, the headers as
     /// pairs, and the body as the web stream `Readable.toWeb` makes of it. A status that has
     /// no body by the spec (204, 205, 304) gets none, which is what the constructor demands.
-    [<Emit("new Response([204, 205, 304].includes($1.statusCode) ? null : $0.toWeb($1), { status: $1.statusCode, headers: $2 })")>]
+    [<Emit("(function (statics, answer, headers) { const status = answer.statusCode; return new Response([204, 205, 304].includes(status) ? null : statics.toWeb(answer), { status, headers }) })($0, $1, $2)")>]
     let private webResponse (statics: ReadableStatics) (answer: HttpResponse) (headers: (string * string)[]) : Fetch.Types.Response =
         jsNative
 
