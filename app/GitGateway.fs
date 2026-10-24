@@ -29,12 +29,13 @@ module Yession.Host.GitGateway
 // missing or rejected credential is answered on THAT channel, and the person reads what
 // happened and where to fix it.
 //
-// The listener binds every interface, and that is not carelessness: it is how a container
-// reaches it. Docker's `host-gateway` alias is the host's loopback under Colima and Docker
-// Desktop but the bridge address under a native Linux daemon, and a loopback-only listener
-// would answer on one and not the other. The route is a 128-bit capability minted per
-// sandbox, so what is exposed is "this session's gateway, to whoever holds a cap for it" —
-// the same trust a sandbox already has.
+// The listener binds where a sandbox reaches this host, and nowhere else (`Interop.Doors`):
+// loopback for the host backend and for a container on a daemon in a VM (Colima, Docker
+// Desktop), whose `host.docker.internal` is the host loopback; srt's address on this
+// platform (`Sandboxes.hostDoors`); and, on a native Linux daemon, the session's Docker
+// network's gateway, opened when its first container starts. The route is a 128-bit
+// capability minted per sandbox, so what is exposed at each is "this session's gateway, to
+// whoever holds a cap for it" — the same trust a sandbox already has.
 //
 // WHOSE credential answers is not the sandbox's to say. A sandbox is shared — the agent's
 // terminal, a person's, a repo's own setup block all run in one — so a route that named one
@@ -299,8 +300,11 @@ let private basicAuthorization (token: string) : string =
 // --- the gateway ---------------------------------------------------------------------------
 
 type Gateway =
-    { /// The bound port, on every interface.
+    { /// The bound port, at every address it answers on.
       Port : int
+      /// Answer at one more address: where a session's containers reach this host on its
+      /// Docker network (`DockerSandbox.Network.Reached`).
+      Open : string -> Async<Result<unit, string>>
       /// Mint the route for one sandbox, replacing any it had: the cap its git will name. A
       /// route answers nothing by itself — what answers on it is the loan a request carries.
       Grant : SandboxRef -> string
@@ -322,13 +326,13 @@ type private Loan =
       Terminal : TerminalId
       Lender : Lender }
 
-/// Start the gateway. `upstream` is the origin github.com's git endpoints live under — a
+/// Start the gateway at `addresses` (`Sandboxes.hostDoors`), on one port. `upstream` is the origin github.com's git endpoints live under — a
 /// parameter for the reason every provider endpoint here is: a suite needs somewhere to
 /// point it that is not the live provider. `report` is where a fault goes that git can no
 /// longer be told about: once the answer's headers are out there is no `ERR` channel left,
 /// and a fault swallowed there is a fault nobody hears — which for a push's audit record is
 /// a push that went out on somebody's credential with no line saying so.
-let start (upstream: string) (report: string -> unit) : Async<Gateway> =
+let start (addresses: string list) (upstream: string) (report: string -> unit) : Async<Gateway> =
     let mutable grants : Map<string, SandboxRef> = Map.empty
     /// Live loans, by secret.
     let mutable live : Map<string, Loan> = Map.empty
@@ -429,13 +433,11 @@ let start (upstream: string) (report: string -> unit) : Async<Gateway> =
                                     else report (sprintf "the git gateway failed after answering a request for %s: %s" (RepoRef.value request.Repo) e.Message)
                             })
 
-    let server = createServer handler
     async {
-        do!
-            Async.FromContinuations (fun (cont, _, _) ->
-                server.listen (0, "0.0.0.0", fun () -> cont ()) |> ignore)
+        let! doors = openDoors "the git gateway" (fun () -> createServer handler) addresses
         return
-            { Port = serverPort server
+            { Port = doors.Port
+              Open = doors.Open
               Grant =
                 fun sandbox ->
                     let cap = randomSecret ()
@@ -453,7 +455,5 @@ let start (upstream: string) (report: string -> unit) : Async<Gateway> =
                     grants <- grants |> Map.filter (fun _ held -> held <> sandbox)
                     live <- live |> Map.filter (fun _ loan -> loan.Sandbox <> sandbox)
                     returned <- returned |> Map.filter (fun _ (_, loan) -> loan.Sandbox <> sandbox)
-              Close =
-                fun () ->
-                    Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ())) }
+              Close = doors.Close }
     }

@@ -239,6 +239,8 @@ type private GitRun =
 
 type ReposConfig =
     { Backend : SandboxBackend
+      /// The session's Docker network, for a backend that runs containers.
+      Network : Sandboxes.DockerSandbox.Network
       ReposDir : string
       /// The same directory as a TERMINAL sees it (`Sandboxes.reposVisibleAt`): the host
       /// path itself under the host-family backends, the mount target under docker. Every
@@ -355,7 +357,7 @@ let private outputLimit = 20000
 let stagingDirName = "staging~"
 
 let create (config: ReposConfig) : Result<ReposService, string> =
-    Sandboxes.forBackend config.Backend "git" EnvironmentSpec.defaults
+    Sandboxes.forBackend config.Backend config.Network "git" EnvironmentSpec.defaults
     |> Result.map (fun createSandbox ->
 
         /// The repos directory as an ABSOLUTE path, resolved once here and used for every

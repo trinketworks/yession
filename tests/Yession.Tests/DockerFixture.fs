@@ -33,6 +33,24 @@ let name () : string =
     minted.Add fresh |> ignore
     fresh
 
+/// A session network this run owns, as the product names one per session, told the
+/// host's address on it through `reached` (a listener's `Open`, or nothing to open).
+let network (reached: string -> Async<Result<unit, string>>) : Sandboxes.DockerSandbox.Network =
+    { Name = name (); Reached = reached }
+
+/// A session network whose host address nothing listens on.
+let quietNetwork () : Sandboxes.DockerSandbox.Network = network (fun _ -> async { return Ok () })
+
+/// The network of that name. A name that never became a network is not an error.
+let private removeNetwork (client: DK.Docker) (owned: string) : Async<unit> =
+    async {
+        try
+            do! client.getNetwork(owned).remove () |> Interop.awaitPromise |> Async.Ignore
+        with ex ->
+            if not (ex.Message.Contains "not found") then
+                eprintfn "docker fixture: could not remove the network %s: %s" owned ex.Message
+    }
+
 /// The containers a name labels, removed forced: a running one goes too.
 let private removeContainers (client: DK.Docker) (owned: string) : Async<unit> =
     async {
@@ -62,7 +80,8 @@ let private removeVolume (client: DK.Docker) (owned: string) : Async<unit> =
                 eprintfn "docker fixture: could not remove the volume %s: %s" owned ex.Message
     }
 
-/// Remove everything minted since the last sweep. Every container first, then every volume:
+/// Remove everything minted since the last sweep. Every container first, then every volume
+/// and network:
 /// a volume that a container still holds cannot be removed, and one case's volume can be
 /// held by a container under another of its names.
 let private sweep () : Async<unit> =
@@ -75,6 +94,8 @@ let private sweep () : Async<unit> =
                 do! removeContainers client owned
             for owned in names do
                 do! removeVolume client owned
+            for owned in names do
+                do! removeNetwork client owned
     }
 
 /// One async case, followed by the sweep however it ended. The case's own failure is raised

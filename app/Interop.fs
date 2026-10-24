@@ -338,3 +338,77 @@ let parseOrExit (spec: Yession.Domain.Cli.Spec) (currentVersion: string) : Yessi
         printfn "%s" text
         exit 0
     | Yession.Domain.Cli.Outcome.Refused complaint -> abort complaint
+
+// --- one listener, several addresses ---------------------------------------------------------
+
+/// A server answering on one port at several addresses, opened as the sandboxes that need
+/// them appear. What the git gateway and the credential proxy listen on: each sandbox backend
+/// reaches this host at its own address (`Sandboxes.hostAddressFrom`), and a listener on
+/// every interface would also answer the host's other networks, which no sandbox is on.
+///
+/// One port for all of them, because a sandbox is told a URL with the port in it before it
+/// is known which address it will dial.
+type Doors =
+    { Port : int
+      /// Answer at one more address too. Asked again for an address already open, it answers
+      /// what the first ask did.
+      Open : string -> Async<Result<unit, string>>
+      Close : unit -> Async<unit> }
+
+/// Open `serve ()` on each of `first`, on one port the OS chooses for the first, then
+/// `Open` more. `serve` makes a fresh server for each address, with the same handlers.
+let openDoors (what: string) (serve: unit -> HttpServer) (first: string list) : Async<Doors> =
+    let listenOn (address: string) (port: int) : Async<Result<HttpServer, string>> =
+        Async.FromContinuations (fun (cont, _, _) ->
+            let server = serve ()
+            server.onceError (fun error ->
+                cont (Error (sprintf "%s cannot listen on %s:%d: %s" what address port (StreamError.describe error))))
+            server.listen (port, address, fun () -> cont (Ok server)) |> ignore)
+    let mutable servers : HttpServer list = []
+    let mutable opened : Map<string, JS.Promise<Result<unit, string>>> = Map.empty
+    async {
+        let addresses = List.distinct first
+        let! port =
+            match addresses with
+            | [] -> async { return failwithf "%s has no address to listen on" what }
+            | head :: _ ->
+                async {
+                    match! listenOn head 0 with
+                    | Ok server ->
+                        servers <- [ server ]
+                        opened <- Map.add head (Async.StartAsPromise (async { return Ok () })) opened
+                        return serverPort server
+                    | Error reason -> return failwith reason
+                }
+        let openAt (address: string) : Async<Result<unit, string>> =
+            match Map.tryFind address opened with
+            | Some pending -> awaitPromise pending
+            | None ->
+                let pending =
+                    Async.StartAsPromise (
+                        async {
+                            match! listenOn address port with
+                            | Ok server ->
+                                servers <- server :: servers
+                                return Ok ()
+                            | Error reason ->
+                                // Not kept: the next sandbox to need the address asks again.
+                                opened <- Map.remove address opened
+                                return Error reason
+                        })
+                opened <- Map.add address pending opened
+                awaitPromise pending
+        for address in List.tail addresses do
+            match! openAt address with
+            | Ok () -> ()
+            | Error reason -> failwith reason
+        return
+            { Port = port
+              Open = openAt
+              Close =
+                fun () ->
+                    async {
+                        for server in servers do
+                            do! Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ()))
+                    } }
+    }

@@ -327,6 +327,7 @@ let private serviceTracing
     TestFiles.ensureDir fixtures
     Repos.create
         { Backend = SrtBackend
+          Network = DockerFixture.quietNetwork ()
           ReposDir = reposDir
           // Host-family: a terminal reaches the checkouts at the directory itself.
           VisibleAt = Sandboxes.reposVisibleAt None SrtBackend reposDir
@@ -620,6 +621,7 @@ let private srtTests =
             let service =
                 Repos.create
                     { Backend = SrtBackend
+                      Network = DockerFixture.quietNetwork ()
                       ReposDir = relRepos
                       VisibleAt = Sandboxes.reposVisibleAt None SrtBackend relRepos
                       StartsAt = fun () -> None

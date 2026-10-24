@@ -282,6 +282,27 @@ The last section holds trust boundaries as sharp as the first section's.
   the named workspace volume, which Docker creates root-owned. Files written through a BIND
   mount belong to root on the host: a nuisance, not an escape.
 
+  Each session's containers share one Docker network of their own (`DockerSandbox.Network`).
+  The git gateway and the credential proxy never listen on every interface: they bind
+  loopback and srt's address at start (`hostDoorsFrom`), and on a native daemon they open the
+  session network's gateway when its first container starts (`hostAlias`). What remains:
+  - **On a daemon in a VM (Colima, Docker Desktop) a container still reaches the host
+    loopback.** The VM forwards `host.docker.internal` there, and it is the only way from a
+    container to the host, which the gateway and the proxy need. So nothing on the host
+    loopback may trust its peer ([technical-design.md §5](technical-design.md#5-architectural-invariants)):
+    the Manager and the example proxy listen on unix sockets under `--auth trusted-headers`,
+    and what is left there (the gateway, the proxy, the sessions' ports) authenticates by
+    capability, cookie or token. The sessions' unauthenticated routes (`/signal`, `/login`)
+    are the denial-of-service surface the Remote WebRTC entry names.
+  - **On a native daemon a container reaches every address of this host that is not
+    loopback.** Docker accepts a container's traffic to the host's own addresses, so a
+    listener another program binds on every interface answers this session's containers.
+    Yession's own listeners are not among them: another session's gateway answers there only
+    to a capability minted for that session.
+  - **On macOS the srt door is every interface address.** srt dials this host by name, and the
+    resolver picks which of its addresses the name is, so each is a door
+    (`hostDoorsFrom`). A capability is still what opens it.
+
   Known and accepted for now:
   - No backend has resource limits.
   - A docker exec has no kill. "Kill" closes the stdin stream, so a runaway that ignores EOF

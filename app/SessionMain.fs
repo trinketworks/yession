@@ -243,6 +243,17 @@ let private workspaceFor (sandbox: SandboxRef) =
         sandbox)
         .Workspace
 
+/// Where this session's listeners (the git gateway, the credential proxy) also answer once a
+/// native daemon gives the host an address on the session's Docker network. Set at boot when
+/// they exist; no container starts before then.
+let private reachListeners : (string -> Async<Result<unit, string>>) ref =
+    ref (fun _ -> async { return Error "the session's listeners are not up yet" })
+
+/// The session's containers share one network of their own (`DockerSandbox.Network`).
+let private dockerNetwork : Sandboxes.DockerSandbox.Network =
+    { Name = sprintf "yession-%s" (SessionId.value sessionId)
+      Reached = fun gateway -> reachListeners.Value gateway }
+
 /// The session's WorkSandboxes (Plan 15, stage 2), by name — each in the workspace
 /// `SessionLayout` gives it, all of them sharing the one repos directory, which is what
 /// it is for. `credentials` is a parameter rather than a module value because resolving
@@ -268,7 +279,7 @@ let private makeSandboxes
             // of them under docker would fight over one container name — and now that a repo
             // can declare its own, two REPOS' same-named sandboxes would too. The rule lives
             // on `SandboxRef`, where a cheap test reaches it; this composition only asks.
-            match Sandboxes.forBackend backend (SandboxRef.objectName sessionId sandbox) workSpec with
+            match Sandboxes.forBackend backend dockerNetwork (SandboxRef.objectName sessionId sandbox) workSpec with
             | Error e -> Error e
             | Ok createSandbox ->
                 // What this session gives the sandbox: its workspace, its home, and whether
@@ -960,6 +971,7 @@ Async.StartImmediate (
         do
             match Repos.create
                     { Backend = agentBackend
+                      Network = dockerNetwork
                       ReposDir = reposDir
                       // What the verbs SAY a checkout is at is the view from the
                       // session's OWN sandboxes — the agent's `default`, where these
@@ -1263,11 +1275,15 @@ Async.StartImmediate (
         // gateway lends the credential per request, resolved by the Plan 08 precedence
         // each time, so a refresh reaches a sandbox already running and a sandbox's env
         // never holds a value worth printing.
-        let! gitGateway = GitGateway.start "https://github.com" (fun fault -> eprintfn "[session %s] git gateway: %s" (SessionId.value sessionId) fault)
+        // Both listen where this session's sandboxes reach this host (`hostDoorsHere`), and on
+        // its Docker network's gateway once a native daemon makes one (`network` below).
+        let doors = Sandboxes.hostDoorsHere ()
+        let! gitGateway = GitGateway.start doors "https://github.com" (fun fault -> eprintfn "[session %s] git gateway: %s" (SessionId.value sessionId) fault)
         // The same idea for the API: a block's `gh` holds a stand-in, and the proxy swaps in
         // the credential of that block's act on the way to api.github.com.
         let! credentialProxy =
             CredentialProxy.start
+                doors
                 [ GitHubAccess.route ]
                 CredentialProxy.direct
                 (Sandboxes.SessionLayout.prepareTrustBundle dataDir)
@@ -1305,6 +1321,15 @@ Async.StartImmediate (
             SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
         let gatewayHostFor (sandbox: SandboxRef) : string option =
             sandboxBackend sandbox |> Sandboxes.hostAddressHere (Interop.hostname ())
+        // The listeners exist now, so the session's Docker network can tell them where its
+        // containers reach this host (`dockerNetwork`).
+        reachListeners.Value <-
+            fun gateway ->
+                async {
+                    match! gitGateway.Open gateway with
+                    | Error reason -> return Error reason
+                    | Ok () -> return! credentialProxy.Open gateway
+                }
         let forwardableCredentials : WorkSandboxes.CredentialSource list =
             [ { Name = GitHubConnection.connectionName
                 // `git` is the gateway, `api` the credential proxy (`GitHubAccess.route`).

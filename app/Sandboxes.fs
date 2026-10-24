@@ -562,10 +562,11 @@ let limitsHere (backend: SandboxBackend) : HostLimits = limitsFor backend (platf
 /// guesses. The platform is an argument for the reason `limitsFor`'s is: every claim about
 /// it stays checkable from either machine.
 ///
-/// docker: `host.docker.internal`, which every container is given as an alias for the
-/// daemon's `host-gateway`. That is the host's loopback under Colima and Docker Desktop and
-/// the bridge address under a native Linux daemon — which is why a listener meant for a
-/// container binds every interface, not loopback. host: loopback, there being no boundary.
+/// docker: `host.docker.internal`, which every container is given as an alias
+/// (`DockerSandbox.hostAlias`). That is the host's loopback under Colima and Docker Desktop,
+/// and the session network's gateway under a native Linux daemon — which is why a listener
+/// meant for a container binds loopback at start and opens the gateway when the network is
+/// made (`hostDoorsFrom`, `DockerSandbox.Network`). host: loopback, there being no boundary.
 ///
 /// srt: a name its filtering proxy will carry. The proxy sets `NO_PROXY` over `localhost`,
 /// `127.0.0.1` and every private range, so any of those is dialled DIRECTLY — into a
@@ -587,6 +588,27 @@ let hostAddressFrom (hostname: string) (platform: Node.Base.Platform) (backend: 
 /// platform `limitsHere` is, for the same reason.
 let hostAddressHere (hostname: string) (backend: SandboxBackend) : string option =
     hostAddressFrom hostname (platform ()) backend
+
+/// Where a listener meant for this session's sandboxes binds at start, of this host's
+/// `interfaceAddresses`: what `hostAddressFrom` sends each backend to, as addresses. Loopback,
+/// which the host backend and a container on a daemon in a VM reach this host by; srt's.
+/// Never every interface: a listener there also answers the host's other networks, and on a
+/// native daemon every container of every session, which no sandbox needs. A native daemon's
+/// session network gateway is opened later, when its first container starts.
+///
+/// srt on Linux dials `127.0.0.2`. On macOS it dials this host's NAME, which the resolver
+/// answers with one of its interface addresses, and which one is the resolver's: so every
+/// interface address `hostRouteFrom` allows is a door there, except loopback (the first
+/// door already) and IPv6 link-local, which binds only with a zone and is never answered.
+let hostDoorsFrom (platform: Node.Base.Platform) (interfaceAddresses: string list) : string list =
+    if platform = Node.Base.Platform.Darwin then
+        "127.0.0.1"
+        :: (interfaceAddresses
+            |> List.filter (fun a -> not (a.StartsWith "127.") && a <> "::1" && not (a.ToLowerInvariant().StartsWith "fe80:")))
+    else [ "127.0.0.1"; "127.0.0.2" ]
+
+/// `hostDoorsFrom` on this host.
+let hostDoorsHere () : string list = hostDoorsFrom (platform ()) (NetworkInterfaces.addresses ())
 
 /// One allowlist entry for `address` at `port`, in the form srt reads: an IPv6 literal is
 /// bracketed, or its colons would be read as the port's.
@@ -1395,6 +1417,72 @@ module DockerSandbox =
     /// Removed even while it runs.
     let private forced () : DK.RemoveOptions = jsOptions<DK.RemoveOptions> (fun o -> o.force <- true)
 
+    /// The network a session's containers share — one per session, so a container reaches
+    /// its own session's containers and no other's — and how the session hears where they
+    /// reach this host.
+    type Network =
+        { /// The docker network's name.
+          Name : string
+          /// Told the address this host has on the network, before a container on it starts,
+          /// when this host has one: a native daemon's bridge. A listener meant for the
+          /// session's containers then binds there, and not on every interface. A daemon in a
+          /// VM (Colima, Docker Desktop) gives the host no address on the network, and its
+          /// containers reach the host by its loopback, so nothing is told.
+          Reached : string -> Async<Result<unit, string>> }
+
+    /// How a container on the network names this host (`hostAddressFrom`'s
+    /// `host.docker.internal`): the network's gateway where this host `owns` it, and the
+    /// daemon's `host-gateway` where it does not.
+    ///
+    /// The gateway is the bridge interface the daemon gave the host. On a native daemon it is
+    /// this host's own address, and a listener bound there is reached by this network's
+    /// containers and not by the host's other networks. `host-gateway` would name the
+    /// daemon's DEFAULT bridge instead, which is not the network these containers are on. On
+    /// a daemon in a VM the gateway is the VM's, and `host-gateway` is the host loopback the
+    /// daemon forwards.
+    let hostAlias (gateway: string) (owns: bool) : string * string option =
+        if owns then "host.docker.internal:" + gateway, Some gateway
+        else "host.docker.internal:host-gateway", None
+
+    /// Whether this host can bind `address`, which is whether the address is this host's.
+    /// Asked by binding rather than of `os.networkInterfaces()`, which leaves out an
+    /// interface that is down — and a bridge with no container on it yet is down.
+    let private ownsAddress (address: string) : Async<bool> =
+        Async.FromContinuations (fun (cont, _, _) ->
+            let probe = createServer (fun _ res -> res.``end`` "")
+            probe.onceError (fun _ -> cont false)
+            probe.listen (0, address, fun () -> probe.close (fun _ -> cont true)) |> ignore)
+
+    /// The session's network, made on the first container that needs it, and its gateway.
+    /// Two sandboxes that start at once both ask; the second one's create is refused as a
+    /// duplicate, and it reads the network the first made.
+    let private ensureNetwork (client: DK.Docker) (network: Network) : Async<Result<string, string>> =
+        async {
+            let gatewayOf () =
+                async {
+                    let! inspected = client.getNetwork(network.Name).inspect () |> Interop.awaitPromise
+                    return DK.NetworkInspect.gateway inspected
+                }
+            let! existing = async { try return! gatewayOf () with _ -> return None }
+            match existing with
+            | Some gateway -> return Ok gateway
+            | None ->
+                try
+                    do!
+                        client.createNetwork (
+                            jsOptions<DK.NetworkCreateOptions> (fun o ->
+                                o.Name <- network.Name
+                                o.Driver <- "bridge"
+                                o.Labels <- sessionLabels network.Name)
+                        )
+                        |> Interop.awaitPromise
+                        |> Async.Ignore
+                with _ -> ()
+                match! async { try return! gatewayOf () with _ -> return None } with
+                | Some gateway -> return Ok gateway
+                | None -> return Error (sprintf "docker network '%s' could not be made, or has no IPv4 gateway" network.Name)
+        }
+
     /// Drain a build/pull progress stream; resolves when Docker signals completion.
     let private drainProgress (client: DK.Docker) (stream: DK.Stream) : Async<Result<unit, string>> =
         Async.FromContinuations(fun (cont, _, _) ->
@@ -1667,7 +1755,7 @@ module DockerSandbox =
                                     (let text = said.ToString().Trim () in if text = "" then "nothing" else text))
         }
 
-    let create (name: string) (spec: EnvironmentSpec) (container: ContainerSpec) : CreateSandbox =
+    let create (network: Network) (name: string) (spec: EnvironmentSpec) (container: ContainerSpec) : CreateSandbox =
         fun policy ->
             async {
                 try
@@ -1760,6 +1848,24 @@ module DockerSandbox =
                                 )
                                 |> Interop.awaitPromise
                                 |> Async.Ignore
+                        // The session's network, and the name this host has on it — told to the
+                        // session first, so its listeners answer there before the container
+                        // can dial them.
+                        let! reached =
+                            async {
+                                match! ensureNetwork client network with
+                                | Error reason -> return Error reason
+                                | Ok gateway ->
+                                    let! owns = ownsAddress gateway
+                                    match hostAlias gateway owns with
+                                    | alias, Some own ->
+                                        let! told = network.Reached own
+                                        return told |> Result.map (fun () -> alias)
+                                    | alias, None -> return Ok alias
+                            }
+                        match reached with
+                        | Error reason -> return Error reason
+                        | Ok alias ->
                         // Clear a same-named crash leftover so `createContainer` can reuse the name.
                         try do! client.getContainer(name).remove (forced ()) |> Interop.awaitPromise |> Async.Ignore
                         with _ -> ()
@@ -1780,11 +1886,10 @@ module DockerSandbox =
                                         jsOptions<DK.HostConfig> (fun host ->
                                             host.Mounts <- List.toArray mounts
                                             // The host, by the name `hostAddressFrom`
-                                            // promises. Colima and Docker Desktop
-                                            // resolve it unasked; a native Linux daemon
-                                            // does not, and `host-gateway` is the
-                                            // daemon's own answer on all three.
-                                            host.ExtraHosts <- [| "host.docker.internal:host-gateway" |]
+                                            // promises, on this session's network
+                                            // (`hostAlias` says which address).
+                                            host.NetworkMode <- network.Name
+                                            host.ExtraHosts <- [| alias |]
                                             // Everything dropped, then the file-ownership
                                             // capabilities added back. "Nothing it runs
                                             // legitimately needs a capability" was measured
@@ -2017,6 +2122,11 @@ module DockerSandbox =
                                     do! client.getContainer(container.id).remove (forced ()) |> Interop.awaitPromise |> Async.Ignore
                                 with ex ->
                                     eprintfn "[sandbox %s] docker remove failed: %s" name ex.Message
+                                // The network goes with the session's last container. The
+                                // daemon refuses while another is attached, which is that
+                                // container's to finish.
+                                try do! client.getNetwork(network.Name).remove () |> Interop.awaitPromise |> Async.Ignore
+                                with _ -> ()
                             }
                         // Which shell a terminal here opens: looked for on the far side of
                         // the entrypoint, once, at start — `command -v` for the dialects
@@ -3254,7 +3364,7 @@ module AgentSandbox =
 
 /// The session's `CreateSandbox` for its configured backend. `Error` fails the session
 /// at boot — fail closed, never a silent fallback to a weaker backend.
-let forBackend (backend: SandboxBackend) (name: string) (spec: EnvironmentSpec) : Result<CreateSandbox, string> =
+let forBackend (backend: SandboxBackend) (network: DockerSandbox.Network) (name: string) (spec: EnvironmentSpec) : Result<CreateSandbox, string> =
     let ambient = ambientEnv ()
     match backend, spec.Runtime with
     // The one question the union cannot settle: whether this BACKEND hosts containers. The
@@ -3272,7 +3382,7 @@ let forBackend (backend: SandboxBackend) (name: string) (spec: EnvironmentSpec) 
     | HostBackend, Confinement -> Ok (HostSandbox.create ())
     // Docker always IS a container; a spec that asked for nothing in particular gets the
     // defaults rather than a second, container-less docker path.
-    | DockerBackend, Container container -> Ok (DockerSandbox.create name spec container)
-    | DockerBackend, Confinement -> Ok (DockerSandbox.create name spec ContainerSpec.defaults)
+    | DockerBackend, Container container -> Ok (DockerSandbox.create network name spec container)
+    | DockerBackend, Confinement -> Ok (DockerSandbox.create network name spec ContainerSpec.defaults)
     | SrtBackend, Confinement ->
         SrtSandbox.toolsFrom ambient |> Result.map SrtSandbox.create

@@ -19,10 +19,10 @@ module Yession.Host.CredentialProxy
 // value it is, and never as the credential behind it.
 //
 // It has one door, a TCP port, for a sandbox that reaches the network directly — a container,
-// or the unconfined host — and is told `HTTPS_PROXY`. It binds every interface, as the git
-// gateway does and for its reason (a container reaches the host at a different address per
-// daemon), so it admits a client only by a capability minted for its sandbox (`Admit`), carried
-// as the proxy URL's credentials. An admitted client's `CONNECT` to a declared host is answered
+// or the unconfined host — and is told `HTTPS_PROXY`. It binds where those reach this host,
+// as the git gateway does and for its reason (`Interop.Doors`): loopback, and a native
+// daemon's session network gateway. It admits a client only by a capability minted for its
+// sandbox (`Admit`), carried as the proxy URL's credentials. An admitted client's `CONNECT` to a declared host is answered
 // here; to any other host it is TUNNELLED, untouched — a sandbox that reaches the internet
 // anyway loses nothing by going this way, and a tool that honours `HTTPS_PROXY` for every host
 // has to be carried for every host. That is why an srt sandbox is never admitted: its egress
@@ -261,9 +261,12 @@ let private trustBundle (authority: Authority) : string =
 let direct (host: string) : string = "https://" + host
 
 type Proxy =
-    { /// The TCP port it listens on, every interface — the door for a sandbox with direct
-      /// egress, which a client passes only with a capability from `Admit`.
+    { /// The TCP port it listens on, at every address it answers on — the door for a sandbox
+      /// with direct egress, which a client passes only with a capability from `Admit`.
       Port : int
+      /// Answer at one more address: where a session's containers reach this host on its
+      /// Docker network (`DockerSandbox.Network.Reached`).
+      Open : string -> Async<Result<unit, string>>
       /// Admit a sandbox on a backend through the TCP door: the capability its proxy URL
       /// carries, live until `Dismiss`. Asked again, the same sandbox is handed the same one.
       /// An srt sandbox is refused: its egress is its policy, and this door tunnels any host.
@@ -310,6 +313,7 @@ let presentedCapability (proxyAuthorization: string) : string option =
 /// `report` is where a fault goes that no client can be told about any more — once an
 /// answer's head is out there is nothing left to say it on.
 let start
+    (addresses: string list)
     (routes: CredentialRoute list)
     (upstream: string -> string)
     (trustFile: string)
@@ -504,18 +508,15 @@ let start
                 "this proxy admits a sandbox by the capability in the proxy URL it was given. This request carried no live capability."
 
     let refuseRequest = fun _ res -> answer res 405 "this proxy carries only HTTPS, through CONNECT."
-    let onPort = createServer refuseRequest
-    onPort.onConnect (Func<_, _, _, _> onPortConnect)
-    let listening (server: HttpServer) (where: string) (listen: (unit -> unit) -> unit) =
-        Async.FromContinuations (fun (cont, fail, _) ->
-            server.onceError (fun error ->
-                fail (exn (sprintf "credential proxy cannot listen on %s: %s" where (StreamError.describe error))))
-            listen cont)
+    let serve () =
+        let server = createServer refuseRequest
+        server.onConnect (Func<_, _, _, _> onPortConnect)
+        server
     async {
-        do! listening onPort "a TCP port" (fun cont -> onPort.listen (0, "0.0.0.0", fun () -> cont ()) |> ignore)
-        let close (server: HttpServer) = Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ()))
+        let! doors = openDoors "the credential proxy" serve addresses
         return
-            { Port = serverPort onPort
+            { Port = doors.Port
+              Open = doors.Open
               Admit =
                 fun backend sandbox ->
                     match backend, Map.tryFind sandbox admitted with
@@ -541,11 +542,7 @@ let start
                     live <- Map.add standIn { Route = route; Terminal = terminal; Lender = lender } live
                     standIn
               Retire = fun terminal -> retireWhere (fun loan -> loan.Terminal = terminal)
-              Close =
-                fun () ->
-                    async {
-                        do! close onPort
-                    } }
+              Close = doors.Close }
     }
 
 // --- what a sandbox and a block are given ------------------------------------------------------

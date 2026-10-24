@@ -3463,6 +3463,8 @@ let cleanDocker () =
             runInherit repoRoot "docker" [ "rm"; "-f"; id ] |> ignore
         for v in lines (run "docker" [ "volume"; "ls"; "-q"; "--filter"; "label=yession-session" ]) do
             runInherit repoRoot "docker" [ "volume"; "rm"; v ] |> ignore
+        for n in lines (run "docker" [ "network"; "ls"; "-q"; "--filter"; "label=yession-session" ]) do
+            runInherit repoRoot "docker" [ "network"; "rm"; n ] |> ignore
     with ex -> eprintfn "clean-docker: %s" ex.Message
 
 /// The probe: a headless peer with a command line, for investigating how an agent behaves in
@@ -3772,7 +3774,7 @@ let rec private verbs () : Verb list =
             function
             | ready :: command :: arguments -> bootSmoke ready command (fun _ -> arguments)
             | _ -> failwith "boot-smoke <ready-line> <command…>" }
-      { Name = "clean-docker"; Summary = "remove session containers and volumes (CI runners)"; Run = fun _ -> cleanDocker () }
+      { Name = "clean-docker"; Summary = "remove session containers, volumes and networks (CI runners)"; Run = fun _ -> cleanDocker () }
       { Name = "example"
         Summary = "build and boot an example integration. <name> (see examples/)"
         Run =
