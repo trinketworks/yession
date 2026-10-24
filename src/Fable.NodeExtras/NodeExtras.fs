@@ -1427,6 +1427,15 @@ module ChildProcessStreams =
     [<Emit("$0.on('exit', $1)")>]
     let onExit (child: ChildProcess) (handler: int option -> unit) : unit = jsNative
 
+/// `process.umask(mask)`: the mask files this process creates from now on are made under,
+/// answering the one it replaces. Process-wide, so a caller sets it around one synchronous
+/// call and puts the old one back at once.
+[<RequireQualifiedAccess>]
+module ProcessMask =
+
+    [<Emit("process.umask($0)")>]
+    let set (mask: int) : int = jsNative
+
 /// This process's own standard input, as the stream this project reads — `Fable.Node` types
 /// it as its own socket class, which `Readables.text` cannot be handed.
 [<RequireQualifiedAccess>]

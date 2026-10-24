@@ -126,6 +126,16 @@ loopback. So does a container whose network reaches the host loopback, which Col
 Docker Desktop's do. A socket's permissions can say it. The Manager makes the socket `0660`.
 Give the proxy the Manager's user or group, and no sandbox or container a path to it.
 
+Put the socket in a directory that no sandbox grant names: not under `--data-dir`, and not
+under any path the resources profile mounts, reads or writes. srt hides every path a policy
+does not name, so a confined command cannot reach a socket it cannot see. But on Linux a
+`Socket` grant lets a confined command dial every unix socket it can see (srt reads no path
+list there, [GAPS.md](GAPS.md#security--trust)), and it runs as the Manager's uid, which the
+socket's mode admits. A grant that names the socket's directory, or a directory above it,
+hands that sandbox the Manager. The data directory is not such a place by construction: an
+operator's profile can name any path, the data directory included. The module below keeps
+the socket under `~/.local/state/yession`, apart from the data directory.
+
 `--socket` needs the public origin ([§Addressing](#addressing)), because no browser dials a
 socket. A session dials the socket for its control channel (`ControlEndpoint.Socket` in
 `YESSION_LAUNCH`), and the public origin for OIDC discovery. A socket path is at most 104

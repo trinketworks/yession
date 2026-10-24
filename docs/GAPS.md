@@ -58,8 +58,9 @@ The last section holds trust boundaries as sharp as the first section's.
   Remaining:
   - **The socket's permissions are the boundary, so the boundary is the uid.** A process of the
     Manager's own user, unconfined, opens the socket. That includes a `host` work sandbox and
-    the agent CLI under its default `host` backend (below). srt denies the path, and a
-    container has none.
+    the agent CLI under its default `host` backend (below). srt denies the path unless a
+    grant names it, which on Linux a `Socket` grant then reaches (the `Socket` entry below).
+    A container has no path to it.
   - **The proxy is still trusted.** The design that trusts nothing between tailscaled and the
     Manager is a strategy `--auth tailscale` that asks tailscaled's LocalAPI `whois` about the
     connection's peer, so the subject comes from the connection and not from a header. The
@@ -217,6 +218,13 @@ The last section holds trust boundaries as sharp as the first section's.
       stays: scoping by path on Linux needs a mechanism that seccomp cannot give srt. The
       Srt-tier case for macOS path scoping reports a visible skip on Linux. The cheap tier pins
       the Linux side.
+      - **That includes the Manager's socket under `--auth trusted-headers`,** if the sandbox
+        can see its path: the command runs as the Manager's uid, which the socket's `0660`
+        admits, and it could then assert any `x-yession-user`. srt's root deny hides the path
+        unless a grant names its directory or one above it. Nothing refuses such a grant yet;
+        [deployment.md](deployment.md#where-the-manager-listens) tells the operator to keep
+        the socket outside every granted path and outside `--data-dir`. A guard that refuses
+        a policy whose paths cover the control socket is the recorded fix.
     - **The start-up checks cannot see a granted executable that cannot RUN.** Measured: the
       `nix` an operator would name on nix-darwin (`/run/current-system/sw/bin/nix`, canonically
       `…-nix-2.34.6+1/bin/nix`) aborts under Seatbelt on every subcommand, including

@@ -1143,11 +1143,14 @@ let createWithUi
                     Async.FromContinuations (fun (cont, fail, _) ->
                         server.onceError (fun error ->
                             fail (exn (sprintf "the Manager cannot listen on %s: %s" path (StreamError.describe error))))
-                        server.listen (path, fun () -> cont server) |> ignore)
-                // Owner and group, and nobody else: the proxy runs as one or the other. Node
-                // creates the socket by the umask, which for a connect means write permission
-                // the owner alone usually has — this widens it to the group, and no further.
-                Node.Api.fs.chmodSync (Fable.Core.U2.Case1 path, "660")
+                        // Owner and group, and nobody else: the proxy runs as one or the
+                        // other. The socket is made with these bits rather than widened after:
+                        // `listen` binds before it returns, so a mask set around the call is
+                        // the mode the socket is born with, and no local process sees a wider
+                        // one for any length of time. 0o117 leaves rw for owner and group.
+                        let previous = ProcessMask.set 0o117
+                        try server.listen (path, fun () -> cont server) |> ignore
+                        finally ProcessMask.set previous |> ignore)
                 controlEndpoint <- Some (ControlEndpoint.Socket path)
                 return Some listening
         }
