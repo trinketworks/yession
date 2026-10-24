@@ -169,6 +169,13 @@
    opacity pulse bottomed out at a quarter, where the running dot on the pane's near-black read
    as no dot at all. Every colour named here is pinned to that floor by the theme-contrast
    suite (Phase4), which reads them from this rule. */
+/* The attention mark's beat (`Style.attentionMark`, Moving): `beat-wait`'s two colours on
+   `color` rather than `background-color`, because the mark is an SVG drawn in `currentColor`
+   and a background would paint the square behind it. Pinned to 3:1 by the same suite. */
+@keyframes beat-mark {
+  0%, 100% { color: var(--color-ink-faint); }
+  50% { color: var(--color-ink-dim); }
+}
 @keyframes beat-live {
   0%, 100% { background-color: var(--color-green-down-2); }
   50% { background-color: var(--color-green); }

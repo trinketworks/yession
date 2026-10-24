@@ -2001,6 +2001,28 @@ let private uiChecklistTests =
             let none = Support.render representativeModel
             Expect.isFalse (none.Contains "data-pr-strip") "and a session watching nothing says nothing"
 
+        // The attention mark ranks by SHAPE (docs/visual-design.md, Attention): five levels,
+        // five faces, each told apart without its colour. What is pinned is what each face
+        // draws inside the shared ring, so two levels collapsing into one shape goes red here.
+        testCase "each attention level draws its own face, and only Moving beats" <| fun () ->
+            let levels =
+                [ Standings.Rest; Standings.Absent; Standings.Moving; Standings.Wanted; Standings.Wrong ]
+            let drawn level = Support.renderTemplate (Yession.App.Icon.attention level)
+            // The face, with the box and ink stripped: what is left is the shape alone.
+            let shape (html: string) = html.Substring (html.IndexOf "viewBox")
+            let faces = levels |> List.map (drawn >> shape)
+            Expect.equal (List.length (List.distinct faces)) 5 "five levels, five shapes"
+            for level in levels do
+                let html = drawn level
+                Expect.stringContains
+                    html
+                    (sprintf "data-attention=\"%s\"" (Standings.Attention.name level))
+                    "each spells its level for a test"
+                Expect.equal
+                    (html.Contains Yession.App.Style.markBeat)
+                    (level = Standings.Moving)
+                    (sprintf "%s beats only if it is under way" (Standings.Attention.name level))
+
         // The agent's standing rides beside the pull requests' line, under the rule the
         // Manager is sent (`AgentStatus`), read off what this page already holds.
         testCase "the header says what the agent is doing" <| fun () ->
