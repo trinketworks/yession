@@ -194,7 +194,11 @@ floor is never traded for the band. Such a head states its rows, not its total. 
 its own and lines up with nothing — unless the head pins its FIRST row to the band instead of
 letting the band be the rows' sum, which is how a column with a two-row head aligns its hairline
 with a sibling's single-row one (the session pane's tab strip, `Style.panePivotRow`, against the
-chat header). Each row still meets the touch target; only where in the taller row it sits moves.
+chat header). Each row still meets the touch target: a control whose own ground should read as
+the row (a selected tab) stretches to fill the taller row edge to edge, so that ground runs all
+the way to the hairline instead of stopping short of it with a gap of the strip's own ground
+showing; a control with its own fixed height (`paneListButtonBase`, `paneStripAct`) stays
+centred in it instead (`self-center`).
 
 A thing that leaves the ground sits on a named layer. `app/tokens.css` names the layers, low to
 high, under "Layers". A phone stacks several at once: a drawer over a scrim over the page, with a
