@@ -22,10 +22,14 @@ module Yession.Host.CredentialProxy
 // or the unconfined host — and is told `HTTPS_PROXY`. It binds where those reach this host,
 // as the git gateway does and for its reason (`Interop.Doors`): loopback, and a native
 // daemon's session network gateway. It admits a client only by a capability minted for its
-// sandbox (`Admit`), carried as the proxy URL's credentials. An admitted client's `CONNECT` to a declared host is answered
-// here; to any other host it is TUNNELLED, untouched — a sandbox that reaches the internet
-// anyway loses nothing by going this way, and a tool that honours `HTTPS_PROXY` for every host
-// has to be carried for every host. That is why an srt sandbox is never admitted: its egress
+// sandbox (`Admit`), carried as the proxy URL's credentials. An admitted client's `CONNECT`
+// to a declared host is answered here; to any other host on the INTERNET it is TUNNELLED,
+// untouched — a sandbox that reaches the internet anyway loses nothing by going this way, and
+// a tool that honours `HTTPS_PROXY` for every host has to be carried for every host. Not to
+// this host or its networks: a name that resolves to loopback, link-local, a private or CGNAT
+// range, a ULA, or one of this host's own addresses is refused (`refusedTunnel`), because this
+// process reaches what a container must not — the Manager, every session's port, the tailnet.
+// That is why an srt sandbox is never admitted: its egress
 // IS its policy, and the tunnel would be a way round it. srt is not given the api route at all
 // (`forwardApi`); it once had a door of its own, a UNIX socket srt's `mitmProxy` handed
 // declared hosts to, and that went with the route.
@@ -95,6 +99,142 @@ let authority (target: string) : (string * int) option =
         match Int32.TryParse (target.Substring (at + 1)) with
         | true, port when port > 0 && port < 65536 && host <> "" -> Some (host, port)
         | _ -> None
+
+// --- where a tunnel may go ------------------------------------------------------------------
+
+/// An address as numbers: four octets, or eight 16-bit groups. Parsed here rather than by
+/// `System.Net`, which Fable does not carry, and only as far as judging one needs.
+[<RequireQualifiedAccess>]
+type Address =
+    | V4 of byte[]
+    | V6 of int[]
+
+module Address =
+
+    let private v4 (text: string) : byte[] option =
+        match text.Split '.' with
+        | [| _; _; _; _ |] as parts ->
+            let octets = parts |> Array.choose (fun p -> match Byte.TryParse p with | true, b when p <> "" && p.Length <= 3 -> Some b | _ -> None)
+            if octets.Length = 4 then Some octets else None
+        | _ -> None
+
+    let private groups (text: string) : int[] option =
+        let hex (part: string) =
+            if part.Length >= 1 && part.Length <= 4 && part |> Seq.forall (fun c -> "0123456789abcdefABCDEF".IndexOf c >= 0) then Some (Convert.ToInt32 (part, 16))
+            else None
+        // A dotted tail is the last two groups: `::ffff:10.0.0.1`.
+        let tail, body =
+            match text.LastIndexOf ':' with
+            | -1 -> None, text
+            | at ->
+                match v4 (text.Substring (at + 1)) with
+                | Some octets -> Some [| (int octets.[0] <<< 8) ||| int octets.[1]; (int octets.[2] <<< 8) ||| int octets.[3] |], text.Substring (0, at + 1) + "0"
+                | None -> None, text
+        let parse (side: string) =
+            if side = "" then Some [||]
+            else
+                let parts = side.Split ':' |> Array.map hex
+                if parts |> Array.forall Option.isSome then Some (parts |> Array.map Option.get) else None
+        let whole =
+            match body.Split ([| "::" |], StringSplitOptions.None) with
+            | [| only |] -> parse only |> Option.filter (fun g -> g.Length = 8)
+            | [| left; right |] ->
+                match parse left, parse right with
+                | Some l, Some r when l.Length + r.Length < 8 -> Some (Array.concat [ l; Array.zeroCreate (8 - l.Length - r.Length); r ])
+                | _ -> None
+            | _ -> None
+        match whole, tail with
+        | Some g, Some t -> Some (Array.append g.[0..5] t)
+        | g, None -> g
+        | None, _ -> None
+
+    /// An address literal, without brackets or a zone (`fe80::1%en0` is `fe80::1`).
+    let parse (text: string) : Address option =
+        let bare = text.Trim([| '['; ']' |]).Split('%').[0]
+        match v4 bare with
+        | Some octets -> Some (Address.V4 octets)
+        | None -> if bare.Contains ":" then groups bare |> Option.map Address.V6 else None
+
+    /// The IPv4 address an IPv6 one carries, where it carries one: mapped (`::ffff:0:0/96`),
+    /// compatible (`::/96`), NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`). Each reaches the
+    /// IPv4 address inside it, so each is judged as that address.
+    let private embedded (g: int[]) : byte[] option =
+        let octets (hi: int) (lo: int) = [| byte (hi >>> 8); byte (hi &&& 0xff); byte (lo >>> 8); byte (lo &&& 0xff) |]
+        if g.[0..4] |> Array.forall ((=) 0) && (g.[5] = 0xffff || g.[5] = 0) && not (g.[5] = 0 && g.[6] = 0) then Some (octets g.[6] g.[7])
+        elif g.[0] = 0x64 && g.[1] = 0xff9b && g.[2..5] |> Array.forall ((=) 0) then Some (octets g.[6] g.[7])
+        elif g.[0] = 0x2002 then Some (octets g.[1] g.[2])
+        else None
+
+    let private privateV4 (o: byte[]) : bool =
+        let a, b = int o.[0], int o.[1]
+        a = 0 // this network
+        || a = 10 // RFC 1918
+        || (a = 100 && b >= 64 && b < 128) // CGNAT, which holds the tailnet
+        || a = 127 // loopback
+        || (a = 169 && b = 254) // link-local, and the cloud metadata address
+        || (a = 172 && b >= 16 && b < 32) // RFC 1918
+        || (a = 192 && b = 0 && int o.[2] = 0) // IETF protocol assignments
+        || (a = 192 && b = 168) // RFC 1918
+        || (a = 198 && (b = 18 || b = 19)) // benchmarking
+        || a >= 224 // multicast, reserved, broadcast
+
+    /// Whether a tunnel may NOT go here whoever's it is: an address that names this host, its
+    /// networks, or nothing routable. Loopback, link-local, RFC 1918, CGNAT (100.64.0.0/10,
+    /// which holds a tailnet), ULA (fc00::/7), multicast, and an IPv6 address carrying one of
+    /// those in IPv4.
+    let isInternal (address: Address) : bool =
+        match address with
+        | Address.V4 octets -> privateV4 octets
+        | Address.V6 g ->
+            match embedded g with
+            | Some octets -> privateV4 octets
+            | None ->
+                g |> Array.forall ((=) 0) // unspecified
+                || (g.[0..6] |> Array.forall ((=) 0) && g.[7] = 1) // loopback
+                || (g.[0] &&& 0xfe00) = 0xfc00 // ULA
+                || (g.[0] &&& 0xffc0) = 0xfe80 // link-local
+                || (g.[0] &&& 0xff00) = 0xff00 // multicast
+
+/// Why a tunnel to `host` is refused, given the addresses it resolved to and this host's own;
+/// `None` when every one is on the internet and none is this host's. Every address is judged,
+/// not the first: a name that answers one public and one internal address is a name whose
+/// next lookup may pick the second.
+let refusedTunnel (host: string) (resolved: string list) (own: string list) : string option =
+    let ownParsed = own |> List.choose Address.parse
+    let judged =
+        resolved
+        |> List.tryPick (fun text ->
+            match Address.parse text with
+            | None -> Some (sprintf "%s resolved to %s, which is not an address" host text)
+            | Some address when Address.isInternal address ->
+                Some (sprintf "%s is %s, on this host or a network beside it" host text)
+            | Some address when List.contains address ownParsed -> Some (sprintf "%s is %s, an address of this host" host text)
+            | Some _ -> None)
+    match resolved, judged with
+    | [], _ -> Some (sprintf "%s resolved to no address" host)
+    | _, reason -> reason
+
+/// Where the TCP door may tunnel a host no route declares: how a name is resolved, and
+/// which resolved addresses are refused. A value, so a suite judges a tunnel to its own
+/// loopback upstream without the policy that refuses every loopback.
+type Egress =
+    { Resolve : string -> Async<Result<string list, string>>
+      /// Why a tunnel to the host with these addresses is refused; `None` admits it.
+      Refuse : string -> string list -> string option }
+
+module Egress =
+
+    /// The internet, and nothing of this host's (`refusedTunnel`): what a session runs.
+    let internet : Egress =
+        { Resolve =
+            fun host ->
+                async {
+                    try
+                        let! addresses = Resolver.addressesOf host |> Interop.awaitPromise
+                        return Ok (List.ofArray addresses)
+                    with e -> return Error e.Message
+                }
+          Refuse = fun host addresses -> refusedTunnel host addresses (NetworkInterfaces.addresses ()) }
 
 /// The credential an `authorization` header carries: its last word. That is the token under
 /// both schemes a provider's API takes it in — `token <t>` and `Bearer <t>` — and it is the
@@ -309,12 +449,15 @@ let presentedCapability (proxyAuthorization: string) : string option =
         with _ -> None
     | _ -> None
 
-/// Start the proxy on a TCP port of its own, with its trust bundle written to `trustFile`. `upstream` is where a declared host is reached (`direct`, outside a suite);
+/// Start the proxy on a TCP port of its own, with its trust bundle written to `trustFile`.
+/// `egress` is where a host no route declares may be tunnelled (`Egress.internet`, outside a
+/// suite). `upstream` is where a declared host is reached (`direct`, outside a suite);
 /// `report` is where a fault goes that no client can be told about any more — once an
 /// answer's head is out there is nothing left to say it on.
 let start
     (addresses: string list)
     (routes: CredentialRoute list)
+    (egress: Egress)
     (upstream: string -> string)
     (trustFile: string)
     (report: string -> unit)
@@ -464,11 +607,11 @@ let start
         // CONNECT named — never the `Host` header the client put inside it.
         (createServer (handle host route)).serve tls
 
-    /// Any other host's `CONNECT`, from a client that reaches the internet anyway: the bytes
-    /// both ways, read by nobody. Answered only once the upstream is open, so a host that
-    /// cannot be reached is a refusal the client can print rather than a tunnel that dies.
-    let tunnel (host: string) (port: int) (client: Duplex) (head: Buffer) =
-        let upstream = connectTcp (port, host)
+    /// Carry the bytes both ways to `address`, the one `host` was judged by. Answered only
+    /// once the upstream is open, so an address that cannot be reached is a refusal the client
+    /// can print rather than a tunnel that dies.
+    let carryTo (address: string) (host: string) (port: int) (client: Duplex) (head: Buffer) =
+        let upstream = connectTcp (port, address)
         let mutable opened = false
         upstream.onError (fun error ->
             if opened then client.destroy ()
@@ -480,6 +623,31 @@ let start
             if head.length > 0 then upstream.sink.writeBytes head |> ignore
             upstream.pipe client.sink
             client.pipe upstream.sink)
+
+    /// Any other host's `CONNECT`, from a client that reaches the internet anyway: the bytes
+    /// both ways, read by nobody.
+    ///
+    /// The internet, and only the internet. The name is resolved ONCE, every address it
+    /// answers is judged (`egress.Refuse`), and the tunnel dials the first address that was
+    /// judged, never the name again — so a second lookup cannot answer differently. Without
+    /// this the door was a way from a container to anything this process can reach: the
+    /// Manager, a session's port, a tailnet, the cloud metadata address.
+    let tunnel (host: string) (port: int) (client: Duplex) (head: Buffer) =
+        Async.StartImmediate (
+            async {
+                match! egress.Resolve host with
+                | Error reason -> refuseConnect client "502 Bad Gateway" "" (sprintf "%s:%d could not be resolved: %s" host port reason)
+                | Ok addresses ->
+                    match egress.Refuse host addresses, addresses with
+                    | Some reason, _ ->
+                        refuseConnect
+                            client
+                            "403 Forbidden"
+                            ""
+                            (sprintf "this proxy carries a sandbox to the internet, not to this host or its networks: %s." reason)
+                    | None, first :: _ -> carryTo first host port client head
+                    | None, [] -> refuseConnect client "502 Bad Gateway" "" (sprintf "%s resolved to no address" host)
+            })
 
     /// Capabilities admitted through the TCP door, by sandbox.
     let mutable admitted : Map<SandboxRef, string> = Map.empty

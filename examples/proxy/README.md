@@ -18,12 +18,16 @@ environment keeps `main.mjs` and swaps the Caddyfile.
 ## The shape
 
 ```
-browser ──tailnet──▶ tailscale serve ──▶ caddy :9000 ──┬──▶ manager :8321      /
-   (TLS, identity)     one mapping        (this dir)     ├──▶ session  :51321    /s/<id>
-                                                         └──▶ session  :57626    /s/<id>
+browser ──tailnet──▶ tailscale serve ══▶ caddy ══┬══▶ manager.sock       /
+   (TLS, identity)     one mapping    proxy.sock  ├──▶ session  :51321    /s/<id>
+                                      (this dir)  └──▶ session  :57626    /s/<id>
                                               ▲
                                     sessions.caddy  ◀── main.mjs ◀── /sessions/stream
 ```
+
+`══` is a unix socket. Both hops that carry an identity are sockets, because a header is true
+only if nothing but its sender could send it, and every local process (and a container that
+reaches the host loopback) can dial a TCP port on loopback.
 
 `serve` does what only it can: it terminates TLS on the tailnet and says who is calling. It
 holds exactly one mapping. The proxy holds everything that a person would want to read or
@@ -39,16 +43,16 @@ asserts:
 ```sh
 YESSION_MANAGER_URL=https://host.example.ts.net:8321 \
 YESSION_SESSION_URL=https://host.example.ts.net:8321/s/{id} \
-  yession-manager --auth trusted-headers
+  yession-manager --auth trusted-headers --socket /var/lib/yession/manager.sock
 ```
 
 Run the map, so that it follows the Manager. Under `trusted-headers`, a header-less subscriber
-gets a 401 and no frames. The map therefore asserts a subject of its own, from inside the
-loopback trust boundary that the proxy defines. `--as` names the subject. Under `localhost`,
-nothing reads the header:
+gets a 401 and no frames. The map therefore asserts a subject of its own, over the Manager's
+socket, whose permissions it shares with the proxy. `--as` names the subject. Under
+`localhost`, nothing reads the header:
 
 ```sh
-node main.mjs --manager http://127.0.0.1:8321 --as proxy-map \
+node main.mjs --manager unix:/var/lib/yession/manager.sock --as proxy-map \
   --out /var/lib/yession/proxy/sessions.caddy \
   --empty '# no running sessions' \
   --template '@s_{id} path /s/{id} /s/{id}/*
@@ -64,21 +68,24 @@ file with nothing in it, and no proxy minds it.
 Run the proxy with `--watch`, so that a rewritten map is live within a second:
 
 ```sh
-YESSION_PROXY_PORT=9000 \
-YESSION_PROXY_MANAGER=127.0.0.1:8321 \
+YESSION_PROXY_SOCKET=/var/lib/yession/proxy.sock \
+YESSION_PROXY_MANAGER=unix//var/lib/yession/manager.sock \
 YESSION_PROXY_SESSIONS='/var/lib/yession/proxy/sessions*.caddy' \
   caddy run --config caddy/Caddyfile --adapter caddyfile --watch
 ```
 
-The proxy listens on loopback. Set `YESSION_PROXY_BIND` to change that, but read the
-Caddyfile's reason first. Anything that can dial the proxy directly can write its own
-`Tailscale-User-Login`, so only `serve` may.
+The proxy listens on its socket, mode `0660`. Anything that can dial the proxy directly can
+write its own `Tailscale-User-Login`, so only `serve` may.
 
-Last, make the ingress once. The `serve` config persists in tailscaled's own state:
+Last, make the ingress once, as root. The `serve` config persists in tailscaled's own state:
 
 ```sh
-tailscale serve --bg --https=8321 9000
+sudo tailscale serve --bg --https=8321 unix:/var/lib/yession/proxy.sock
 ```
+
+Tailscale 1.98.9 and later run a socket target only from a root `serve`, and the sandboxed
+macOS app cannot dial one. [deployment.md](../../docs/deployment.md#authorizing-1) gives both
+constraints and the alternative for a host that keeps the sandboxed app.
 
 A proxy that does not watch its own config needs `--reload '<command>'` on `main.mjs`.
 `main.mjs` runs the command after every write, for example `nginx -s reload`.

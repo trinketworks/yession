@@ -147,28 +147,6 @@ module ConfigFile =
 
     /// `repos:` — where the session's checkouts appear in this sandbox.
     ///
-    /// The mirror image of `inCheckout` above, and deliberately so: that one refuses an
-    /// absolute path because it names somewhere INSIDE a checkout, and this one requires an
-    /// absolute path because it names somewhere inside a CONTAINER, where a relative path has
-    /// no root to be relative to. `..` is refused in both for the same reason — a path with a
-    /// climb in it means one thing to whoever wrote it and another to whatever resolves it.
-    ///
-    /// Nothing here reaches out of the sandbox: this is a mount TARGET, and the source is the
-    /// session's own repos directory in every case. A repo that could name the source could
-    /// name any directory on the host, which is what `uses:`/`wants:` exists to arbitrate.
-    let private reposTarget : Decoder<string> =
-        Decode.string
-        |> Decode.andThen (fun raw ->
-            let path = raw.Trim().TrimEnd '/'
-            let segments = path.Split ([| '/'; '\\' |]) |> List.ofArray
-            if path = "" then Decode.fail "repos cannot be blank"
-            elif not (path.StartsWith "/") then
-                Decode.fail (
-                    sprintf "repos must be absolute: it is where the checkouts appear inside the sandbox. '%s' is not absolute" path)
-            elif segments |> List.contains ".." then
-                Decode.fail (sprintf "repos cannot climb, and '%s' does" path)
-            else Decode.succeed path)
-
     /// `build:` — a context directory, and optionally a dockerfile within it.
     ///
     /// Both paths go through `inCheckout` for the same reason `workdir` does: the context
@@ -291,7 +269,7 @@ module ConfigFile =
             | _ -> Decode.succeed spec)
 
     let private sandboxKeys =
-        [ "container"; "dialect"; "workdir"; "env"; "uses"; "wants"; "files"; "setup"; "description"; "repos" ]
+        [ "container"; "dialect"; "workdir"; "env"; "uses"; "wants"; "files"; "setup"; "description" ]
 
     /// `forward:` said which connections a sandbox forwarded, and a connection is a resource
     /// now: offered by the operator and selected like every other. Refused by name rather
@@ -303,6 +281,20 @@ module ConfigFile =
             | Some _ ->
                 Decode.fail
                     "`forward:` no longer exists. A connection is a resource now. The operator offers it (`github: { connection: { github: [git, api] } }`). A sandbox selects it under `uses` or `wants`"
+            | None -> Decode.succeed ())
+
+    /// `repos:` moved where a container saw the session's checkouts. It is refused by name,
+    /// like `forward:` above, because a file that had it worked yesterday. The checkouts now
+    /// have ONE absolute path, the same on the host and in every sandbox
+    /// (`Sandboxes.checkoutAt`), so there is nothing left to move: a second address is
+    /// what let a git worktree made in a container point every other view at a directory
+    /// that did not exist.
+    let private noRepos : Decoder<unit> =
+        Decode.optional "repos" Decode.value
+        |> Decode.andThen (function
+            | Some _ ->
+                Decode.fail
+                    "`repos:` no longer exists. The session's checkouts have one path, the same in every sandbox and on the host. A sandbox's start says where its checkout is. Use a relative `workdir` to start inside it"
             | None -> Decode.succeed ())
 
     /// `dialect:` — one of the shells a terminal can instrument, by name.
@@ -337,6 +329,7 @@ module ConfigFile =
 
     let private sandbox : Decoder<SandboxDecl> =
         noForward
+        |> Decode.andThen (fun () -> noRepos)
         |> Decode.andThen (fun () -> noUnknownKeys sandboxKeys)
         |> Decode.andThen (fun () ->
             Decode.object (fun get ->
@@ -353,8 +346,7 @@ module ConfigFile =
                   Description =
                     get.Optional.Field "description" Decode.string
                     |> Option.map (fun said -> said.Trim ())
-                    |> Option.filter (fun said -> said <> "")
-                  Repos = get.Optional.Field "repos" reposTarget },
+                    |> Option.filter (fun said -> said <> "") },
                 (container, dialect)))
         |> Decode.andThen (fun (decl, (container, dialect)) ->
             // A dialect names the shell a CONTAINER's terminal opens, chosen from what the
@@ -544,5 +536,4 @@ module ConfigFile =
                         |> Map.toList
                         |> List.map (fun (path, content) -> HomePath.value path, Encode.string content))
                   if decl.Setup.IsSome then "setup", Encode.string decl.Setup.Value
-                  if decl.Description.IsSome then "description", Encode.string decl.Description.Value
-                  if decl.Repos.IsSome then "repos", Encode.string decl.Repos.Value ])
+                  if decl.Description.IsSome then "description", Encode.string decl.Description.Value ])

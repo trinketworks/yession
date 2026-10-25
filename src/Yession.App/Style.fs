@@ -360,8 +360,10 @@ module Style =
     /// The one disc every mark in the product is drawn as: 6px, round, inline. The point is
     /// the second of the two primitives and it is always round (docs/visual-design.md, Form);
     /// written once, here, because it had been spelled out at nine sites, each free to arrive
-    /// a pixel off. What a mark MEANS is the colour and the motion composed onto it below —
-    /// never its size, and never its shape.
+    /// a pixel off. What a status's mark MEANS is the colour and the motion composed onto it
+    /// below — never its size, and never its shape. The one point that ranks by shape is the
+    /// attention mark (`attentionMark`, `Icon.attention`), which answers a different question:
+    /// not what state a thing is in, but how much it wants a person.
     let private disc = "inline-block w-1.5 h-1.5 rounded-full"
 
     /// How a mark that LEADS a word sits: in the gutter to its left, on the text's baseline,
@@ -1579,6 +1581,20 @@ module Style =
         | Yession.Domain.Standings.Wrong -> toneBad
         | Yession.Domain.Standings.Rest -> toneMuted
 
+    /// The attention mark's box and ink (`Icon.attention`): 10px, because its SHAPE carries
+    /// the rank and a 6px disc has no room inside it for a ring, a half or a core. Moving
+    /// beats in colour like every wait (`beat-mark`, the `color` twin of `beat-wait`, since
+    /// an SVG paints with `currentColor` and not a background), and stands still in its ink
+    /// under reduced motion.
+    let markBeat = "animate-beat-mark motion-reduce:animate-none"
+
+    let attentionMark (attention: Yession.Domain.Standings.Attention) : string =
+        let beat =
+            match attention with
+            | Yession.Domain.Standings.Moving -> [ markBeat ]
+            | _ -> []
+        cls ([ "block shrink-0 w-2.5 h-2.5"; attentionInk attention ] @ beat)
+
     /// A value, with no colour of its own. A base that carried one could not be recoloured
     /// by appending: two Tailwind text utilities on one element resolve by stylesheet order
     /// rather than by the order they are written here, so the colour is always the last
@@ -1646,9 +1662,36 @@ module Style =
     /// On a phone this column sits under the fixed degradation bar, so it pays for it in
     /// padding — but only while the bar is there (`degradedShell`), and at the pace the bar
     /// unfolds at, so the conversation moves down with it rather than in one frame.
+    ///
+    /// On a wide screen with the pane SHUT, nothing else claims the row, so `flex-1` alone
+    /// hands this column the whole width the sidebar leaves — a header hairline, a timeline
+    /// and a composer band all stretched to whatever the monitor happens to be. Capped and
+    /// centered instead, near the measure the open pane already holds it to
+    /// (`PaneSplit.chatReadable`, Model.fs: the reading column's 38rem plus the 32px rail on
+    /// each side) with one more rail's worth of room on each side again, so the timeline still
+    /// has somewhere to show a row's ground stopping short of the column's own edge — flush to
+    /// the measure, every row's highlight would reach exactly as far as the text, which reads
+    /// as a box drawn round the words rather than as the row (the invariant
+    /// `Browser.fs`'s "a message's ground stops at the reading column, not the window" holds
+    /// desktop to). `[.term-closed_&]` only: the open pane already derives this column's width
+    /// from the same number, through room a reader can drag past it on purpose
+    /// (`PaneSplit.resolve`), and a static cap here would fight that drag.
+    ///
+    /// MARGIN, not `max-w` + `mx-auto`: the pane's own width animates shut over 200ms
+    /// (`contentPanel`'s `wide:transition-[width]`), and an auto margin centers within
+    /// whatever space is free AT THAT INSTANT — so as the pane closed, this column visibly
+    /// RECENTERED under the words every frame, sliding the conversation sideways while it
+    /// read, which is the one thing this shell promises never to do (see `contentPanel`'s own
+    /// doc). The margin here is a `calc` off `100vw` instead: fixed the moment `.term-closed`
+    /// lands, same on every frame of the pane's close, so the column's left edge — where every
+    /// word starts — never moves. Only its right edge does, keeping pace with the pane as it
+    /// closes, which is the pane sliding, not the column. `max(0px, …)` is the floor for a
+    /// `wide` screen too narrow to hold the cap at all: the margin collapses to nothing and
+    /// `flex-1` alone takes what the sidebar leaves, same as an uncapped column always did.
     let mainColumn =
         "flex-1 flex flex-col min-w-0 h-full " + degradedBarRoomPad
         + " phone:transition-[padding-top] phone:duration-200 phone:ease-out motion-reduce:transition-none"
+        + " wide:[.term-closed_&]:mx-[max(0px,calc((100vw-var(--spacing-side)-(var(--spacing-measure)+var(--spacing-rail)*4))/2))]"
 
     /// The phone's band is a ROW, not a compressed copy of the desktop's stack: the two
     /// chevrons a phone always has in this band — the sidebar's and the terminals' — and the
@@ -4040,15 +4083,20 @@ module Style =
     /// up with nothing" names and accepts for a two-row head in general; this one head instead
     /// pins its FIRST row to the token, so it needs no second row to land on the band.
     ///
-    /// `items-end` + `pb-5` (`phone:items-center` + `phone:pb-[11px]`) are not reinvented —
-    /// they are the chat header's OWN alignment (`header`), copied so the strip's content sits
-    /// where the header's does: bottom-anchored with the header's 20px gap to the hairline on a
-    /// wide screen, centred with its 11px gap on a phone. Every control in the strip is still
-    /// `spacing-touch` and keeps its 44px target; only where that 44px box SITS in the now
-    /// taller row has changed. The strip is the ground (`bg`), black like the chat's head
-    /// beside it, and the selected tab wears the pane's own ground (`panel`), so it runs on
-    /// into whatever is under it: the chrome says which tab the page belongs to, before a word
-    /// is read (docs/visual-design.md, principle 2).
+    /// `items-stretch`, not the chat header's own `items-end` + `pb-5` (`phone:items-center` +
+    /// `phone:pb-[11px]`) copied at first, because that alignment is the header's TEXT settling
+    /// short of the hairline with room a title doesn't need to fill. A tab is not text: a
+    /// `h-touch` chip centred or end-anchored in the now-taller row left its own fill — the
+    /// thing that is supposed to say which tab the page belongs to (`pivotItemOn`'s `bg-panel`)
+    /// — stopping short of the row's rule, a visible band of the strip's bare `bg` between the
+    /// chip and the hairline it should run into. `items-stretch`, and no explicit height on
+    /// `pivotItemBase` (`min-w-touch` still bounds its width, never its height), lets every
+    /// entry fill the row edge to edge instead, so the selected tab's own ground runs all the
+    /// way to the hairline with nothing of the strip's showing between them. The three controls
+    /// outside the scroller (`paneListButtonBase`, `paneStripAct`) keep their own `h-touch`, so
+    /// a bare `items-stretch` would snap them to the row's top instead of leaving them centred
+    /// as before — they carry `self-center` for that. The `+` cell's own wrapper (`terminalTabNewCell`)
+    /// already centres its one button with its own `items-center`, so it needs no such tag.
     ///
     /// `paneToolbar`, where there is one, is now the column's own second row underneath —
     /// `spacing-touch` tall and no longer asked to land on the band. Its hairline is its own,
@@ -4059,8 +4107,7 @@ module Style =
     /// header wears for the same band — this row had the height but drew no line, so the
     /// header's rule stopped dead at the pane's divider instead of running on into it.
     let panePivotRow =
-        cls [ "shrink-0 h-band flex items-end pb-5 bg-bg "
-              + "phone:h-band-phone phone:items-center phone:pb-[11px]"; Stroke.dividerBottom ]
+        cls [ "shrink-0 h-band flex items-stretch bg-bg phone:h-band-phone"; Stroke.dividerBottom ]
     /// The tablist: `all`, then the scroller of tabs. `all` stays put at the row's head however
     /// many tabs follow it. `min-w-0` so the scroller is what gives way when the names outgrow
     /// the row.
@@ -4104,7 +4151,7 @@ module Style =
     /// however it is ordered (measured live: `border-0` present, `border-right-width` 0 on
     /// every tab; removed, 1px, matching `divide-hair`).
     let private pivotItemBase =
-        cls [ "shrink-0 cursor-pointer h-touch min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5"
+        cls [ "shrink-0 cursor-pointer min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5"
               "font-ui font-normal text-small whitespace-nowrap transition-colors duration-150 ease-out"
               "motion-reduce:transition-none"; focusRingInset ]
     let pivotItem = cls [ pivotItemBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
@@ -4133,13 +4180,13 @@ module Style =
     /// A square act at the strip's end — `+`, and the way back to the chat: the strip's
     /// height square, its glyph in the tabs' resting ink.
     let paneStripAct =
-        cls [ "shrink-0 w-touch h-touch grid place-items-center bg-transparent border-0 cursor-pointer p-0"
+        cls [ "shrink-0 self-center w-touch h-touch grid place-items-center bg-transparent border-0 cursor-pointer p-0"
               "text-ink-dim hover:text-ink hover:bg-surface transition-colors motion-reduce:transition-none"; focusRingInset ]
     /// The list button: the list's glyph and how many terminals it holds — on a phone only
     /// one tab fits, and the count is the one clue that there are others. As tall as the
     /// strip, at least as wide, its figures in the tabs' type so they read as one line.
     let private paneListButtonBase =
-        cls [ "shrink-0 h-touch min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5 border-0 cursor-pointer"
+        cls [ "shrink-0 self-center h-touch min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5 border-0 cursor-pointer"
               "font-ui font-normal text-small tabular-nums transition-colors motion-reduce:transition-none"; focusRingInset ]
     let paneListButton = cls [ paneListButtonBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
     /// The same with its sheet down: the sheet's own ground (`allSheet`), flush with it, so

@@ -10,7 +10,7 @@
 // template written in the same two placeholders, writes the result to one file, and — where
 // the proxy does not watch its config on its own — runs a reload command.
 //
-//   node main.mjs --manager http://127.0.0.1:8321 --as proxy-map \
+//   node main.mjs --manager unix:/var/lib/yession/manager.sock --as proxy-map \
 //     --template '@s_{id} path /s/{id} /s/{id}/*
 //   handle @s_{id} {
 //   	reverse_proxy 127.0.0.1:{port}
@@ -33,7 +33,8 @@
 //
 // The stream is gated by the Manager's trust rule like every management route. Under
 // `--auth trusted-headers` a header-less subscribe is a 401 with no frames, so this asserts a
-// subject of its own (`--as`) from inside the loopback trust boundary the proxy defines; under
+// subject of its own (`--as`) over the Manager's socket, whose permissions are the trust
+// boundary the proxy shares; under
 // `--auth localhost` the header is read by nothing and costs nothing. A 401 is logged and
 // retried, never treated as "no sessions": a misconfigured header must not unmap a deployment.
 //
@@ -44,12 +45,14 @@ import { parseArgs } from 'node:util'
 import { writeFile, rename, readFile, mkdir } from 'node:fs/promises'
 import { exec } from 'node:child_process'
 import { dirname } from 'node:path'
+import { request } from 'node:http'
 
 const usage = `usage: node main.mjs --template TEXT --out PATH [--manager URL] [--as SUBJECT] [--reload CMD]
 
   --template TEXT   rendered once per running session; {id} and {port} are the session's
   --out PATH        the file the rendering is written to (atomically, only when it changed)
-  --manager URL     the Manager (default http://127.0.0.1:8321)
+  --manager URL     the Manager (default http://127.0.0.1:8321), or unix:PATH for one
+                    listening on a socket (--auth trusted-headers)
   --as SUBJECT      the x-yession-user this subscriber asserts (default sessions-map)
   --reload CMD      run through the shell after every write, for a proxy that does not
                     watch its own config
@@ -88,8 +91,12 @@ if (!options.template.includes('{id}') && !options.template.includes('{port}')) 
   fail('--template names neither {id} nor {port}, so every session would render alike')
 }
 
-const manager = options.manager.replace(/\/+$/, '')
+// `unix:<path>` is a Manager on a socket, which is where `--auth trusted-headers` listens:
+// the stream is then asked over that socket, and the url below names only the route.
+const socketPath = options.manager.startsWith('unix:') ? options.manager.slice('unix:'.length) : null
+const manager = socketPath ? 'http://yession-manager' : options.manager.replace(/\/+$/, '')
 const stream = `${manager}/sessions/stream`
+const where = socketPath ? `${socketPath} (/sessions/stream)` : stream
 const reconnectDelayMs = 2000
 
 function fail(message) {
@@ -157,13 +164,11 @@ function reload() {
  * throws when no connection could be made at all (the Manager is gone).
  */
 async function follow(signal) {
-  const response = await fetch(stream, {
-    headers: { accept: 'text/event-stream', 'x-yession-user': options.as },
-    signal,
-  })
+  const headers = { accept: 'text/event-stream', 'x-yession-user': options.as }
+  const response = socketPath ? await overSocket(headers, signal) : await fetch(stream, { headers, signal })
   if (!response.ok) {
     const body = (await response.text().catch(() => '')).trim()
-    log(`${stream} answered ${response.status}${body ? `: ${body}` : ''} — keeping the map as it is`)
+    log(`${where} answered ${response.status}${body ? `: ${body}` : ''} — keeping the map as it is`)
     return
   }
   const decoder = new TextDecoder()
@@ -184,6 +189,31 @@ async function follow(signal) {
       // `: subscribed` and any other comment or field: not ours.
     }
   }
+}
+
+/**
+ * The stream asked over the Manager's socket, in the shape `fetch` answers: `fetch` cannot
+ * dial a socket, and `node:http` can. A socket nobody listens on rejects, as a refused port
+ * does, so the "no Manager" rule below reads both alike.
+ */
+function overSocket(headers, signal) {
+  return new Promise((resolve, reject) => {
+    const sent = request({ socketPath, path: '/sessions/stream', headers, signal }, (answer) => {
+      const status = answer.statusCode ?? 0
+      resolve({
+        ok: status >= 200 && status < 300,
+        status,
+        body: answer,
+        text: async () => {
+          let text = ''
+          for await (const chunk of answer) text += chunk
+          return text
+        },
+      })
+    })
+    sent.on('error', reject)
+    sent.end()
+  })
 }
 
 async function apply(json) {
@@ -207,7 +237,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
   })
 }
 
-log(`${options.out} follows ${stream} as ${options.as}`)
+log(`${options.out} follows ${where} as ${options.as}`)
 for (;;) {
   try {
     await follow(controller.signal)
@@ -215,7 +245,7 @@ for (;;) {
   } catch (error) {
     if (controller.signal.aborted) break
     // Nothing answered. Whatever the map said is now about sessions that cannot exist.
-    log(`${stream} unreachable (${error.cause?.code ?? error.message}) — no Manager, so no sessions`)
+    log(`${where} unreachable (${error.cause?.code ?? error.code ?? error.message}) — no Manager, so no sessions`)
     await publish(render(null), 'no Manager')
   }
   await sleep(reconnectDelayMs)

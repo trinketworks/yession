@@ -820,7 +820,7 @@ let private routeTests =
                 Expect.equal unknown.Status 401 "invalid control secret"
 
                 // The typed session-side client (what sandbox spawn uses) round-trips.
-                let! typed = ControlClient.resolveSecret url "secret-a" name
+                let! typed = ControlClient.resolveSecret (ControlEndpoint.Address url) "secret-a" name
                 Expect.equal (expect typed) "session-held" "the typed client resolves the value"
             }
 
@@ -834,7 +834,7 @@ let private routeTests =
                         ignore
                 // The capability a Session builds in SessionMain: pre-bound to
                 // its own scope; failures are values.
-                let capability = ControlClient.secretsCapabilities url "secret-a" sessionA
+                let capability = ControlClient.secretsCapabilities (ControlEndpoint.Address url) "secret-a" sessionA
                 let! set = capability.SetSecret name "hunter2"
                 Expect.equal (expect set).Id { Scope = SessionScope sessionA; Name = name } "metadata round-trips"
                 let! listed = capability.ListSecrets ()

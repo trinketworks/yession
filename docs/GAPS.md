@@ -48,13 +48,27 @@ The last section holds trust boundaries as sharp as the first section's.
   - Peer display names stay self-asserted.
   - The client UI renders a bare `UserId.value`, with no names or avatars from verified claims.
     The session carries and records `UserClaims` but does not display them.
-- **BYO authorization trusts plaintext headers** (Plan 07). `--auth trusted-headers` trusts
-  canonical `x-yession-*` identity headers from an operator-run authenticating proxy
-  ([deployment.md](deployment.md#the-header-scheme)). Anyone who can reach the loopback port
-  directly can forge them, the same trust boundary as `--auth localhost`. The proxy MUST strip
-  inbound `x-yession-*` headers and be the only non-local path in. The recorded hardening
-  follow-up is a signed-JWT header strategy that verifies against an operator JWKS.
-  `Fable.Jose.jwtVerify` is already bound.
+- **BYO authorization trusts plaintext headers, over a socket only the proxy opens** (Plan 07).
+  `--auth trusted-headers` trusts canonical `x-yession-*` identity headers from an operator-run
+  authenticating proxy ([deployment.md](deployment.md#the-header-scheme)). The Manager serves
+  it on a unix socket and refuses a TCP port at boot (`Listener.admits`), because every local
+  process, and a container that reaches the host loopback, dials a loopback port as loopback.
+  The example proxy listens on a socket too, so `serve` is the only peer that can assert
+  `Tailscale-User-Login` ([§5 rule 18](technical-design.md#5-architectural-invariants)).
+  Remaining:
+  - **The socket's permissions are the boundary, so the boundary is the uid.** A process of the
+    Manager's own user, unconfined, opens the socket. That includes a `host` work sandbox and
+    the agent CLI under its default `host` backend (below). srt denies the path unless a
+    grant names it, which on Linux a `Socket` grant then reaches (the `Socket` entry below).
+    A container has no path to it.
+  - **The proxy is still trusted.** The design that trusts nothing between tailscaled and the
+    Manager is a strategy `--auth tailscale` that asks tailscaled's LocalAPI `whois` about the
+    connection's peer, so the subject comes from the connection and not from a header. The
+    recorded alternative is a signed-JWT header strategy against an operator JWKS
+    (`Fable.Jose.jwtVerify` is already bound).
+  - **The socket ingress is not yet verified on a live tailnet.** It needs a root `serve` on
+    Tailscale 1.98.9 or later, and not the sandboxed macOS app
+    ([deployment.md](deployment.md#authorizing-1)).
 - **No `nonce` in ID tokens yet, and the flow makes that tolerable.** The ID token never passes
   through the browser. The confidential RP redeems the code over its own back channel, with its
   client secret plus the PKCE verifier, so no injected-token path exists for a nonce to close. A
@@ -114,8 +128,9 @@ The last section holds trust boundaries as sharp as the first section's.
   every session, so the boundary is the same. Authors stay `PeerRef`, so event ATTRIBUTION does
   not change. [deployment.md](deployment.md#what---auth-localhost-costs-here) gives both exits
   (`--secrets ephemeral`, `--auth trusted-headers`).
-- **No transport encryption guarantees beyond WebRTC/DTLS.** Everything binds 127.0.0.1. Loopback
-  HTTP is the RFC 8252 pattern. Nothing here is LAN-safe without the operator's proxy in front.
+- **No transport encryption guarantees beyond WebRTC/DTLS.** Everything binds 127.0.0.1, or a
+  unix socket under `trusted-headers`. Loopback HTTP is the RFC 8252 pattern. Nothing here is
+  LAN-safe without the operator's proxy in front.
 - **The Manager and Process read plaintext**, per the stated Phase 1–2 threat model. The design
   allows command-to-container encryption, but no code does it yet.
 - **The authentication strategy gates the management UI** (Plan 07). A `Denied` outcome is a 401
@@ -203,6 +218,13 @@ The last section holds trust boundaries as sharp as the first section's.
       stays: scoping by path on Linux needs a mechanism that seccomp cannot give srt. The
       Srt-tier case for macOS path scoping reports a visible skip on Linux. The cheap tier pins
       the Linux side.
+      - **That includes the Manager's socket under `--auth trusted-headers`,** if the sandbox
+        can see its path: the command runs as the Manager's uid, which the socket's `0660`
+        admits, and it could then assert any `x-yession-user`. srt's root deny hides the path
+        unless a grant names its directory or one above it. Nothing refuses such a grant yet;
+        [deployment.md](deployment.md#where-the-manager-listens) tells the operator to keep
+        the socket outside every granted path and outside `--data-dir`. A guard that refuses
+        a policy whose paths cover the control socket is the recorded fix.
     - **The start-up checks cannot see a granted executable that cannot RUN.** Measured: the
       `nix` an operator would name on nix-darwin (`/run/current-system/sw/bin/nix`, canonically
       `…-nix-2.34.6+1/bin/nix`) aborts under Seatbelt on every subcommand, including
@@ -357,10 +379,6 @@ The last section holds trust boundaries as sharp as the first section's.
 
 ## Runtime & topology
 
-- **An operator's `repos:` on `default` is not read where repo paths resolve.** The session's own
-  sandboxes are the operator's declarations, and `repos:` is legal on them. But the path an agent
-  hears for a checkout (`SessionMain.fs`, `VisibleAt`) comes from the backend alone. A `default`
-  that is a container with its own `repos:` hears the backend's path, not its own.
 - **The process split is complete** (Phase 4). Each session is a child OS process of the Manager.
   Supervision and secrets custody cross the boundary as a secret-scoped control RPC (environments
   are session-owned via the sandbox seam). The htmx management UI creates, launches, resumes and
@@ -910,9 +928,9 @@ After the fixes land, one pass rewrites it to what still reproduces.
   - **A docker terminal does not open on the checkouts.** Under the host-family backends, the
     repos directory sits inside a terminal's start workspace (`Sandboxes.SessionLayout`), so the
     agent's first `ls` shows what it cloned. Under docker, the workspace is the image's working
-    directory (this session composes no `WorkingDirectory`), and the repos dir is a bind mount at
-    `/repos` beside it. Verbs still answer with the right path (`reposVisibleAt`). The cost is
-    one `cd`.
+    directory (this session composes no `WorkingDirectory`), and the repos dir is a bind mount
+    beside it, at the path the host keeps it at (`Sandboxes.checkoutAt`). Verbs answer with that
+    path. The cost is one `cd`.
   - **Yession reads a repo's `yession.yaml`, and here is what it still cannot say** (Plan 27).
     The file declares sandboxes and nothing else. A sandbox is the only scope where "two repos
     both said something" has a total answer: the keys are (repo, name) pairs and the repos are
@@ -1004,6 +1022,22 @@ After the fixes land, one pass rewrites it to what still reproduces.
     block's environment like the git loan, with the same transcript caveat. Unlike the gateway,
     the proxy admits every request to a declared host, so a live stand-in is the lender's whole
     API token.
+  - **The proxy tunnels an admitted container to any host on the internet, and to nothing
+    else.** A `CONNECT` to a host no route declares is tunnelled, because a tool that honours
+    `HTTPS_PROXY` sends every host this way (this repository's own `yession.yaml` build fetches
+    from cache.nixos.org, yession.cachix.org, npm, NuGet and GitHub's tarball hosts through
+    it). The name is resolved once and every answer judged. Loopback, link-local, RFC 1918,
+    CGNAT (the tailnet), ULA, multicast and this host's own addresses are refused, and the
+    tunnel dials the judged address, never the name again (`refusedTunnel` and `Egress` in
+    `app/CredentialProxy.fs`). Before this, a container holding the capability reached the
+    Manager's loopback port through it.
+    - **The design direction is operator-declared egress.** The operator declares the hosts a
+      sandbox may reach, and the proxy tunnels those and nothing else. It was not chosen yet
+      because the hosts a build reaches are many and move (Nix substituters and flake inputs,
+      registries and their CDNs), and the list would be this repository's to keep for every
+      operator. The refusal above stays under it as the floor.
+    - **It is a policy on the proxy, not on the container.** A container's own direct egress
+      is the Docker network's, and reaches what that network reaches.
   - **The AgentSandbox has no grants.** The agent CLI runs with no built-in tools. Every command
     it issues runs in a work sandbox, under that sandbox's grants. Its own process holds no
     connection and no proxy, and nothing in the profile can give it one. If the CLI ever runs

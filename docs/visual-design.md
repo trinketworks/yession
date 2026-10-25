@@ -194,7 +194,11 @@ floor is never traded for the band. Such a head states its rows, not its total. 
 its own and lines up with nothing — unless the head pins its FIRST row to the band instead of
 letting the band be the rows' sum, which is how a column with a two-row head aligns its hairline
 with a sibling's single-row one (the session pane's tab strip, `Style.panePivotRow`, against the
-chat header). Each row still meets the touch target; only where in the taller row it sits moves.
+chat header). Each row still meets the touch target: a control whose own ground should read as
+the row (a selected tab) stretches to fill the taller row edge to edge, so that ground runs all
+the way to the hairline instead of stopping short of it with a gap of the strip's own ground
+showing; a control with its own fixed height (`paneListButtonBase`, `paneStripAct`) stays
+centred in it instead (`self-center`).
 
 A thing that leaves the ground sits on a named layer. `app/tokens.css` names the layers, low to
 high, under "Layers". A phone stacks several at once: a drawer over a scrim over the page, with a
@@ -221,6 +225,33 @@ lands. Neither is `disabled`. The attribute `disabled` does not exist in this pr
 
 An armed control is a destructive act one tap from done. It wears the `err` fill at rest
 (principle 3).
+
+### Attention
+
+A status says what state a thing is in. Attention says how much it wants a person. A session
+has several statuses and one attention: the level of its most urgent standing
+(`Standing.worst`). The attention mark (`Icon.attention`) is the one point that ranks by
+shape, because a list of sessions is read at a glance, in a blur, and colour alone may not
+carry a rank (WCAG 1.4.1).
+
+| Level | Shape | Ink | Means |
+|---|---|---|---|
+| Wrong | ring with a core | `err` | nothing moves until a person fixes it: sign in again, a PR conflicted or failed |
+| Wanted | filled | `green` | a person's turn: the agent is waiting |
+| Moving | ring half filled, beats | `ink-dim` | under way, needs nobody: working, running, checks pending |
+| Absent | dotted ring | `ink-dim` | no agent, chosen knowingly |
+| Rest | ring | `ink-faint` | nothing to say: stopped, or everything watched is fine |
+
+Waiting outranks working. Work under way needs nobody, and the ball with a person does.
+Wanted is green because green is the people, not because it is good.
+
+The five share one geometry: a 10px box, a ring of radius 4 at a 2px stroke. They differ
+only in what is inside the ring. The mark is larger than a status's 6px dot because its shape
+carries the rank, and a 6px disc has no room inside it.
+
+The mark never stands alone. A word beside it, or the name of the control it sits in, says
+the state.
+*Test: print the roster in greyscale and blur it. The five levels still read in order.*
 
 ## Hierarchy of controls
 

@@ -44,7 +44,8 @@ from elsewhere, say where each one answers and who the humans are:
 YESSION_MANAGER_URL=https://example.com          # the Manager: scheme + host, no path
 YESSION_SESSION_URL=https://example.com/s/{id}   # sessions: a template over {id} / {port}
 
-yession-manager --auth trusted-headers           # or --auth localhost on one machine
+yession-manager --auth trusted-headers \
+  --socket /var/lib/yession/manager.sock         # only the proxy opens it; or --auth localhost on one machine
 ```
 
 [docs/deployment.md](https://github.com/trinketworks/yession/blob/master/docs/deployment.md)

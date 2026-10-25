@@ -92,13 +92,6 @@ let private pureTests =
             Expect.isError (Repos.validBranchName "a//b") "double slash"
             Expect.isError (Repos.validBranchName "") "empty"
 
-        // The mount target, the sandbox's write path and the path a verb reports are three
-        // uses of one answer. Pinned as a mapping so a fourth caller cannot invent a second.
-        testCase "where a checkout is reachable from is decided by the work backend, once" <| fun () ->
-            Expect.equal (Sandboxes.reposVisibleAt None HostBackend "/data/repos") "/data/repos" "the directory itself"
-            Expect.equal (Sandboxes.reposVisibleAt None SrtBackend "/data/repos") "/data/repos" "srt binds the same path"
-            Expect.equal (Sandboxes.reposVisibleAt None DockerBackend "/data/repos") "/repos" "docker reaches its mount target"
-
         // What a verb ANSWERS with is a path somebody can act on from where they are, and one
         // `set_shell_profile` takes as given — not the same fact plus the operator's home
         // directory. Relative only where that is TRUE.
@@ -329,8 +322,6 @@ let private serviceTracing
         { Backend = SrtBackend
           Network = DockerFixture.quietNetwork ()
           ReposDir = reposDir
-          // Host-family: a terminal reaches the checkouts at the directory itself.
-          VisibleAt = Sandboxes.reposVisibleAt None SrtBackend reposDir
           StartsAt = fun () -> None
           ExtraReadPaths = [ fixtures ]
           Git = git
@@ -623,7 +614,6 @@ let private srtTests =
                     { Backend = SrtBackend
                       Network = DockerFixture.quietNetwork ()
                       ReposDir = relRepos
-                      VisibleAt = Sandboxes.reposVisibleAt None SrtBackend relRepos
                       StartsAt = fun () -> None
                       ExtraReadPaths = [ fixturesIn fixtures ]
                       Git = namedGit

@@ -100,7 +100,7 @@ yession-manager --auth trusted-headers   # an authenticating proxy in front
 |---|---|
 | *(absent)* / `none` | Denies every request, so an exposed endpoint cannot fall back to an unintended rule. |
 | `localhost` | Any loopback request is the single unattributed subject `local`. |
-| `trusted-headers` | The proxy in front asserts the user in canonical `x-yession-*` headers, trusted verbatim. |
+| `trusted-headers` | The proxy in front asserts the user in canonical `x-yession-*` headers, trusted verbatim. The Manager listens on a unix socket (`--socket <path>`), and refuses to boot on a TCP port. |
 
 An unknown name or option fails the boot, because an ignored `--auth` would refuse everyone.
 Every bin answers `--help`.
@@ -108,6 +108,38 @@ Every bin answers `--help`.
 `trusted-headers` replaces `localhost`. The two never compose. Behind a proxy that terminates
 on loopback, every request is loopback, so a header-less request would become `local`. That is
 the bypass the proxy exists to prevent.
+
+#### Where the Manager listens
+
+A trust rule believes something about the connection, so it decides the door
+(`Listener.admits` in `app/ProcessManager.fs`):
+
+| `--auth` | Listener |
+|---|---|
+| `localhost` | A TCP port on loopback (`--port`, default 8321). It reads the peer address, which only TCP has. |
+| `trusted-headers` | A unix socket (`--socket <path>`). A TCP port is refused at boot. |
+| `none` | Either. |
+
+Under `trusted-headers` a header is the subject, so it is true only if nothing but the proxy
+could send it. A TCP port on loopback cannot say that. Every process on the host dials it as
+loopback. So does a container whose network reaches the host loopback, which Colima's and
+Docker Desktop's do. A socket's permissions can say it. The Manager makes the socket `0660`.
+Give the proxy the Manager's user or group, and no sandbox or container a path to it.
+
+Put the socket in a directory that no sandbox grant names: not under `--data-dir`, and not
+under any path the resources profile mounts, reads or writes. srt hides every path a policy
+does not name, so a confined command cannot reach a socket it cannot see. But on Linux a
+`Socket` grant lets a confined command dial every unix socket it can see (srt reads no path
+list there, [GAPS.md](GAPS.md#security--trust)), and it runs as the Manager's uid, which the
+socket's mode admits. A grant that names the socket's directory, or a directory above it,
+hands that sandbox the Manager. The data directory is not such a place by construction: an
+operator's profile can name any path, the data directory included. The module below keeps
+the socket under `~/.local/state/yession`, apart from the data directory.
+
+`--socket` needs the public origin ([§Addressing](#addressing)), because no browser dials a
+socket. A session dials the socket for its control channel (`ControlEndpoint.Socket` in
+`YESSION_LAUNCH`), and the public origin for OIDC discovery. A socket path is at most 104
+bytes on macOS and 108 on Linux.
 
 #### What the trust rule decides about credentials
 
@@ -231,11 +263,14 @@ missed frame costs nothing:
 ```sh
 curl -sN http://127.0.0.1:8321/sessions/stream
 # data: {"sessions":[{"id":"local-session","name":"…","port":57239,"pid":95225}]}
+curl -sN --unix-socket /var/lib/yession/manager.sock \
+  -H 'x-yession-user: tracker' http://yession/sessions/stream      # under trusted-headers
 ```
 
 The trust rule gates the stream like every management route. Under `trusted-headers`, every
-loopback caller (a proxy binding, a health check, a tracker) asserts an `x-yession-user` that
-names what it is, or gets 401s and no frames. Under `localhost`, nothing reads the header.
+caller on the Manager's socket (a proxy binding, a health check, a tracker) asserts an
+`x-yession-user` that names what it is, or gets 401s and no frames. Under `localhost`, nothing
+reads the header.
 
 The template is not on the wire. The deployment applies its own to `id` and `port`, so the
 prefix has one home. [`examples/proxy/main.mjs`](../examples/proxy/)
@@ -338,12 +373,16 @@ The deployment has one origin, behind one reverse proxy of your own. The Manager
 and each session at `/s/<id>`:
 
 ```
-browser ──tailnet──▶ tailscale serve ──▶ your proxy ──┬──▶ manager      /
-                     TLS + identity      one mapping    └──▶ session i    /s/<id>
+browser ──tailnet──▶ tailscale serve ═════▶ your proxy ═════┬══▶ manager      /
+                     TLS + identity   socket   one mapping    socket
+                                                            └──▶ session i    /s/<id>
+                                                                 TCP, loopback
 ```
 
 `serve` holds one mapping: TLS on the tailnet, and who is calling. Routing, identity
-translation, and stripping live in the proxy. [`examples/proxy`](../examples/proxy/README.md)
+translation, and stripping live in the proxy. Both hops that carry an identity are unix
+sockets (`═`): `serve` to the proxy, and the proxy to the Manager. Nothing on a TCP port
+believes its peer. The sessions' ports authenticate by cookie and token, not by peer. [`examples/proxy`](../examples/proxy/README.md)
 has the pieces and how to run them
 ([ADR](decisions/2026-09-03-one-proxy-in-front.md)). This section describes what they
 implement, for a deployment on another proxy.
@@ -377,19 +416,48 @@ does it on the Manager's route. The Caddy form, with its reasons, is the `handle
 - **Delete by name, not `-x-yession-*`** — Caddy applies deletions after sets, so the wildcard
   strips what was just asserted. The fronted browser case in `tests/Yession.Tests/Browser.fs`
   measures this.
-- **The Manager is reachable only through the proxy** — under `trusted-headers` the header
-  *is* the subject, so on a shared box bind the Manager where only the proxy can dial.
+- **Every door that carries an identity is a socket** — the proxy believes
+  `Tailscale-User-Login` and the Manager believes `x-yession-user`, so each listens where
+  only its asserter can dial. A TCP port on loopback is dialled by every local process and
+  by a container that reaches the host loopback. The Manager refuses one under
+  `trusted-headers` ([§Where the Manager listens](#where-the-manager-listens)). The proxy's
+  is the Caddyfile's `bind`.
+
+The mapping is a socket target, run as root:
+
+```sh
+sudo tailscale serve --bg --https=8321 unix:/var/lib/yession/proxy.sock
+```
+
+Two constraints decide whether that works on a host:
+
+- **Tailscale 1.98.9 or later runs a socket target only from a root `serve`** (security
+  bulletin TS-2026-005). Run the command once with `sudo`. The mapping persists in
+  tailscaled's state.
+- **The sandboxed macOS app cannot dial a socket.** The Standalone and App Store builds fail at
+  request time with `dial unix …: connect: operation not permitted` (tailscale/tailscale#21900,
+  open on 1.104.1). Use the open-source `tailscaled` on macOS, which is not sandboxed.
+
+On a host that must keep the sandboxed app, the alternative is the `caddy-tailscale` plugin. It
+makes the Caddy site its own tailnet node (`bind tailscale/<name>`), so no ingress sits between
+the tailnet and the proxy. Its `tailscale_auth` directive takes the user from the connection
+itself, through tailscaled, and not from a header: replace the three `header_up` sets with
+`tailscale_auth` and set `x-yession-user` from `{http.auth.user.tailscale_login}`. The Manager's
+socket stays. The plugin is experimental, and this repository neither packages nor tests it.
 
 Session routes carry none of this. A session authenticates through the Manager as OIDC issuer,
 never by header, so a proxy that can only forward still fronts sessions correctly.
 
-Loopback callers assert themselves ([§The registry stream](#the-registry-stream)), for example
-`main.mjs --as proxy-map`.
+Callers on the Manager's socket assert themselves
+([§The registry stream](#the-registry-stream)), for example
+`main.mjs --manager unix:<path> --as proxy-map`.
 
 > Verified against a live tailnet: Tailscale 1.102.3 with HTTPS certificates, macOS. The
 > verification covered the identity headers, the overwrite, the `x-yession-*` pass-through, the
-> deletion ordering, and the composition below with a Manager and a session behind it. Every
-> pull request re-verifies the Caddy half, against whichever Caddy the dev shell pins.
+> deletion ordering, and the composition below with a Manager and a session behind it, all over
+> a TCP mapping. The socket mapping is not yet verified on a live tailnet. Every pull request
+> re-verifies the Caddy half over both sockets, against whichever Caddy the dev shell pins,
+> with a TCP-to-socket relay standing in for `serve`.
 
 ##### What `--auth localhost` costs here
 
@@ -471,9 +539,12 @@ let
   yession = inputs.yession.packages.${pkgs.stdenv.hostPlatform.system}.default;
   proxy = "${inputs.yession}/examples/proxy";   # the Caddyfile and the reconciler
   origin = "https://host.example.ts.net:8321";  # scheme + host once, feeding both URLs
-  managerPort = 8321;
-  proxyPort = 9000;           # what `tailscale serve --bg --https=8321 9000` targets
-  proxyDir = "${config.home.homeDirectory}/.local/state/yession/proxy";
+  stateDir = "${config.home.homeDirectory}/.local/state/yession";
+  # The two doors that carry an identity, both sockets (§Tailscale). The proxy's is what
+  # `sudo tailscale serve --bg --https=8321 unix:<proxySocket>` targets, once, as root.
+  managerSocket = "${stateDir}/manager.sock";
+  proxySocket = "${stateDir}/proxy.sock";
+  proxyDir = "${stateDir}/proxy";
   logDir = "${config.home.homeDirectory}/Library/Logs/yession";
 
   # Paths as the kernel sees them (/private/etc, not /etc): the profile refuses
@@ -519,7 +590,7 @@ in
       ProgramArguments = [
         "${yession}/bin/yession-manager"
         "--auth" "trusted-headers"
-        "--port" (toString managerPort)
+        "--socket" managerSocket
         # The default data dir is RELATIVE (`.yession`) and launchd does not start in $HOME.
         "--data-dir" "${config.home.homeDirectory}/.yession"
         "--idle-timeout" "30m"
@@ -538,7 +609,7 @@ in
     };
   };
 
-  # The proxy, loopback only, re-reading the session map under --watch.
+  # The proxy, on its socket, re-reading the session map under --watch.
   launchd.agents.yession-proxy = {
     enable = true;
     config = {
@@ -550,8 +621,8 @@ in
       KeepAlive = true;
       EnvironmentVariables = {
         HOME = config.home.homeDirectory;
-        YESSION_PROXY_PORT = toString proxyPort;
-        YESSION_PROXY_MANAGER = "127.0.0.1:${toString managerPort}";
+        YESSION_PROXY_SOCKET = proxySocket;
+        YESSION_PROXY_MANAGER = "unix/${managerSocket}";
         YESSION_PROXY_SESSIONS = "${proxyDir}/sessions*.caddy";
         XDG_DATA_HOME = "${proxyDir}/caddy";
         XDG_CONFIG_HOME = "${proxyDir}/caddy";
@@ -567,7 +638,7 @@ in
     config = {
       ProgramArguments = [
         "${pkgs.nodejs_24}/bin/node" "${proxy}/main.mjs"
-        "--manager" "http://127.0.0.1:${toString managerPort}"
+        "--manager" "unix:${managerSocket}"
         "--as" "proxy-map"
         "--out" "${proxyDir}/sessions.caddy"
         "--empty" "# no running sessions"

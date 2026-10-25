@@ -2,18 +2,27 @@
 # authenticated the caller. Here that is `tailscale serve`, which asserts the calling tailnet
 # user in `Tailscale-User-*` headers and overwrites any a client sent — so a single mapping,
 #
-#   tailscale serve --bg --https=8321 9000
+#   sudo tailscale serve --bg --https=8321 unix:/var/lib/yession/proxy.sock
 #
 # is the whole of the ingress, and everything else (routing, the identity translation) is
 # in this file, where it can be read, versioned and tested.
 #
-# Three variables, read once when the Caddyfile is adapted, and one with a default:
+# Both doors are UNIX SOCKETS, and that is the security of the whole arrangement. This proxy
+# believes `Tailscale-User-Login`, and the Manager believes the `x-yession-user` this proxy
+# sets from it. A header is true only if nothing but its sender could have sent it, and a
+# TCP port on loopback cannot promise that: every process on the host dials it, and so does
+# a container whose network reaches the host loopback (Colima's and Docker Desktop's do).
+# A socket's permissions can: `serve` (root) opens this one, this proxy opens the Manager's,
+# and a sandbox or a container has no path to either.
 #
-#   YESSION_PROXY_PORT      the port this proxy listens on — what `serve` targets, e.g. 9000
-#   YESSION_PROXY_MANAGER   the Manager, e.g. 127.0.0.1:8321
+# Three variables, read once when the Caddyfile is adapted:
+#
+#   YESSION_PROXY_SOCKET    the socket this proxy listens on — what `serve` targets, an
+#                           absolute path, e.g. /var/lib/yession/proxy.sock
+#   YESSION_PROXY_MANAGER   the Manager's socket as Caddy dials one,
+#                           e.g. unix//var/lib/yession/manager.sock (the Manager's --socket)
 #   YESSION_PROXY_SESSIONS  a glob over the session map ../main.mjs writes,
 #                           e.g. /var/lib/yession/proxy/sessions*.caddy
-#   YESSION_PROXY_BIND      the interface, default 127.0.0.1 — see `bind` below
 #
 # Run it with `--watch`: Caddy re-adapts this file every second, which re-reads the import,
 # so a rewritten map is live within a second and nothing has to tell Caddy to reload.
@@ -23,16 +32,16 @@
 	persist_config off
 }
 
-# The site address is a bare port on purpose, twice over. A host in it (`127.0.0.1:9000`)
-# becomes a Host MATCHER, and every request through `serve` carries the tailnet name as its
-# Host — so nothing matched and Caddy answered an empty 200 to everything. And a host in it
-# is served over TLS by default, `auto_https off` notwithstanding: that only stops the
-# certificate machinery. `http://` says TLS is the ingress's job; `bind` says where to listen.
-http://:{$YESSION_PROXY_PORT} {
-	# Loopback, or the translation below is a hole: anything that can dial this port directly
-	# can write its own `Tailscale-User-Login`, and the proxy would believe it. `serve` is the
-	# only thing that should be able to reach here.
-	bind {$YESSION_PROXY_BIND:127.0.0.1}
+# The site address names no host on purpose, twice over. A host in it (`127.0.0.1`) becomes
+# a Host MATCHER, and every request through `serve` carries the tailnet name as its Host — so
+# nothing matched and Caddy answered an empty 200 to everything. And a host in it is served
+# over TLS by default, `auto_https off` notwithstanding: that only stops the certificate
+# machinery. `http://` says TLS is the ingress's job; `bind` says where to listen.
+http:// {
+	# A socket, owner and group only, or the translation below is a hole: anything that can
+	# dial this door can write its own `Tailscale-User-Login`, and the proxy would believe
+	# it. `serve` is the only thing that should be able to reach here.
+	bind unix/{$YESSION_PROXY_SOCKET}|0660
 
 	# One line per request: the method, the URI, the status and how long it took, beside the
 	# time, level and logger every Caddy line carries. Enough to see which step of a slow open hung (the `/open` screen, its readiness

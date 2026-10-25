@@ -384,55 +384,34 @@ module SessionLayout =
         Fs.ensureDir current
         current
 
-/// Where the session's repos directory is reachable from INSIDE a work sandbox. The
-/// host-family backends share the directory itself (srt binds the same absolute path, so
-/// the name does not change); the docker backend cannot share a host path by policy and
-/// carries it as a bind mount instead, where it is reachable under the target and nothing
-/// else.
+/// A repo's checkout: ONE absolute path, the same on the host, in an srt sandbox and inside
+/// a container. Every reader names the checkout with this string, so none of them can name
+/// it differently.
 ///
-/// One function because three things have to name the same place and cannot be allowed to
-/// drift: the mount, the sandbox's write path, and — the half that was missing — the
-/// ANSWER a repo verb gives. A checkout the agent cannot name is a checkout it hunts for,
-/// and hunting is what the turn gets spent on.
-/// `declared` is a sandbox's own `repos:`, when it wrote one. It only bears on a backend
-/// that MOUNTS the checkouts — a host-family sandbox shares the session's own directory by
-/// path, and there is no mount whose target could be moved, so a declaration there names
-/// somewhere nothing would appear. Unreachable today by construction rather than by luck: a
-/// repo-owned declaration is refused without a `container:`, and repo work runs on
-/// `SandboxRuntime.repoWorkBackend`.
-let reposVisibleAt (declared: string option) (backend: SandboxBackend) (hostReposDir: string) : string =
-    match backend with
-    | HostBackend
-    | SrtBackend -> hostReposDir
-    | DockerBackend -> declared |> Option.defaultValue "/repos"
-
-/// A repo's checkout as its OWN work sandbox will see it — the root that repo's
-/// `workdir:` resolves against (`SandboxDecl.toRequest`). Repo-owned work runs under
-/// `SandboxRuntime.repoWorkBackend`, so this is that backend's view of the repos
-/// directory, never a terminal's: resolved against the terminal's view, `workdir: .`
-/// produced a container whose working directory wore the HOST checkout path — an empty
-/// volume mounted where nothing would ever look, while the checkout sat under the
-/// /repos bind.
-let workCheckoutAt (declared: string option) (reposDir: string) (repo: RepoRef) : string =
-    sprintf "%s/%s" (reposVisibleAt declared SandboxRuntime.repoWorkBackend reposDir) (RepoRef.relativePath repo)
-
-/// The same checkout in both its addresses (`CheckoutViews`): the sandbox's own view for
-/// `workdir:`, the host's for a `build:` context the daemon client reads from THIS
-/// filesystem. `SandboxDecl.toRequest` takes the pair so each path resolves against the
-/// view its reader will use.
-let checkoutViewsAt (declared: string option) (reposDir: string) (repo: RepoRef) : CheckoutViews =
-    { InSandbox = workCheckoutAt declared reposDir repo
-      OnHost = sprintf "%s/%s" reposDir (RepoRef.relativePath repo) }
+/// The host-family backends share the repos directory by path. The docker backend cannot
+/// share a host path by policy, so it carries the directory as a bind mount
+/// (`withSessionShares`), and binds it at this same path. It used to bind it at `/repos`,
+/// which gave one checkout two addresses. Everything that writes an absolute path into a
+/// checkout then broke in the other view: a git worktree made in the `dev` container
+/// recorded `/repos/…` as its gitdir, the session's own git could not read it, and the
+/// failed listing left the session reading no `yession.yaml` at all (session TNQDWN3T).
+/// Worktrees are one case of many: submodules, `core.worktree`, tool caches, and links
+/// devenv and node write all record absolute paths. One address stops the whole class.
+///
+/// The cost is a longer path inside a container, and that path's length counts against the
+/// 104-byte unix-socket limit for a socket made under the checkout. MSBuild, for one,
+/// already binds its worker sockets under `/tmp` for that reason.
+let checkoutAt (reposDir: string) (repo: RepoRef) : string =
+    sprintf "%s/%s" reposDir (RepoRef.relativePath repo)
 
 /// Where the session's artifacts directory is reachable from INSIDE a work sandbox — the
-/// same story as `reposVisibleAt` one directory over, and the reason a share needs no bytes
+/// same story as `checkoutAt` one directory over, and the reason a share needs no bytes
 /// to cross this process: the sandbox copies the file into a directory the host is holding
 /// open, and the host reads what landed.
 ///
-/// No `declared` counterpart, unlike the checkouts: `repos:` exists because a repo's own
-/// toolchain may expect its sources somewhere particular, and nothing in a sandbox is built
-/// against the artifacts directory. It is a drop box, and a drop box a sandbox could move
-/// would be one the store might not be watching.
+/// Unlike the checkouts it keeps a container address of its own: nothing writes a path INTO
+/// the artifacts directory that another view must read back. It is a drop box, and a copy
+/// in is the whole of its use.
 let artifactsVisibleAt (backend: SandboxBackend) (hostArtifactsDir: string) : string =
     match backend with
     | HostBackend
@@ -461,12 +440,13 @@ let artifactsVisibleTo (configured: SandboxBackend) (hostArtifactsDir: string) (
 /// declared its own `dev` did not decline to see the repos directory.
 ///
 /// The docker backend cannot share a host path by policy, so it rides the spec as a
-/// bind mount at /repos — beside the named workspace volume, not replacing it.
+/// bind mount at the directory's own path (`checkoutAt`) — beside the named workspace
+/// volume, not replacing it.
 /// Host-family backends share it by write path instead (`SessionMain`'s `sharedRepos`).
 /// The runtime union makes this branch structural rather than incidental: only the
 /// docker arm can name a mount, because only it has a container to mount into.
 ///
-/// It lives HERE, beside `reposVisibleAt`, because the mount and the paths that answer
+/// It lives HERE, beside `checkoutAt`, because the mount and the paths that answer
 /// for it must name the same place — and because the dev-container suite drives this
 /// exact assembly rather than a hand-kept copy of it.
 /// Both of the session's shared directories in ONE verb, because they are one fact: what
@@ -492,10 +472,9 @@ let withSessionShares
                         Mounts =
                             container.Mounts
                             @ [ { Source = HostPath reposDir
-                                  // The sandbox's own choice, which `workdir:` was already
-                                  // resolved against — one function, so the mount and the
-                                  // paths that answer for it cannot name two places.
-                                  Target = reposVisibleAt requested.ReposAt backend reposDir
+                                  // The directory's own path, so a checkout has one
+                                  // address inside the container and out (`checkoutAt`).
+                                  Target = reposDir
                                   Mode = ReadWrite }
                                 { Source = HostPath artifactsDir
                                   Target = artifactsVisibleAt backend artifactsDir
@@ -1837,7 +1816,7 @@ module DockerSandbox =
                         // The named volume persists across container restarts by design;
                         // the label lets cleanup find it (see the workflow teardown). Made
                         // only when the plan mounts it: a sandbox whose workspace is another
-                        // mount (a repo's /repos bind) used to get one anyway, which nothing
+                        // mount (the checkouts' bind) used to get one anyway, which nothing
                         // mounted and nothing removed, one per sandbox per session.
                         if plan |> List.exists (fun m -> m.Source = SessionWorkspace) then
                             do!

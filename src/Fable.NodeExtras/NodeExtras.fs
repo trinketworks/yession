@@ -963,6 +963,29 @@ module NetworkInterfaces =
     let addresses () : string list =
         flatten (byInterface ()) |> Array.map (fun assigned -> assigned.address) |> List.ofArray
 
+/// `node:dns/promises`'s `lookup`, asked for EVERY address a name has — the resolver
+/// `connect` itself would ask, so the answer is the one a connection would use. `Fable.Node`
+/// types `lookup` with a callback and a single answer.
+module Resolver =
+
+    type private Found =
+        abstract address : string
+
+    [<AllowNullLiteral>]
+    type private LookupOptions =
+        abstract all : bool with get, set
+
+    [<Import("lookup", "node:dns/promises")>]
+    let private lookupWith (host: string) (options: LookupOptions) : JS.Promise<Found[]> = jsNative
+
+    [<Emit("$0.then(found => found.map(f => f.address))")>]
+    let private addressesIn (found: JS.Promise<Found[]>) : JS.Promise<string[]> = jsNative
+
+    /// Every address `host` resolves to, in the resolver's order. An address literal answers
+    /// itself. A name that does not resolve rejects.
+    let addressesOf (host: string) : JS.Promise<string[]> =
+        addressesIn (lookupWith host (jsOptions<LookupOptions> (fun o -> o.all <- true)))
+
 [<AutoOpen>]
 module WebCrypto =
 
@@ -1427,6 +1450,15 @@ module ChildProcessStreams =
     [<Emit("$0.on('exit', $1)")>]
     let onExit (child: ChildProcess) (handler: int option -> unit) : unit = jsNative
 
+/// `process.umask(mask)`: the mask files this process creates from now on are made under,
+/// answering the one it replaces. Process-wide, so a caller sets it around one synchronous
+/// call and puts the old one back at once.
+[<RequireQualifiedAccess>]
+module ProcessMask =
+
+    [<Emit("process.umask($0)")>]
+    let set (mask: int) : int = jsNative
+
 /// This process's own standard input, as the stream this project reads — `Fable.Node` types
 /// it as its own socket class, which `Readables.text` cannot be handed.
 [<RequireQualifiedAccess>]
@@ -1446,6 +1478,17 @@ type HttpRequest =
 type internal ClientRequestOptions =
     abstract ``method`` : string with get, set
     abstract headers : OutgoingHeaders with get, set
+    /// A unix socket to dial instead of the URL's host. Only `httpRequestOverSocket` sets it.
+    abstract socketPath : string with get, set
+    /// The request target, which a socket request carries here and not in a URL.
+    abstract path : string with get, set
+    abstract signal : Fetch.Types.AbortSignal with get, set
+
+/// `Readable`'s statics, opaque: `webResponse` is the one thing that reads them.
+[<AllowNullLiteral>]
+type ReadableStatics =
+    interface
+    end
 
 [<AutoOpen>]
 module HttpClient =
@@ -1484,6 +1527,52 @@ module HttpClient =
                 o.headers <- OutgoingHeaders.ofPairs headers)
 
         if url.StartsWith "https:" then overHttps url options onResponse else overHttp url options onResponse
+
+    [<Import("request", "node:http")>]
+    let private overHttpWith (options: ClientRequestOptions) (onResponse: HttpResponse -> unit) : HttpRequest =
+        jsNative
+
+    /// `httpRequest` over a unix socket: `target` is the path and query, and `socketPath` is
+    /// where the server listens. Node's `fetch` has no way to dial a socket, and `node:http`
+    /// does — so a server that listens on a socket is reached through this.
+    let httpRequestOverSocket
+        (socketPath: string)
+        (target: string)
+        (``method``: string)
+        (headers: (string * HeaderValue)[])
+        (signal: Fetch.Types.AbortSignal option)
+        (onResponse: HttpResponse -> unit)
+        : HttpRequest =
+        let options =
+            jsOptions<ClientRequestOptions> (fun o ->
+                o.socketPath <- socketPath
+                o.path <- target
+                o.``method`` <- ``method``
+                o.headers <- OutgoingHeaders.ofPairs headers
+                signal |> Option.iter (fun given -> o.signal <- given))
+        overHttpWith options onResponse
+
+    /// `node:stream`'s `Readable` class, for its one static this file needs.
+    [<Import("Readable", "node:stream")>]
+    let private readableClass : ReadableStatics = jsNative
+
+    /// A WHATWG `Response` over an answer `node:http` received: the status, the headers as
+    /// pairs, and the body as the web stream `Readable.toWeb` makes of it. A status that has
+    /// no body by the spec (204, 205, 304) gets none, which is what the constructor demands.
+    [<Emit("(function (statics, answer, headers) { const status = answer.statusCode; return new Response([204, 205, 304].includes(status) ? null : statics.toWeb(answer), { status, headers }) })($0, $1, $2)")>]
+    let private webResponse (statics: ReadableStatics) (answer: HttpResponse) (headers: (string * string)[]) : Fetch.Types.Response =
+        jsNative
+
+    /// An answer `httpRequestOverSocket` received, as the `Response` a `fetch` would have
+    /// given — so a caller reads it the one way whichever door it came through.
+    let responseOf (answer: HttpResponse) : Fetch.Types.Response =
+        let headers =
+            answer.headerEntries ()
+            |> Array.collect (fun (name, value) ->
+                match value with
+                | HeaderValue.Single text -> [| name, text |]
+                | HeaderValue.Repeated texts -> texts |> Array.map (fun text -> name, text))
+        webResponse readableClass answer headers
 
 // --- node:http, answering ---------------------------------------------------------------------
 

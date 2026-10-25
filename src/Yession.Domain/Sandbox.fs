@@ -265,10 +265,9 @@ module SandboxPath =
     let private trimmed (path: string) = path.TrimEnd '/'
 
     /// An absolute path as a terminal REACHES it: relative to `root` when it is under
-    /// there, unchanged when it is not — a docker sandbox's `/repos` bind, a named
-    /// sandbox reaching the shared repos directory from its own workspace, anywhere else
-    /// on the filesystem. A relative path that is only true somewhere else is worse than
-    /// a long one.
+    /// there, unchanged when it is not — a named sandbox reaching the shared repos
+    /// directory from its own workspace, anywhere else on the filesystem. A relative path
+    /// that is only true somewhere else is worse than a long one.
     ///
     /// On a directory BOUNDARY, never a bare prefix: `/data/s/work` does not contain
     /// `/data/s/workspace/repos`, and answering `space/repos` for it would be a path to

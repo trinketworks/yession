@@ -1438,7 +1438,7 @@ let private managerBehindFrontDoor (name: string) =
             ProcessManager.createWithUi
                 { ProcessManager.Options.defaults dataDir nodePath [ "app/SessionMain.js" ] with
                     Strategy = Some Strategy.localhost
-                    ManagerPort = Some managerPort
+                    Listen = ProcessManager.Listener.Port managerPort
                     // Two origins deliberately. The Manager keeps its own, because it is the
                     // OIDC issuer a launched session fetches discovery against and that has
                     // to be an address which really answers; the SESSIONS are published at
@@ -2204,7 +2204,7 @@ let private reapingTests =
                             // Path-mounted: a session's address is derived from its ID, so it
                             // is the same string before and after a reap however the OS
                             // reassigns ports. That is the guarantee that replaced pinning.
-                            ManagerPort = Some managerPort
+                            Listen = ProcessManager.Listener.Port managerPort
                             Public = PublicAccess.create origin (origin + "/s/{id}") |> expect
                             IdleTimeout = Some (TimeSpan.FromSeconds 3.0)
                             OnEvent = fun name attrs -> lock events (fun () -> events.Add (name, attrs)) }
@@ -3114,8 +3114,8 @@ let private notificationStreamTests =
 
                 let mutable receivedA : SessionNotification list = []
                 let mutable receivedB : SessionNotification list = []
-                let cancelA = ControlClient.subscribeNotifications url "secret-a" (fun n -> receivedA <- receivedA @ [ n ])
-                let cancelB = ControlClient.subscribeNotifications url "secret-b" (fun n -> receivedB <- receivedB @ [ n ])
+                let cancelA = ControlClient.subscribeNotifications (ControlEndpoint.Address url) "secret-a" (fun n -> receivedA <- receivedA @ [ n ])
+                let cancelB = ControlClient.subscribeNotifications (ControlEndpoint.Address url) "secret-b" (fun n -> receivedB <- receivedB @ [ n ])
 
                 // The subscription connects asynchronously and notifications are not
                 // buffered, so push until the first arrives (or a generous timeout).
@@ -3161,11 +3161,11 @@ let private hookDeliveryStreamTests =
                     startControlServerOver endpoints [ "secret-a", (SessionId.create "hook-a" |> expect) ]
 
                 let mutable received : SessionNotification list = []
-                let cancel = ControlClient.subscribeNotifications url "secret-a" (fun n -> received <- received @ [ n ])
+                let cancel = ControlClient.subscribeNotifications (ControlEndpoint.Address url) "secret-a" (fun n -> received <- received @ [ n ])
 
                 let filter =
                     { Where = [ FieldPath.create "body.repository.full_name" |> expect, "trinketworks/yession" ] }
-                let! subscription = ControlClient.subscribeHook url "secret-a" filter
+                let! subscription = ControlClient.subscribeHook (ControlEndpoint.Address url) "secret-a" filter
                 let subscriptionId = expect subscription
 
                 let body = """{"repository":{"full_name":"trinketworks/yession"}}"""
@@ -3200,7 +3200,7 @@ let private hookDeliveryStreamTests =
                     Expect.equal delivered body "and carries the bytes the provider signed"
                 | other -> failwithf "expected a delivery, got %A" other
 
-                match! ControlClient.unsubscribeHook url "secret-a" subscriptionId with
+                match! ControlClient.unsubscribeHook (ControlEndpoint.Address url) "secret-a" subscriptionId with
                 | Ok dropped -> Expect.isTrue dropped "the subscription was there to drop"
                 | Error e -> failwith e
                 let settled = List.length received
@@ -3310,7 +3310,7 @@ let private mcpStreamTests =
                 mcp.Publish sseSession { Servers = [ serialServer ] }
 
                 let mutable received : McpServerSet list = []
-                let cancel = ControlClient.subscribeMcp url "secret-a" (fun s -> received <- received @ [ s ])
+                let cancel = ControlClient.subscribeMcp (ControlEndpoint.Address url) "secret-a" (fun s -> received <- received @ [ s ])
 
                 let! _ = settledWithin 3000 (fun () -> not (List.isEmpty received))
                 Expect.equal
@@ -3621,7 +3621,7 @@ let private registryStreamTests =
                     ProcessManager.createWithUi
                         { ProcessManager.Options.defaults dataDir nodePath [ "app/SessionMain.js" ] with
                             Strategy = Some Strategy.localhost
-                            ManagerPort = Some managerPort
+                            Listen = ProcessManager.Listener.Port managerPort
                             Public = access }
                         (Some ManagerUi.tryHandle)
                 let baseUrl = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value

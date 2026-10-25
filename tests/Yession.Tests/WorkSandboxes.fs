@@ -1294,26 +1294,20 @@ let private backendTests =
                 SandboxRuntime.repoWorkBackend
                 "repo-owned is the repo work backend, whatever the session runs")
 
-        // A repo's `workdir:` resolves against the checkout as the CONTAINER sees it —
-        // the /repos bind — never the terminal's view. Resolved against the terminal's
-        // view, `workdir: .` produced a container whose working directory wore the host
-        // checkout path: an empty volume where nothing would look, while the checkout
-        // sat under /repos (measured on a live session before this rule existed).
-        testCase "a repo's declaration resolves against the container's view of its checkout" (fun () ->
-            Expect.equal
-                (Sandboxes.workCheckoutAt None "/Users/o/.yession/sessions/S1/workspace/repos" repo)
-                "/repos/octo/hello"
-                "the container view, independent of where the host keeps the clones")
-
-        // …and against the view its own file asked for, when it asked. The same function
-        // answers both, which is the point: the mount, the write path and the answer a verb
-        // gives are one computation, so a declaration cannot move one of them and not the
-        // others.
-        testCase "a sandbox that says where it wants the checkouts is answered there" (fun () ->
-            Expect.equal
-                (Sandboxes.workCheckoutAt (Some "/src") "/Users/o/.yession/sessions/S1/workspace/repos" repo)
-                "/src/octo/hello"
-                "the declared root, with the same repo under it")
+        // A checkout has ONE address. A container used to see it at /repos while every
+        // other view saw the host's path, so anything written into a checkout as an
+        // absolute path broke in the other view: a git worktree made in `dev` recorded
+        // `/repos/…`, the session's git could not read it, and the session read no
+        // yession.yaml at all (session TNQDWN3T).
+        testCase "a repo's sandbox sees its checkout at the path the host keeps it at" (fun () ->
+            let reposDir = "/Users/o/.yession/sessions/S1/workspace/repos"
+            let spec = Sandboxes.withSessionShares reposDir "/Users/o/.yession/sessions/S1/workspace/artifacts" DockerBackend EnvironmentSpec.container
+            let target =
+                match spec.Runtime with
+                | Container container ->
+                    container.Mounts |> List.tryPick (fun m -> if m.Source = HostPath reposDir then Some m.Target else None)
+                | Confinement -> None
+            Expect.equal target (Some reposDir) "the bind's target is its source")
     ]
 
 let private workspaceVolumeTests =

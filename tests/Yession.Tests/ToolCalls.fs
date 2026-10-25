@@ -176,10 +176,7 @@ let private prsOpening (create: PrDraft -> Async<Result<string, string>>) : PrWa
 let private servicesOver (service: Repos.ReposService) : Commands.CommandServices =
     { Repos = fun () -> Some service
       Sandboxes = fun () -> WorkSandboxes.unavailable
-      WorkCheckout =
-        fun repo _declared ->
-            { InSandbox = "/repos/" + RepoRef.relativePath repo
-              OnHost = "/data/repos/" + RepoRef.relativePath repo }
+      WorkCheckout = fun repo -> "/data/repos/" + RepoRef.relativePath repo
       DeclaredSandboxes = fun () -> []
       Terminals = fun () -> SessionTerminals.unavailable
       Files = fun () -> SessionFiles.unavailable
