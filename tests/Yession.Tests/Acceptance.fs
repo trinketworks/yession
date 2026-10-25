@@ -320,7 +320,7 @@ let private withGitHubPanel (change: GitHubPanel -> GitHubPanel) (model: ClientM
     { model with GitHub = { model.GitHub with Status = model.GitHub.Status |> Option.map change } }
 
 /// A session with watched pull requests, as the `pull_requests` query reports them — the
-/// only shape a browser has of them, and so the only shape the header strip can read.
+/// only shape a browser has of them, and so the only shape the status block can read.
 let private withPullRequests (rows: (string * QueryCell) list list) : ClientModel =
     { representativeModel with
         Queries =
@@ -900,7 +900,7 @@ let private uiChecklistTests =
         testCase "the agent's row follows the credential's health, not merely its presence" <| fun () ->
             let html = Support.render (private' "claude" "the refresh token has expired")
             let row = html.Substring (html.IndexOf (Dom.attr Dom.Hooks.agentPresence "live"))
-            let row = row.Substring (0, min 400 row.Length)
+            let row = row.Substring (0, row.IndexOf "</div>")
             Expect.isTrue (row.Contains Dom.Text.signInAgainStatus) "the agent's own row says what is needed"
             Expect.isFalse (row.Contains ">ready<") "and no longer claims to be ready"
 
@@ -1981,21 +1981,21 @@ let private uiChecklistTests =
         // A tone is how loudly a value is said, never what it says. What is pinned is the
         // HOOK and the word — not the ink, which is how the surface is built and what a
         // redesign is allowed to change.
-        // The header strip (the roster summary's twin, on the page a person is looking at).
-        // What it promises is that a session which owes something SAYS SO where the eye
-        // already is, and that pressing it reaches the rows behind the line.
-        testCase "a session that owes something says so in its header, and the line leads somewhere" <| fun () ->
+        // The pull requests' line in the sidebar's status block (the roster summary's twin, on
+        // the page a person is looking at). What it promises is that a session which owes
+        // something SAYS SO, and that pressing it reaches the rows behind the line.
+        testCase "a session that owes something says so in its status block, and the line leads somewhere" <| fun () ->
             let html = Support.render (withPullRequests [ prRow 377 "queued" (CellStatus ("ok", ToneMuted)) ])
             let strip =
                 let start = html.IndexOf "data-pr-strip"
-                Expect.isTrue (start > 0) "the strip renders"
+                Expect.isTrue (start > 0) "the line renders"
                 html.Substring (start, html.IndexOf ("</button>", start) - start)
             Expect.isTrue (strip.Contains "#377 queued") "wearing the line the query's rows amount to"
-            Expect.isTrue (html.Contains "aria-label=\"Pull requests\"") "and it is a control with a name"
+            Expect.isTrue (strip.Contains "pull requests: ") "and a screen reader hears what the line is about"
 
         // Silence is the feature, here as on the roster: a strip that was always there would
         // be a thing to stop seeing, and the point is that its presence means something.
-        testCase "a session with nothing owed has no header strip at all" <| fun () ->
+        testCase "a session with nothing owed has no pull requests' line at all" <| fun () ->
             let quiet = Support.render (withPullRequests [ prRow 1 "merged" (CellStatus ("ok", ToneMuted)) ])
             Expect.isFalse (quiet.Contains "data-pr-strip") "watches that have all merged owe nothing"
             let none = Support.render representativeModel
@@ -2025,44 +2025,56 @@ let private uiChecklistTests =
 
         // The agent's standing rides beside the pull requests' line, under the rule the
         // Manager is sent (`AgentStatus`), read off what this page already holds.
-        testCase "the header says what the agent is doing" <| fun () ->
+        testCase "the status block says what the agent is doing" <| fun () ->
             let said (model: ClientModel) =
                 let html = Support.render model
                 let start = html.IndexOf "data-agent-standing"
                 Expect.isTrue (start > 0) "the agent's standing renders"
-                let dotEnd = html.IndexOf ("</span>", start)
-                html.Substring (start, html.IndexOf ("</span>", dotEnd + 1) - start)
+                html.Substring (start, html.IndexOf ("</div>", start) - start)
             let noTurn = { representativeModel with Agent = { representativeModel.Agent with ActiveTurn = None } }
             let connected = noTurn |> withClaudePanel (fun panel -> { panel with AgentAvailable = true })
             Expect.stringContains (said connected) "waiting" "idle is the ball with the people"
             Expect.stringContains (said { connected with Agent = representativeModel.Agent }) "working" "a turn is work"
             Expect.stringContains (said noTurn) "no agent" "and a session nothing can answer says so"
 
-        // A phone's band is the title's room. It says only what stops the agent; a wide
-        // screen gets them all, worst first.
-        testCase "a phone's header says only what stops the agent" <| fun () ->
+        // The band is the title's room at every width. It says no standing in words; it
+        // wears the worst one's mark under the chevron that opens the block, and says its
+        // word in the chevron's name.
+        testCase "the header wears only the worst standing, as a mark on the way to the rest" <| fun () ->
             let noTurn =
                 { (withPullRequests [ prRow 377 "conflicted" (CellStatus ("ok", ToneMuted)) ]) with
                     Agent = { representativeModel.Agent with ActiveTurn = None } }
             let connected = noTurn |> withClaudePanel (fun panel -> { panel with AgentAvailable = true })
             let html = Support.render connected
-            let prs, agent = html.IndexOf "data-pr-strip", html.IndexOf "data-agent-standing"
-            Expect.isTrue (prs > 0 && agent > prs) "both are in the band, the conflicted pull request first"
-            Expect.equal (occurrences "data-phone-shows" html) 0 "and neither is a phone's"
-            let absent = Support.render noTurn
-            Expect.equal (occurrences "data-phone-shows" absent) 1 "no agent is"
+            let band =
+                // The session's band, found by the chevron it holds: a message group has a
+                // `<header>` of its own.
+                let start = html.LastIndexOf ("<header", html.IndexOf "data-nav-toggle=\"show\"")
+                html.Substring (start, html.IndexOf ("</header>", start) - start)
+            Expect.isFalse (band.Contains "data-pr-strip") "the pull requests' line is not in the band"
+            Expect.isFalse (band.Contains "data-agent-standing") "nor the agent's"
+            let mark =
+                let start = band.IndexOf "data-reopen-attention"
+                Expect.isTrue (start > 0) "the chevron carries a mark"
+                band.Substring (start, band.IndexOf ("</svg>", start) - start)
+            Expect.stringContains
+                mark
+                (sprintf "data-attention=\"%s\"" (Standings.Attention.name Standings.Wrong))
+                "the conflicted pull request's, which outranks a waiting agent"
+            Expect.stringContains band "aria-label=\"Show sidebar, #377" "and the chevron says it"
+            let blank = Support.render { representativeModel with Claude = { representativeModel.Claude with Status = None } }
+            Expect.isFalse (blank.Contains "data-reopen-attention") "a session with nothing to say wears no mark"
 
-        // The sidebar's agent row is where a phone reads what the agent is doing.
-        testCase "the sidebar's agent row says what the agent is doing" <| fun () ->
-            let said (model: ClientModel) =
-                let html = Support.render model
-                let start = html.IndexOf "data-agent-row-standing"
-                Expect.isTrue (start > 0) "the agent row carries a standing"
-                html.Substring (start, min 200 (html.Length - start))
+        // The block says what the agent is doing; the agent's row says who is here. Said once.
+        testCase "the status block sits above the people, and the agent's row does not repeat it" <| fun () ->
             let noTurn = { representativeModel with Agent = { representativeModel.Agent with ActiveTurn = None } }
-            let connected = noTurn |> withClaudePanel (fun panel -> { panel with AgentAvailable = true })
-            Expect.stringContains (said connected) "waiting" "idle"
-            Expect.stringContains (said { connected with Agent = representativeModel.Agent }) "working" "a turn"
+            let html = Support.render (noTurn |> withClaudePanel (fun panel -> { panel with AgentAvailable = true }))
+            let block, people = html.IndexOf "data-standings", html.IndexOf ">in this session<"
+            Expect.isTrue (block > 0 && people > block) "the block comes first"
+            let row =
+                let start = html.IndexOf (Dom.attr Dom.Hooks.agentPresence "live")
+                html.Substring (start, html.IndexOf ("</div>", start) - start)
+            Expect.isFalse (row.Contains "waiting") "the agent's row leaves the word to the block"
 
         // The one rule the strip applies that the rows do not state outright, and the reason
         // it reads the status cell's TONE rather than its sentence: the words in a health
@@ -2396,7 +2408,9 @@ let private uiChecklistTests =
                 "and a watch nobody can read has stopped moving too"
 
         // The one agent state nobody but a person can end. Working and waiting are the agent
-        // getting on with it, for the red suite's reason.
+        // getting on with it, for the red suite's reason. A turn in flight does not clear it:
+        // the page reads one agent standing, and a credential that needs signing in again
+        // fails the NEXT turn whatever this one is doing.
         testCase "a tab warns when the agent cannot run until somebody signs in again" <| fun () ->
             let needing = Some { Kind = StaticConnection; SignInRequired = Some "token expired" }
             let stuck =
@@ -2405,8 +2419,8 @@ let private uiChecklistTests =
             Expect.equal (ClientModel.tabTitle stuck) "⚠ planning the launch · yession" "a sign-in only a person can give"
             Expect.equal
                 (ClientModel.tabTitle { stuck with Agent = representativeModel.Agent })
-                "planning the launch · yession"
-                "a running turn proves the agent can run"
+                "⚠ planning the launch · yession"
+                "and a running turn does not hide it"
 
         testCase "a tab ticks when something merged, until the watch goes away" <| fun () ->
             Expect.equal
