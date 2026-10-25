@@ -14,6 +14,8 @@ open Yession.Domain
 open Yession.Codecs
 open Yession.Domain.Agent
 open Yession.Domain.Repos
+open Yession.Domain.Sandboxes
+open Yession.Domain.Tools
 open Yession.Domain.Chat
 open Yession.Host
 open Yession.App.Codecs
@@ -543,6 +545,17 @@ let private reposOver (reposDir: string) (listed: RepoRef list) : Repos.ReposSer
       RepoDiff = fun _ -> denied ()
       RemoveRepo = fun _ _ _ -> denied () }
 
+/// The same service with a listing that fails while `failing` says so — the whole listing, the
+/// way a checkout git cannot read failed it for every repo in the session.
+let private listingFailingWhile (failing: unit -> bool) (service: Repos.ReposService) : Repos.ReposService =
+    { service with
+        ListRepos =
+            fun () ->
+                async {
+                    if failing () then return Error "git -C failed (exit 128)"
+                    else return! service.ListRepos ()
+                } }
+
 /// A gate that approves everything and records what it was asked to do, so a test can see
 /// which declarations reached it and in what shape.
 let private recordingGate (seen: ResizeArray<GatedCall>) : RunGatedCommand =
@@ -784,6 +797,103 @@ let foldTests =
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal seen.Count 0 "nothing was asked for"
                 Expect.equal (folded.Outcomes ()) [] "and nothing is wrong"
+            }
+
+        // A listing that failed used to leave the declarations empty, which every reader took
+        // to mean "no file declares anything": `repo_config` said `(none)` and a start said the
+        // repo "declares no sandboxes", over a file that declared two.
+        testCaseAsync "a fold whose listing failed is not read as declaring nothing" <|
+            async {
+                let r = repo "octo/hello"
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
+                let folded =
+                    RepoSandboxes.create
+                        dir
+                        (cell (Some (listingFailingWhile (fun () -> true) (reposOver dir [ r ]))))
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray<GatedCall> ()))
+                        (foldLog ())
+                        noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                Expect.equal (folded.Declared ()) (Unreadable ("git -C failed (exit 128)", None)) "unreadable, with the reason"
+            }
+
+        testCaseAsync "a fold that reads after a failed one is the current answer again" <|
+            async {
+                let r = repo "octo/hello"
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
+                let mutable failing = true
+                let folded =
+                    RepoSandboxes.create
+                        dir
+                        (cell (Some (listingFailingWhile (fun () -> failing) (reposOver dir [ r ]))))
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray<GatedCall> ()))
+                        (foldLog ())
+                        noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                failing <- false
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                Expect.equal
+                    (match folded.Declared () with
+                     | Read declared -> declared |> Map.toList |> List.map (fst >> SandboxRef.render)
+                     | other -> failwithf "expected a read, got %A" other)
+                    [ "octo/hello:dev" ]
+                    "what the file declares"
+            }
+
+        // The files did not go anywhere when a re-read failed, so what the last read found
+        // still stands. It is marked, because it may no longer be what the files say.
+        testCaseAsync "a failed re-read keeps the last read, marked as not current" <|
+            async {
+                let r = repo "octo/hello"
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
+                let mutable failing = false
+                let folded =
+                    RepoSandboxes.create
+                        dir
+                        (cell (Some (listingFailingWhile (fun () -> failing) (reposOver dir [ r ]))))
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray<GatedCall> ()))
+                        (foldLog ())
+                        noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                failing <- true
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                Expect.equal
+                    (match folded.Declared () with
+                     | Unreadable (_, Some declared) -> declared |> Map.toList |> List.map (fst >> SandboxRef.render)
+                     | other -> failwithf "expected the last read kept beside the failure, got %A" other)
+                    [ "octo/hello:dev" ]
+                    "the declarations the last good read found"
+            }
+
+        testCaseAsync "repo_config names a listing that failed" <|
+            async {
+                let r = repo "octo/hello"
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
+                let folded =
+                    RepoSandboxes.create
+                        dir
+                        (cell (Some (listingFailingWhile (fun () -> true) (reposOver dir [ r ]))))
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray<GatedCall> ()))
+                        (foldLog ())
+                        noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                let! answer = (RepoSandboxes.query (fun () -> folded)).Read ()
+                let problems =
+                    match answer with
+                    | Ok (RowsOf rows) ->
+                        rows
+                        |> List.choose (fun row ->
+                            match List.tryFind (fst >> (=) "problem") row with
+                            | Some (_, CellText text) -> Some text
+                            | _ -> None)
+                    | other -> failwithf "expected rows, got %A" other
+                Expect.isTrue
+                    (problems |> List.exists (fun text -> text.Contains "git -C failed (exit 128)"))
+                    "a row carrying why the files could not be read"
             }
 
         // The query answers "what became of every declaration" to whoever asks. This is the
