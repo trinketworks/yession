@@ -358,10 +358,6 @@ The last section holds trust boundaries as sharp as the first section's.
 
 ## Runtime & topology
 
-- **An operator's `repos:` on `default` is not read where repo paths resolve.** The session's own
-  sandboxes are the operator's declarations, and `repos:` is legal on them. But the path an agent
-  hears for a checkout (`SessionMain.fs`, `VisibleAt`) comes from the backend alone. A `default`
-  that is a container with its own `repos:` hears the backend's path, not its own.
 - **The process split is complete** (Phase 4). Each session is a child OS process of the Manager.
   Supervision and secrets custody cross the boundary as a secret-scoped control RPC (environments
   are session-owned via the sandbox seam). The htmx management UI creates, launches, resumes and
@@ -911,9 +907,9 @@ After the fixes land, one pass rewrites it to what still reproduces.
   - **A docker terminal does not open on the checkouts.** Under the host-family backends, the
     repos directory sits inside a terminal's start workspace (`Sandboxes.SessionLayout`), so the
     agent's first `ls` shows what it cloned. Under docker, the workspace is the image's working
-    directory (this session composes no `WorkingDirectory`), and the repos dir is a bind mount at
-    `/repos` beside it. Verbs still answer with the right path (`reposVisibleAt`). The cost is
-    one `cd`.
+    directory (this session composes no `WorkingDirectory`), and the repos dir is a bind mount
+    beside it, at the path the host keeps it at (`Sandboxes.checkoutAt`). Verbs answer with that
+    path. The cost is one `cd`.
   - **Yession reads a repo's `yession.yaml`, and here is what it still cannot say** (Plan 27).
     The file declares sandboxes and nothing else. A sandbox is the only scope where "two repos
     both said something" has a total answer: the keys are (repo, name) pairs and the repos are

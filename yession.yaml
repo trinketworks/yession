@@ -6,8 +6,9 @@
 # .NET 10, Chromium, uv); the container brings only nix, and the ENTRYPOINT assembles the
 # devshell from the checkout — one source of truth, no second copy of the toolchain here.
 #
-# The session bind-mounts its shared checkouts at /repos, so `workdir: .` is this repo's
-# own checkout inside the container. Substitution comes from cache.nixos.org and the
+# The session bind-mounts its shared checkouts at the path the host keeps them at, so a
+# checkout has one address everywhere and `workdir: .` is this repo's own checkout inside
+# the container. Substitution comes from cache.nixos.org and the
 # public yession cachix cache, named in NIX_CONFIG below: names, not paths, which is what
 # keeps this file working on any machine. (First run on a fresh container is cold; the
 # store warms via substitution, and an operator may offer a persistent store volume.)

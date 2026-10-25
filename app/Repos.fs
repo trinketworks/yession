@@ -239,12 +239,10 @@ type private GitRun =
 
 type ReposConfig =
     { Backend : SandboxBackend
+      /// The checkouts' one directory, the same path in every sandbox (`Sandboxes.checkoutAt`).
+      /// Every listing carries a checkout's path under it, because the only reason to clone
+      /// a repo is to work in it and the work happens in a terminal.
       ReposDir : string
-      /// The same directory as a TERMINAL sees it (`Sandboxes.reposVisibleAt`): the host
-      /// path itself under the host-family backends, the mount target under docker. Every
-      /// listing carries it, because the only reason to clone a repo is to work in it and
-      /// the work happens in a terminal.
-      VisibleAt : string
       /// Where a terminal in the DEFAULT sandbox starts, NOW — an absolute path, the
       /// workspace or wherever `set_shell_profile` moved it. Every path a listing says is
       /// said from here (`SandboxPath.reachedFrom`), so it is one a terminal and a file
@@ -508,7 +506,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// The same checkout as a TERMINAL in this session reaches it. What the listing
         /// reports, and the only path anything outside the git sandbox can act on.
         let visiblePathOf (repo: RepoRef) =
-            SandboxPath.reachedFrom (config.StartsAt ()) (sprintf "%s/%s" config.VisibleAt (RepoRef.relativePath repo))
+            SandboxPath.reachedFrom (config.StartsAt ()) (pathOf repo)
         let present (repo: RepoRef) = Fs.exists (sprintf "%s/.git" (pathOf repo))
 
         /// The checkout's own root `AGENTS.md`, read once at the moment the clone lands

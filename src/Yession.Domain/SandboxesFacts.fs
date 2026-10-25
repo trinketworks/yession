@@ -111,12 +111,11 @@ and WorkSandboxStarted =
       /// Where the repo's checkout is AS THIS SANDBOX SEES IT, for a sandbox its repo
       /// declared. `None` for a session's own, which has no repo to hold one.
       ///
-      /// One checkout has two addresses (`CheckoutViews`) and which one is right depends on
-      /// where you are standing: the host's path under srt, `/repos/…` inside a container.
-      /// Only a sandbox settles that, which is why the answer is on the START and not on
-      /// `add_repo` — measured, an agent told the host path by `add_repo` pointed a shell
-      /// profile at it inside the container, watched it silently not take, and spent six
-      /// calls working out why.
+      /// The checkout has one absolute address in every sandbox (`Sandboxes.checkoutAt`),
+      /// so this is not a second view of it. It is on the START because it is the start
+      /// that says this sandbox has the checkout at all, and where its work begins. Logs
+      /// written before the address was unified carry a container's own `/repos/…` here,
+      /// true of the sandbox that started then.
       Checkout : string option
       /// The connections forwarded into it, by NAME — never a value, and never a token
       /// shape that could be mistaken for one. Forwarding is a fact about the sandbox

@@ -51,13 +51,11 @@ type CommandServices =
       Repos : unit -> Repos.ReposService option
       /// The session's named WorkSandboxes.
       Sandboxes : unit -> WorkSandboxes.WorkSandboxes
-      /// A repo's checkout in both its addresses (`Sandboxes.checkoutViewsAt`) — the
-      /// sandbox's own view, which a repo-owned declaration's `workdir:` resolves
-      /// against, and the host's, which its `build:` context does. Its own function
-      /// rather than a repo verb because it is a different fact: the verbs answer in
-      /// the view of the session's own sandboxes, where their answers are acted on,
-      /// and a repo's sandbox is a container with a view of its own.
-      WorkCheckout : RepoRef -> string option -> CheckoutViews
+      /// A repo's checkout at its one absolute path (`Sandboxes.checkoutAt`), which a
+      /// repo-owned declaration's `workdir:` and `build:` context both resolve against.
+      /// Absolute rather than a repo verb's answer, which is said relative to where the
+      /// default sandbox's terminals start.
+      WorkCheckout : RepoRef -> string
       /// What the checkouts declare their sandboxes to be, as the last fold read it (Plan 27);
       /// empty in a session with nothing to fold.
       ///
@@ -310,19 +308,20 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                         // Both reach a running turn, which is the whole reason
                                         // this sentence existed and the only reason it worked.
                                         //
-                                        // What stays is WHICH VIEW this path is, and that is a
-                                        // fact rather than advice — the only fact here nothing
-                                        // else supplies. Both paths now arrive in one answer,
-                                        // this one and the sandbox's, and an answer carrying
-                                        // two addresses for one checkout without saying which
-                                        // is which invites the reader to pick the first:
-                                        // measured, an agent did exactly that, pointed a dev
-                                        // sandbox's profile at the default's path, and spent
-                                        // two more calls undoing it.
+                                        // What stays is WHERE this path is said from, and that
+                                        // is a fact rather than advice — the only fact here
+                                        // nothing else supplies. The checkout has one absolute
+                                        // path in every sandbox (`Sandboxes.checkoutAt`), but
+                                        // this answer is relative to where the default
+                                        // sandbox's terminals start, and a sandbox the repo
+                                        // declares starts somewhere else. Unlabelled, a reader
+                                        // took it as the dev sandbox's path, pointed that
+                                        // sandbox's profile at it, and spent two calls undoing
+                                        // it.
                                         return
                                             Ok (
                                                 sprintf
-                                                    "added %s. That path is the DEFAULT sandbox's path. A sandbox that this repo declares sees the checkout at a path of its own. That sandbox says the path when it starts. Everyone in this session shares the checkout in both cases."
+                                                    "added %s. That path is relative to where the DEFAULT sandbox's terminals start. The checkout has one absolute path, the same in every sandbox. A sandbox that this repo declares names it when it starts. Everyone in this session shares the checkout."
                                                     (RepoListing.describe listing),
                                                 recorded.RecordedAs)
                                 }))
@@ -564,16 +563,10 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         | Ok decl ->
                             // The checkout is DERIVED from the sandbox's scope, never
                             // carried: a gated call that could name a checkout could name
-                            // any directory on this host. And it is the checkout as the
-                            // SANDBOX will see it — a repo's sandbox is a container, so
-                            // its `workdir:` resolves against the container's view of the
-                            // checkout, not the path a terminal in `default` would use.
+                            // any directory on this host.
                             let checkout =
                                 match SandboxRef.scope name, services.Repos () with
-                                // With the declaration's own `repos:`, so a `workdir:` beside
-                                // it resolves against where the checkouts are about to be
-                                // rather than where they would have been by default.
-                                | RepoOwned repo, Some _ -> Some (services.WorkCheckout repo decl.Repos)
+                                | RepoOwned repo, Some _ -> Some (services.WorkCheckout repo)
                                 | RepoOwned _, None
                                 | SessionOwned, _ -> None
                             match SandboxDecl.toRequest checkout decl with

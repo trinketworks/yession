@@ -231,7 +231,7 @@ let private tmpDir = Sandboxes.SessionLayout.prepareTmpDir dataDir
 /// configured one: a repo-owned sandbox is a container whatever `default` runs under,
 /// and answering with the srt workspace for one gave every repo container a working
 /// directory shaped like a host path — an empty volume mounted where nothing would
-/// look, while the checkout sat under the /repos bind.
+/// look, while the checkout sat under its bind.
 ///
 /// Module level because two things need it and they are not near each other: the sandboxes
 /// themselves, and the path a repo verb ANSWERS with — which is relative to the terminal's
@@ -341,20 +341,12 @@ let private makeSandboxes
                       // Asked of the fold rather than captured, because the sandbox manager is
                       // built before the first fold has run and a description arrives with it.
                       Describe = fun ref -> repoSandboxes.Described ref
-                      // Answered from the ref's own scope and the backend it will run under, so
-                      // the path is the one a command in THIS sandbox would use.
+                      // Answered from the ref's own scope: a repo's sandbox has that repo's
+                      // checkout, at the one path every sandbox shares.
                       Checkout =
                         fun ref ->
                             match SandboxRef.scope ref with
-                            | RepoOwned repo ->
-                                Some (
-                                    sprintf
-                                        "%s/%s"
-                                        (Sandboxes.reposVisibleAt
-                                            (repoSandboxes.ReposAt ref)
-                                            (SandboxRuntime.scopedBackend workBackend (SandboxRef.scope ref))
-                                            reposDir)
-                                        (RepoRef.relativePath repo))
+                            | RepoOwned repo -> Some (Sandboxes.checkoutAt reposDir repo)
                             | SessionOwned -> None
                       // The credentials this session knows how to forward. GitHub is the one
                       // Plan 14 left deferred, and it is what makes `git push` from a terminal
@@ -700,7 +692,7 @@ let private reportGitHubNetworkFailure (credentialActor: CredentialFor) (_gitSai
 let private commandServices : Commands.CommandServices =
     { Repos = fun () -> reposService
       Sandboxes = fun () -> workSandboxes
-      WorkCheckout = fun repo declared -> Sandboxes.checkoutViewsAt declared reposDir repo
+      WorkCheckout = fun repo -> Sandboxes.checkoutAt reposDir repo
       DeclaredSandboxes = fun () -> repoSandboxes.Declared ()
       Terminals = fun () -> terminals
       Files = fun () -> files
@@ -961,17 +953,6 @@ Async.StartImmediate (
             match Repos.create
                     { Backend = agentBackend
                       ReposDir = reposDir
-                      // What the verbs SAY a checkout is at is the view from the
-                      // session's OWN sandboxes — the agent's `default`, where these
-                      // answers are acted on. Relative to where a terminal starts, when
-                      // it can be: `repos/…` is what anyone here can act on, and
-                      // `set_shell_profile` resolves it against the same root. A repo
-                      // container's view of its own checkout is a different fact,
-                      // answered by `Sandboxes.workCheckoutAt` where a declaration is
-                      // resolved.
-                      // The DEFAULT sandbox's view, where its backend puts the repos. A
-                      // `repos:` the operator declared on it is not read here (docs/GAPS.md).
-                      VisibleAt = Sandboxes.reposVisibleAt None workBackend reposDir
                       StartsAt =
                         fun () ->
                             SandboxPath.resolvedFrom
