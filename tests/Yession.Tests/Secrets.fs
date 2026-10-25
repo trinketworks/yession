@@ -567,6 +567,121 @@ let private keyringTests =
             }
     ]
 
+// --- An operator's own key store (`--keystore exec:<helper>`) ---------------------------
+// Spawns a process per operation, so `Ports`. The helper is a shell script written here:
+// what the Manager sends it and what it may answer is the whole contract, so a fixture
+// that speaks the protocol is the test of it.
+
+/// A helper script under `out/.data`, executable, keeping its blob beside itself. The
+/// `$#` guard pins half the protocol: the operation is the ONE argument, and the payload
+/// never travels as another.
+let private helperScript (label: string) (body: string) : string =
+    let path =
+        sprintf "tests/Yession.Tests/out/.data/helper-%s-%d.sh" label (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+    TestFiles.write path (sprintf "#!/bin/sh\n[ $# -eq 1 ] || exit 9\nblob=\"$0.blob\"\n%s\n" body)
+    TestFiles.makeExecutable path
+    path
+
+/// A helper that keeps the payload in a file: `get` prints it (nothing until a `set`), `set`
+/// stores stdin. What a KMS or Vault helper does, without the KMS.
+let private storingHelper (label: string) : string =
+    helperScript
+        label
+        "case \"$1\" in\n  get) [ -f \"$blob\" ] && cat \"$blob\"; exit 0 ;;\n  set) cat > \"$blob\" ;;\n  *) exit 8 ;;\nesac"
+
+let private execTests =
+    testList "helper key store" [
+        testCase "a --keystore spelling round-trips, and an unknown one is refused" <| fun () ->
+            Expect.equal (KeyStore.KeyStoreSpec.ofName None) (Ok KeyStore.Keyring) "absent is the keyring"
+            Expect.equal (KeyStore.KeyStoreSpec.ofName (Some "keyring")) (Ok KeyStore.Keyring) "and so is its name"
+            Expect.equal
+                (KeyStore.KeyStoreSpec.ofName (Some "exec:/usr/local/bin/kek"))
+                (Ok (KeyStore.Exec "/usr/local/bin/kek"))
+                "exec: carries the helper's path"
+            for spec in [ KeyStore.Keyring; KeyStore.Exec "/opt/helper with space" ] do
+                Expect.equal (KeyStore.KeyStoreSpec.ofName (Some (KeyStore.KeyStoreSpec.describe spec))) (Ok spec) "describe is what ofName reads"
+            Expect.isError (KeyStore.KeyStoreSpec.ofName (Some "exec:")) "a helper needs a path"
+            Expect.isError (KeyStore.KeyStoreSpec.ofName (Some "kms")) "an unknown store is refused, never defaulted"
+            Expect.isError (KeyStore.KeyStoreSpec.ofName (Some "")) "and so is an empty one"
+
+        testCaseAsync "the helper-backed KeyStore round-trips the payload on the pipes" <|
+            async {
+                let store = KeyStore.exec (storingHelper "roundtrip")
+                let! available = store.Available ()
+                Expect.isTrue available "a named store is never probed away"
+                let! empty = store.Get ()
+                Expect.equal (expect empty) None "starts absent"
+                let payload = KeyStore.payload "kek-test" (SecretsCipher.generateKek ())
+                let! set = store.Set payload
+                expect set
+                let! back = store.Get ()
+                Expect.equal (expect back) (Some payload) "round-trips through the helper"
+            }
+
+        testCaseAsync "a whole SecretStore runs durable over a helper, and the key survives a reopen" <|
+            async {
+                let keyStore = KeyStore.exec (storingHelper "store")
+                let path = freshPath "exec"
+                let! store = openDurable path keyStore
+                Expect.isTrue store.Durable "durable over the helper"
+                Expect.isTrue store.KekMinted "the Manager minted the key; the helper only kept it"
+                let id = sid (SessionScope sessionA) "deploy-token"
+                let! _ = store.Set id "helper-held"
+                let! reopened = openDurable path keyStore
+                Expect.isFalse reopened.KekMinted "the second open loaded it"
+                let! resolved = reopened.Resolve id
+                Expect.equal (expect resolved) (Some "helper-held") "KEK survives via the helper"
+            }
+
+        testCaseAsync "a helper that fails is a key store failure the open retries, not a host without one" <|
+            async {
+                // Fails until a marker exists — IAM credentials that are not minted yet at
+                // boot, a KMS that throttles — then behaves. `openStoreWaiting` must wait it
+                // out rather than refuse, and `onWait` is where the marker gets written.
+                let helper =
+                    helperScript
+                        "flaky"
+                        "ready=\"$0.ready\"\n[ -f \"$ready\" ] || { echo 'credentials not ready' >&2; exit 7; }\ncase \"$1\" in\n  get) [ -f \"$blob\" ] && cat \"$blob\"; exit 0 ;;\n  set) cat > \"$blob\" ;;\nesac"
+                let store = KeyStore.exec helper
+                let! available = store.Available ()
+                Expect.isTrue available "not probed: the operator named it"
+                let! failed = store.Get ()
+                match failed with
+                | Error detail ->
+                    Expect.isTrue (detail.Contains "exited 7") (sprintf "the exit status is reported: %s" detail)
+                    Expect.isTrue (detail.Contains "credentials not ready") (sprintf "and what the helper said: %s" detail)
+                | Ok _ -> failwith "a failing helper must not read as a store"
+                let mutable waited = 0
+                let waitedOn (e: SecretStore.OpenError) =
+                    waited <- waited + 1
+                    Expect.equal (SecretStore.OpenError.kind e) "keystore" "the wait is for the key store"
+                    TestFiles.write (helper + ".ready") ""
+                let! opened = SecretStore.openStoreWaiting 1 waitedOn (Some (freshPath "flaky")) store
+                let store = expect (opened |> Result.mapError SecretStore.OpenError.describe)
+                Expect.equal waited 1 "waited once, then the helper answered"
+                Expect.isTrue store.Durable "and the store is durable"
+            }
+
+        testCaseAsync "a helper that answers nonsense is a key store failure, not a key" <|
+            async {
+                let store = KeyStore.exec (helperScript "garbage" "echo 'not a payload'")
+                let! opened = SecretStore.openStore (Some (freshPath "garbage")) store
+                match opened with
+                | Error (SecretStore.KeyStoreFailure detail) ->
+                    Expect.isTrue (detail.Contains "malformed") (sprintf "the payload shape is checked: %s" detail)
+                | other -> failwithf "expected KeyStoreFailure, got %A" other
+            }
+
+        testCaseAsync "a helper that is not there is a key store failure the boot can name" <|
+            async {
+                let store = KeyStore.exec "tests/Yession.Tests/out/.data/no-such-helper"
+                let! got = store.Get ()
+                match got with
+                | Error detail -> Expect.isTrue (detail.Contains "did not run") (sprintf "says it never ran: %s" detail)
+                | Ok _ -> failwith "a missing helper must not read as an empty store"
+            }
+    ]
+
 // --- Step 7: injection precedence (pure walk over an in-memory store; cheap tier) -------
 
 let private resolutionTests =
@@ -953,5 +1068,6 @@ let tests =
         resolutionTests
         auditTests
         Tag.needs "OS keyring" [ Tag.Keyring ] (fun () -> keyringTests)
+        Tag.needs "helper key store" [ Tag.Ports ] (fun () -> execTests)
         Tag.needs "Secrets control routes" [ Tag.Ports ] (fun () -> routeTests)
     ]

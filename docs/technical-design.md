@@ -397,8 +397,9 @@ redesigns.
 
 Secrets are Manager-owned authority:
 
-- The OS credential manager holds the key that encrypts secrets at rest. Without a
-  credential manager, nothing persists.
+- A key store the Manager never reads as a file holds the key that encrypts secrets at
+  rest: the OS credential manager, or a helper the operator names. Without one, nothing
+  persists.
 - A pure default-deny policy authorizes access. It reads the composite identity that the
   Manager verified itself: the calling session plus the users bound to its launch at
   ID-token issuance.

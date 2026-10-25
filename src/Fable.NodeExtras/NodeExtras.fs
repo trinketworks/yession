@@ -794,7 +794,11 @@ type ExecOptions =
       /// How long, in milliseconds, before the child is sent `KillSignal`. `None` is no limit.
       Timeout : int option
       /// What a timeout sends. `None` is Node's own default, `SIGTERM`.
-      KillSignal : string option }
+      KillSignal : string option
+      /// Text handed to the child on stdin, which is then CLOSED. `None` leaves stdin as
+      /// Node pipes it: open, and never written. A child that reads its stdin sees end of
+      /// input only under `Some` — `Some ""` is how a caller says "nothing, and no more".
+      Input : string option }
 
 /// What an `execFile` child answered, whole. Qualified, because the three names are the
 /// obvious ones for any record of a run, and a caller's own would otherwise capture this one's
@@ -848,6 +852,15 @@ module AsyncChildProcesses =
             options.Timeout |> Option.iter (fun ms -> o.timeout <- ms)
             options.KillSignal |> Option.iter (fun signal -> o.killSignal <- signal))
 
+    /// `child.stdin.end(text)`: write it, then close. One call, so a child cannot read a
+    /// half-written input as the whole of it. The error handler is for the child that exits
+    /// WITHOUT reading — a `get` that needs no input — where the write lands on a closed pipe
+    /// (`EPIPE`) and Node, with nobody listening, would throw it through the whole process.
+    /// What the child answered is still what the callback reports, so nothing is lost by
+    /// hearing the pipe out.
+    [<Emit("(function (stdin, text) { stdin.on('error', () => {}); stdin.end(text); })($0.stdin, $1)")>]
+    let private endStdin (child: ChildProcess) (text: string) : unit = jsNative
+
     let private statusOf (failure: ExecFailure) : int option =
         if isNull failure then Some 0
         else
@@ -862,16 +875,21 @@ module AsyncChildProcesses =
     /// FAILED is not an exception: `Status` says how it ended.
     let execFile (command: string) (arguments: string list) (options: ExecOptions) : Async<ExecResult> =
         Async.FromContinuations (fun (cont, _, _) ->
-            execFileWith
-                command
-                (Array.ofList arguments)
-                (toJs options)
-                (System.Action<ExecFailure, string, string> (fun failure out err ->
-                    cont
-                        { ExecResult.Status = statusOf failure
-                          ExecResult.Stdout = Option.ofObj out
-                          ExecResult.Stderr = Option.ofObj err }))
-            |> ignore)
+            let child =
+                execFileWith
+                    command
+                    (Array.ofList arguments)
+                    (toJs options)
+                    (System.Action<ExecFailure, string, string> (fun failure out err ->
+                        cont
+                            { ExecResult.Status = statusOf failure
+                              ExecResult.Stdout = Option.ofObj out
+                              ExecResult.Stderr = Option.ofObj err }))
+            // A child that could not be spawned has no stdin to end; `execFile` reports that
+            // through the callback above, so there is nothing more to say here.
+            match options.Input with
+            | Some text when not (isNull child) && not (isNull (box child?stdin)) -> endStdin child text
+            | _ -> ())
 
 // --- Crypto ---------------------------------------------------------------------------------
 

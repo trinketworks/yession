@@ -34,6 +34,15 @@ let secretsOption =
         "whether secrets persist across restarts: durable, ephemeral"
         ProcessManager.SecretsMode.ofName
 
+/// Where the secrets key lives. Decoded by the parse like `--secrets`, so a store this bin
+/// cannot run refuses the command line. `KeyStore.KeyStoreSpec` owns the vocabulary.
+let keystoreOption =
+    Cli.parsedValue
+        "keystore"
+        "store"
+        "where the secrets key lives: keyring (the OS credential manager, default) or exec:<path> (your own helper)"
+        KeyStore.KeyStoreSpec.ofName
+
 let portOption =
     Cli.parsedValue
         "port"
@@ -114,6 +123,7 @@ let spec =
     Cli.spec "yession-manager"
     |> Cli.accepts authOption
     |> Cli.accepts secretsOption
+    |> Cli.accepts keystoreOption
     |> Cli.accepts portOption
     |> Cli.accepts socketOption
     |> Cli.accepts dataDirOption
@@ -189,6 +199,8 @@ type Report =
     { Version : string
       TrustRule : string * Origin
       Secrets : string * Origin
+      /// `KeyStore.KeyStoreSpec.describe`: what could be typed back as `--keystore`.
+      KeyStore : string * Origin
       /// Where the Manager listens: a port, or a socket (`Listener.describe`).
       Listen : string * Origin
       DataDir : string * Origin
@@ -239,7 +251,9 @@ module Report =
             [ setting "trust rule" report.TrustRule
                 "The Manager identifies the user behind each request with this rule."
               setting "secrets" report.Secrets
-                "The Manager stores connected credentials this way. It uses the OS credential manager where this host has one."
+                "The Manager stores connected credentials this way. It uses the key store below where this host has one."
+              setting "key store" report.KeyStore
+                "The Manager keeps the key that encrypts stored credentials here: the OS credential manager, or a helper you run."
               setting "listen" report.Listen
                 "The Manager listens here. Under --auth trusted-headers it is a socket only the proxy can open."
               setting "data dir" report.DataDir

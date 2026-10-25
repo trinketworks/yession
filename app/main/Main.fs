@@ -71,6 +71,11 @@ let private strategy = Cli.valueOf ManagerCli.authOption args
 // async below. An unknown name refused the command line, so nothing was touched at all.
 let private secretsMode = Cli.valueOf ManagerCli.secretsOption args
 
+// Where the secrets key lives (`--keystore`): the OS credential manager, probed, or a helper
+// the operator named. Resolved below, beside the mode, because whether a store is wanted at
+// all is the mode's to say.
+let private keyStoreSpec = Cli.valueOf ManagerCli.keystoreOption args
+
 // How this deployment is reached from outside (Plan 09). Parsed once, HERE, so a
 // combination that cannot work is a refused boot rather than links and redirect URIs that
 // point somewhere unreachable. Sessions inherit the same variables by env and parse them
@@ -133,6 +138,7 @@ let private checkReport () =
             (match ProcessManager.SecretsMode.describe secretsMode with
              | Some spelling -> spelling, ManagerCli.Chosen
              | None -> "durable or in-memory", ManagerCli.Default)
+          KeyStore = KeyStore.KeyStoreSpec.describe keyStoreSpec, origin ManagerCli.keystoreOption
           Listen =
             ProcessManager.Listener.describe listener,
             (if Cli.isSet ManagerCli.portOption args || Cli.isSet ManagerCli.socketOption args then ManagerCli.Chosen
@@ -164,6 +170,10 @@ let private checkReport () =
 if Cli.isSet ManagerCli.detailedOption args && not (Cli.isSet ManagerCli.checkOption args) then
     Interop.rejectValue cli "--detailed needs --check. It says what a --check report means."
 
+// A key store nobody will open is a setting that silently did nothing, so it is refused.
+if Cli.isSet ManagerCli.keystoreOption args && not (ProcessManager.SecretsMode.needsCredentialManager secretsMode) then
+    Interop.rejectValue cli "--keystore names where the secrets key lives, and --secrets ephemeral keeps no key. Drop one."
+
 if Cli.isSet ManagerCli.checkOption args then
     printfn "%s" (checkReport ())
     Interop.exit 0
@@ -189,9 +199,12 @@ Async.StartImmediate(
         // stderr, which is what a supervisor shows when a boot never answers.
         let! keyStore =
             if ProcessManager.SecretsMode.needsCredentialManager secretsMode then
-                eprintfn
-                    "Yession Manager: reading the secrets key from the OS credential manager. If nothing follows, it is waiting on a prompt (on macOS, a keychain dialog for node)."
-                KeyStore.detect ()
+                match keyStoreSpec with
+                | KeyStore.Keyring ->
+                    eprintfn
+                        "Yession Manager: reading the secrets key from the OS credential manager. If nothing follows, it is waiting on a prompt (on macOS, a keychain dialog for node)."
+                | KeyStore.Exec command -> eprintfn "Yession Manager: the secrets key comes from %s." command
+                KeyStore.resolve keyStoreSpec
             else async { return None }
         let secretsBacking =
             match ProcessManager.SecretsBacking.forMode secretsMode keyStore with
