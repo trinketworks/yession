@@ -450,26 +450,37 @@ let private answersAt (address: string) (port: int) : Async<bool> =
 let private doorTests =
     testList "where the gateway answers" [
         // Linux loopback is all of 127/8, so `127.0.0.2` is an address a listener on every
-        // interface would answer and one on `127.0.0.1` does not.
-        testCaseAsync "the gateway does not answer at an address it was not opened at" <| async {
-            do!
-                withGatewayAtLoopback (fun gateway ->
-                    async {
-                        let! answered = answersAt "127.0.0.2" gateway.Port
-                        Expect.isFalse answered "not every interface"
-                    })
-        }
+        // interface would answer and one on `127.0.0.1` does not. macOS configures only
+        // `127.0.0.1` on `lo0`: a bind to `127.0.0.2` is EADDRNOTAVAIL and a connect to it
+        // sits in a timeout — which is also why `hostDoorsFrom` never names it there. Skipped
+        // rather than asserted on macOS: the invariant is real and this platform has no second
+        // loopback address to express it with, which is what a visible skip says and a quiet
+        // pass does not.
+        (if ``process``.platform = Node.Base.Platform.Darwin then
+            ptestCase "the gateway does not answer at an address it was not opened at (Linux only: macOS has no second loopback address)" (fun () -> ())
+         else
+            testCaseAsync "the gateway does not answer at an address it was not opened at" (async {
+                do!
+                    withGatewayAtLoopback (fun gateway ->
+                        async {
+                            let! answered = answersAt "127.0.0.2" gateway.Port
+                            Expect.isFalse answered "not every interface"
+                        })
+            }))
 
-        testCaseAsync "an address opened later answers on the same port" <| async {
-            do!
-                withGatewayAtLoopback (fun gateway ->
-                    async {
-                        let! opened = gateway.Open "127.0.0.2"
-                        Expect.equal opened (Ok ()) "opened"
-                        let! answered = answersAt "127.0.0.2" gateway.Port
-                        Expect.isTrue answered "the port a sandbox was told"
-                    })
-        }
+        (if ``process``.platform = Node.Base.Platform.Darwin then
+            ptestCase "an address opened later answers on the same port (Linux only: macOS has no second loopback address)" (fun () -> ())
+         else
+            testCaseAsync "an address opened later answers on the same port" (async {
+                do!
+                    withGatewayAtLoopback (fun gateway ->
+                        async {
+                            let! opened = gateway.Open "127.0.0.2"
+                            Expect.equal opened (Ok ()) "opened"
+                            let! answered = answersAt "127.0.0.2" gateway.Port
+                            Expect.isTrue answered "the port a sandbox was told"
+                        })
+            }))
     ]
 
 let private portsTests =
