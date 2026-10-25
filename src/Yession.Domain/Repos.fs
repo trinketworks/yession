@@ -67,6 +67,40 @@ type RepoListing =
       /// how a clone turns into `ls ~/repos`, twice, and then a turn that ran out of steps.
       Path : string }
 
+/// One checkout the repos directory holds, as git read it: listed, or unreadable with
+/// git's reason.
+///
+/// A case of its own rather than a failure of the whole listing, because one directory git
+/// cannot read says nothing about its neighbours. It used to say everything: a worktree the
+/// agent made inside a container left a `.git` FILE pointing at `/repos/…`, a path only that
+/// container has, and the session's listing stopped at it. The fold that reads every
+/// checkout's `yession.yaml` then read none, and a relaunched session refused to start a
+/// sandbox its healthy repo declared (session TNQDWN3T).
+[<RequireQualifiedAccess>]
+type RepoRead =
+    | Listed of RepoListing
+    | Unreadable of RepoUnreadable
+
+/// A checkout git could not read, named by repo and by the path a terminal reaches it at,
+/// so whoever reads the reason knows which directory to look at.
+and RepoUnreadable =
+    { Repo : RepoRef
+      Path : string
+      Reason : string }
+
+module RepoRead =
+
+    let repo (read: RepoRead) : RepoRef =
+        match read with
+        | RepoRead.Listed listing -> listing.Repo
+        | RepoRead.Unreadable unreadable -> unreadable.Repo
+
+    let listed (reads: RepoRead list) : RepoListing list =
+        reads |> List.choose (function RepoRead.Listed listing -> Some listing | RepoRead.Unreadable _ -> None)
+
+    let unreadable (reads: RepoRead list) : RepoUnreadable list =
+        reads |> List.choose (function RepoRead.Unreadable unreadable -> Some unreadable | RepoRead.Listed _ -> None)
+
 /// One repository a person could choose, as the provider lists it — enough to choose it
 /// and to clone it. Provider-neutral by construction: a forge's listing is decoded into
 /// this in the session, and the browser's picker reads only this.

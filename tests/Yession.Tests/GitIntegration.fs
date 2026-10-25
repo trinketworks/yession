@@ -24,6 +24,7 @@ open Yession.Codecs
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
 open Yession.Domain.Chat
+open Yession.Domain.Repos
 open Yession.Oidc
 open Yession.App
 open Yession.Host
@@ -55,6 +56,12 @@ let private pureTests =
             Expect.isTrue (configs |> List.contains ("core.hooksPath", "/dev/null")) "hooks off"
             Expect.isTrue (configs |> List.contains ("core.fsmonitor", "false")) "fsmonitor off"
             Expect.isTrue (configs |> List.contains ("protocol.ext.allow", "never")) "ext transport off"
+
+        testCase "a failed git run names the checkout it ran in" <| fun () ->
+            Expect.stringContains
+                (Repos.gitFailure [ "-C"; "/data/repos/octo/hello"; "rev-parse"; "HEAD" ] 128 "fatal: not a git repository: (null)")
+                "rev-parse in /data/repos/octo/hello"
+                "the verb and the directory, never `-C`"
 
         // A helper is never useful here (the token rides in as a header config), and the
         // fallback is worse than useless: Apple's git carries `credential.helper=osxkeychain`
@@ -444,6 +451,36 @@ let private srtTests =
             | other -> failwithf "expected one add and its clone, got %A" other
         }
 
+        // The incident (session TNQDWN3T): a worktree made inside a container leaves a
+        // `.git` FILE naming a gitdir only that container has. Beside it, the session's own
+        // checkout must still be read — one directory git cannot read is never the listing.
+        testCaseAsync "a checkout git cannot read does not hide the one beside it" <| async {
+            let root = mkdtemp ()
+            makeBareFixture root "hello" |> ignore
+            let service = serviceIn root (freshLog ())
+            let repo = RepoRef.create "octo/hello" |> expect
+            let! _ = service.AddRepo caller repo
+            let stray = sprintf "%s/octo/hello-phone" (reposIn root)
+            TestFiles.ensureDir stray
+            TestFiles.write (sprintf "%s/.git" stray) "gitdir: /repos/octo/hello/.git/worktrees/hello-phone\n"
+            let! listed = service.ListRepos ()
+            Expect.isTrue
+                (RepoRead.listed (expect listed) |> List.exists (fun listing -> listing.Repo = repo))
+                "the healthy checkout is listed"
+        }
+
+        testCaseAsync "a checkout git cannot read is listed with a reason naming where it is" <| async {
+            let root = mkdtemp ()
+            let stray = sprintf "%s/octo/hello-phone" (reposIn root)
+            TestFiles.ensureDir stray
+            TestFiles.write (sprintf "%s/.git" stray) "gitdir: /repos/octo/hello/.git/worktrees/hello-phone\n"
+            let service = serviceIn root (freshLog ())
+            let! listed = service.ListRepos ()
+            match RepoRead.unreadable (expect listed) with
+            | [ unreadable ] -> Expect.stringContains unreadable.Reason stray "git's failure names the checkout"
+            | other -> failwithf "expected one unreadable checkout, got %A" other
+        }
+
         // The add is said before the clone, so the timeline shows it at once; a failed clone
         // resolves that same item, so nothing is left reading as still cloning.
         testCaseAsync "a clone that fails records its failure under the add's own id" <| async {
@@ -490,7 +527,7 @@ let private srtTests =
             let! listed = service.ListRepos ()
             Expect.equal
                 (expect listed)
-                [ { Repo = repo; Branch = "main"; Dirty = false; Path = sprintf "%s/octo/hello" (reposIn root) } ]
+                [ RepoRead.Listed { Repo = repo; Branch = "main"; Dirty = false; Path = sprintf "%s/octo/hello" (reposIn root) } ]
                 "the listing is the filesystem's answer, and it says where"
         }
 
