@@ -2129,10 +2129,24 @@ module Style =
     /// give, and the honest answer is absence (docs/visual-design.md, Space). At 844x390 the
     /// ask card's floor left this column 24px with 608px of extent under it, and every one of
     /// its fourteen items, scrolled to the middle, landed under the author line the column
-    /// pins — which was the whole strip. `display: none` and not a cover, because a drawn
-    /// column is one Tab reaches: the fault the card stopped being an overlay to fix.
-    /// What takes the room carries the way back, and here that is the card's own way out
-    /// (`askWay`): the conversation is one press away for as long as it is not drawn.
+    /// pins — which was the whole strip. `visibility: hidden` and not a cover, because a drawn
+    /// column is one Tab reaches: the fault the card stopped being an overlay to fix. An
+    /// invisible one is out of the focus order, out of hit-testing and out of the
+    /// accessibility tree, as a `display: none` one is. What takes the room carries the way
+    /// back, and here that is the card's own way out (`askWay`): the conversation is one
+    /// press away for as long as it is not drawn.
+    ///
+    /// Not `display: none`, which it was: a scroller taken out of layout LOSES ITS SCROLL, and
+    /// comes back at its top. On a phone with the keyboard up, a composer five lines deep left
+    /// this column about 90px; the sixth line took it under 72, and a reader two hundred
+    /// messages down came back at message one. Worse when the reader was far back: the tray
+    /// offering the way to the latest took 44px of the column, the column went, `Tail`
+    /// measured a scroller with no box as at its end, the model stopped offering the way, the
+    /// tray left, the column came back at its top, was measured far back, and the tray
+    /// returned — a render a frame, each laying the whole conversation out again, until the
+    /// typing stopped. `visibility` keeps the box and the scroll position in it, so there is
+    /// nothing to lose and nothing to measure wrongly (`Tail.tell` refuses a boxless surface
+    /// too, for the next thing that takes the box away).
     ///
     /// ALWAYS SCROLLS, by one pixel at least, so it bounces like a native iOS scroll view
     /// even when there is nothing more to see: iOS rubber-bands only a box that overflows,
@@ -2148,7 +2162,7 @@ module Style =
         "relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain "
         + "px-8 pb-6 flex flex-col gap-6 "
         + "after:absolute after:inset-x-0 after:top-full after:h-px "
-        + "before:grow [&>*:first-child]:mt-0 too-short:hidden "
+        + "before:grow [&>*:first-child]:mt-0 too-short:invisible "
         + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:before:-mb-1 break-words "
         + focusRingInset
 

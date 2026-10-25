@@ -2863,6 +2863,40 @@ let private atItsEnd (page: IPage) (key: string) : Async<bool> =
         return scroll |> Option.exists (fun s -> s.Top + s.ClientHeight >= s.Height - 4.0)
     }
 
+/// A long conversation (the scroll scenario's, so the harness counts the renders from here)
+/// with its reader more than a screen back from the end — the way to the latest offered in the
+/// composer's tray — and then the viewport shortened, as a keyboard shortens it, until the
+/// column has less room than one item and is not drawn (`too-short`, app/tailwind.css).
+/// Answers where the reader's scroll stood before the room went. Not the start: the start is
+/// 0, and 0 is also where a lost scroll lands.
+let private columnTooShort (page: IPage) : Async<float> =
+    async {
+        do! Harness.run4 page HarnessPage.benchScrollBegin 80 0 16 true
+        do! twoFrames page
+        let chat = tailSurface "chat"
+        let! scroll = Probe.scroll page chat
+        // Two screens short of the end, which is more than the one that counts as far.
+        let top =
+            match scroll with
+            | Some s -> s.Height - 3.0 * s.ClientHeight
+            | None -> failwith "there is no conversation to scroll"
+        Expect.isTrue (top > 0.0) "the conversation is long enough to stand more than a screen back in"
+        let! _ = Probe.scrollTo page chat top
+        do! twoFrames page
+        do! waitPresent "the way back to the latest message to be offered" page "#shell [data-jump-to-latest=\"chat\"] button"
+        let! was = Probe.scroll page chat
+        let was =
+            match was with
+            | Some s -> s.Top
+            | None -> failwith "the conversation went as it was read"
+        // On a phone the header, the composer and the tray leave the column under one item
+        // (72px) at this height.
+        do! awaitU (page.SetViewportSizeAsync (390, 240))
+        do! Wait.until "the column to have less room than one item" (fun () -> Probe.scroll page chat) (Option.exists (fun s -> s.ClientHeight < 72.0))
+        do! twoFrames page
+        return was
+    }
+
 /// Show the pane and wait until it stands at the width the separator says — the column animates
 /// open, and a measurement taken while it travels is of a width it was for one frame.
 let private paneOpenAndSettled (page: IPage) : Async<unit> =
@@ -5905,6 +5939,42 @@ let editorTests =
                     let! onJump = Read.focused page "[data-jump-to-latest], [data-jump-to-latest] *"
                     let inPane = inPanel && not onJump
                     Expect.isTrue inPane "the keyboard is in the pane, on what holds the blocks it was taken to"
+                }
+            // A column with less room than one item is not drawn (`Style.timeline`), and when the
+            // room comes back its reader is where they left it. Hidden by `display: none` the
+            // scroller lost its scroll and came back at its top: on a phone with the keyboard up,
+            // the sixth line of a draft took the column under one item and a reader deep in a long
+            // conversation to its first message. Only a laid-out page has a scroll to lose; the
+            // markup is the same throughout.
+            editorCaseIn 390 844 "a conversation given less room than one item keeps its reader's place for when the room comes back" <| fun page ->
+                async {
+                    do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
+                    let! was = columnTooShort page
+                    do! awaitU (page.SetViewportSizeAsync (390, 844))
+                    do! Wait.until "the column to have its room back" (fun () -> Probe.scroll page (tailSurface "chat")) (Option.exists (fun s -> s.ClientHeight >= 72.0))
+                    do! twoFrames page
+                    let! _ = Harness.ask page HarnessPage.benchScrollEnd
+                    let! now = Probe.scroll page (tailSurface "chat")
+                    Expect.equal (now |> Option.map (fun s -> s.Top)) (Some was) "the reader is where they were before the column went"
+                }
+            // …and nothing happens to it, frame after frame, while it has no room. With the scroll
+            // lost, a column with no box read as at its end, so the model stopped offering the way
+            // back, the tray gave its 44px back, the column returned at its top and was measured far
+            // back, and the tray took the room again: a render a frame, each laying the whole
+            // conversation out, for as long as the draft stayed deep — the "flickers and gets slow"
+            // on a phone. The harness counts the app's renders from the scenario's start; a frame's
+            // worth of them against a column nothing is happening to is that loop.
+            editorCaseIn 390 844 "a conversation given less room than one item is not rendered frame after frame" <| fun page ->
+                async {
+                    do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
+                    let! _ = columnTooShort page
+                    do! Probe.frames page 30
+                    let! report = Harness.ask page HarnessPage.benchScrollEnd
+                    use doc = System.Text.Json.JsonDocument.Parse report
+                    let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
+                    // The scroll away and the tray arriving are a render or two. A render a frame
+                    // over thirty frames is thirty.
+                    Expect.isTrue (renders <= 6) (sprintf "the conversation was rendered %d times while its column had no room" renders)
                 }
         ]
         // Dismissing a menu with the keyboard is where focus goes to `body` if nobody puts it
