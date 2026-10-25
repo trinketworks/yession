@@ -44,7 +44,7 @@ type PrKnown =
       Draft : bool }
 
 /// The one word for where a pull request stands, and how loudly to say it. ONE home,
-/// because the settings panel, the roster summary and the header strip must not each
+/// because the settings panel, the roster summary and the status block must not each
 /// invent their own vocabulary for the same fact — they read it from here.
 module PrStatus =
 
@@ -91,7 +91,7 @@ module PrStatus =
     let unreachable : string = "unreachable"
 
     /// How loudly a status word is said, on every surface that says one — the
-    /// `pull_requests` table, the session's header strip — so the same word is never red
+    /// `pull_requests` table, the session's status block — so the same word is never red
     /// in one and grey in the other. The word is still the word; this is only volume.
     ///
     /// Loud is anything waiting on somebody to ACT: a stall nobody is driving, and the
@@ -145,7 +145,7 @@ module PrStatus =
         if rank left <= rank right then left else right
 
     /// One line about a set of pull requests, for a surface with room for one line and no
-    /// more — the Manager's roster, and the session page's header strip.
+    /// more — the Manager's roster, and the session page's status block.
     ///
     /// Takes a LABEL rather than a `PrRef`, because the two callers hold the identity in
     /// different shapes: the session has the watch, the browser has only what the

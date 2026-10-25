@@ -4572,7 +4572,7 @@ module ClientModel =
     /// `pull_requests` query — the only shape a browser has them in, since the query stream
     /// is what delivers them.
     ///
-    /// Here rather than at either surface because there are now two: the header strip and
+    /// Here rather than at either surface because there are now two: the status block and
     /// the tab title. Two readers of one set of rows that parsed them separately would be
     /// two readers that can disagree about the same session in the same window — which is
     /// the fault `PrStatus` exists to prevent, one layer up from where it prevents it.
@@ -4614,36 +4614,35 @@ module ClientModel =
                 credential |> Option.map (fun c -> c.SignInRequired.IsSome) |> Option.defaultValue false)
         | None -> false
 
-    /// What the agent is doing, as the sidebar's agent row and the header both say it, under
-    /// the rule the session reports to the Manager by (`AgentStatus`), from the facts this
-    /// page already holds.
+    /// What the agent is doing, under the rule the session reports to the Manager by
+    /// (`AgentStatus`), from the facts this page already holds.
     ///
     /// None before the Claude panel has said anything: whether an agent can run at all is the
     /// one input the page cannot know until then, and "waiting" over a session that cannot
     /// answer would be the wrong word for a moment rather than none.
-    let agentStanding (model: ClientModel) : Standings.Standing option =
+    ///
+    /// One departure from that rule. A running turn outranks a credential that stopped
+    /// working in `AgentStatus` (the turn is what the agent is doing right now), but this page
+    /// is where a person reads the agent's health, and "working" over a sign-in the next turn
+    /// will fail on is the "ready" the sidebar's agent row used to lie with.
+    let private agentStanding (model: ClientModel) : Standings.Standing option =
         model.Claude.Status
         |> Option.map (fun panel ->
-            Standings.AgentStatus.standing
-                { TurnRunning = Option.isSome model.Agent.ActiveTurn
-                  BusyTerminals = Projection.awaitedByAgent model.Terminals
-                  NoAgent = not panel.AgentAvailable
-                  SignInRequired = panel.AgentAvailable && claudeNeedsSignIn model })
-
-    /// What the sidebar's agent row says. A running turn outranks a credential that stopped
-    /// working in `AgentStatus` (the turn is what the agent is doing right now), but this row
-    /// is the one place a person reads the agent's own health, and "working" over a sign-in
-    /// the next turn will fail on is the "ready" this row used to lie with.
-    let agentRowStanding (model: ClientModel) : Standings.Standing option =
-        agentStanding model
-        |> Option.map (fun standing ->
-            if claudeNeedsSignIn model && standing.Word <> Standings.AgentStatus.noAgent then
+            let needsSignIn = panel.AgentAvailable && claudeNeedsSignIn model
+            let standing =
+                Standings.AgentStatus.standing
+                    { TurnRunning = Option.isSome model.Agent.ActiveTurn
+                      BusyTerminals = Projection.awaitedByAgent model.Terminals
+                      NoAgent = not panel.AgentAvailable
+                      SignInRequired = needsSignIn }
+            if needsSignIn then
                 { standing with Word = Standings.AgentStatus.signInAgain; Attention = Standings.Wrong }
             else
                 standing)
 
-    /// Where this session stands, as the header says it: its agent, then its pull requests —
-    /// the order the session reports them to the Manager in.
+    /// Where this session stands: its agent, then its pull requests — the order the session
+    /// reports them to the Manager in. The sidebar's status block says each of them, and the
+    /// reopen chevron wears the worst while the sidebar is shut.
     let standings (model: ClientModel) : Standings.Standing list =
         Option.toList (agentStanding model) @ Option.toList (PrStatus.summary (prStandings model))
 

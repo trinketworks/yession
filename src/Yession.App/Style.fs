@@ -1466,6 +1466,21 @@ module Style =
     /// The avatar opts back out: a box has no baseline (it would park its bottom edge on
     /// the line), so it centres in the row the way it always did.
     let personAvatar = "self-center"
+
+    /// A standing's mark in the column's status block (`standingsSection`): centred in the
+    /// AVATAR's 20px column, so the marks stack on the axis the roster's avatars do and every
+    /// word in the block starts on the rail the names below it start on.
+    let standingMarkSeat = "w-5 shrink-0 self-center grid place-items-center"
+    /// A standing that GOES somewhere (the pull requests' line opens their rows in settings):
+    /// the roster row's own shape, pressable. A thumb's height on a phone, centred there
+    /// because a baseline row in a 44px box parks its words at the top of it.
+    let standingRowPress =
+        cls [ person; "w-full bg-transparent border-0 p-0 text-left cursor-pointer"
+              "hover:text-ink transition-colors duration-150 ease-out motion-reduce:transition-none"
+              "phone:min-h-touch phone:items-center"
+              focusRing ]
+    /// Where that row says it goes: the settings pivot's chevron, at the row's right edge.
+    let standingRowGo = "ml-auto self-center text-ink-faint"
     let commandCard = "flex flex-col gap-1 px-3 py-2 bg-surface"
 
     /// The contents' entries, as one stack. Their own container rather than the section's, so
@@ -1744,56 +1759,13 @@ module Style =
         "absolute left-0 -bottom-px h-0.5 bg-blue pointer-events-none "
         + "transition-[width] duration-500 ease-linear motion-reduce:transition-none"
 
-    /// The header's right-hand group: the session's standings (`headerStandingWide`) and the
-    /// way back to the terminals. `pb-[1px]` is optical, not rhythm: it drops the 11px caps line's
+    /// The header's right-hand group: the way back to the terminals. The session's standings
+    /// are the sidebar's (`standingsSection`), and the band only wears the worst of them,
+    /// under the chevron that opens it (`navReopenMark`). `pb-[1px]` is optical, not rhythm: it drops the 11px caps line's
     /// baseline onto the wordmark/title baseline (pb-1 left it 3px high, measured live). On a
     /// phone there is no wordmark to meet: the group centres on the title's line instead.
     let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-[1px] phone:items-center phone:gap-3 phone:pb-0"
     let headerStatus = "shrink-0"
-
-    /// What this session's pull requests amount to, in the header band: the same line the
-    /// Manager's roster shows for this session, on the page a person is actually looking at.
-    ///
-    /// A real button, because it GOES somewhere — the panel with the rows behind the line is
-    /// one press away in settings, and a line a reader cannot follow is a line that raises a
-    /// question it will not answer. Bordered like nothing else in the band on purpose: it
-    /// wears the caps voice of its neighbours and takes its colour from the tone of the worst
-    /// thing it is reporting, so the band gains a word rather than a control.
-    ///
-    /// No display of its own: the slot it sits in (`headerStandingWide`) decides where it
-    /// is drawn, the same as for the agent's standing beside it.
-    let prStripIn (tone: string) =
-        "bg-transparent border-0 cursor-pointer " + caps + " transition-colors " + focusRing + " " + tone
-
-    /// The agent's standing in the header: working, waiting, running a command, no agent,
-    /// sign in again. A STATUS, so it is drawn as one — the caps voice in its tone, leading
-    /// with a dot, which beats while the state is a wait under way (docs/visual-design.md,
-    /// Colour). Not pressable: a status is not a control (Hierarchy of controls), and the
-    /// call to action for the two that need a person is on the sidebar's own agent row.
-    let headerAgentStanding (tone: string) = caps + " " + tone
-
-    /// Where the header's standings are drawn. A wide screen has room for them; a phone's
-    /// 56px band (geometry-pinned: `Browser.fs` measures that the bar never covers the header
-    /// under it) is the title's, and gives a seat only to the agent's "no agent" and "sign in
-    /// again", the one it gave before standings existed.
-    ///
-    /// The agent's standings are the sidebar agent row's word, so the band says them only
-    /// while that column is collapsed or off-canvas, relocating rather than repeating. Same
-    /// visibility rule as `navReopen`, for the same reason.
-    ///
-    /// `inline` and not a flex box, so a status's dot keeps the seat `discLead` gives it on
-    /// every other status in the product: in the gutter to the left of the word.
-    let private headerStanding = "shrink-0 whitespace-nowrap hidden"
-
-    /// A standing the sidebar does not say: the pull requests' line. Wide screens only.
-    let headerStandingWide = cls [ headerStanding; "wide:inline" ]
-
-    /// The agent's standing while it is under way or fine: wide screens, with the sidebar shut.
-    let headerStandingOffWideSidebar = cls [ headerStanding; "wide:[.nav-alt_&]:inline" ]
-
-    /// The agent's standing when it stops the agent: with the sidebar shut, on a phone too.
-    let headerStandingOffSidebar =
-        cls [ headerStanding; "wide:[.nav-alt_&]:inline phone:inline phone:[.nav-alt_&]:hidden" ]
 
     /// The nav column's own mount of the connection report. Hidden on a phone, where the bar
     /// above every pane carries it — the two mounts are complementary by construction, so
@@ -1822,8 +1794,7 @@ module Style =
         cls [ "relative grid grid-cols-[var(--spacing-rail)_minmax(0,1fr)_auto] items-center px-8 py-2 bg-surface"
               Stroke.dividerBottom
               // Where the column IS on screen, the column says it. Where it is not — a
-              // collapsed nav, or any phone — this does. Same rule as
-              // `headerStandingOffSidebar`.
+              // collapsed nav, or any phone — this does. Same rule as `navReopen`.
               "hidden wide:[.nav-alt_&]:grid phone:grid"
               // Over the header that follows it, so the disclosure's lines, which open below
               // the bar, are not painted under it.
@@ -2099,7 +2070,18 @@ module Style =
     /// indent the heading gives up there (`titleWrap`). Hidden while the sidebar is visible.
     let navReopen =
         "absolute left-2 bottom-4.5 w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
-        + "phone:static phone:grid phone:[.nav-alt_&]:hidden phone:-mx-4"
+        + "phone:relative phone:inset-auto phone:grid phone:[.nav-alt_&]:hidden phone:-mx-4"
+
+    /// The session's worst standing, under the reopen chevron: the column it opens is where
+    /// the standings are said, so the way in carries the one that matters most. Centred on
+    /// the chevron's axis and hung below it — under the 24px box into the band's padding on a
+    /// wide screen (its foot 6px over the hairline), inside the 44px target on a phone (3px
+    /// under the glyph) — so it adds a mark and not a pixel of width to the band. `relative`
+    /// and not `static` on a phone so the mark has the target to hang in; `inset-auto` so the
+    /// wide screen's gutter offsets do not move it out of the row.
+    let navReopenMark =
+        "absolute left-1/2 -translate-x-1/2 top-full mt-0.5 pointer-events-none "
+        + "phone:top-auto phone:mt-0 phone:bottom-0.5"
 
     // --- Timeline --------------------------------------------------------------------------
 

@@ -494,6 +494,37 @@ module View =
                   <dl class="{Style.queryLegendEntries}">{rows}</dl>
                 </details>"""
 
+    /// Where this session stands — the standings the Manager's roster shows for it, worst
+    /// first (`ClientModel.standings`) — at the top of the column, where they are said at every
+    /// width. The header used to say them, which on a phone spent the title's band on a word
+    /// the conversation was already showing; the band now wears only the worst one's mark,
+    /// under the chevron that opens this (`navReopenMark`).
+    ///
+    /// Each is a roster row: its attention mark in the avatars' column, its word on the names'
+    /// rail, so the block and the people under it are one column of marks and one of words.
+    /// The pull requests' line is pressable, because it GOES somewhere — the rows behind it
+    /// are one press away in settings. Nothing to say, no block: a heading over nothing is a
+    /// thing to learn to skip.
+    let private standingsSection (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+        match ClientModel.standings model |> Standings.Standing.byConcern with
+        | [] -> Lit.nothing
+        | standings ->
+            let row (standing: Standings.Standing) =
+                let mark = html $"""<span class="{Style.standingMarkSeat}">{Icon.attention standing.Attention}</span>"""
+                let word = html $"""<span class="{Style.cls [ Style.givesWay; Style.attentionInk standing.Attention ]}">{standing.Word}</span>"""
+                if standing.Facet = PrStatus.facet then
+                    html $"""
+                        <button type="button" class="{Style.standingRowPress}" data-pr-strip @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>
+                          {mark}<span class="{Style.srOnly}">pull requests: </span>{word}<span class="{Style.standingRowGo}">{Icon.right}</span>
+                        </button>"""
+                else
+                    html $"""<div class="{Style.person}" data-agent-standing>{mark}{word}</div>"""
+            html $"""
+                <section class="{Style.cls [ Style.sideSection; Style.navLane1 ]}" data-standings>
+                  <span class="{Style.label}">status</span>
+                  {standings |> List.map row}
+                </section>"""
+
     let private peopleSection (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         // The agent's row says whether a turn can RUN, which is not the same question as
         // whether a credential is stored. `agentAvailable` answers the second (any relevant
@@ -502,17 +533,20 @@ module View =
         // fail on. The status word follows the credential's health; the gate does not, so
         // the no-agent prompt keeps meaning "nothing is connected" rather than doubling up.
         //
-        // A live agent's word is what it is doing (`ClientModel.agentRowStanding`): working,
-        // waiting, running, or "sign in again". It used to say "ready", and the header said
-        // what the agent was doing beside it; this row is where a phone has room for that.
+        // What the agent is DOING is the status block's (`standingsSection`), so this row says
+        // who is here and, when its credential stopped working, the verb that fixes it — the
+        // same seat and voice as an absent agent's "connect".
         let agentRow =
             // `None` is the stream not having said yet, which is the one state this row has
             // nothing to say in — it was a third case of a `bool option` and is the absence
             // of the panel now.
-            match model.Claude.Status |> Option.map (fun panel -> panel.AgentAvailable), ClientModel.agentRowStanding model with
-            | Some true, Some standing ->
-                let dot = if standing.Attention = Standings.Moving then Style.statusDotBeat else Style.statusDot
-                html $"""<div class="{Style.person}" data-agent-presence="live"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]}"></span>agent<span class="{Style.headerAgentStanding (Style.attentionInk standing.Attention)} ml-auto" data-agent-row-standing><span class="{dot}"></span>{standing.Word}</span></div>"""
+            match model.Claude.Status |> Option.map (fun panel -> panel.AgentAvailable) with
+            | Some true ->
+                let verb =
+                    if ClientModel.claudeNeedsSignIn model then
+                        html $"""<button type="button" class="{Style.cls [ Style.btnBare; Style.rosterVerb ]}" data-agent-sign-in @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>{Dom.Text.signInAgainStatus}</button>"""
+                    else Lit.nothing
+                html $"""<div class="{Style.person}" data-agent-presence="live"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]}"></span>agent{verb}</div>"""
             // One roster row, like the live one: the dimmed avatar says nobody is here, and the
             // bare verb at the right says what to do about it. It used to hang a full-width
             // bordered button under the row with a rule beside it, which took the roster's
@@ -521,11 +555,10 @@ module View =
             // message does meanwhile (recorded, unanswered — `Scheduler.create`, a `None`
             // runner at drain time) is behaviour the queue itself shows, not a sentence to
             // hang here.
-            | Some false, _ ->
+            | Some false ->
                 html $"""
                     <div class="{Style.person}" data-agent-presence="absent" data-no-agent><span class="{Style.cls [ Style.avatar; Style.agentAvatarAbsent; Style.personAvatar ]}"></span><span class="text-ink-faint">agent</span><button type="button" class="{Style.cls [ Style.btnBare; Style.rosterVerb ]}" data-settings-toggle="prompt" data-no-agent-connect @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>connect</button></div>"""
-            | None, _
-            | Some true, None ->
+            | None ->
                 html $"""<div class="{Style.person}" data-agent-presence="unknown"><span class="{Style.cls [ Style.avatar; Style.agentAvatarAbsent; Style.personAvatar ]}"></span><span class="text-ink-faint">agent</span></div>"""
 
         // What a checkout asks for, when somebody still has to decide about it.
@@ -1105,6 +1138,7 @@ module View =
                 <button type="button" class="{Style.navChevronBack}" aria-label="Collapse sidebar" data-nav-toggle="hide" @click={Ev(fun _ -> dispatch ToggleNavMsg)}>{Icon.left}</button>
               </div>
               {connectionSection dispatch model}
+              {standingsSection dispatch model}
               {peopleSection actions dispatch model}
               {chaptersSection dispatch model}
               {environmentSection dispatch model}
@@ -1315,41 +1349,6 @@ module View =
               </span>
             </span>"""
 
-    /// Where this session stands, in the header band — the same standings the Manager's
-    /// roster shows for it, on the page somebody is actually looking at, worst first
-    /// (`ClientModel.standings`), where a wide screen has room for them.
-    ///
-    /// A phone's band says none of them but the two that stop the agent ("no agent", "sign in
-    /// again"). The band is the title's room there, the conversation already shows what the
-    /// agent is doing, and the sidebar's agent row says it one swipe away.
-    ///
-    /// The pull requests' line is a control, because it GOES somewhere: the rows behind it
-    /// are one press away in settings. It is silent when nothing is owed, so a line that IS
-    /// there is worth looking at. The agent's line is a status and not pressable, and it is
-    /// the sidebar agent row's word, so the band says it only while that row is off screen.
-    let private headerStandings (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
-        let standings = ClientModel.standings model |> Standings.Standing.byConcern
-        let slot (standing: Standings.Standing) =
-            let seat =
-                if standing.Facet <> Standings.AgentStatus.facet then Style.headerStandingWide
-                elif standing.Word = Standings.AgentStatus.noAgent || standing.Word = Standings.AgentStatus.signInAgain then
-                    Style.headerStandingOffSidebar
-                else Style.headerStandingOffWideSidebar
-            let said =
-                if standing.Facet = PrStatus.facet then
-                    html $"""
-                        <button type="button" class="{Style.prStripIn (Style.attentionInk standing.Attention)}" aria-label="Pull requests"
-                                data-pr-strip @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>{standing.Word}</button>"""
-                else
-                    let dot =
-                        match standing.Attention with
-                        | Standings.Moving
-                        | Standings.Absent -> Style.statusDotBeat
-                        | _ -> Style.statusDot
-                    html $"""<span class="{Style.headerAgentStanding (Style.attentionInk standing.Attention)}" data-agent-standing><span class="{dot}"></span>{standing.Word}</span>"""
-            html $"""<span class="{seat}" ?data-phone-shows={seat = Style.headerStandingOffSidebar}>{said}</span>"""
-        html $"""{standings |> List.map slot}"""
-
     /// The way back into the content column once it is shut. Present only while it IS
     /// shut, so there are never two controls for the one column on screen at once.
     ///
@@ -1387,9 +1386,21 @@ module View =
             |> Map.toList
             |> List.filter (fun (_, p) -> p.Focus |> Option.exists (fun f -> f.Field = Title))
             |> List.map (fun (who, p) -> remoteCursor model who p)
+        // The worst standing rides the way into the column that says them all, and its word
+        // rides the control's name, so a screen reader hears what the mark shows.
+        let worst = Standings.Standing.worst (ClientModel.standings model)
+        let reopenLabel =
+            match worst with
+            | Some standing -> sprintf "Show sidebar, %s" standing.Word
+            | None -> "Show sidebar"
+        let reopenMark =
+            match worst with
+            | Some standing ->
+                html $"""<span class="{Style.navReopenMark}" data-reopen-attention>{Icon.attention standing.Attention}</span>"""
+            | None -> Lit.nothing
         html $"""
             <header class="{Style.header}">
-              <button type="button" class="{Style.cls [ Style.navChevronForward; Style.navReopen ]}" aria-label="Show sidebar" data-nav-toggle="show" @click={Ev(fun _ -> dispatch ToggleNavMsg)}>{Icon.right}</button>
+              <button type="button" class="{Style.cls [ Style.navChevronForward; Style.navReopen ]}" aria-label="{reopenLabel}" data-nav-toggle="show" @click={Ev(fun _ -> dispatch ToggleNavMsg)}>{Icon.right}{reopenMark}</button>
               <div class="{Style.titleWrap}">
                 <!-- `enterkeyhint="done"` because that is what the return key now does here
                      (`commitOnEnter`): it finishes with the field. A phone draws the hint on
@@ -1411,7 +1422,6 @@ module View =
                 <span class="{Style.titleId}" data-session-id>{sessionIdText}</span>
               </div>
               <div class="{Style.headerAside}">
-                {headerStandings dispatch model}
                 {contentReopen dispatch model}
               </div>
               {catchUpBar model}
