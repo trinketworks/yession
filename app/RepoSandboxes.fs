@@ -67,7 +67,10 @@ type RepoSandboxes =
       /// this knows what the file said. Naming `octo/hello:dev` started it from the empty
       /// declaration the tool carries — no container — and was refused as a repo sandbox
       /// declaring none, which sends whoever reads it to a `yession.yaml` that declares one.
-      Declared : unit -> (SandboxRef * SandboxDecl) list
+      ///
+      /// `Declarations` rather than the bare list, because a fold that could not read the files
+      /// has to be told apart from one that read them and found nothing.
+      Declared : unit -> Declarations
       /// What a checkout said one of its sandboxes is FOR, from the last fold. Answered here
       /// because this is what holds declarations; the sandbox manager holds none and asks.
       Described : SandboxRef -> string option
@@ -85,7 +88,7 @@ let none : RepoSandboxes =
     { Fold = fun _ _ -> async { return () }
       Outcomes = fun () -> []
       Undeclared = fun () -> []
-      Declared = fun () -> []
+      Declared = fun () -> Read Map.empty
       Described = fun _ -> None
       Approve = fun _ _ _ -> async { return Error "this session has no repos to approve anything for" } }
 
@@ -223,21 +226,24 @@ let create
     // than re-read: reading again later would answer about a file that has since changed. It
     // was three maps — the refs, the descriptions, and the `repos:` paths — each a projection
     // of this one, and each able to disagree with the others about which fold it came from.
-    let mutable declarations : Map<SandboxRef, SandboxDecl> = Map.empty
+    //
+    // `NotYetRead` until the first fold finishes, so nothing reads the empty map as an answer.
+    let mutable declarations : Declarations = NotYetRead
 
     let foldOnce (cause: FoldCause) (onBehalfOf: CredentialFor) : Async<unit> =
         async {
             match repos () with
             | None ->
                 outcomes <- []
-                declarations <- Map.empty
+                declarations <- Read Map.empty
             | Some service ->
                 match! service.ListRepos () with
                 // A listing that failed says nothing about any repo in particular, so there
-                // is no row to write and the previous answer stands: reporting "no repo
-                // declares anything" because the disk hiccupped would be a worse lie than
-                // saying nothing.
-                | Error _ -> ()
+                // is no row to write and the previous declarations stand. What changes is
+                // that they are no longer CURRENT, and the state says so with the reason:
+                // kept silently, a failure at boot left nothing at all, which every reader
+                // took to mean that no file declares anything.
+                | Error reason -> declarations <- Declarations.after declarations (Error reason)
                 | Ok listings ->
                     let read = RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))
                     let declared = read.Declared
@@ -246,7 +252,7 @@ let create
                     // can be described as it comes up rather than on the next one — and so a
                     // start in this fold can be answered about, which is what a declaration is
                     // read for at all.
-                    declarations <- declared
+                    declarations <- Declarations.after declarations (Ok declared)
                     let fileProblems =
                         unreadable
                         |> List.map (fun (repo, reason) ->
@@ -582,21 +588,28 @@ let create
         }
 
     let undeclared () =
-        (sandboxes ()).Listed ()
-        |> List.map (fun entry -> entry.Ref)
-        // Only a REPO's sandbox can stop being declared. The session's own were never
-        // declared by a file, so they are not undeclared by one either.
-        |> List.filter (fun ref ->
-            match SandboxRef.scope ref with
-            | SessionOwned -> false
-            | RepoOwned _ -> not (Map.containsKey ref declarations))
+        // Only declarations that are the whole truth can say a sandbox is no longer declared:
+        // against a file the session could not read, every running sandbox would read as
+        // abandoned.
+        match declarations with
+        | NotYetRead
+        | Unreadable _ -> []
+        | Read known ->
+            (sandboxes ()).Listed ()
+            |> List.map (fun entry -> entry.Ref)
+            // Only a REPO's sandbox can stop being declared. The session's own were never
+            // declared by a file, so they are not undeclared by one either.
+            |> List.filter (fun ref ->
+                match SandboxRef.scope ref with
+                | SessionOwned -> false
+                | RepoOwned _ -> not (Map.containsKey ref known))
 
-    let declaredAs (ref: SandboxRef) = Map.tryFind ref declarations
+    let declaredAs (ref: SandboxRef) = Map.tryFind ref (Declarations.known declarations)
 
     { Fold = fold
       Outcomes = fun () -> outcomes
       Undeclared = undeclared
-      Declared = fun () -> Map.toList declarations
+      Declared = fun () -> declarations
       Described = fun ref -> declaredAs ref |> Option.bind (fun decl -> decl.Description)
       Approve = approve }
 
@@ -634,6 +647,26 @@ let query (current: unit -> RepoSandboxes) : Queries.QueryRegistration =
         fun () ->
             async {
                 let folded = current ()
+                // First, when there is one: why the rows below are not the whole truth. A
+                // fold that could not list the checkouts used to leave this query answering
+                // `(none)`, the same answer as a session whose files declare nothing.
+                let unread =
+                    match folded.Declared () with
+                    | Read _ -> []
+                    | unread ->
+                        [ [ "repo", CellAbsent
+                            "sandbox", CellAbsent
+                            "state",
+                            CellText (
+                                match unread with
+                                | NotYetRead -> "not read yet"
+                                | Unreadable (_, Some _) -> "stale"
+                                | Unreadable (_, None)
+                                | Read _ -> "unreadable")
+                            "problem",
+                            (match Declarations.whyNotCurrent unread with
+                             | Some why -> CellText why
+                             | None -> CellAbsent) ] ]
                 let declarations =
                     folded.Outcomes ()
                     |> List.map (fun outcome ->
@@ -662,5 +695,5 @@ let query (current: unit -> RepoSandboxes) : Queries.QueryRegistration =
                           "sandbox", CellText (SandboxRef.render sandbox)
                           "state", CellText "no longer declared"
                           "problem", CellAbsent ])
-                return Ok (RowsOf (declarations @ orphans))
+                return Ok (RowsOf (unread @ declarations @ orphans))
             } }

@@ -177,7 +177,7 @@ let private servicesOver (service: Repos.ReposService) : Commands.CommandService
     { Repos = fun () -> Some service
       Sandboxes = fun () -> WorkSandboxes.unavailable
       WorkCheckout = fun repo -> "/data/repos/" + RepoRef.relativePath repo
-      DeclaredSandboxes = fun () -> []
+      DeclaredSandboxes = fun () -> Read Map.empty
       Terminals = fun () -> SessionTerminals.unavailable
       Files = fun () -> SessionFiles.unavailable
       Artifacts = fun () -> Artifacts.unavailable
@@ -260,7 +260,7 @@ let private declaringDev (record: SandboxRequest -> unit) : Commands.CommandServ
             Setup = Some "make deps"
             Uses = [ ResourceName.create "github" |> expect ] }
     { servicesOver (reposAnswering (fun repo -> async { return Ok { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos" } })) with
-        DeclaredSandboxes = fun () -> [ dev, declared ]
+        DeclaredSandboxes = fun () -> Read (Map.ofList [ dev, declared ])
         Sandboxes =
             fun () ->
                 { WorkSandboxes.unavailable with
@@ -678,12 +678,58 @@ let private tests' =
                     openToolSession
                         { services with
                             DeclaredSandboxes =
-                                fun () -> services.DeclaredSandboxes () @ [ other, SandboxDecl.empty ] }
+                                fun () ->
+                                    Read (Declarations.known (services.DeclaredSandboxes ()) |> Map.add other SandboxDecl.empty) }
                 let! answer = session.Call "start_work_sandbox" """{"name":"dev"}"""
                 let text = answered answer
                 Expect.stringContains text "ambiguous" "the name means two things"
                 Expect.stringContains text "octo/hello:dev" "one of them"
                 Expect.stringContains text "octo/world:dev" "and the other"
+            }
+
+        // A fold that could not list the checkouts used to leave the declarations empty, and
+        // the start then refused because the repo "declares no sandboxes", over a file that
+        // declared two. The agent believed it and spent the turn hunting a missing checkout.
+        testCaseAsync "a repo sandbox whose file could not be read is refused with the reason" <|
+            async {
+                let session =
+                    openToolSession
+                        { declaringDev ignore with
+                            DeclaredSandboxes = fun () -> Unreadable ("git -C failed (exit 128)", None) }
+                let! answer = session.Call "start_work_sandbox" """{"name":"octo/hello:dev"}"""
+                Expect.stringContains (answered answer) "git -C failed (exit 128)" "why nothing is known"
+            }
+
+        testCaseAsync "a repo sandbox whose file could not be read is not said to be undeclared" <|
+            async {
+                let session =
+                    openToolSession
+                        { declaringDev ignore with
+                            DeclaredSandboxes = fun () -> Unreadable ("git -C failed (exit 128)", None) }
+                let! answer = session.Call "start_work_sandbox" """{"name":"octo/hello:dev"}"""
+                Expect.isFalse ((answered answer).Contains "declares no sandbox") "no claim about a file nobody read"
+            }
+
+        testCaseAsync "a repo sandbox asked for before the first read is told the read is coming" <|
+            async {
+                let session = openToolSession { declaringDev ignore with DeclaredSandboxes = fun () -> NotYetRead }
+                let! answer = session.Call "start_work_sandbox" """{"name":"octo/hello:dev"}"""
+                Expect.stringContains (answered answer) "not read" "a session still starting, not a file declaring nothing"
+            }
+
+        // A failed re-read must not take away what an earlier read found: the files have not
+        // gone anywhere, only the session's latest look at them failed.
+        testCaseAsync "a repo sandbox the last good read declared still starts after a read fails" <|
+            async {
+                let services = declaringDev ignore
+                let session =
+                    openToolSession
+                        { services with
+                            DeclaredSandboxes =
+                                fun () ->
+                                    Unreadable ("git -C failed", Some (Declarations.known (services.DeclaredSandboxes ()))) }
+                let! answer = session.Call "start_work_sandbox" """{"name":"octo/hello:dev"}"""
+                Expect.stringContains (answered answer) "is up" "started as last declared"
             }
 
     ]

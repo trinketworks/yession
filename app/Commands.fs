@@ -56,13 +56,14 @@ type CommandServices =
       /// Absolute rather than a repo verb's answer, which is said relative to where the
       /// default sandbox's terminals start.
       WorkCheckout : RepoRef -> string
-      /// What the checkouts declare their sandboxes to be, as the last fold read it (Plan 27);
-      /// empty in a session with nothing to fold.
+      /// What the checkouts declare their sandboxes to be, as the last fold read it (Plan 27),
+      /// or why it has nothing current (`Declarations`); `Read` of nothing in a session with
+      /// nothing to fold.
       ///
       /// Needed because a repo's sandbox is its FILE's to describe, and the tool that names
       /// one carries a declaration with nothing in it — so a start given the caller's
       /// declaration verbatim came up, or refused, as something the repo never wrote.
-      DeclaredSandboxes : unit -> (SandboxRef * SandboxDecl) list
+      DeclaredSandboxes : unit -> Declarations
       /// The terminal manager, which owns the shell profile (Plan 25).
       Terminals : unit -> SessionTerminals.SessionTerminals
       /// The files inside each sandbox, for the two commands that change one.
@@ -1055,9 +1056,17 @@ let private startAs
     (name: SandboxRef)
     (asked: SandboxDecl)
     : Result<SandboxRef * SandboxDecl, string> =
+    let declarations = services.DeclaredSandboxes ()
     let declared =
-        services.DeclaredSandboxes ()
+        Declarations.known declarations
+        |> Map.toList
         |> List.filter (fun (ref, _) -> SandboxRef.scope ref <> SessionOwned)
+    // A name missing from declarations the session could not read is a name it knows nothing
+    // about, so a refusal over one says why instead of concluding the file declares nothing.
+    let unlessUnread (refusal: string) =
+        match Declarations.whyNotCurrent declarations with
+        | None -> refusal
+        | Some why -> sprintf "%s. %s" refusal why
     let asDeclared (ref: SandboxRef) (decl: SandboxDecl) = Ok (ref, decl)
     match SandboxRef.scope name with
     | SessionOwned ->
@@ -1084,19 +1093,23 @@ let private startAs
                 declared
                 |> List.filter (fun (ref, _) -> SandboxRef.scope ref = RepoOwned repo)
                 |> List.map (fst >> SandboxRef.render)
-            match siblings with
-            | [] ->
+            match siblings, Declarations.whyNotCurrent declarations with
+            // Nothing known of this repo because nothing could be read: that is the whole
+            // answer, and "declares no sandboxes" would be a claim about a file nobody read.
+            | [], Some why -> Error why
+            | [], None ->
                 Error (
                     sprintf
                         "%s declares no sandboxes. A repo's work sandbox comes from its yession.yaml. `repo_config` says what this session made of that file"
                         (RepoRef.value repo))
-            | names ->
+            | names, _ ->
                 Error (
-                    sprintf
-                        "%s declares no sandbox named '%s'. It declares %s"
-                        (RepoRef.value repo)
-                        (SandboxName.value (SandboxRef.name name))
-                        (String.concat ", " names))
+                    unlessUnread (
+                        sprintf
+                            "%s declares no sandbox named '%s'. It declares %s"
+                            (RepoRef.value repo)
+                            (SandboxName.value (SandboxRef.name name))
+                            (String.concat ", " names)))
 
 let private sandboxCapabilitiesFor
     (services: CommandServices)

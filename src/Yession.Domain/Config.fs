@@ -203,6 +203,64 @@ module SandboxDecl =
                       Runtime = runtime
                       Setup = decl.Setup } }
 
+/// What the session knows its checkouts declare: the files as the last fold read them, or
+/// why it has nothing current to say.
+///
+/// A union and not a map, because "declares nothing" and "could not be read" were one value.
+/// A fold whose listing failed kept the previous answer, and a session that had just booted
+/// had none, so every reader got the empty map: `repo_config` answered `(none)` and
+/// `start_work_sandbox dev` refused because the repo "declares no sandboxes", over a
+/// `yession.yaml` that declared two. The agent believed it and went looking for a missing
+/// checkout. Now a reader has to say what it does with each case, and the compiler walks to
+/// the next one.
+type Declarations =
+    /// No fold has finished yet. The first runs right after the session starts.
+    | NotYetRead
+    /// The last fold read every checkout's file, and this is what they declare. An empty map
+    /// is a real answer: no file declares anything.
+    | Read of Map<SandboxRef, SandboxDecl>
+    /// The last fold could not list the checkouts, for `reason`. `lastRead` is what the last
+    /// fold that DID read them found, kept so that sandboxes already declared still start as
+    /// declared; `None` when no fold has read them yet in this process.
+    | Unreadable of reason: string * lastRead: Map<SandboxRef, SandboxDecl> option
+
+module Declarations =
+
+    /// The declarations a reader may act on: the last ones read, or none when nothing was.
+    let known (declarations: Declarations) : Map<SandboxRef, SandboxDecl> =
+        match declarations with
+        | NotYetRead
+        | Unreadable (_, None) -> Map.empty
+        | Read declared
+        | Unreadable (_, Some declared) -> declared
+
+    /// A fold's result folded into what came before: a read replaces everything, and a
+    /// failure keeps the last read beside its reason.
+    let after (previous: Declarations) (listing: Result<Map<SandboxRef, SandboxDecl>, string>) : Declarations =
+        match listing, previous with
+        | Ok declared, _ -> Read declared
+        | Error reason, Read declared
+        | Error reason, Unreadable (_, Some declared) -> Unreadable (reason, Some declared)
+        | Error reason, NotYetRead
+        | Error reason, Unreadable (_, None) -> Unreadable (reason, None)
+
+    /// Why `known` is not the whole truth, in a sentence that says what reads the files
+    /// again. `None` when it is.
+    let whyNotCurrent (declarations: Declarations) : string option =
+        match declarations with
+        | Read _ -> None
+        | NotYetRead ->
+            Some
+                "this session has not read its checkouts' yession.yaml yet. The first read runs right after the session starts. Ask again shortly"
+        | Unreadable (reason, lastRead) ->
+            Some (
+                sprintf
+                    "this session could not read its checkouts' yession.yaml: %s.%s add_repo, switch_branch or remove_repo reads them again, and so does a relaunch"
+                    reason
+                    (match lastRead with
+                     | Some _ -> " What it knows comes from the last read that succeeded."
+                     | None -> ""))
+
 /// What a repo asks of the SESSION rather than of one of its own sandboxes (`session:`).
 type SessionDecl =
     { /// Where the session's own `default` sandbox's terminals start, relative to THIS
