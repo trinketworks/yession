@@ -264,7 +264,15 @@ let tests =
             testCaseAsync "a sweep keeps what each sandbox pinned of the shared store, and nothing else" (async {
                 let volume = DockerFixture.name ()
                 do! createLabelledVolume (DK.create ()) volume
+                // Each `withDev` lays its own checkout down, and since a checkout has one path
+                // everywhere (`checkoutAt`), the directory the fixture writes the pin into is
+                // the path the container runs it from. Recorded in order — the outer first —
+                // because the lease names the pin by absolute path, and a pin named by a path
+                // the checkout is not at is a pin that cannot start, which is what the release
+                // gate said once /repos stopped being that path.
+                let checkouts = ResizeArray<string> ()
                 let withExamples (dir: string) =
+                    checkouts.Add dir
                     copiedConfig dir
                     TestFiles.copyFile "examples/nix-store/pin" (dir + "/pin")
                     TestFiles.chmod (dir + "/pin") 0o755
@@ -273,8 +281,7 @@ let tests =
                 let sweepDir = TestFiles.tempDirAt (TestFiles.homeDir () + "/.cache/yession-tests/sweep-")
                 TestFiles.copyFile "examples/nix-store/sweep" (sweepDir + "/sweep")
                 TestFiles.chmod (sweepDir + "/sweep") 0o755
-                let checkout = sprintf "/repos/%s" (RepoRef.value repoRef)
-                let lease (name: string) : VolumeLeases.Lease =
+                let lease (checkout: string) (name: string) : VolumeLeases.Lease =
                     { Volume = volume
                       Dir = VolumeLeases.leaseDir "/nix" name
                       Maintenance = { Pin = checkout + "/pin"; Every = TimeSpan.FromMinutes 10.0 } }
@@ -306,8 +313,8 @@ let tests =
                                     let! run, garbage, _ =
                                         runInSandbox first "sh" [ "-c"; "echo g-$$ > /tmp/g && nix-store --add /tmp/g" ] Map.empty None
                                     Expect.equal run (SandboxExited 0) "an unrooted path"
-                                    do! VolumeLeases.pinOnce Clock.system said.Add first (lease "first")
-                                    do! VolumeLeases.pinOnce Clock.system said.Add second (lease "second")
+                                    do! VolumeLeases.pinOnce Clock.system said.Add first (lease checkouts.[0] "first")
+                                    do! VolumeLeases.pinOnce Clock.system said.Add second (lease checkouts.[1] "second")
                                     Expect.isEmpty said "both pins ran clean"
                                     runLine (
                                         sprintf
