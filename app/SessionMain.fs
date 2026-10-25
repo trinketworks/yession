@@ -1250,6 +1250,7 @@ Async.StartImmediate (
         let! credentialProxy =
             CredentialProxy.start
                 [ GitHubAccess.route ]
+                CredentialProxy.Egress.internet
                 CredentialProxy.direct
                 (Sandboxes.SessionLayout.prepareTrustBundle dataDir)
                 (fun fault -> eprintfn "[session %s] credential proxy: %s" (SessionId.value sessionId) fault)
