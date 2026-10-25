@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "description": "Local-first runtime where humans and AI agents collaborate inside a shared session.",
+  "license": "MIT",
   "engines": {
     "node": ">=24.14"
   },
