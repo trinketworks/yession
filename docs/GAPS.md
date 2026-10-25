@@ -66,9 +66,6 @@ The last section holds trust boundaries as sharp as the first section's.
     connection's peer, so the subject comes from the connection and not from a header. The
     recorded alternative is a signed-JWT header strategy against an operator JWKS
     (`Fable.Jose.jwtVerify` is already bound).
-  - **The socket ingress is not yet verified on a live tailnet.** It needs a root `serve` on
-    Tailscale 1.98.9 or later, and not the sandboxed macOS app
-    ([deployment.md](deployment.md#authorizing-1)).
 - **No `nonce` in ID tokens yet, and the flow makes that tolerable.** The ID token never passes
   through the browser. The confidential RP redeems the code over its own back channel, with its
   client secret plus the PKCE verifier, so no injected-token path exists for a nonce to close. A
