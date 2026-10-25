@@ -643,6 +643,7 @@ let private packageJson (version: string) =
   "name": "yession",
   "version": "%s",
   "description": "Local-first runtime where humans and AI agents collaborate inside a shared session.",
+  "license": "MIT",
   "type": "module",
   "bin": {
 %s
@@ -714,6 +715,7 @@ let private assemble (version: string) =
     File.WriteAllText (Path.Combine (pkg, "bin/yession-session.js"), yessionSessionBinJs)
     File.WriteAllText (Path.Combine (pkg, "package.json"), packageJson version)
     File.Copy (Path.Combine (repoRoot, "README.md"), Path.Combine (pkg, "README.md"), true)
+    File.Copy (Path.Combine (repoRoot, "LICENSE"), Path.Combine (pkg, "LICENSE"), true)
 
 // --- the build: what a verb needs, made once, side by side where nothing orders it ------------
 

@@ -83,7 +83,7 @@ let
   #    `check Nix` is the gate that now covers exactly that route (tasks.fsx).
   #
   # 2. The tracked-but-not-consumed list below, so editing devenv config / CI / docs doesn't
-  #    invalidate the build. README.md is kept — tasks.fsx copies it into the package.
+  #    invalidate the build. README.md and LICENSE are kept — tasks.fsx copies them into the package.
   src =
     let
       root = ./..;
@@ -513,7 +513,10 @@ let
 
       runHook postInstallCheck
     '';
-    meta.mainProgram = "yession-manager";
+    meta = {
+      mainProgram = "yession-manager";
+      license = lib.licenses.mit;
+    };
   };
 
   # serial-provider — the EXAMPLE, built as its own installable.
@@ -550,7 +553,10 @@ let
       runHook postInstall
     '';
     dontStrip = true;
-    meta.mainProgram = "serial-provider";
+    meta = {
+      mainProgram = "serial-provider";
+      license = lib.licenses.mit;
+    };
   };
 
   # crashRepro — `tasks.fsx crash-repro` inside the build sandbox, which is the only place the
