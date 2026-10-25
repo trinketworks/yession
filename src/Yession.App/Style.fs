@@ -1685,9 +1685,18 @@ module Style =
     /// a layout change wearing a reading-comfort one's name. Only `chatColumn`, below —
     /// the timeline and the composer, the two things actually read and typed into — asks for
     /// a measure. The row above it does not.
+    ///
+    /// `--column-gutter` is that measure's margin, said ONCE, here, for the three things that
+    /// read it: `chatColumn` stands in from it, `timeline` reaches back out across it (so its
+    /// scrollbar is at this column's edge, not floating beside the words) and `header` pads its
+    /// title by it (so the title starts where the words do). Zero except on a wide screen with
+    /// the pane SHUT — why then, and why a `calc` off `100vw` rather than `mx-auto`, is
+    /// `chatColumn`'s doc.
     let mainColumn =
         "flex-1 flex flex-col min-w-0 h-full " + degradedBarRoomPad
         + " phone:transition-[padding-top] phone:duration-200 phone:ease-out motion-reduce:transition-none"
+        + " [--column-gutter:0px]"
+        + " wide:[.term-closed_&]:[--column-gutter:max(0px,calc((100vw-var(--spacing-side)-(var(--spacing-measure)+var(--spacing-rail)*4))/2))]"
 
     /// The part of `mainColumn` that is actually read or typed into — the timeline and the
     /// composer, wrapped together so one margin holds both to the same edges. The header, the
@@ -1714,15 +1723,14 @@ module Style =
     /// whatever space is free AT THAT INSTANT — so as the pane closed, this column visibly
     /// RECENTERED under the words every frame, sliding the conversation sideways while it
     /// read, which is the one thing this shell promises never to do (see `contentPanel`'s own
-    /// doc). The margin here is a `calc` off `100vw` instead: fixed the moment `.term-closed`
+    /// doc). The margin here (`--column-gutter`, set on `mainColumn`) is a `calc` off `100vw`
+    /// instead: fixed the moment `.term-closed`
     /// lands, same on every frame of the pane's close, so the column's left edge — where every
     /// word starts — never moves. Only its right edge does, keeping pace with the pane as it
     /// closes, which is the pane sliding, not the column. `max(0px, …)` is the floor for a
     /// `wide` screen too narrow to hold the cap at all: the margin collapses to nothing and
     /// `flex-1` alone takes what the sidebar leaves, same as an uncapped column always did.
-    let chatColumn =
-        "flex-1 min-h-0 flex flex-col min-w-0"
-        + " wide:[.term-closed_&]:mx-[max(0px,calc((100vw-var(--spacing-side)-(var(--spacing-measure)+var(--spacing-rail)*4))/2))]"
+    let chatColumn = "flex-1 min-h-0 flex flex-col min-w-0 mx-(--column-gutter)"
 
     /// The phone's band is a ROW, not a compressed copy of the desktop's stack: the two
     /// chevrons a phone always has in this band — the sidebar's and the terminals' — and the
@@ -1744,8 +1752,15 @@ module Style =
     /// said in a second place, and a second place is where two heads come to disagree: the
     /// column's own head is still 88px under a thumb, so the two hairlines a drawer shows at
     /// once sit 32px apart (see `sideHead`).
+    ///
+    /// The left padding is the timeline's own plus `--column-gutter` (`mainColumn`), so the
+    /// title stands in exactly as far as the conversation does: with the pane shut and the
+    /// conversation centered, the title starts where the words start rather than at the
+    /// band's edge (the title's own `ml-8` is the rail every body is inset by). Only the left:
+    /// the band's right-hand group is the way to the pane, and it stays at the edge the pane
+    /// opens from.
     let header =
-        "relative h-band shrink-0 flex items-end gap-4 px-8 pb-5 "
+        "relative h-band shrink-0 flex items-end gap-4 pl-[calc(var(--column-gutter)+2rem)] pr-8 pb-5 "
         + "phone:h-band-phone phone:items-center phone:gap-2 phone:px-4 phone:pb-[11px] "
         + Stroke.dividerBottom
 
@@ -2144,9 +2159,20 @@ module Style =
     /// keeps the bounce in here rather than chaining it to the page. The pixel means "at the
     /// end" cannot be `scrollTop + clientHeight = scrollHeight` with no slack: see
     /// `Tail.atEnd` (app/browser/Tail.fs), whose 4px slack is what absorbs it.
+    ///
+    /// THE SCROLLBAR IS AT THE COLUMN'S EDGE, never beside the words. With the pane shut the
+    /// conversation stands in by `--column-gutter` (`mainColumn`), and a scroller that stood in
+    /// with it drew its bar in mid-screen, a grey stripe down the right of the reading column
+    /// with half the page beyond it. So the scroller reaches back out across the gutter (the
+    /// negative margin) and puts the same distance back as padding: the words stay exactly
+    /// where they were, the bar sits at the edge of `mainColumn` the way a document's does,
+    /// and a wheel anywhere over the gutter scrolls the conversation too. Thin, on a clear
+    /// track, in `edge`: there to find when you look for it, and nothing to read when you
+    /// do not, which is what the platforms' own overlay scrollbars do.
     let timeline =
         "relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain "
-        + "px-8 pb-6 flex flex-col gap-6 "
+        + "mx-[calc(var(--column-gutter)*-1)] px-[calc(var(--column-gutter)+2rem)] pb-6 flex flex-col gap-6 "
+        + "[scrollbar-width:thin] [scrollbar-color:var(--color-edge)_transparent] "
         + "after:absolute after:inset-x-0 after:top-full after:h-px "
         + "before:grow [&>*:first-child]:mt-0 too-short:hidden "
         + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:before:-mb-1 break-words "
