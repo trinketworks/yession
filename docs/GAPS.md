@@ -345,12 +345,15 @@ The last section holds trust boundaries as sharp as the first section's.
   bound users' scopes ▸ Manager process env.
 
   Remaining, deliberate:
-  - **Hosts without a credential manager run in-memory only** (dev containers, CI, headless
-    servers). Secrets die with the Manager, the boot says so loudly, and no plaintext key file
-    exists. `--secrets ephemeral` makes in-memory an operator CHOICE (logged at info, not warn).
-    `--secrets durable` refuses the boot on such a host
-    ([deployment.md](deployment.md#credentials)). The `Keyring` capability covers the real
-    keyring in tests.
+  - **Hosts without a credential manager run in-memory only, unless the operator brings a key
+    store** (dev containers, CI, headless servers). Secrets die with the Manager, the boot says
+    so loudly, and no plaintext key file exists. `--secrets ephemeral` makes in-memory an
+    operator CHOICE (logged at info, not warn). `--secrets durable` refuses the boot on such a
+    host. `--keystore exec:<helper>` hands the key to a helper the operator wrote, over a
+    git-credential-helper protocol, so a server with a KMS, a Vault or a TPM has a durable store
+    without yession knowing any of them
+    ([deployment.md](deployment.md#your-own-key-store)). The `Keyring` capability covers the
+    real keyring in tests; `Ports` covers the helper.
   - **No AMBIENT scope.** `LocalScope` is deployment-wide but not ambient: the Manager authorizes
     it against unattributed access it recorded for that run. It holds connection credentials
     only, and generic `SecretAction`s on it deny. User-scoped GENERIC secrets have no writer (see

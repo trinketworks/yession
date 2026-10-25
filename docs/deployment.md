@@ -174,6 +174,41 @@ Durable secrets are one AES-256-GCM file in the data directory. The key comes fr
 Keychain, the Windows Credential Manager, or the Linux Secret Service. There is no key file and
 no key variable.
 
+#### Your own key store
+
+A headless server has no credential manager. It has something else: a cloud KMS, a Vault, a
+TPM through `systemd-creds`. Name a helper, and the Manager keeps its key through that instead:
+
+```sh
+yession-manager --secrets durable --keystore exec:/usr/local/bin/yession-keystore
+```
+
+The Manager runs the helper once per operation, with the operation as its one argument. The
+protocol is the one git and Docker credential helpers use:
+
+| Call | Contract |
+|---|---|
+| `<helper> get` | Print the stored payload to stdout, or nothing when there is none yet. Exit 0. Exit non-zero when the backend failed, and say why on stderr. |
+| `<helper> set` | Read the payload from stdin and store it. Exit 0 only once it is durable. |
+
+The payload is opaque text, a few hundred bytes. It travels on stdin and stdout and nowhere
+else: never as an argument, never in a variable. The helper inherits the Manager's environment
+and runs as its user, so an instance role or a Vault token the Manager's process has, the
+helper has. A helper that exits non-zero does not fail the boot. The Manager retries every 30
+seconds and says so, the way it waits out a locked keychain, so a role whose credentials arrive
+after the service starts is fine. A helper that answers something that is not a payload, or that
+has not answered in 30 seconds, fails the open.
+
+A twelve-line helper over AWS KMS: `set` runs `aws kms encrypt` on stdin and writes the
+ciphertext to a file beside the data directory, `get` runs `aws kms decrypt` on that file. The
+key at rest is then ciphertext under a key that never leaves KMS, every unwrap is in CloudTrail,
+and disabling the KMS key makes every stored credential unreadable at once. What a helper does
+not change: the raw key is in the Manager's memory between `get` and its import, as it is
+between the credential manager's answer and the same import.
+
+`--keystore keyring` is the default. `--keystore` with `--secrets ephemeral` is refused: a key
+store nobody opens is a setting that silently did nothing.
+
 #### The header scheme
 
 The proxy translates its authenticator's output into these headers. Values are UTF-8. Node

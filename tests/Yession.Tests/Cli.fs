@@ -78,6 +78,7 @@ let private fronted : ManagerCli.Report =
     { Version = "1.2.3"
       TrustRule = "trusted-headers", ManagerCli.Chosen
       Secrets = "durable", ManagerCli.Chosen
+      KeyStore = "exec:/run/current-system/sw/bin/yession-keystore", ManagerCli.Chosen
       Listen = "socket /run/yession/manager.sock", ManagerCli.Chosen
       DataDir = "/srv/yession", ManagerCli.Chosen
       DefaultSession = "local-session", ManagerCli.Default
@@ -96,6 +97,7 @@ let private frontedAccess () =
 /// Nothing configured: every default, and the two features that can be off.
 let private loopback : ManagerCli.Report =
     { fronted with
+        KeyStore = "keyring", ManagerCli.Default
         Listen = "port 8321", ManagerCli.Default
         IdleTimeout = "never", ManagerCli.Off
         Addressing = ManagerCli.Addressing.OnLoopback

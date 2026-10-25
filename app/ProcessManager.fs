@@ -373,8 +373,9 @@ module SecretsBacking =
             Error
                 "--secrets durable is set, but no OS credential manager answered on this host. \
                  The secrets KEK has nowhere to live. Make a credential manager available \
-                 (unlock the keychain, or start a Secret Service daemon). Or pass \
-                 --secrets ephemeral to accept a store that dies with this Manager."
+                 (unlock the keychain, or start a Secret Service daemon), or name your own \
+                 with --keystore exec:<helper>. Or pass --secrets ephemeral to accept a store \
+                 that dies with this Manager."
 
 /// How often to look for sessions to reap, derived from the window rather than configured
 /// separately: a quarter of it, so the worst-case overshoot is a quarter of a window and

@@ -299,7 +299,8 @@ let private git (args: string list) (cwd: string) (told: Map<string, string>) : 
                   // The deadline has to END the run rather than ask it to stop: what is
                   // bounded here is a git waiting on an answer, and one that took the signal
                   // as a chance to tidy up would spend the budget anyway.
-                  KillSignal = Some "SIGKILL" }
+                  KillSignal = Some "SIGKILL"
+                  Input = None }
 
         // Under an `encoding` Node hands both streams over as text even for a child that never
         // started — so an absent one is not a run that said nothing, and is refused rather
