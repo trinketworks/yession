@@ -5575,12 +5575,14 @@ module View =
               {header actions dispatch model}
               {signInPrompt dispatch model}
               {refusalNotice dispatch model RefusalMount.Chat}
-              <div class="{Style.launchArea}">
-                {chat actions dispatch model}
-                {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
+              <div class="{Style.chatColumn}">
+                <div class="{Style.launchArea}">
+                  {chat actions dispatch model}
+                  {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
+                </div>
+                {queue dispatch model}
+                {drafts actions dispatch model}
               </div>
-              {queue dispatch model}
-              {drafts actions dispatch model}
             </div>
             {contentPane actions dispatch model}
             </div>"""

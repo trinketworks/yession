@@ -1663,19 +1663,36 @@ module Style =
     /// padding — but only while the bar is there (`degradedShell`), and at the pace the bar
     /// unfolds at, so the conversation moves down with it rather than in one frame.
     ///
+    /// FULL WIDTH, always — the header's band and its hairline (`header`, below), the
+    /// degradation bar and the sign-in/refusal notices all read as a row that spans this
+    /// column edge to edge, the sidebar's edge to the pane's. Capping this column (an earlier
+    /// version of this fix did) crops every one of those bands along with the words, which is
+    /// a layout change wearing a reading-comfort one's name. Only `chatColumn`, below —
+    /// the timeline and the composer, the two things actually read and typed into — asks for
+    /// a measure. The row above it does not.
+    let mainColumn =
+        "flex-1 flex flex-col min-w-0 h-full " + degradedBarRoomPad
+        + " phone:transition-[padding-top] phone:duration-200 phone:ease-out motion-reduce:transition-none"
+
+    /// The part of `mainColumn` that is actually read or typed into — the timeline and the
+    /// composer, wrapped together so one margin holds both to the same edges. The header, the
+    /// degradation bar and the two notices stand outside this and stay at `mainColumn`'s full
+    /// width (see its own doc): a bar's hairline is layout, meant to span the row it sits in,
+    /// and cropping it along with the prose was the bug this wrapper exists to undo.
+    ///
     /// On a wide screen with the pane SHUT, nothing else claims the row, so `flex-1` alone
-    /// hands this column the whole width the sidebar leaves — a header hairline, a timeline
-    /// and a composer band all stretched to whatever the monitor happens to be. Capped and
-    /// centered instead, near the measure the open pane already holds it to
-    /// (`PaneSplit.chatReadable`, Model.fs: the reading column's 38rem plus the 32px rail on
-    /// each side) with one more rail's worth of room on each side again, so the timeline still
-    /// has somewhere to show a row's ground stopping short of the column's own edge — flush to
-    /// the measure, every row's highlight would reach exactly as far as the text, which reads
-    /// as a box drawn round the words rather than as the row (the invariant
-    /// `Browser.fs`'s "a message's ground stops at the reading column, not the window" holds
-    /// desktop to). `[.term-closed_&]` only: the open pane already derives this column's width
-    /// from the same number, through room a reader can drag past it on purpose
-    /// (`PaneSplit.resolve`), and a static cap here would fight that drag.
+    /// would hand this column the whole width the sidebar leaves — a timeline and a composer
+    /// band both stretched to whatever the monitor happens to be. Capped and centered instead,
+    /// near the measure the open pane already holds it to (`PaneSplit.chatReadable`, Model.fs:
+    /// the reading column's 38rem plus the 32px rail on each side) with one more rail's worth
+    /// of room on each side again, so the timeline still has somewhere to show a row's ground
+    /// stopping short of the column's own edge — flush to the measure, every row's highlight
+    /// would reach exactly as far as the text, which reads as a box drawn round the words
+    /// rather than as the row (the invariant `Browser.fs`'s "a message's ground stops at the
+    /// reading column, not the window" holds desktop to). `[.term-closed_&]` only: the open
+    /// pane already derives this column's width from the same number, through room a reader
+    /// can drag past it on purpose (`PaneSplit.resolve`), and a static cap here would fight
+    /// that drag.
     ///
     /// MARGIN, not `max-w` + `mx-auto`: the pane's own width animates shut over 200ms
     /// (`contentPanel`'s `wide:transition-[width]`), and an auto margin centers within
@@ -1688,9 +1705,8 @@ module Style =
     /// closes, which is the pane sliding, not the column. `max(0px, …)` is the floor for a
     /// `wide` screen too narrow to hold the cap at all: the margin collapses to nothing and
     /// `flex-1` alone takes what the sidebar leaves, same as an uncapped column always did.
-    let mainColumn =
-        "flex-1 flex flex-col min-w-0 h-full " + degradedBarRoomPad
-        + " phone:transition-[padding-top] phone:duration-200 phone:ease-out motion-reduce:transition-none"
+    let chatColumn =
+        "flex-1 min-h-0 flex flex-col min-w-0"
         + " wide:[.term-closed_&]:mx-[max(0px,calc((100vw-var(--spacing-side)-(var(--spacing-measure)+var(--spacing-rail)*4))/2))]"
 
     /// The phone's band is a ROW, not a compressed copy of the desktop's stack: the two
