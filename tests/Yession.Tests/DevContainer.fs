@@ -270,14 +270,24 @@ let tests =
                     TestFiles.chmod (dir + "/pin") 0o755
                 // The sweep runs in a container of its own, from a directory the daemon can
                 // bind — under $HOME, for the reason at the top of this file.
+                // Made here rather than left to whichever case ran first: run alone
+                // (`--only`), nothing else has created it yet.
+                TestFiles.ensureDir (TestFiles.homeDir () + "/.cache/yession-tests")
                 let sweepDir = TestFiles.tempDirAt (TestFiles.homeDir () + "/.cache/yession-tests/sweep-")
                 TestFiles.copyFile "examples/nix-store/sweep" (sweepDir + "/sweep")
                 TestFiles.chmod (sweepDir + "/sweep") 0o755
-                let checkout = sprintf "/repos/%s" (RepoRef.value repoRef)
-                let lease (name: string) : VolumeLeases.Lease =
-                    { Volume = volume
-                      Dir = VolumeLeases.leaseDir "/nix" name
-                      Maintenance = { Pin = checkout + "/pin"; Every = TimeSpan.FromMinutes 10.0 } }
+                // Each sandbox has a checkout of its own here, at the path the host keeps it
+                // at (`Sandboxes.checkoutAt`), and starts in it (`workdir: .`). So the pin is
+                // found where the sandbox stands, never at an address assumed for it.
+                let lease (sandbox: Sandbox) (name: string) : Async<VolumeLeases.Lease> =
+                    async {
+                        let! run, out, _ = runInSandbox sandbox "pwd" [] Map.empty None
+                        Expect.equal run (SandboxExited 0) "the sandbox says where it stands"
+                        return
+                            { Volume = volume
+                              Dir = VolumeLeases.leaseDir "/nix" name
+                              Maintenance = { Pin = out.Trim () + "/pin"; Every = TimeSpan.FromMinutes 10.0 } }
+                    }
                 /// A fresh store path rooted at /root/result — the same place in every sandbox.
                 let rootOne (sandbox: Sandbox) (tag: string) : Async<string> =
                     async {
@@ -306,8 +316,10 @@ let tests =
                                     let! run, garbage, _ =
                                         runInSandbox first "sh" [ "-c"; "echo g-$$ > /tmp/g && nix-store --add /tmp/g" ] Map.empty None
                                     Expect.equal run (SandboxExited 0) "an unrooted path"
-                                    do! VolumeLeases.pinOnce Clock.system said.Add first (lease "first")
-                                    do! VolumeLeases.pinOnce Clock.system said.Add second (lease "second")
+                                    let! firstLease = lease first "first"
+                                    let! secondLease = lease second "second"
+                                    do! VolumeLeases.pinOnce Clock.system said.Add first firstLease
+                                    do! VolumeLeases.pinOnce Clock.system said.Add second secondLease
                                     Expect.isEmpty said "both pins ran clean"
                                     runLine (
                                         sprintf
