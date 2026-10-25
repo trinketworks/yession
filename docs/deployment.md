@@ -433,10 +433,16 @@ Two constraints decide whether that works on a host:
 
 - **Tailscale 1.98.9 or later runs a socket target only from a root `serve`** (security
   bulletin TS-2026-005). Run the command once with `sudo`. The mapping persists in
-  tailscaled's state.
+  tailscaled's state. On 1.102 every change to `serve` is a root action, TCP targets
+  included: the CLI refuses an operator too, with `must be root, or be an operator and able to
+  run 'sudo tailscale'`.
 - **The sandboxed macOS app cannot dial a socket.** The Standalone and App Store builds fail at
   request time with `dial unix …: connect: operation not permitted` (tailscale/tailscale#21900,
-  open on 1.104.1). Use the open-source `tailscaled` on macOS, which is not sandboxed.
+  open on 1.104.1). Use the open-source `tailscaled` on macOS, which is not sandboxed. While
+  either app also runs, the bare `tailscale` CLI talks to the app, not to `tailscaled`.
+  `tailscale --socket /private/var/run/tailscaled.socket` reaches the daemon: the CLI looks
+  for the app only when `--socket` is its default `/var/run/tailscaled.socket`, and on macOS
+  the two paths are one file.
 
 On a host that must keep the sandboxed app, the alternative is the `caddy-tailscale` plugin. It
 makes the Caddy site its own tailnet node (`bind tailscale/<name>`), so no ingress sits between
@@ -452,12 +458,15 @@ Callers on the Manager's socket assert themselves
 ([§The registry stream](#the-registry-stream)), for example
 `main.mjs --manager unix:<path> --as proxy-map`.
 
-> Verified against a live tailnet: Tailscale 1.102.3 with HTTPS certificates, macOS. The
-> verification covered the identity headers, the overwrite, the `x-yession-*` pass-through, the
-> deletion ordering, and the composition below with a Manager and a session behind it, all over
-> a TCP mapping. The socket mapping is not yet verified on a live tailnet. Every pull request
-> re-verifies the Caddy half over both sockets, against whichever Caddy the dev shell pins,
-> with a TCP-to-socket relay standing in for `serve`.
+> Verified against a live tailnet, on macOS with HTTPS certificates. Over a TCP mapping, on
+> Tailscale 1.102.3: the identity headers, the overwrite, the `x-yession-*` pass-through, the
+> deletion ordering, and the composition below with a Manager and a session behind it. Over
+> the socket mapping, on 2026-10-25, with the open-source tailscaled 1.102.4 under nix-darwin:
+> the whole operator checklist of PR #1508, from the Manager refusing a TCP port under
+> `trusted-headers` to a forged `x-yession-user` audited as the real tailnet login and a
+> session's terminal reaching GitHub. Every pull request re-verifies the Caddy half over both
+> sockets, against whichever Caddy the dev shell pins, with a TCP-to-socket relay standing in
+> for `serve`.
 
 ##### What `--auth localhost` costs here
 
