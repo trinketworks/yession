@@ -2526,8 +2526,10 @@ module View =
         // frequent act on a busy timeline and the one whose particulars change least from one
         // to the next; a screen that laid them all out made every start four lines tall.
         // Which facts show is decided from the event's typed fields, never by reading the
-        // sentence back: `checkout` only when it is NOT the conventional /repos/<owner>/<repo>
-        // every reader can already assume; `forwarding` a reference per connection.
+        // sentence back: `checkout` only when it is NOT the session's own `…/repos/<owner>/<repo>`
+        // every reader can already assume (a log from before the checkouts had one path
+        // says `/repos/<owner>/<repo>`, which ends the same way); `forwarding` a reference
+        // per connection.
         let sandboxStartFacts (by: ActorRef) (act: Act) (s: WorkSandboxStarted) : TemplateResult list =
             let row (key: string) (fact: string) (value: TemplateResult) =
                 html $"""
@@ -2540,13 +2542,13 @@ module View =
                 |> Option.map (fun d -> row Dom.Text.sandboxFactFor "description" (html $"""{d}"""))
                 |> Option.toList
             let backend = [ row Dom.Text.sandboxFactBackend "backend" (html $"""{s.Backend}""") ]
-            let convention =
+            let conventional (path: string) =
                 match SandboxRef.scope s.Sandbox with
-                | RepoOwned repo -> Some (sprintf "/repos/%s" (RepoRef.value repo))
-                | SessionOwned -> None
+                | RepoOwned repo -> path.TrimEnd('/').EndsWith (sprintf "/repos/%s" (RepoRef.value repo))
+                | SessionOwned -> false
             let checkout =
                 match s.Checkout with
-                | Some path when Some path <> convention ->
+                | Some path when not (conventional path) ->
                     [ row Dom.Text.sandboxFactCheckout "checkout" (html $"""<code class="{Style.actNotePath}">{path}</code>""") ]
                 | _ -> []
             // Each connection drawn as a REFERENCE — the same mark and name the sidebar's

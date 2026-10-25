@@ -2529,10 +2529,7 @@ let private launchTests =
 let private repo (raw: string) = RepoRef.create raw |> expect
 let private sandboxName (raw: string) = SandboxName.create raw |> expect
 
-/// The two views DIFFER on purpose: a resolution against the wrong one then fails the
-/// assertion instead of passing by coincidence of equal strings.
-let private checkout (inSandbox: string) : CheckoutViews option =
-    Some { InSandbox = inSandbox; OnHost = "/on-host" + inSandbox }
+let private checkout (path: string) : string option = Some path
 let private configTests =
     testList "yession.yaml (Plan 27)" [
 
@@ -2771,26 +2768,13 @@ let private configTests =
             | Ok _ -> failwith "a path is still refused under systemd"
             | Error reason -> Expect.stringContains reason "A bare name (like yession)" "the refusal says which spelling works under both"
 
-        // A repo saying where the session's checkouts should appear in its own container.
-        testCase "a sandbox can say where it wants the checkouts" <| fun () ->
-            let file =
-                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "repos": "/src" } } }"""
-                |> expect
-            let dev = file.Sandboxes |> Map.find (sandboxName "dev")
-            Expect.equal dev.Repos (Some "/src") "the target as written"
-
-        // The mirror of `workdir:`, which refuses an absolute path because it names somewhere
-        // inside a checkout. This names somewhere inside a CONTAINER, where a relative path
-        // has no root to be relative to — so the refusal runs the other way, and says so.
-        testCase "a relative checkouts path is refused, because it would have no root" <| fun () ->
-            match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "repos": "src" } } }""" with
-            | Ok _ -> failwith "a relative target inside a container resolves against nothing"
-            | Error reason -> Expect.stringContains reason "absolute" "it says which way it must be written"
-
-        testCase "a checkouts path that climbs is refused" <| fun () ->
-            match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "repos": "/src/../etc" } } }""" with
-            | Ok _ -> failwith "a climb means one thing to its author and another to what resolves it"
-            | Error reason -> Expect.stringContains reason "climb" "it says what is wrong with it"
+        // `repos:` moved where a container saw the checkouts, and so gave one checkout two
+        // addresses. Refused by name, because a file that had it worked yesterday and its
+        // author needs to hear what replaced it.
+        testCase "a sandbox that says where it wants the checkouts is told they have one path" <| fun () ->
+            match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "repos": "/src" } } }""" with
+            | Ok _ -> failwith "a second address for the checkouts was accepted"
+            | Error reason -> Expect.stringContains reason "one path" "it says what replaced the key"
 
         // Absent and blank are one state. A repo that wrote `description:` and left it empty
         // has said nothing, and a note reading "started sandbox dev (docker) — " would be
@@ -3145,10 +3129,9 @@ let private configTests =
             | Ok _ -> failwith "a climbing dockerfile was accepted"
             | Error e -> Expect.isTrue (e.Contains "climbs") (sprintf "the dockerfile is under the same rule, said: %s" e)
 
-        // One declaration, two addresses: the workdir is acted on INSIDE the sandbox and
-        // the build context is read on the HOST, so each resolves against its reader's
-        // view of the same checkout — which is what `CheckoutViews` carries both for.
-        testCase "a build context resolves against the host's view; the workdir against the sandbox's" <| fun () ->
+        // The workdir is acted on INSIDE the sandbox and the build context is read on the
+        // HOST. The checkout has one address in both, so both resolve under it.
+        testCase "a build context and a workdir both resolve under the checkout" <| fun () ->
             let decl =
                 (ConfigFile.parse """
                     { "version": 2,
@@ -3158,10 +3141,10 @@ let private configTests =
                  |> expect).Sandboxes
                 |> Map.find (sandboxName "dev")
             let request = SandboxDecl.toRequest (checkout "/repos/octo/hello") decl |> expect
-            Expect.equal request.Spec.WorkingDirectory (Some "/repos/octo/hello/app") "the sandbox's address"
+            Expect.equal request.Spec.WorkingDirectory (Some "/repos/octo/hello/app") "the workdir"
             match request.Spec.Runtime with
             | Container { Build = Some build } ->
-                Expect.equal build.ContextPath "/on-host/repos/octo/hello/infra" "the host's address"
+                Expect.equal build.ContextPath "/repos/octo/hello/infra" "the build context"
                 Expect.equal build.DockerfilePath (Some "Dockerfile.dev") "the dockerfile stays relative — the daemon resolves it inside the streamed context"
             | other -> failwithf "expected a build, got %A" other
 
@@ -3174,7 +3157,7 @@ let private configTests =
                         Some { ContainerSpec.defaults with Build = Some { ContextPath = "../../../etc"; DockerfilePath = None } } }
             match (SandboxDecl.toRequest (checkout "/repos/octo/hello") decl |> expect).Spec.Runtime with
             | Container { Build = Some build } ->
-                Expect.equal build.ContextPath "/on-host/repos/octo/hello/etc" "climbing is clamped at the checkout"
+                Expect.equal build.ContextPath "/repos/octo/hello/etc" "climbing is clamped at the checkout"
             | other -> failwithf "expected a build, got %A" other
 
         testCase "a build on a sandbox no repo declared is refused" <| fun () ->

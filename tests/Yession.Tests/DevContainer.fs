@@ -1,14 +1,16 @@
 module Yession.Tests.DevContainer
 
 // This repo's OWN declared work environment, end to end through the product's pieces:
-// yession.yaml decoded by the real decoder, the request resolved against the container's
-// view of its checkout, the policy assembled by `policyFor`, the container started by the
+// yession.yaml decoded by the real decoder, the request resolved against its checkout's
+// one path, the policy assembled by `policyFor`, the container started by the
 // real docker backend. Written down after the whole path was proved by hand in a live
 // session (the container pivot's final laps), because every invariant here broke at least
 // once on the way there and every break was invisible to the cheap tier:
 //
-//   * the workdir wore a HOST path while the checkout sat under the /repos bind, with an
+//   * the workdir wore a HOST path while the checkout sat under a /repos bind, with an
 //     empty workspace volume shadowing it (#405)
+//   * the checkout had a second address in the container (/repos), so a git worktree
+//     made there pointed every other view at a directory that did not exist
 //   * `docker exec` died on a nix-built image's symlinked /etc while `docker run` worked,
 //     so the container looked up and answered nothing (#400)
 //   * git refused the bind-mounted checkout as another user's (#404)
@@ -72,9 +74,9 @@ let private reposDirWith (checkout: string -> unit) : string =
     reposDir
 
 /// The `dev` request exactly as the session builds it: this repo's own file through the
-/// real decoder, the workdir resolved against the CONTAINER's view of the checkout
-/// (`workCheckoutAt`), and the one thing the session adds — the /repos bind — through
-/// the same `withSessionShares` the session calls, not a hand-kept copy of it.
+/// real decoder, the workdir resolved against the checkout's one path (`checkoutAt`), and
+/// the one thing the session adds — the checkouts' bind — through the same
+/// `withSessionShares` the session calls, not a hand-kept copy of it.
 let private declaredDev (reposDir: string) : EnvironmentSpec =
     // The session's other shared directory, beside the checkouts because that is where the
     // layout puts it. Created here for the same reason the session creates it at boot: a
@@ -83,7 +85,7 @@ let private declaredDev (reposDir: string) : EnvironmentSpec =
     TestFiles.ensureDir artifactsDir
     let file = (RepoConfig.read reposDir repoRef |> expect |> Option.get).File
     let decl = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
-    let request = SandboxDecl.toRequest (Some (Sandboxes.checkoutViewsAt None reposDir repoRef)) decl |> expect
+    let request = SandboxDecl.toRequest (Some (Sandboxes.checkoutAt reposDir repoRef)) decl |> expect
     match request.Spec.Runtime with
     | Container _ -> ()
     | Confinement -> failwith "yession.yaml declares no container, and a repo work sandbox is one"
@@ -165,7 +167,7 @@ let private withDevSpec
         with e -> failure <- Some e
         match sandbox with
         | Some (s: Sandbox) ->
-            let! _ = runInSandbox s "sh" [ "-c"; sprintf "rm -rf /repos/%s" (RepoRef.value repoRef) ] Map.empty None
+            let! _ = runInSandbox s "sh" [ "-c"; sprintf "rm -rf '%s'" (Sandboxes.checkoutAt reposDir repoRef) ] Map.empty None
             do! s.Dispose ()
         | None -> ()
         TestFiles.removeTree reposDir
@@ -189,14 +191,23 @@ let tests =
             // silent: the probes run in one case each against a per-case container, and
             // the image pull is paid once by the daemon's own cache.
 
-            testCaseAsync "it starts in this repo's checkout, reached through the /repos bind" (
+            testCaseAsync "it starts in this repo's checkout, at the path the host keeps it at" (
                 withDev [] copiedConfig (fun sandbox -> async {
                     // An exec answering AT ALL is itself the Docker 29 /etc invariant: on a
                     // nix-built image every exec died while the container ran happily.
                     let! run, out, _ = runInSandbox sandbox "sh" [ "-c"; "pwd && ls yession.yaml" ] Map.empty None
                     Expect.equal run (SandboxExited 0) "the exec ran"
-                    Expect.isTrue (out.Contains "/repos/trinketworks/yession") "it stands in the checkout, container view"
+                    Expect.isTrue (out.Contains "/.cache/yession-tests/devcontainer-") "it stands in the checkout, at the host's path"
                     Expect.isTrue (out.Contains "yession.yaml") "and the checkout's content is really there (an empty listing here usually means the daemon cannot see the fixture — see the module comment)"
+                }))
+
+            // What the one address is FOR: anything outside the container writes into the
+            // checkout as an absolute path (a git worktree's gitdir, a tool's cache, a
+            // link) names the same file inside it, and the other way round.
+            testCaseAsync "an absolute path written into the checkout outside it resolves inside it" (
+                withDev [] (fun dir -> copiedConfig dir; TestFiles.write (dir + "/.probe") (dir + "/yession.yaml")) (fun sandbox -> async {
+                    let! run, _, _ = runInSandbox sandbox "sh" [ "-c"; "test -f \"$(cat .probe)\"" ] Map.empty None
+                    Expect.equal run (SandboxExited 0) "the host's absolute path names the file in the container"
                 }))
 
             testCaseAsync "the backend's git trust reaches the container" (

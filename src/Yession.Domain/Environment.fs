@@ -20,15 +20,6 @@ module ContainerImage =
 
 type ContainerBuildSpec = { ContextPath : string; DockerfilePath : string option }
 
-/// One checkout, addressed from the two places a declaration's paths are USED.
-///
-/// `workdir:` is acted on INSIDE the sandbox, so it resolves against the sandbox's own
-/// view of the checkout. A `build:` context is read by the SESSION PROCESS — the daemon
-/// client streams the context from this filesystem — so it resolves against the host's
-/// view. Carrying both is what stops a path resolving against the wrong one, which is
-/// how `workdir: .` once produced a container working in a directory nothing mounted.
-type CheckoutViews = { InSandbox : string; OnHost : string }
-
 type MountSource =
     | HostPath of string
     | NamedVolume of string
@@ -48,7 +39,7 @@ module ContainerMount =
     /// workspace volume at its working directory: a workdir inside a declared mount is
     /// already backed by that mount, and a volume put on top of the deeper path would
     /// SHADOW the very thing the mount carries — measured as an empty workspace volume
-    /// sitting over the /repos bind, hiding the checkout it existed to hold.
+    /// sitting over the checkouts' bind, hiding the checkout it existed to hold.
     let provides (target: string) (dir: string) : bool =
         let target = target.TrimEnd '/'
         let dir = dir.TrimEnd '/'
@@ -568,22 +559,7 @@ type EnvironmentSpec =
       /// next reader does the same thing. It is not the container's `cmd`: that is the
       /// container's own process, and one that exits takes the sandbox with it, so setup
       /// written there would end the thing it prepared. This runs in a sandbox already up.
-      Setup : string option
-      /// Where the SESSION's checkouts appear in this sandbox — its declaration's choice, or
-      /// `None` for the backend's own default.
-      ///
-      /// The checkouts are the session's and arrive whether or not anybody asked (a repo that
-      /// declared its own `dev` did not decline to see them), so what is declarable is the
-      /// TARGET and never the source. That is the same line `Files` draws: a target inside a
-      /// container this declaration already specifies entirely reaches nothing, while a source
-      /// reaches out of the sandbox and stays the operator's to offer.
-      ///
-      /// On the SPEC, unlike the description beside it in the file, and the difference is what
-      /// each does: a description changes what a reader is told, and moving the checkouts
-      /// changes what the container IS. So this belongs to what `Ensure` compares — two asks
-      /// that mount the session's work in different places are two different sandboxes, and
-      /// the second has to be refused rather than silently answered with the first.
-      ReposAt : string option }
+      Setup : string option }
 
 module EnvironmentSpec =
 
@@ -595,8 +571,7 @@ module EnvironmentSpec =
           Wants = []
           Files = Map.empty
           Runtime = Confinement
-          Setup = None
-          ReposAt = None }
+          Setup = None }
 
     /// The same, as a container — what the docker backend starts from when nothing asked for
     /// anything in particular.

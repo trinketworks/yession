@@ -109,14 +109,7 @@ type SandboxDecl =
       ///
       /// It reaches a reader wherever a sandbox is named — the start note, the queries — so
       /// whoever is choosing between them is choosing on the reason rather than the spelling.
-      Description : string option
-      /// Where this sandbox wants the session's checkouts to appear, absolute; absent takes
-      /// the backend's own default (`/repos` in a container).
-      ///
-      /// A TARGET and never a source, which is what makes it the repo's to write at all — the
-      /// same line `files:` draws. The checkouts arrive regardless; this only says where to
-      /// look for them, inside a container this file already specifies entirely.
-      Repos : string option }
+      Description : string option }
 
 module SandboxDecl =
 
@@ -128,8 +121,7 @@ module SandboxDecl =
           Wants = []
           Files = Map.empty
           Setup = None
-          Description = None
-          Repos = None }
+          Description = None }
 
     /// One declaration, written back as the file would have written it.
     ///
@@ -150,12 +142,13 @@ module SandboxDecl =
     /// second policy engine here and nothing this can express that a command could not.
     ///
     /// The checkout is the one thing a file cannot know — a path in it is relative to a
-    /// directory the SESSION chose — so it is supplied, in BOTH its views (`CheckoutViews`):
-    /// `workdir` resolves against the sandbox's own view, because it is where the sandbox
-    /// starts; a `build:` context resolves against the host's, because the daemon client
-    /// reads it from this filesystem before the container exists. Each is already
-    /// guaranteed inside the checkout by the decoder, which is where a path a person can
-    /// fix is refused; resolving is all that is left.
+    /// directory the SESSION chose — so it is supplied. It has ONE address
+    /// (`Sandboxes.checkoutAt`): the same absolute path on the host, in an srt sandbox and
+    /// inside a container, which binds it at that path. So `workdir` (acted on inside the
+    /// sandbox) and a `build:` context (read by the daemon client on this filesystem)
+    /// resolve against the same string, and nothing here can pick the wrong view of it.
+    /// Each is already guaranteed inside the checkout by the decoder, which is where a path
+    /// a person can fix is refused; resolving is all that is left.
     ///
     /// `None` is a sandbox NOBODY'S repo declared: the session's own, which has no checkout
     /// for a relative path to be relative to. A `workdir` there is refused rather than
@@ -166,31 +159,31 @@ module SandboxDecl =
     /// me". It is the file saying nothing, and what nothing means is the BACKEND's answer:
     /// docker starts its defaults, srt and host confine. `Sandboxes.forBackend` is where the
     /// two authors meet.
-    let toRequest (checkout: CheckoutViews option) (decl: SandboxDecl) : Result<SandboxRequest, string> =
+    let toRequest (checkout: string option) (decl: SandboxDecl) : Result<SandboxRequest, string> =
         // Resolved rather than concatenated, and clamped at the checkout (`CheckoutPath`).
         let workingDirectory =
             match decl.WorkingDirectory, checkout with
             | None, _ -> Ok None
-            | Some dir, Some views -> Ok (Some (CheckoutPath.under views.InSandbox dir))
+            | Some dir, Some checkout -> Ok (Some (CheckoutPath.under checkout dir))
             | Some dir, None ->
                 Error (
                     sprintf
                         "'%s' is relative to a checkout. This sandbox is the session's own, not a repo's. set_shell_profile moves where its terminals start"
                         dir)
-        // The context leaves here HOST-absolute — the address the daemon client will
-        // actually read — under the same clamp as `workdir`: nothing this arithmetic can
-        // produce sits above the checkout, whatever reached it.
+        // The context leaves here absolute — the address the daemon client will actually
+        // read — under the same clamp as `workdir`: nothing this arithmetic can produce
+        // sits above the checkout, whatever reached it.
         let runtime =
             match decl.Container with
             | None -> Ok Confinement
             | Some container ->
                 match container.Build, checkout with
                 | None, _ -> Ok (Container container)
-                | Some build, Some views ->
+                | Some build, Some checkout ->
                     Ok (
                         Container
                             { container with
-                                Build = Some { build with ContextPath = CheckoutPath.under views.OnHost build.ContextPath } })
+                                Build = Some { build with ContextPath = CheckoutPath.under checkout build.ContextPath } })
                 | Some build, None ->
                     Error (
                         sprintf
@@ -208,8 +201,7 @@ module SandboxDecl =
                       Wants = decl.Wants
                       Files = decl.Files
                       Runtime = runtime
-                      Setup = decl.Setup
-                      ReposAt = decl.Repos } }
+                      Setup = decl.Setup } }
 
 /// What a repo asks of the SESSION rather than of one of its own sandboxes (`session:`).
 type SessionDecl =
