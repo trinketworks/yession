@@ -522,22 +522,11 @@ let tests =
 
 // --- The fold ----------------------------------------------------------------------------
 
-/// A repos service that knows about `listed` and nothing else. Only `ListRepos` is the
-/// fold's business; every other verb is somebody else's suite.
-let private reposOver (reposDir: string) (listed: RepoRef list) : Repos.ReposService =
+/// A repos service that answers the listing with `reads` and refuses everything else.
+let private reposReading (reads: unit -> RepoRead list) : Repos.ReposService =
     let denied _ = async { return Error "not part of this test" }
     { AddRepo = fun _ _ -> denied ()
-      ListRepos =
-        fun () ->
-            async {
-                return
-                    Ok (
-                        listed
-                        |> List.map (fun r ->
-                            { Repo = r
-                              Branch = "main"
-                              Dirty = false
-                              Path = sprintf "%s/%s" reposDir (RepoRef.relativePath r) })) }
+      ListRepos = fun () -> async { return Ok (reads ()) }
       SwitchBranch = fun _ _ _ _ -> denied ()
       FetchRepo = fun _ _ -> denied ()
       RepoStatus = fun _ -> denied ()
@@ -545,8 +534,28 @@ let private reposOver (reposDir: string) (listed: RepoRef list) : Repos.ReposSer
       RepoDiff = fun _ -> denied ()
       RemoveRepo = fun _ _ _ -> denied () }
 
-/// The same service with a listing that fails while `failing` says so — the whole listing, the
-/// way a checkout git cannot read failed it for every repo in the session.
+let private listedAt (reposDir: string) (r: RepoRef) : RepoRead =
+    RepoRead.Listed
+        { Repo = r
+          Branch = "main"
+          Dirty = false
+          Path = sprintf "%s/%s" reposDir (RepoRef.relativePath r) }
+
+/// A checkout git could not read, as the listing reports one.
+let private unreadableAt (reposDir: string) (r: RepoRef) : RepoRead =
+    RepoRead.Unreadable
+        { Repo = r
+          Path = sprintf "%s/%s" reposDir (RepoRef.relativePath r)
+          Reason = "fatal: not a git repository: /repos/elsewhere" }
+
+/// A repos service that knows about `listed` and nothing else. Only `ListRepos` is the
+/// fold's business; every other verb is somebody else's suite.
+let private reposOver (reposDir: string) (listed: RepoRef list) : Repos.ReposService =
+    reposReading (fun () -> listed |> List.map (listedAt reposDir))
+
+/// The same service with a listing that fails while `failing` says so — the whole listing, as
+/// one that could not be made at all does. (A checkout git cannot read is not this: it is a
+/// row of its own, `RepoRead.Unreadable`.)
 let private listingFailingWhile (failing: unit -> bool) (service: Repos.ReposService) : Repos.ReposService =
     { service with
         ListRepos =
@@ -783,6 +792,90 @@ let foldTests =
                     Expect.equal outcome.Sandbox None "there is no sandbox to name — the file did not parse"
                     Expect.isTrue (outcome.Problem |> Option.exists (fun p -> p.Contains "nope")) "the key that broke it"
                 | other -> failwithf "expected one row, got %A" other
+            }
+
+        // The incident (session TNQDWN3T): a stray checkout git could not read stopped the
+        // whole listing, so the fold read no file and a healthy repo's sandboxes were
+        // refused as undeclared.
+        testCaseAsync "a checkout git cannot read does not stop its neighbour's declarations" <|
+            async {
+                let r, stray = repo "octo/hello", repo "octo/hello-phone"
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
+                let folded =
+                    RepoSandboxes.create
+                        dir
+                        (cell (Some (reposReading (fun () -> [ listedAt dir r; unreadableAt dir stray ]))))
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray<GatedCall> ()))
+                        (foldLog ())
+                        noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                Expect.equal
+                    (folded.Declared () |> Declarations.known |> Map.toList |> List.map (fst >> SandboxRef.render))
+                    [ "octo/hello:dev" ]
+                    "the healthy repo's declaration is read"
+            }
+
+        testCaseAsync "a checkout git cannot read leaves the fold read, not unreadable" <|
+            async {
+                let r, stray = repo "octo/hello", repo "octo/hello-phone"
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
+                let folded =
+                    RepoSandboxes.create
+                        dir
+                        (cell (Some (reposReading (fun () -> [ listedAt dir r; unreadableAt dir stray ]))))
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray<GatedCall> ()))
+                        (foldLog ())
+                        noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                Expect.isNone (Declarations.whyNotCurrent (folded.Declared ())) "the files that could be read were"
+            }
+
+        testCaseAsync "a checkout git cannot read is a row naming it" <|
+            async {
+                let stray = repo "octo/hello-phone"
+                let dir = TestFiles.tempDir "yession-config-"
+                let folded =
+                    RepoSandboxes.create
+                        dir
+                        (cell (Some (reposReading (fun () -> [ unreadableAt dir stray ]))))
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray<GatedCall> ()))
+                        (foldLog ())
+                        noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                match folded.Outcomes () with
+                | [ outcome ] ->
+                    Expect.equal
+                        (outcome.Repo, outcome.Problem |> Option.exists (fun p -> p.Contains "/repos/elsewhere"))
+                        (stray, true)
+                        "the checkout, with git's reason"
+                | other -> failwithf "expected one row, got %A" other
+            }
+
+        // A checkout that blinked says nothing about its file, so what it declared before
+        // stands rather than reading as "declares nothing".
+        testCaseAsync "a checkout that becomes unreadable keeps what it declared" <|
+            async {
+                let r = repo "octo/hello"
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
+                let readable = ref true
+                let folded =
+                    RepoSandboxes.create
+                        dir
+                        (cell (Some (reposReading (fun () -> [ (if readable.Value then listedAt dir r else unreadableAt dir r) ]))))
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray<GatedCall> ()))
+                        (foldLog ())
+                        noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                readable.Value <- false
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                Expect.equal
+                    (folded.Declared () |> Declarations.known |> Map.toList |> List.map (fst >> SandboxRef.render))
+                    [ "octo/hello:dev" ]
+                    "the earlier declaration stands"
             }
 
         // Re-folding is what makes the trigger cheap enough to run after every repo verb,

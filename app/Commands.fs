@@ -864,7 +864,7 @@ let launchRepo
                         Error (
                             sprintf
                                 "this session already has %s. Ask the agent to add another repo"
-                                (RepoRef.value existing.Repo))
+                                (RepoRef.value (RepoRead.repo existing)))
                 | Ok [] ->
                     return
                         Ok (
@@ -881,14 +881,15 @@ let launchRepo
                                         { LaunchFailure.Tool = addRepoTool; Summary = added; Reason = reason; Recorded = false }
                                     match! service.ListRepos () with
                                     | Error e -> return Error (listingFailure e)
-                                    | Ok listings ->
-                                        match listings |> List.tryFind (fun l -> l.Repo = repo) with
+                                    | Ok reads ->
+                                        match reads |> List.tryFind (fun read -> RepoRead.repo read = repo) with
                                         | None ->
                                             return
                                                 Error (
                                                     listingFailure (
                                                         sprintf "%s was added and is not in the listing" (RepoRef.value repo)))
-                                        | Some listing ->
+                                        | Some (RepoRead.Unreadable unreadable) -> return Error (listingFailure unreadable.Reason)
+                                        | Some (RepoRead.Listed listing) ->
                                             let! switched =
                                                 match branch with
                                                 | Some wanted when wanted <> listing.Branch ->

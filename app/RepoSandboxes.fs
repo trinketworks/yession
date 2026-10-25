@@ -244,10 +244,26 @@ let create
                 // kept silently, a failure at boot left nothing at all, which every reader
                 // took to mean that no file declares anything.
                 | Error reason -> declarations <- Declarations.after declarations (Error reason)
-                | Ok listings ->
-                    let read = RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))
-                    let declared = read.Declared
-                    let unreadable = read.Refused
+                | Ok reads ->
+                    let unreadableCheckouts = RepoRead.unreadable reads
+                    let read = RepoConfig.readAll reposDir (RepoRead.listed reads |> List.map (fun listing -> listing.Repo))
+                    // One checkout git cannot read says nothing about its neighbours, so they
+                    // are read as they are and the fold stays `Read`. Nor does it say anything
+                    // about its OWN file, so what that repo declared last time stands, beside
+                    // a row giving the reason: "this repo declares nothing" because one
+                    // checkout blinked would be a worse lie than saying nothing (`RepoRead`).
+                    let declared =
+                        let kept =
+                            Declarations.known declarations
+                            |> Map.filter (fun ref _ ->
+                                match SandboxRef.scope ref with
+                                | SessionOwned -> false
+                                | RepoOwned repo -> unreadableCheckouts |> List.exists (fun u -> u.Repo = repo))
+                        Map.fold (fun acc ref decl -> Map.add ref decl acc) read.Declared kept
+                    let unreadable =
+                        read.Refused
+                        @ (unreadableCheckouts
+                           |> List.map (fun u -> u.Repo, sprintf "git cannot read the checkout at %s: %s" u.Path u.Reason))
                     // Kept BEFORE anything is started, so a sandbox that comes up in this fold
                     // can be described as it comes up rather than on the next one — and so a
                     // start in this fold can be answered about, which is what a declaration is
@@ -302,7 +318,7 @@ let create
                     let declaredProfiles =
                         read.ShellProfiles
                         |> List.choose (fun (repo, path) ->
-                            listings
+                            RepoRead.listed reads
                             |> List.tryFind (fun listing -> RepoRef.value listing.Repo = RepoRef.value repo)
                             |> Option.map (fun listing -> repo, CheckoutPath.under listing.Path path))
                     let lastProfile =
@@ -549,42 +565,47 @@ let create
             | Some service ->
                 match! service.ListRepos () with
                 | Error reason -> return Error reason
-                | Ok listings ->
-                    let declared = (RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))).Declared
-                    match askedBy declared repo with
-                    | None -> return Error (sprintf "%s asks for nothing this session can resolve" (RepoRef.value repo))
-                    // The set that arrived is the set a person read. If it is not what
-                    // the repo asks for now, the file moved under them and the decision
-                    // they made is not the one they would make.
-                    | Some asked when asked <> granted ->
-                        return
-                            Error (
-                                sprintf
-                                    "what %s asks for changed since you looked. It now asks for %s."
-                                    (RepoRef.value repo)
-                                    (String.concat "; " asked))
-                    | Some asked ->
-                        let actor = Principal.toActor approver
-                        let approval = mintMessageId ()
-                        do!
-                            append
-                                actor
-                                (SessionEvent.RepoCapabilitiesApproved
-                                    { RepoCapabilitiesApproved.MessageId = approval
-                                      RepoCapabilitiesApproved.Repo = repo
-                                      RepoCapabilitiesApproved.Granted = asked
-                                      RepoCapabilitiesApproved.Actor = actor })
-                        // And then DO it. Consent that leaves the sandbox down until
-                        // somebody happens to touch a repo is a button that reports
-                        // success and changes nothing — which is the same class of fault
-                        // as a refusal nobody sees, arriving from the other direction.
-                        //
-                        // Safe to call here because the fold is idempotent by
-                        // construction: it re-asks for what is already running and
-                        // records nothing when nothing changed. It runs on the authority
-                        // of whoever approved, which is the truth of why it ran.
-                        do! fold (FoldCause.Changed (repo, Some approval)) (CredentialFor.Person approver)
-                        return Ok ()
+                | Ok reads ->
+                    match reads |> List.tryPick (function RepoRead.Unreadable u when u.Repo = repo -> Some u | _ -> None) with
+                    // Consent is to what the file asks for NOW, and an unreadable checkout has
+                    // no now: say why, rather than "asks for nothing".
+                    | Some unreadable -> return Error (sprintf "git cannot read the checkout at %s: %s" unreadable.Path unreadable.Reason)
+                    | None ->
+                        let declared = (RepoConfig.readAll reposDir (RepoRead.listed reads |> List.map (fun listing -> listing.Repo))).Declared
+                        match askedBy declared repo with
+                        | None -> return Error (sprintf "%s asks for nothing this session can resolve" (RepoRef.value repo))
+                        // The set that arrived is the set a person read. If it is not what
+                        // the repo asks for now, the file moved under them and the decision
+                        // they made is not the one they would make.
+                        | Some asked when asked <> granted ->
+                            return
+                                Error (
+                                    sprintf
+                                        "what %s asks for changed since you looked. It now asks for %s."
+                                        (RepoRef.value repo)
+                                        (String.concat "; " asked))
+                        | Some asked ->
+                            let actor = Principal.toActor approver
+                            let approval = mintMessageId ()
+                            do!
+                                append
+                                    actor
+                                    (SessionEvent.RepoCapabilitiesApproved
+                                        { RepoCapabilitiesApproved.MessageId = approval
+                                          RepoCapabilitiesApproved.Repo = repo
+                                          RepoCapabilitiesApproved.Granted = asked
+                                          RepoCapabilitiesApproved.Actor = actor })
+                            // And then DO it. Consent that leaves the sandbox down until
+                            // somebody happens to touch a repo is a button that reports
+                            // success and changes nothing — which is the same class of fault
+                            // as a refusal nobody sees, arriving from the other direction.
+                            //
+                            // Safe to call here because the fold is idempotent by
+                            // construction: it re-asks for what is already running and
+                            // records nothing when nothing changed. It runs on the authority
+                            // of whoever approved, which is the truth of why it ran.
+                            do! fold (FoldCause.Changed (repo, Some approval)) (CredentialFor.Person approver)
+                            return Ok ()
         }
 
     let undeclared () =

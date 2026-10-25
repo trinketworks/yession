@@ -762,7 +762,7 @@ let private reposHolding (initial: RepoListing list) (clone: RepoRef -> Result<R
                         listings <- listings @ [ listing ]
                         return Ok { Repos.Recorded.Answer = listing; Repos.Recorded.RecordedAs = None }
                 }
-          ListRepos = fun () -> async { return Ok listings }
+          ListRepos = fun () -> async { return Ok (listings |> List.map RepoRead.Listed) }
           SwitchBranch =
             fun caller repo branch _ ->
                 async {

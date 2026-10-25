@@ -217,6 +217,18 @@ let gitVerb (args: string list) : string =
     | verb :: _ -> verb
     | [] -> "?"
 
+/// What a git run that exited non-zero says: the subcommand, the checkout it ran in, and
+/// git's own words.
+///
+/// The checkout is in the sentence because git's words often name none. It used to say
+/// `git -C failed (exit 128): fatal: not a git repository: (null)` — `-C` as the verb and no
+/// directory anywhere — and an agent reading it re-added a checkout that was fine, because
+/// the one that was broken was a sibling it could not see named.
+let gitFailure (args: string list) (code: int) (said: string) : string =
+    match args with
+    | "-C" :: checkout :: _ -> sprintf "git %s in %s failed (exit %d): %s" (gitVerb args) checkout code said
+    | _ -> sprintf "git %s failed (exit %d): %s" (gitVerb args) code said
+
 /// Cap rendered git output. The head is kept — a status/log/diff front-loads its
 /// signal — and the elision is stated, never silent.
 let capText (limit: int) (text: string) : string =
@@ -313,7 +325,10 @@ type Recorded<'a> =
 /// the event; the read-only inspectors take none because they record nothing.
 type ReposService =
     { AddRepo : RepoCaller -> RepoRef -> Async<Result<Recorded<RepoListing>, string>>
-      ListRepos : unit -> Async<Result<RepoListing list, string>>
+      /// Every checkout, each read on its own: one git cannot read is a row with its reason,
+      /// never the listing's failure (`RepoRead`). `Error` is left for a listing that could
+      /// not be made at all.
+      ListRepos : unit -> Async<Result<RepoRead list, string>>
       SwitchBranch : RepoCaller -> RepoRef -> string -> bool -> Async<Result<Recorded<RepoListing>, string>>
       FetchRepo : RepoCaller -> RepoRef -> Async<Result<string, string>>
       RepoStatus : RepoRef -> Async<Result<string, string>>
@@ -500,7 +515,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     | Error e -> return Error e
                     | Ok run when run.Code <> 0 ->
                         let said = if run.Stderr.Trim () <> "" then run.Stderr else run.Stdout
-                        return Error (sprintf "git %s failed (exit %d): %s" (List.tryHead args |> Option.defaultValue "?") run.Code (capText 2000 (said.Trim ())))
+                        return Error (gitFailure args run.Code (capText 2000 (said.Trim ())))
                     | Ok run -> return Ok run
                 })
 
@@ -722,7 +737,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     return! Interop.awaitPromise pending
             }
 
-        let listRepos () : Async<Result<RepoListing list, string>> =
+        let listRepos () : Async<Result<RepoRead list, string>> =
             async {
                 let refs =
                     readdirSafe reposDir
@@ -733,18 +748,13 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                             | Ok ref when Fs.exists (sprintf "%s/%s/%s/.git" reposDir owner repo) -> Some ref
                             | _ -> None))
                     |> Array.toList
-                let mutable listings = []
-                let mutable failure = None
+                let mutable reads = []
                 for ref in refs do
-                    match failure with
-                    | Some _ -> ()
-                    | None ->
-                        match! listingOf ref with
-                        | Error e -> failure <- Some e
-                        | Ok listing -> listings <- listings @ [ listing ]
-                match failure with
-                | Some e -> return Error e
-                | None -> return Ok listings
+                    match! listingOf ref with
+                    | Ok listing -> reads <- reads @ [ RepoRead.Listed listing ]
+                    | Error reason ->
+                        reads <- reads @ [ RepoRead.Unreadable { Repo = ref; Path = visiblePathOf ref; Reason = reason } ]
+                return Ok reads
             }
 
         let switchBranch (caller: RepoCaller) (repo: RepoRef) (branch: string) (create: bool) : Async<Result<Recorded<RepoListing>, string>> =
@@ -855,13 +865,16 @@ let private queryDef : QueryDef =
         "The repos checked out in this session. Each row shows the branch the repo is on and \
          whether it has uncommitted changes. It also shows the repo's path from where the \
          default sandbox's terminals and file tools start (`.` when they start in it). The rows \
-         come from the checkouts themselves, so they always agree with git."
+         come from the checkouts themselves, so they always agree with git. A checkout git \
+         cannot read has a row of its own with git's reason under `problem`, and the rows \
+         around it are still read."
       Shape =
         Rows
             [ QueryColumn.create "repo" "repo"
               QueryColumn.create "branch" "branch"
               QueryColumn.create "dirty" "uncommitted changes"
-              QueryColumn.create "path" "path" ]
+              QueryColumn.create "path" "path"
+              QueryColumn.create "problem" "problem" ]
       Legend = [] }
 
 /// Register the listing as a query. The service keeps its typed `ListRepos` — the query
@@ -874,13 +887,22 @@ let query (service: ReposService) : Queries.QueryRegistration =
             async {
                 match! service.ListRepos () with
                 | Error e -> return Error e
-                | Ok listings ->
+                | Ok reads ->
                     return
                         Ok (RowsOf (
-                            listings
-                            |> List.map (fun listing ->
-                                [ "repo", CellText (RepoRef.value listing.Repo)
-                                  "branch", CellText listing.Branch
-                                  "dirty", CellFlag listing.Dirty
-                                  "path", CellText listing.Path ])))
+                            reads
+                            |> List.map (fun read ->
+                                match read with
+                                | RepoRead.Listed listing ->
+                                    [ "repo", CellText (RepoRef.value listing.Repo)
+                                      "branch", CellText listing.Branch
+                                      "dirty", CellFlag listing.Dirty
+                                      "path", CellText listing.Path
+                                      "problem", CellAbsent ]
+                                | RepoRead.Unreadable unreadable ->
+                                    [ "repo", CellText (RepoRef.value unreadable.Repo)
+                                      "branch", CellAbsent
+                                      "dirty", CellAbsent
+                                      "path", CellText unreadable.Path
+                                      "problem", CellText unreadable.Reason ])))
             } }
