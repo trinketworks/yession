@@ -296,15 +296,17 @@ let private askCardColumn (column: int) : string list =
 /// absent with nothing to bring it back is a conversation nobody can return to.
 ///
 /// What is NOT drawn is skipped rather than failed, which is the whole of the first leg: an
-/// item inside a column the browser is not drawing has a zero box at the origin, and hit-testing
-/// that would report every item in an honestly absent column as unreachable.
+/// item inside a column the browser is not drawing has a zero box at the origin, or a box no
+/// press lands on (`visibility: hidden`, which is how `Style.timeline` keeps the column's
+/// scroll through its absence), and hit-testing that would report every item in an honestly
+/// absent column as unreachable.
 let private itemsClearOfCard () : string list =
     let items = all Root.Document "#shell [data-conversation] [data-message-id]"
     let drawn =
         items
         |> List.filter (fun item ->
             let box = item.getBoundingClientRect ()
-            box.width > 0.0 && box.height > 0.0)
+            box.width > 0.0 && box.height > 0.0 && Css.computedProperty (item :?> HTMLElement) "visibility" <> "hidden")
     match items, drawn with
     // Anti-vacuity: a card standing over nothing cannot say where the conversation went.
     | [], _ -> [ "there is no conversation behind the card, so nothing here is a question" ]

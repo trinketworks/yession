@@ -205,9 +205,17 @@ let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) :
     /// Tell the model what moved under a surface's reader — only when that moves what it
     /// holds, the reader's intent or how far back they are (`TailReader.next`), so a reader
     /// scrolling within the near region or the far one renders nothing.
+    ///
+    /// A surface with no box says nothing. An element the browser is not laying out
+    /// (`display: none`, or a column with no height) reads `scrollTop`, `scrollHeight` and
+    /// `clientHeight` as zero, and zero short of zero is "at the end" — so measuring one told
+    /// the model a reader two hundred messages back had arrived. Chromium fires a scroll event
+    /// as the box goes, so this was not a corner `restore` alone could guard. The reader's
+    /// place is where they left it, and a surface that comes back to its box reports from
+    /// there.
     let tell (el: HTMLElement) (move: ReaderMove) : unit =
         match surfaceOf el, current () with
-        | Some surface, Some model ->
+        | Some surface, Some model when el.clientHeight > 0.0 ->
             let now = Map.tryFind surface model.Readers
             if TailReader.next move now <> now then dispatch (ReaderMovedMsg (surface, move))
         | _ -> ()
