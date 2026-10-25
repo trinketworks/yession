@@ -8730,10 +8730,53 @@ let private FRONTED_LOGIN = "alice@example.com"
 let private FRONTED_NAME = "Alice Example"
 
 
+/// `tailscale serve`, as far as this suite needs one: a TCP port on loopback whose every
+/// connection is carried, byte for byte, to the proxy's unix socket. What `serve` adds (TLS,
+/// the `Tailscale-User-*` headers) the browser context adds itself, so this is only the
+/// door: the one thing that can open the proxy's socket.
+type private Ingress =
+    { Port : int
+      Stop : unit -> unit }
+
+let private ingressTo (socketPath: string) : Ingress =
+    let listener = new TcpListener (IPAddress.Loopback, 0)
+    listener.Start ()
+    let stopping = new CancellationTokenSource ()
+    let carry (client: TcpClient) =
+        task {
+            use client = client
+            use upstream = new Socket (AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified)
+            try
+                do! upstream.ConnectAsync (UnixDomainSocketEndPoint socketPath)
+                use toProxy = new NetworkStream (upstream, false)
+                let fromBrowser = client.GetStream ()
+                let up = fromBrowser.CopyToAsync (toProxy, stopping.Token)
+                let down = toProxy.CopyToAsync (fromBrowser, stopping.Token)
+                let! _ = Task.WhenAny (up, down)
+                ()
+            with _ -> ()
+        }
+        |> ignore
+    let rec accept () =
+        task {
+            try
+                let! client = listener.AcceptTcpClientAsync stopping.Token
+                carry client
+                return! accept ()
+            with _ -> ()
+        }
+    accept () |> ignore
+    { Port = (listener.LocalEndpoint :?> IPEndPoint).Port
+      Stop =
+        fun () ->
+            stopping.Cancel ()
+            listener.Stop () }
+
 /// The deployment, and the one address a person on the tailnet ever sees of it.
 type private Fronted =
-    { /// The public origin — caddy's, which is the Manager's origin too.
+    { /// The public origin — the ingress's, which is the Manager's origin too.
       Origin : string
+      Ingress : Ingress
       Pieces : Deployed list }
 
 /// The three processes, in the order a cold boot needs them: the proxy first, because the
@@ -8741,23 +8784,26 @@ type private Fronted =
 /// it while booting; the Manager; then the map, which needs the Manager's stream to follow.
 /// Everything here is what the README says to run, with the README's own template.
 ///
-/// Both ports are taken at `:0` and released rather than chosen. Neither piece can be told
-/// `0` and asked afterwards: caddy is handed the Manager's address to reverse-proxy to, and
-/// the Manager is handed caddy's as its public origin, so each has to be known before either
-/// starts.
+/// Both doors are unix sockets, as the README says to run them: the proxy's, which only the
+/// ingress opens, and the Manager's, which only the proxy and the map open. The ingress's
+/// port is taken at `:0` before anything starts, because the Manager is handed it as its
+/// public origin.
 let private deployFronted () : Fronted =
     if Directory.Exists frontedDataDir then Directory.Delete (frontedDataDir, true)
     Directory.CreateDirectory frontedMapDir |> ignore
-    let frontedPort = freeLoopbackPort ()
-    let frontedManagerPort = freeLoopbackPort ()
-    let origin = sprintf "http://127.0.0.1:%d" frontedPort
+    // Absolute: Caddy and the map run from the repository root, and a socket path has to
+    // name the same file for all three.
+    let proxySocket = Path.GetFullPath (frontedDataDir + "/proxy.sock")
+    let managerSocket = Path.GetFullPath (frontedDataDir + "/manager.sock")
+    let ingress = ingressTo proxySocket
+    let origin = sprintf "http://127.0.0.1:%d" ingress.Port
     let proxy =
         deploy
             "caddy"
             "caddy"
             [ "run"; "--config"; "examples/proxy/caddy/Caddyfile"; "--adapter"; "caddyfile"; "--watch" ]
-            [ "YESSION_PROXY_PORT", string frontedPort
-              "YESSION_PROXY_MANAGER", sprintf "127.0.0.1:%d" frontedManagerPort
+            [ "YESSION_PROXY_SOCKET", proxySocket
+              "YESSION_PROXY_MANAGER", "unix/" + managerSocket
               // Absolute: an `import` glob is resolved against the Caddyfile's own directory,
               // and the map is written under this suite's, not the example's.
               "YESSION_PROXY_SESSIONS", Path.GetFullPath frontedMapDir + "/sessions*.caddy" ]
@@ -8766,7 +8812,7 @@ let private deployFronted () : Fronted =
         deployProduct
             "the Manager"
             [ "--auth"; "trusted-headers"; "--secrets"; "ephemeral"
-              "--port"; string frontedManagerPort; "--data-dir"; frontedDataDir ]
+              "--socket"; managerSocket; "--data-dir"; frontedDataDir ]
             [ "YESSION_MANAGER_URL", origin
               "YESSION_SESSION_URL", origin + "/s/{id}" ]
             (fun line -> line.Contains "management UI at")
@@ -8775,14 +8821,20 @@ let private deployFronted () : Fronted =
             "sessions-map"
             "node"
             [ "examples/proxy/main.mjs"
-              "--manager"; sprintf "http://127.0.0.1:%d" frontedManagerPort
+              "--manager"; "unix:" + managerSocket
               "--as"; "proxy-map"
               "--out"; frontedMapDir + "/sessions.caddy"
               "--empty"; "# no running sessions"
               "--template"; "@s_{id} path /s/{id} /s/{id}/*\nhandle @s_{id} {\n\treverse_proxy 127.0.0.1:{port}\n}" ]
             []
             (fun line -> line.Contains " follows ")
-    { Origin = origin; Pieces = [ proxy; manager; map ] }
+    { Origin = origin; Ingress = ingress; Pieces = [ proxy; manager; map ] }
+
+/// Stop a deployment: the map and the Manager before the proxy they sit behind, and the
+/// ingress last.
+let private stopFronted (deployed: Fronted) =
+    for d in List.rev deployed.Pieces do d.Stop ()
+    deployed.Ingress.Stop ()
 
 // One case at a time (`BrowserRunner`): a case's deployment starts by emptying `frontedDataDir`.
 let frontedTests =
@@ -8885,8 +8937,25 @@ let frontedTests =
                         }
                     })
                 finally
-                    // Reverse order: the map and the Manager before the proxy they sit behind.
-                    for d in List.rev deployed.Pieces do d.Stop ()
+                    stopFronted deployed
+            }
+
+        // The forgery the audit found, from the side the Manager can see: an identity header
+        // that the proxy did not set. A client that names itself in `x-yession-user` and
+        // carries no `Tailscale-User-Login` reaches the Manager with the identity the proxy
+        // set from the ingress — none — and is refused. The Manager has no TCP port to send
+        // it to instead (`Listener.admits`), so this door is the only one there is.
+        testCaseAsync "an x-yession-user the proxy did not set is refused with 401" <|
+            async {
+                let deployed = deployFronted ()
+                try
+                    use client = new HttpClient ()
+                    use request = new HttpRequestMessage (HttpMethod.Get, deployed.Origin + "/")
+                    request.Headers.Add ("x-yession-user", FRONTED_LOGIN)
+                    let! answer = client.SendAsync request |> Async.AwaitTask
+                    Expect.equal (int answer.StatusCode) 401 "a header from a peer that is not the proxy names nobody"
+                finally
+                    stopFronted deployed
             }
     ]
 

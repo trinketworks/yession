@@ -138,3 +138,69 @@ let attempt
 /// The common case: the body as text, whatever the status said.
 let text (url: string) (init: Fetch.Types.RequestProperties list) : Async<Attempt<string>> =
     attempt (fun response -> response.text ()) url init
+
+/// How a request reaches its server.
+///
+/// A unix socket is the door of a server that must know who dialled it: the Manager under
+/// `--auth trusted-headers` listens on one, so that only what the socket's permissions admit
+/// can speak to it (`ProcessManager.Listener`). Node's `fetch` cannot dial a socket, so a
+/// request to one goes through `node:http`, and comes back as the same `Response`.
+[<RequireQualifiedAccess>]
+type Transport =
+    /// TCP, to the host and port the URL names.
+    | Tcp
+    /// The unix socket at this path. The URL's path and query are the request target, and its
+    /// host is the `host` header and nothing more.
+    | UnixSocket of path: string
+
+/// One request as a transport carries it: the four things any caller here sets.
+type Request =
+    { Method : Fetch.Types.HttpMethod
+      Headers : (string * string) list
+      Body : string option
+      Signal : Fetch.Types.AbortSignal option }
+
+/// The method as `node:http` takes it: the name on the wire.
+let private methodName (verb: Fetch.Types.HttpMethod) : string =
+    match verb with
+    | Fetch.Types.HttpMethod.CONNECT -> "CONNECT"
+    | Fetch.Types.HttpMethod.DELETE -> "DELETE"
+    | Fetch.Types.HttpMethod.GET -> "GET"
+    | Fetch.Types.HttpMethod.HEAD -> "HEAD"
+    | Fetch.Types.HttpMethod.OPTIONS -> "OPTIONS"
+    | Fetch.Types.HttpMethod.PATCH -> "PATCH"
+    | Fetch.Types.HttpMethod.POST -> "POST"
+    | Fetch.Types.HttpMethod.PUT -> "PUT"
+    | Fetch.Types.HttpMethod.TRACE -> "TRACE"
+
+/// `fetchUnsafe` over a transport: a non-2xx status is an answer, and only a request that met
+/// no reply rejects.
+let fetchOver (transport: Transport) (url: string) (request: Request) : JS.Promise<Fetch.Types.Response> =
+    match transport with
+    | Transport.Tcp ->
+        Fetch.fetchUnsafe
+            url
+            [ yield Fetch.Types.RequestProperties.Method request.Method
+              yield headers request.Headers
+              match request.Body with
+              | Some body -> yield Fetch.Types.RequestProperties.Body (U3.Case3 body)
+              | None -> ()
+              match request.Signal with
+              | Some signal -> yield Fetch.Types.RequestProperties.Signal signal
+              | None -> () ]
+    | Transport.UnixSocket path ->
+        let target = Interop.requestUrl url
+        Promise.create (fun resolve reject ->
+            let sent =
+                Fable.NodeExtras.HttpClient.httpRequestOverSocket
+                    path
+                    (target.pathname + target.search)
+                    (methodName request.Method)
+                    (request.Headers
+                     |> List.map (fun (name, value) -> name, Fable.NodeExtras.HeaderValue.Single value)
+                     |> Array.ofList)
+                    request.Signal
+                    (fun answer -> resolve (Fable.NodeExtras.HttpClient.responseOf answer))
+            sent.onError (fun error -> reject (exn (Fable.NodeExtras.StreamError.describe error)))
+            request.Body |> Option.iter (sent.writeText >> ignore)
+            sent.finish ())

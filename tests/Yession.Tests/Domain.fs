@@ -2478,9 +2478,18 @@ let private launchTests =
                 { Session = SessionId.create "sess-1" |> expect
                   DataDir = "/data/sess-1"
                   Port = 0
-                  Control = Some { Url = "http://127.0.0.1:8321"; Secret = "s3cret" }
+                  Control = Some { Endpoint = ControlEndpoint.Address "http://127.0.0.1:8321"; Secret = "s3cret" }
                   ParentGuard = true }
             Expect.equal (Launch.parse (Launch.encode launch)) (Ok launch) "what the Manager mints is what the session reads"
+
+        testCase "a launch whose Manager listens on a socket round-trips with the path" <| fun () ->
+            let launch =
+                { Session = SessionId.create "sess-1" |> expect
+                  DataDir = "/data/sess-1"
+                  Port = 0
+                  Control = Some { Endpoint = ControlEndpoint.Socket "/run/yession/manager.sock"; Secret = "s3cret" }
+                  ParentGuard = true }
+            Expect.equal (Launch.parse (Launch.encode launch)) (Ok launch) "the session dials the socket the Manager listens on"
 
         testCase "a launch with no Manager round-trips too" <| fun () ->
             // The unsupervised shape has to survive the wire, not just the default: a

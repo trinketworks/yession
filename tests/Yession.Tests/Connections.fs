@@ -1175,7 +1175,7 @@ let private watchingConnections (url: string) (secret: string) =
     let frames = ResizeArray<ConnectionStatusList> ()
     let waiter : (unit -> unit) option ref = ref None
     let cancel =
-        ControlClient.subscribeConnections url secret (fun list ->
+        ControlClient.subscribeConnections (ControlEndpoint.Address url) secret (fun list ->
             frames.Add list
             match waiter.Value with
             | Some check -> check ()
@@ -1276,8 +1276,8 @@ let private routeTests =
                     startConnectionsServer
                         [ "secret-a", caller sessionA (Set.singleton alice) false
                           "secret-b", caller sessionB (Set.singleton bob) false ]
-                let clientA = ControlClient.connections url "secret-a"
-                let clientB = ControlClient.connections url "secret-b"
+                let clientA = ControlClient.connections (ControlEndpoint.Address url) "secret-a"
+                let clientB = ControlClient.connections (ControlEndpoint.Address url) "secret-b"
 
                 // 401 at the door.
                 let! unknown = postControl (url + "/control/connections/resolve") "nope" (ControlWire.toString ControlWire.connectionResolveRequest { Target = target (UserScope alice) })
@@ -1433,7 +1433,7 @@ let private routeTests =
         testCaseAsync "the status stream sends a snapshot on subscribe and a fresh frame on change" <|
             async {
                 let! url = startConnectionsServer [ "secret-a", caller sessionA (Set.singleton alice) false ]
-                let clientA = ControlClient.connections url "secret-a"
+                let clientA = ControlClient.connections (ControlEndpoint.Address url) "secret-a"
                 let! _ = clientA.Put (target (UserScope alice)) "sk-ant-oat01-x"
 
                 let frames, expectFrame, cancel = watchingConnections url "secret-a"
@@ -1461,7 +1461,7 @@ let private routeTests =
         testCaseAsync "a credential that stops working pushes a fresh frame, with no write to the store" <|
             async {
                 let! url = startConnectionsServer [ "secret-a", caller sessionA (Set.singleton alice) false ]
-                let clientA = ControlClient.connections url "secret-a"
+                let clientA = ControlClient.connections (ControlEndpoint.Address url) "secret-a"
                 let t = target (UserScope alice)
                 // Connected, and finished: a refresh token that has already lapsed.
                 let! _ =

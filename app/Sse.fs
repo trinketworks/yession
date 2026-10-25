@@ -137,6 +137,7 @@ let private retryAfterMs = 1000
 // connection the caller is asked about, never thrown.
 let private openStream
     (clock: Clock)
+    (transport: Http.Transport)
     (url: string)
     (headers: (string * string) list)
     (onEvent: Sink<string>)
@@ -155,12 +156,13 @@ let private openStream
     // of a refusal nobody will read is as much of a held socket as a stream is.
     let release () = controller.abort ()
 
-    let request =
-        [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.GET
+    let request : Http.Request =
+        { Method = Fetch.Types.HttpMethod.GET
           // `accept` goes on LAST so it wins over a caller that named one: this connection reads
           // an event stream or it reads nothing.
-          Http.headers (headers @ [ "accept", "text/event-stream" ])
-          Fetch.Types.RequestProperties.Signal controller.signal ]
+          Headers = headers @ [ "accept", "text/event-stream" ]
+          Body = None
+          Signal = Some controller.signal }
 
     // A sink that throws is OUR bug and must not reach the attempt decision: a dropped socket is
     // retried, where a broken subscriber retried forever silently drops every event it was given.
@@ -199,7 +201,7 @@ let private openStream
 
     let connect () =
         async {
-            let! response = Fetch.fetchUnsafe url request |> Interop.awaitPromise
+            let! response = Http.fetchOver transport url request |> Interop.awaitPromise
 
             if not response.Ok then
                 // A refusal is the server ANSWERING, so what the caller judges is the status it
@@ -271,9 +273,13 @@ let subscribeWhile
     (retry: Retry)
     (onFrame: Sink<string>)
     : Subscription =
-    Subscription.ofStop (openStream clock url headers (fun event -> dataOf event |> Option.iter onFrame) retry)
+    Subscription.ofStop (openStream clock Http.Transport.Tcp url headers (fun event -> dataOf event |> Option.iter onFrame) retry)
 
-/// Subscribe to an SSE stream, receiving one call per event carrying data (comment-only
-/// keep-alives are dropped). `headers` ride every connect and reconnect.
+/// Subscribe to an SSE stream over `transport`, receiving one call per event carrying data
+/// (comment-only keep-alives are dropped). `headers` ride every connect and reconnect.
+let subscribeOver (transport: Http.Transport) (url: string) (headers: (string * string) list) (onFrame: Sink<string>) : Subscription =
+    Subscription.ofStop (openStream Clock.system transport url headers (fun event -> dataOf event |> Option.iter onFrame) Retry.always)
+
+/// `subscribeOver` TCP, to the host the url names.
 let subscribe (url: string) (headers: (string * string) list) (onFrame: Sink<string>) : Subscription =
-    subscribeWhile Clock.system url headers Retry.always onFrame
+    subscribeOver Http.Transport.Tcp url headers onFrame

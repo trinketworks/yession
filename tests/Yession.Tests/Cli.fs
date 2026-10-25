@@ -78,7 +78,7 @@ let private fronted : ManagerCli.Report =
     { Version = "1.2.3"
       TrustRule = "trusted-headers", ManagerCli.Chosen
       Secrets = "durable", ManagerCli.Chosen
-      Port = "8321", ManagerCli.Default
+      Listen = "socket /run/yession/manager.sock", ManagerCli.Chosen
       DataDir = "/srv/yession", ManagerCli.Chosen
       DefaultSession = "local-session", ManagerCli.Default
       IdleTimeout = "30m", ManagerCli.Chosen
@@ -87,10 +87,16 @@ let private fronted : ManagerCli.Report =
       Webhooks = [ "github"; "shop@1=x-shop-hmac:base64" ]
       Inherited = [ "YESSION_MANAGER_URL"; "YESSION_PROXY_PORT" ] }
 
+/// A fronted deployment's addressing, for the listener cases.
+let private frontedAccess () =
+    match Yession.Domain.Link.PublicAccess.create "https://host.ts.net" "https://host.ts.net/s/{id}" with
+    | Ok access -> access
+    | Error e -> failwith e
+
 /// Nothing configured: every default, and the two features that can be off.
 let private loopback : ManagerCli.Report =
     { fronted with
-        Port = "8321", ManagerCli.Default
+        Listen = "port 8321", ManagerCli.Default
         IdleTimeout = "never", ManagerCli.Off
         Addressing = ManagerCli.Addressing.OnLoopback
         Webhooks = []
@@ -295,6 +301,52 @@ let tests =
             Expect.equal (ProcessManager.ManagerPort.ofName (Some "9000")) (Ok 9000) "a port"
             Expect.equal (ProcessManager.ManagerPort.ofName (Some "0")) (Ok 0) "and 0, which the OS answers"
 
+        // `Listener.admits`: where the Manager may listen, beside the strategy's door. The
+        // refusal under trusted-headers is the security half: a TCP port on loopback is
+        // dialled as loopback by every process on the host and by a container whose
+        // network reaches the host loopback, so a header arriving there proves nothing.
+        testCase "trusted-headers refuses a TCP port" <| fun () ->
+            let fronted = frontedAccess ()
+            Expect.isError
+                (ProcessManager.Listener.admits Yession.Oidc.Strategy.trustedHeaders.Door (Some 8321) None fronted)
+                "a header on a port anything local can dial is not the proxy's"
+
+        testCase "trusted-headers refuses the default port too" <| fun () ->
+            let fronted = frontedAccess ()
+            Expect.isError
+                (ProcessManager.Listener.admits Yession.Oidc.Strategy.trustedHeaders.Door None None fronted)
+                "no --socket is no door the proxy alone holds"
+
+        testCase "trusted-headers listens on the socket it is given" <| fun () ->
+            let fronted = frontedAccess ()
+            Expect.equal
+                (ProcessManager.Listener.admits Yession.Oidc.Strategy.trustedHeaders.Door None (Some "/run/y.sock") fronted)
+                (Ok (ProcessManager.Listener.Socket "/run/y.sock"))
+                "the socket"
+
+        testCase "a socket needs the proxy's origin to send browsers to" <| fun () ->
+            Expect.isError
+                (ProcessManager.Listener.admits Yession.Oidc.Strategy.trustedHeaders.Door None (Some "/run/y.sock") Yession.Domain.Link.Loopback)
+                "no browser dials a socket"
+
+        testCase "localhost refuses a socket, which has no peer address to read" <| fun () ->
+            let fronted = frontedAccess ()
+            Expect.isError
+                (ProcessManager.Listener.admits Yession.Oidc.Strategy.localhost.Door None (Some "/run/y.sock") fronted)
+                "localhost reads the TCP peer"
+
+        testCase "localhost listens on the default port" <| fun () ->
+            Expect.equal
+                (ProcessManager.Listener.admits Yession.Oidc.Strategy.localhost.Door None None Yession.Domain.Link.Loopback)
+                (Ok (ProcessManager.Listener.Port ProcessManager.ManagerPort.Default))
+                "8321"
+
+        testCase "a port and a socket together are refused" <| fun () ->
+            let fronted = frontedAccess ()
+            Expect.isError
+                (ProcessManager.Listener.admits Yession.Oidc.Strategy.none.Door (Some 9000) (Some "/run/y.sock") fronted)
+                "one endpoint, one door"
+
         testCase "a port argument that is not a port number is refused, not defaulted" <| fun () ->
             // Refused because the alternative reaches `listen` as NaN, which BINDS — on a
             // random port, reporting itself as a Manager answering somewhere nobody was told.
@@ -314,7 +366,7 @@ let tests =
             // The question --check exists to answer: a value alone cannot say whether the
             // setting you wrote took effect, because `8321` is the same text either way.
             Expect.equal (settingFor "trust rule" fronted).Origin ManagerCli.Chosen "a chosen value"
-            Expect.equal (settingFor "port" fronted).Origin ManagerCli.Default "a defaulted one"
+            Expect.equal (settingFor "listen" loopback).Origin ManagerCli.Default "a defaulted one"
             Expect.equal (settingFor "webhooks" loopback).Origin ManagerCli.Off "and a feature that is off"
 
         testCase "every setting says something, and says what it does" <| fun () ->
