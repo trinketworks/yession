@@ -105,6 +105,8 @@ type HostConfig =
     /// Run the daemon's init (docker-init, which is tini) as PID 1, in front of `Cmd` —
     /// `docker run --init`.
     abstract Init: bool with get, set
+    /// The network the container joins at creation — `docker run --network`.
+    abstract NetworkMode: string with get, set
 
 /// `createContainer`'s options: `name` rides the query string, the rest is the body.
 [<AllowNullLiteral>]
@@ -122,6 +124,13 @@ type ContainerCreateOptions =
 [<AllowNullLiteral>]
 type VolumeCreateOptions =
     abstract Name: string with get, set
+    abstract Labels: Labels with get, set
+
+/// `createNetwork`'s options.
+[<AllowNullLiteral>]
+type NetworkCreateOptions =
+    abstract Name: string with get, set
+    abstract Driver: string with get, set
     abstract Labels: Labels with get, set
 
 /// A container's or a volume's `remove`.
@@ -226,6 +235,35 @@ type [<AllowNullLiteral>] Container =
     /// process prints; multiplexed like an exec's, so `demuxStream` reads it.
     abstract logs: options: LogsOptions -> JS.Promise<Stream>
 
+/// One address range of a network, as the daemon assigned it.
+type [<AllowNullLiteral>] IpamConfig =
+    /// The address the HOST has on this network, which a container routes to it by.
+    abstract Gateway: string option
+
+type [<AllowNullLiteral>] Ipam =
+    abstract Config: IpamConfig array option
+
+/// What `network.inspect()` answers with, of it.
+type [<AllowNullLiteral>] NetworkInspect =
+    abstract IPAM: Ipam option
+
+[<RequireQualifiedAccess>]
+module NetworkInspect =
+
+    /// The first IPv4 gateway the network has: where its containers reach the host.
+    let gateway (inspected: NetworkInspect) : string option =
+        inspected.IPAM
+        |> Option.bind (fun ipam -> ipam.Config)
+        |> Option.defaultValue [||]
+        |> Array.tryPick (fun config -> config.Gateway |> Option.filter (fun g -> not (g.Contains ":")))
+
+/// A network handle.
+type [<AllowNullLiteral>] Network =
+    /// Rejects when there is no such network.
+    abstract inspect: unit -> JS.Promise<NetworkInspect>
+    /// Rejects while a container is still attached.
+    abstract remove: unit -> JS.Promise<Unread>
+
 /// A named-volume handle.
 type [<AllowNullLiteral>] Volume =
     abstract remove: options: RemoveOptions -> JS.Promise<Unread>
@@ -286,6 +324,8 @@ type [<AllowNullLiteral>] Docker =
     abstract getContainer: id: string -> Container
     abstract createVolume: options: VolumeCreateOptions -> JS.Promise<Unread>
     abstract getVolume: name: string -> Volume
+    abstract createNetwork: options: NetworkCreateOptions -> JS.Promise<Network>
+    abstract getNetwork: name: string -> Network
     abstract getImage: name: string -> Image
     /// Pull an image; resolves to the progress stream to drain before use.
     abstract pull: tag: string -> JS.Promise<Stream>

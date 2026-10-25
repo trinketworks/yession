@@ -320,6 +320,7 @@ let private serviceTracing
     TestFiles.ensureDir fixtures
     Repos.create
         { Backend = SrtBackend
+          Network = DockerFixture.quietNetwork ()
           ReposDir = reposDir
           StartsAt = fun () -> None
           ExtraReadPaths = [ fixtures ]
@@ -611,6 +612,7 @@ let private srtTests =
             let service =
                 Repos.create
                     { Backend = SrtBackend
+                      Network = DockerFixture.quietNetwork ()
                       ReposDir = relRepos
                       StartsAt = fun () -> None
                       ExtraReadPaths = [ fixturesIn fixtures ]

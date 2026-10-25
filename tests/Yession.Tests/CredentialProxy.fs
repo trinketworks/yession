@@ -296,7 +296,7 @@ let private withProxyTo (egress: Egress) (upstream: Upstream) (body: Proxy -> As
         let dir =
             let made = TestFiles.tempDir "yession-credproxy-"
             Fs.canonical made |> Option.defaultValue made
-        let! proxy = CredentialProxy.start [ route; other ] egress (fun _ -> upstream.Origin) (dir + "/trust.pem") ignore
+        let! proxy = CredentialProxy.start [ "127.0.0.1" ] [ route; other ] egress (fun _ -> upstream.Origin) (dir + "/trust.pem") ignore
         try
             do! body proxy
         finally

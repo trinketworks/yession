@@ -84,6 +84,36 @@ let private routeTests =
             Expect.equal (Sandboxes.hostAddressFrom "box.local" Node.Base.Platform.Darwin SrtBackend) (Some "box.local") "srt on macOS: the box's name"
             Expect.equal (Sandboxes.hostAddressFrom "runner" Node.Base.Platform.Linux SrtBackend) (Some "127.0.0.2") "srt on Linux: a loopback address NO_PROXY does not name"
 
+        // Where the listeners bind at start: what each backend dials, and never every
+        // interface, which would also answer the host's other networks and, on a native
+        // daemon, every container of every session.
+        testCase "on Linux the listeners bind loopback and srt's loopback address" <| fun () ->
+            Expect.equal
+                (Sandboxes.hostDoorsFrom Node.Base.Platform.Linux [ "127.0.0.1"; "10.0.0.5"; "172.17.0.1" ])
+                [ "127.0.0.1"; "127.0.0.2" ]
+                "the LAN and the docker bridges are not doors"
+
+        testCase "on macOS the listeners bind loopback and the addresses srt's name resolves among" <| fun () ->
+            Expect.equal
+                (Sandboxes.hostDoorsFrom Node.Base.Platform.Darwin [ "127.0.0.1"; "::1"; "fe80::1"; "192.168.1.9"; "fd7a:115c::7" ])
+                [ "127.0.0.1"; "192.168.1.9"; "fd7a:115c::7" ]
+                "loopback once, no link-local"
+
+        // A container on a native daemon reaches this host at its network's gateway, which
+        // is one of this host's addresses; on a daemon in a VM the gateway is the VM's, and
+        // `host-gateway` is the host loopback the daemon forwards.
+        testCase "a container names the host by its network's gateway when this host has it" <| fun () ->
+            Expect.equal
+                (Sandboxes.DockerSandbox.hostAlias "172.20.0.1" true)
+                ("host.docker.internal:172.20.0.1", Some "172.20.0.1")
+                "the gateway, and a door to open there"
+
+        testCase "a container names the host by host-gateway when the daemon is in a VM" <| fun () ->
+            Expect.equal
+                (Sandboxes.DockerSandbox.hostAlias "192.168.106.1" false)
+                ("host.docker.internal:host-gateway", None)
+                "the daemon's own answer, and nothing to open"
+
         // srt's proxy re-judges an allowed NAME by what it resolves to, and refuses this
         // host's own addresses unless that address is on the allowlist at the port. The
         // macOS name is the box's own, so it travels with the box's addresses — at the
@@ -377,17 +407,81 @@ let private routeWith (gateway: GitGateway.Gateway) (name: string) (lend: Lend) 
 
 /// A gateway whose faults-after-answering go to `report` — the seam a case reads when
 /// what it asserts is that a fault git could not be told about was still said somewhere.
-let private withGatewayReporting (upstream: string) (report: string -> unit) (body: GitGateway.Gateway -> Async<unit>) : Async<unit> =
+let private withGatewayAtReporting
+    (addresses: string list)
+    (upstream: string)
+    (report: string -> unit)
+    (body: GitGateway.Gateway -> Async<unit>)
+    : Async<unit> =
     async {
-        let! gateway = GitGateway.start upstream report
+        let! gateway = GitGateway.start addresses upstream report
         try
             do! body gateway
         finally
             gateway.Close () |> Async.StartImmediate
     }
 
+/// At the doors a session opens at start (`hostDoorsHere`), which is where every backend
+/// but a native daemon's containers dials.
+let private withGatewayReporting (upstream: string) (report: string -> unit) (body: GitGateway.Gateway -> Async<unit>) : Async<unit> =
+    withGatewayAtReporting (Sandboxes.hostDoorsHere ()) upstream report body
+
 let private withGateway (upstream: string) (body: GitGateway.Gateway -> Async<unit>) : Async<unit> =
     withGatewayReporting upstream ignore body
+
+/// At loopback alone, for the cases about where it answers.
+let private withGatewayAtLoopback (body: GitGateway.Gateway -> Async<unit>) : Async<unit> =
+    withGatewayAtReporting [ "127.0.0.1" ] "http://127.0.0.1:1" ignore body
+
+/// Whether anything accepts a TCP connection at `address:port`.
+let private answersAt (address: string) (port: int) : Async<bool> =
+    Async.FromContinuations (fun (cont, _, _) ->
+        let mutable settled = false
+        let finish answer =
+            if not settled then
+                settled <- true
+                cont answer
+        let probe = connectTcp (port, address)
+        probe.onceConnect (fun () ->
+            probe.destroy ()
+            finish true)
+        probe.onError (fun _ -> finish false))
+
+let private doorTests =
+    testList "where the gateway answers" [
+        // Linux loopback is all of 127/8, so `127.0.0.2` is an address a listener on every
+        // interface would answer and one on `127.0.0.1` does not. macOS configures only
+        // `127.0.0.1` on `lo0`: a bind to `127.0.0.2` is EADDRNOTAVAIL and a connect to it
+        // sits in a timeout — which is also why `hostDoorsFrom` never names it there. Skipped
+        // rather than asserted on macOS: the invariant is real and this platform has no second
+        // loopback address to express it with, which is what a visible skip says and a quiet
+        // pass does not.
+        (if ``process``.platform = Node.Base.Platform.Darwin then
+            ptestCase "the gateway does not answer at an address it was not opened at (Linux only: macOS has no second loopback address)" (fun () -> ())
+         else
+            testCaseAsync "the gateway does not answer at an address it was not opened at" (async {
+                do!
+                    withGatewayAtLoopback (fun gateway ->
+                        async {
+                            let! answered = answersAt "127.0.0.2" gateway.Port
+                            Expect.isFalse answered "not every interface"
+                        })
+            }))
+
+        (if ``process``.platform = Node.Base.Platform.Darwin then
+            ptestCase "an address opened later answers on the same port (Linux only: macOS has no second loopback address)" (fun () -> ())
+         else
+            testCaseAsync "an address opened later answers on the same port" (async {
+                do!
+                    withGatewayAtLoopback (fun gateway ->
+                        async {
+                            let! opened = gateway.Open "127.0.0.2"
+                            Expect.equal opened (Ok ()) "opened"
+                            let! answered = answersAt "127.0.0.2" gateway.Port
+                            Expect.isTrue answered "the port a sandbox was told"
+                        })
+            }))
+    ]
 
 let private portsTests =
     testList "a real git at the gateway" [
@@ -994,6 +1088,6 @@ let tests =
         routeTests
         carryTests
         cgiTests
-        Tag.needs "The git gateway, driven by git" [ Tag.Ports ] (fun () -> testList "with a real git" [ portsTests; pushTests ])
+        Tag.needs "The git gateway, driven by git" [ Tag.Ports ] (fun () -> testList "with a real git" [ doorTests; portsTests; pushTests ])
         Tag.needs "The git gateway, from srt" [ Tag.Srt ] (fun () -> srtTests)
     ]

@@ -239,6 +239,8 @@ type private GitRun =
 
 type ReposConfig =
     { Backend : SandboxBackend
+      /// The session's Docker network, for a backend that runs containers.
+      Network : Sandboxes.DockerSandbox.Network
       /// The checkouts' one directory, the same path in every sandbox (`Sandboxes.checkoutAt`).
       /// Every listing carries a checkout's path under it, because the only reason to clone
       /// a repo is to work in it and the work happens in a terminal.
@@ -353,7 +355,7 @@ let private outputLimit = 20000
 let stagingDirName = "staging~"
 
 let create (config: ReposConfig) : Result<ReposService, string> =
-    Sandboxes.forBackend config.Backend "git" EnvironmentSpec.defaults
+    Sandboxes.forBackend config.Backend config.Network "git" EnvironmentSpec.defaults
     |> Result.map (fun createSandbox ->
 
         /// The repos directory as an ABSOLUTE path, resolved once here and used for every

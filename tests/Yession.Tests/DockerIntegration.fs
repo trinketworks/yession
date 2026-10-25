@@ -60,10 +60,14 @@ let private envSecrets : SecretName -> Async<Result<string, string>> =
 /// Create a docker sandbox for a fresh minted name: the production composition
 /// (`preparePolicy` → `forBackend`), so the spec's secret refs resolve exactly as a
 /// session's would.
-let private start (resolve: SecretName -> Async<Result<string, string>>) (spec: EnvironmentSpec) : Async<Result<string * Sandbox, string>> =
+let private startOn
+    (network: Sandboxes.DockerSandbox.Network)
+    (resolve: SecretName -> Async<Result<string, string>>)
+    (spec: EnvironmentSpec)
+    : Async<Result<string * Sandbox, string>> =
     async {
         let name = DockerFixture.name ()
-        let createSandbox = Sandboxes.forBackend DockerBackend name spec |> expect
+        let createSandbox = Sandboxes.forBackend DockerBackend network name spec |> expect
         // Asked, not written: see the note in DevContainer.fs — a docker sandbox's
         // contribution is the product's answer, not this test's copy of it.
         let layout = Sandboxes.SessionLayout.forSandbox "/session" DockerBackend SandboxRef.defaultRef
@@ -74,12 +78,18 @@ let private start (resolve: SecretName -> Async<Result<string, string>>) (spec: 
             return created |> Result.map (fun sandbox -> name, sandbox)
     }
 
-let private startOrFail (spec: EnvironmentSpec) : Async<string * Sandbox> =
+/// `startOn` a network whose host address nothing listens on.
+let private start (resolve: SecretName -> Async<Result<string, string>>) (spec: EnvironmentSpec) =
+    startOn (DockerFixture.quietNetwork ()) resolve spec
+
+let private startOrFailOn (network: Sandboxes.DockerSandbox.Network) (spec: EnvironmentSpec) : Async<string * Sandbox> =
     async {
-        match! start envSecrets spec with
+        match! startOn network envSecrets spec with
         | Error reason -> return failwithf "docker sandbox failed: %s" reason
         | Ok started -> return started
     }
+
+let private startOrFail (spec: EnvironmentSpec) = startOrFailOn (DockerFixture.quietNetwork ()) spec
 
 let private label (name: string) = sprintf "yession-session=%s" name
 
@@ -319,7 +329,7 @@ let tests =
                     alpineSpec
                     |> withContainer (fun c -> { c with Entrypoint = Some [ "/usr/bin/env"; "BEHIND=entrypoint" ] })
                 let name = DockerFixture.name ()
-                let createSandbox = Sandboxes.forBackend DockerBackend name spec |> expect
+                let createSandbox = Sandboxes.forBackend DockerBackend (DockerFixture.quietNetwork ()) name spec |> expect
                 let layout = Sandboxes.SessionLayout.forSandbox "/session" DockerBackend SandboxRef.defaultRef
                 let! policy =
                     async {
@@ -425,7 +435,7 @@ let tests =
                 Expect.equal w (SandboxExited 0) "write into the workspace succeeds"
                 do! first.Dispose ()
                 // A fresh sandbox under the SAME name re-attaches the same volume.
-                let createSandbox = Sandboxes.forBackend DockerBackend name alpineSpec |> expect
+                let createSandbox = Sandboxes.forBackend DockerBackend (DockerFixture.quietNetwork ()) name alpineSpec |> expect
                 match! createSandbox ((Sandboxes.policyFor DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) Map.empty Map.empty None None None [] Set.empty EnvironmentSpec.defaults |> expect)) with
                 | Error reason -> failwithf "recreate failed: %s" reason
                 | Ok second ->
@@ -572,7 +582,7 @@ let tests =
                         res.writeHead (200, [ ResponseHeader.ContentType "text/plain" ])
                         res.``end`` "answered by the upstream")
                 do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
-                let! gateway = GitGateway.start (sprintf "http://127.0.0.1:%d" (serverPort upstream)) ignore
+                let! gateway = GitGateway.start (Sandboxes.hostDoorsHere ()) (sprintf "http://127.0.0.1:%d" (serverPort upstream)) ignore
                 try
                     let cap = gateway.Grant SandboxRef.defaultRef
                     let secret =
@@ -583,7 +593,9 @@ let tests =
                               Resolve = fun () -> async { return Some "tok" }
                               Refused = fun () -> async { () }
                               Spent = fun _ -> async { () } }
-                    let! _, sandbox = startOrFail alpineSpec
+                    // The session's network, opening the gateway where its containers reach
+                    // this host, as a session's does (`dockerNetwork` in SessionMain).
+                    let! _, sandbox = startOrFailOn (DockerFixture.network gateway.Open) alpineSpec
                     let url = sprintf "http://%s:%d/git/%s/github.com/octo/hello.git/info/refs?service=git-upload-pack" host gateway.Port cap
                     // The loan, as a block's git would carry it.
                     let! run, out, err =

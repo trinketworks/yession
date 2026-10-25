@@ -111,7 +111,7 @@ let private declaredDevBare (reposDir: string) : EnvironmentSpec =
 let private startDev (granted: ResourceLeaf list) (spec: EnvironmentSpec) : Async<Sandbox> =
     async {
         let name = DockerFixture.name ()
-        let createSandbox = Sandboxes.forBackend DockerBackend name spec |> expect
+        let createSandbox = Sandboxes.forBackend DockerBackend (DockerFixture.quietNetwork ()) name spec |> expect
         let resolve = fun secret -> async { return Error (sprintf "no secrets here for '%s'" (SecretName.value secret)) }
         // What the session gives a docker sandbox, ASKED rather than written. This was
         // `None None None` — the flagship container test carrying its own copy of the
