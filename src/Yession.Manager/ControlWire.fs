@@ -259,7 +259,7 @@ module ControlWire =
     /// encoded — another provider fact the session supplies, defaulting to the standard
     /// form encoding for every provider that keeps to RFC 6749.
     type ConnectionBeginRequest =
-        { Target : SecretId
+        { Target : ConnectionId
           AuthorizeUrl : string
           TokenUrl : string
           ClientId : string
@@ -272,10 +272,10 @@ module ControlWire =
 
     /// Manual completion (the paste path): the pasted payload is `code` or `code#state`.
     /// The target names which begun flow this completes — the broker checks it matches.
-    type ConnectionCompleteRequest = { Target : SecretId; Code : string }
+    type ConnectionCompleteRequest = { Target : ConnectionId; Code : string }
 
     /// Store a pasted static token/key verbatim.
-    type ConnectionPutRequest = { Target : SecretId; Value : string }
+    type ConnectionPutRequest = { Target : ConnectionId; Value : string }
 
     /// Store a grant the SESSION obtained itself, as a grant — the device flow (RFC 8628)
     /// is a whole authorization the session runs end to end, and there is no code for the
@@ -289,7 +289,7 @@ module ControlWire =
     /// (seconds from now), because that is what an OAuth token response says and the clock
     /// that matters for storing an absolute expiry is the Manager's.
     type ConnectionPutGrantRequest =
-        { Target : SecretId
+        { Target : ConnectionId
           AccessToken : string
           RefreshToken : string option
           ExpiresIn : int option
@@ -299,32 +299,34 @@ module ControlWire =
           TokenDialect : TokenRequestDialect }
 
     [<RequireQualifiedAccess>]
-    type ConnectionDisconnectRequest = { Target : SecretId }
+    type ConnectionDisconnectRequest = { Target : ConnectionId }
     type ConnectionDisconnectResponse = { Disconnected : bool }
 
     [<RequireQualifiedAccess>]
-    type ConnectionResolveRequest = { Target : SecretId }
+    type ConnectionResolveRequest = { Target : ConnectionId }
     type ConnectionResolveResponse = { Kind : ConnectionKind; Value : string }
 
     /// A session reporting that the PROVIDER refused this credential — the one fact about a
     /// credential's health that the Manager can never work out for itself. A static token
     /// carries no expiry at all, so "it stopped working" only ever arrives from whoever
     /// spent it. `Reason` is what to show a person, not a status code.
-    type ConnectionRejectRequest = { Target : SecretId; Reason : string }
+    type ConnectionRejectRequest = { Target : ConnectionId; Reason : string }
     /// Whether this changed anything — false if the credential was already known refused,
     /// so a verb retried three times does not report three fresh faults.
     type ConnectionRejectResponse = { Recorded : bool }
 
-    let private secretId : Codec<SecretId> =
+    /// A connection target, as `{scope, name}`: the shape a `SecretId` had on this wire
+    /// before the store split its families, kept so neither end has to move together.
+    let private connectionId : Codec<ConnectionId> =
         { Encode =
-            fun (id: SecretId) ->
+            fun (id: ConnectionId) ->
                 Encode.object
                     [ "scope", SecretsCodec.secretScope.Encode id.Scope
                       "name", secretName.Encode id.Name ]
           Decode =
             Decode.object (fun get ->
-                { SecretId.Scope = get.Required.Field "scope" SecretsCodec.secretScope.Decode
-                  SecretId.Name = get.Required.Field "name" secretName.Decode }) }
+                { ConnectionId.Scope = get.Required.Field "scope" SecretsCodec.secretScope.Decode
+                  ConnectionId.Name = get.Required.Field "name" secretName.Decode }) }
 
     let connectionKind : Codec<ConnectionKind> =
         { Encode =
@@ -347,7 +349,7 @@ module ControlWire =
         { Encode =
             fun (s: ConnectionStatus) ->
                 Encode.object
-                    [ "id", secretId.Encode s.Id
+                    [ "id", connectionId.Encode s.Id
                       "kind", connectionKind.Encode s.Kind
                       "signInRequired",
                         (match s.Health with
@@ -356,7 +358,7 @@ module ControlWire =
                       "updatedAt", Codec.timestamp.Encode s.UpdatedAt ]
           Decode =
             Decode.object (fun get ->
-                { ConnectionStatus.Id = get.Required.Field "id" secretId.Decode
+                { ConnectionStatus.Id = get.Required.Field "id" connectionId.Decode
                   ConnectionStatus.Kind = get.Required.Field "kind" connectionKind.Decode
                   ConnectionStatus.Health =
                     get.Optional.Field "signInRequired" Decode.string
@@ -379,7 +381,7 @@ module ControlWire =
         { Encode =
             fun (r: ConnectionBeginRequest) ->
                 Encode.object
-                    [ "target", secretId.Encode r.Target
+                    [ "target", connectionId.Encode r.Target
                       "authorizeUrl", Encode.string r.AuthorizeUrl
                       "tokenUrl", Encode.string r.TokenUrl
                       "clientId", Encode.string r.ClientId
@@ -388,7 +390,7 @@ module ControlWire =
                       "tokenDialect", TokenRequestDialect.codec.Encode r.TokenDialect ]
           Decode =
             Decode.object (fun get ->
-                { ConnectionBeginRequest.Target = get.Required.Field "target" secretId.Decode
+                { ConnectionBeginRequest.Target = get.Required.Field "target" connectionId.Decode
                   ConnectionBeginRequest.AuthorizeUrl = get.Required.Field "authorizeUrl" Decode.string
                   ConnectionBeginRequest.TokenUrl = get.Required.Field "tokenUrl" Decode.string
                   ConnectionBeginRequest.ClientId = get.Required.Field "clientId" Decode.string
@@ -410,26 +412,26 @@ module ControlWire =
     let connectionCompleteRequest : Codec<ConnectionCompleteRequest> =
         { Encode =
             fun (r: ConnectionCompleteRequest) ->
-                Encode.object [ "target", secretId.Encode r.Target; "code", Encode.string r.Code ]
+                Encode.object [ "target", connectionId.Encode r.Target; "code", Encode.string r.Code ]
           Decode =
             Decode.object (fun get ->
-                { ConnectionCompleteRequest.Target = get.Required.Field "target" secretId.Decode
+                { ConnectionCompleteRequest.Target = get.Required.Field "target" connectionId.Decode
                   ConnectionCompleteRequest.Code = get.Required.Field "code" Decode.string }) }
 
     let connectionPutRequest : Codec<ConnectionPutRequest> =
         { Encode =
             fun (r: ConnectionPutRequest) ->
-                Encode.object [ "target", secretId.Encode r.Target; "value", Encode.string r.Value ]
+                Encode.object [ "target", connectionId.Encode r.Target; "value", Encode.string r.Value ]
           Decode =
             Decode.object (fun get ->
-                { ConnectionPutRequest.Target = get.Required.Field "target" secretId.Decode
+                { ConnectionPutRequest.Target = get.Required.Field "target" connectionId.Decode
                   ConnectionPutRequest.Value = get.Required.Field "value" Decode.string }) }
 
     let connectionPutGrantRequest : Codec<ConnectionPutGrantRequest> =
         { Encode =
             fun (r: ConnectionPutGrantRequest) ->
                 Encode.object
-                    [ "target", secretId.Encode r.Target
+                    [ "target", connectionId.Encode r.Target
                       "accessToken", Encode.string r.AccessToken
                       "refreshToken", Encode.option Encode.string r.RefreshToken
                       "expiresIn", Encode.option Encode.int r.ExpiresIn
@@ -439,7 +441,7 @@ module ControlWire =
                       "tokenDialect", TokenRequestDialect.codec.Encode r.TokenDialect ]
           Decode =
             Decode.object (fun get ->
-                { ConnectionPutGrantRequest.Target = get.Required.Field "target" secretId.Decode
+                { ConnectionPutGrantRequest.Target = get.Required.Field "target" connectionId.Decode
                   ConnectionPutGrantRequest.AccessToken = get.Required.Field "accessToken" Decode.string
                   // Every lifetime is optional because a provider states them only when it
                   // means them: a GitHub App with user-token expiration turned off answers
@@ -454,10 +456,10 @@ module ControlWire =
                   ConnectionPutGrantRequest.TokenDialect = TokenRequestDialect.field "tokenDialect" get }) }
 
     let connectionDisconnectRequest : Codec<ConnectionDisconnectRequest> =
-        { Encode = fun (r: ConnectionDisconnectRequest) -> Encode.object [ "target", secretId.Encode r.Target ]
+        { Encode = fun (r: ConnectionDisconnectRequest) -> Encode.object [ "target", connectionId.Encode r.Target ]
           Decode =
             Decode.object (fun get ->
-                { ConnectionDisconnectRequest.Target = get.Required.Field "target" secretId.Decode }) }
+                { ConnectionDisconnectRequest.Target = get.Required.Field "target" connectionId.Decode }) }
 
     let connectionDisconnectResponse : Codec<ConnectionDisconnectResponse> =
         { Encode = fun (r: ConnectionDisconnectResponse) -> Encode.object [ "disconnected", Encode.bool r.Disconnected ]
@@ -466,20 +468,20 @@ module ControlWire =
                 { ConnectionDisconnectResponse.Disconnected = get.Required.Field "disconnected" Decode.bool }) }
 
     let connectionResolveRequest : Codec<ConnectionResolveRequest> =
-        { Encode = fun (r: ConnectionResolveRequest) -> Encode.object [ "target", secretId.Encode r.Target ]
+        { Encode = fun (r: ConnectionResolveRequest) -> Encode.object [ "target", connectionId.Encode r.Target ]
           Decode =
             Decode.object (fun get ->
-                { ConnectionResolveRequest.Target = get.Required.Field "target" secretId.Decode }) }
+                { ConnectionResolveRequest.Target = get.Required.Field "target" connectionId.Decode }) }
 
     let connectionRejectRequest : Codec<ConnectionRejectRequest> =
         { Encode =
             fun (r: ConnectionRejectRequest) ->
                 Encode.object
-                    [ "target", secretId.Encode r.Target
+                    [ "target", connectionId.Encode r.Target
                       "reason", Encode.string r.Reason ]
           Decode =
             Decode.object (fun get ->
-                { ConnectionRejectRequest.Target = get.Required.Field "target" secretId.Decode
+                { ConnectionRejectRequest.Target = get.Required.Field "target" connectionId.Decode
                   ConnectionRejectRequest.Reason = get.Required.Field "reason" Decode.string }) }
 
     let connectionRejectResponse : Codec<ConnectionRejectResponse> =

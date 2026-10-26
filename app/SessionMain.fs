@@ -502,7 +502,7 @@ let private envCreds = (ambientCredential ()).IsSome
 // The session's live view of connected credentials (Plan 08): fed by the Manager's
 // connection-status stream, metadata only. Availability is DYNAMIC — a sign-in
 // mid-session flips the agent gate without a relaunch.
-let mutable private connectionStatus : Map<SecretId, ConnectionStatus> = Map.empty
+let mutable private connectionStatus : Map<ConnectionId, ConnectionStatus> = Map.empty
 
 let private connectionsClient =
     controlChannel |> Option.map (fun (url, secret) -> ControlClient.connections url secret)
@@ -645,7 +645,7 @@ let private mcpServers =
 
 /// The stored credential a repo verb would spend for this actor, if any — the one rule,
 /// `GitHubConnection.spentTarget`, over what this session has heard.
-let private githubTargetFor (credentialActor: CredentialFor) : SecretId option =
+let private githubTargetFor (credentialActor: CredentialFor) : ConnectionId option =
     GitHubConnection.spentTarget sessionId connectionStatus credentialActor
 
 /// The ambient `GITHUB_TOKEN`, the last resort of the precedence below — read in one place,
@@ -773,7 +773,7 @@ let private commandServices : Commands.CommandServices =
 /// The stored Claude credential this actor's calls run on, if any. Named once, for the same
 /// reason `githubTargetFor` is: spending a credential and reporting one refused must never
 /// pick different targets.
-let private claudeTargetFor (actor: CredentialFor) : SecretId option =
+let private claudeTargetFor (actor: CredentialFor) : ConnectionId option =
     ClaudeConnection.turnTargets sessionId actor
     |> List.filter (fun target -> Map.containsKey target connectionStatus)
     |> List.tryHead
@@ -812,7 +812,7 @@ let private resolveCredential (actor: CredentialFor) : Async<Result<(string * st
 /// Manager sees the refresh refused — and it is only a pasted `sk-ant-` key, which cannot
 /// refresh at all, that can die unseen mid-session.
 let private askProvider
-    (target: SecretId option)
+    (target: ConnectionId option)
     (credential: string * string)
     : Async<Result<AgentModel list, string>> =
     async {

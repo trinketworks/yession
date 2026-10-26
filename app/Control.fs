@@ -83,6 +83,7 @@ type SecretsError =
 /// sandbox spawn, from the caller's own scope only (`SecretStore.SecretResolution`). Set
 /// answers metadata, list metadata, delete a flag — the agent-facing surface still has no
 /// read.
+[<RequireQualifiedAccess>]
 type SecretsApi =
     { Set : ControlCaller -> ControlWire.SetSecretRequest -> Async<Result<SecretMetadata, SecretsError>>
       List : ControlCaller -> ControlWire.ListSecretsRequest -> Async<Result<SecretMetadata list, SecretsError>>

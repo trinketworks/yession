@@ -96,7 +96,7 @@ type ConnectionHealth =
 /// One stored connection as listings and the status stream see it. There is no value
 /// field — a status cannot leak a credential because the type cannot carry one.
 type ConnectionStatus =
-    { Id : SecretId
+    { Id : ConnectionId
       Kind : ConnectionKind
       Health : ConnectionHealth
       UpdatedAt : DateTimeOffset }
@@ -122,8 +122,8 @@ module ConnectionStatusList =
     /// A connection that LEFT is not an arrival — what a departure calls for is nothing,
     /// since a sandbox already started keeps what it was given.
     let arrivals
-        (before: Map<SecretId, ConnectionStatus>)
-        (after: Map<SecretId, ConnectionStatus>)
+        (before: Map<ConnectionId, ConnectionStatus>)
+        (after: Map<ConnectionId, ConnectionStatus>)
         : CredentialFor list =
         after
         |> Map.toList

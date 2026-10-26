@@ -246,18 +246,18 @@ let resolveSecret (endpoint: ControlEndpoint) (secret: string) : SecretName -> A
 /// (including policy 403s, with the Manager's reason) are values, never exceptions.
 type SessionConnections =
     { Begin : ControlWire.ConnectionBeginRequest -> Async<Result<ControlWire.ConnectionBeginResponse, string>>
-      Complete : SecretId -> string -> Async<Result<unit, string>>
-      Put : SecretId -> string -> Async<Result<unit, string>>
+      Complete : ConnectionId -> string -> Async<Result<unit, string>>
+      Put : ConnectionId -> string -> Async<Result<unit, string>>
       /// Hand over a grant this session obtained itself, so the Manager can refresh it
       /// later. The session never keeps the refresh token: it goes over this leg once.
       PutGrant : ControlWire.ConnectionPutGrantRequest -> Async<Result<unit, string>>
-      Disconnect : SecretId -> Async<Result<bool, string>>
+      Disconnect : ConnectionId -> Async<Result<bool, string>>
       /// Tell the Manager the PROVIDER refused this credential. The one fact about a
       /// credential's health that only the side SPENDING it can know — a static token has no
       /// expiry to read, so nothing Manager-side can work this out. Answers whether it was
       /// news, so a verb that retries does not report the same fault three times.
-      Reject : SecretId -> string -> Async<Result<bool, string>>
-      Resolve : SecretId -> Async<Result<ConnectionKind * string, string>> }
+      Reject : ConnectionId -> string -> Async<Result<bool, string>>
+      Resolve : ConnectionId -> Async<Result<ConnectionKind * string, string>> }
 
 let connections (endpoint: ControlEndpoint) (secret: string) : SessionConnections =
     let post (route: ControlRoute) (body: string) (decode: string -> Result<'a, string>) : Async<Result<'a, string>> =

@@ -101,7 +101,7 @@ let classifyPasted (deviceFlowConfigured: bool) (raw: string) : Result<string, s
         Error (sprintf "expected a GitHub credential (%s)" kinds)
 
 /// The two sign-in scopes the panel offers — identical to the Claude mapping.
-let targetFor (sessionId: SessionId) (owner: CredentialOwner) (scopeChoice: string) : Result<SecretId, string> =
+let targetFor (sessionId: SessionId) (owner: CredentialOwner) (scopeChoice: string) : Result<ConnectionId, string> =
     match scopeChoice with
     | "session" -> Ok { Scope = SessionScope sessionId; Name = secretName }
     | "mine" -> Ok { Scope = CredentialOwner.scope owner; Name = secretName }
@@ -110,18 +110,18 @@ let targetFor (sessionId: SessionId) (owner: CredentialOwner) (scopeChoice: stri
 /// The per-operation credential targets, most specific first: the session's own explicit
 /// credential, then the acting human's, then the deployment's. Mirrors
 /// `ClaudeConnection.turnTargets` — including why `LocalScope` is named unconditionally.
-let turnTargets (sessionId: SessionId) (credential: CredentialFor) : SecretId list =
-    [ Some { SecretId.Scope = SessionScope sessionId; SecretId.Name = secretName }
+let turnTargets (sessionId: SessionId) (credential: CredentialFor) : ConnectionId list =
+    [ Some { ConnectionId.Scope = SessionScope sessionId; ConnectionId.Name = secretName }
       CredentialFor.person credential
       |> Option.bind CredentialOwner.ofPrincipal
-      |> Option.map (fun owner -> { SecretId.Scope = CredentialOwner.scope owner; SecretId.Name = secretName })
-      Some { SecretId.Scope = LocalScope; SecretId.Name = secretName } ]
+      |> Option.map (fun owner -> { ConnectionId.Scope = CredentialOwner.scope owner; ConnectionId.Name = secretName })
+      Some { ConnectionId.Scope = LocalScope; ConnectionId.Name = secretName } ]
     |> List.choose id
 
 /// The stored credential a GitHub verb would spend for this actor: the first of its turn
 /// targets the session has heard exists. Factored out so that spending one and reporting one
 /// refused cannot pick different targets.
-let spentTarget (sessionId: SessionId) (heard: Map<SecretId, ConnectionStatus>) (actor: CredentialFor) : SecretId option =
+let spentTarget (sessionId: SessionId) (heard: Map<ConnectionId, ConnectionStatus>) (actor: CredentialFor) : ConnectionId option =
     turnTargets sessionId actor |> List.filter (fun target -> Map.containsKey target heard) |> List.tryHead
 
 /// The token a GitHub verb spends for this actor — `None` is anonymous, which public repos
@@ -133,8 +133,8 @@ let spentTarget (sessionId: SessionId) (heard: Map<SecretId, ConnectionStatus>) 
 /// first connection frame arrives is asked, rather than inferred from timestamps.
 let tokenOver
     (sessionId: SessionId)
-    (heard: unit -> Map<SecretId, ConnectionStatus>)
-    (resolve: (SecretId -> Async<Result<ConnectionKind * string, string>>) option)
+    (heard: unit -> Map<ConnectionId, ConnectionStatus>)
+    (resolve: (ConnectionId -> Async<Result<ConnectionKind * string, string>>) option)
     (ambient: unit -> string option)
     (unresolved: string -> unit)
     (actor: CredentialFor)
@@ -233,7 +233,7 @@ let pollOutcome (currentInterval: int) (body: string) : PollOutcome =
 /// client secret precisely BECAUSE this was the device flow — GitHub requires one for every
 /// other way of getting a user token, which is what made the broker's public-client shape
 /// fit this provider at all.
-let grantRequest (target: SecretId) (granted: PollGrant) : ControlWire.ConnectionPutGrantRequest =
+let grantRequest (target: ConnectionId) (granted: PollGrant) : ControlWire.ConnectionPutGrantRequest =
     { Target = target
       AccessToken = granted.AccessToken
       RefreshToken = granted.RefreshToken
@@ -502,7 +502,7 @@ let commitIdentity (profile: Profile) : string * string =
 /// the Claude panel's reason and in the same shape.
 let panelFor
     (sessionId: SessionId)
-    (statusOf: SecretId -> ConnectionStatus option)
+    (statusOf: ConnectionId -> ConnectionStatus option)
     (identity: CookieIdentity)
     : GitHubPanel =
     let owner = ownerOf identity
@@ -520,7 +520,7 @@ let routes
     // The pending device flow per target, held HERE and only here: the device code is
     // the half of the grant that must not leave the session, and a flow is pending for
     // minutes at most (GitHub expires the code), so process memory is its whole life.
-    let mutable pending : Map<SecretId, DeviceCodeGrant> = Map.empty
+    let mutable pending : Map<ConnectionId, DeviceCodeGrant> = Map.empty
     fun req res ->
         let routeOf () = SessionRoute.parseUnder mount req.``method`` (req.url.Split('?').[0])
         match routeOf () with

@@ -38,7 +38,7 @@ let private callerALocal : Subject = { Session = Some sessionA; Users = Set.sing
 let private noSession : Subject = { Session = None; Users = Set.singleton alice; Local = false }
 
 let private request subject action resource : Request =
-    { Subject = subject; Action = SecretAction action; Resource = resource }
+    { Subject = subject; Access = SecretAccess (action, resource) }
 
 let private permits msg r = Expect.equal (Policy.authorize r) Permit msg
 let private denies msg r =
@@ -117,7 +117,7 @@ let private policyTests =
 // above (user-scope writes always deny) are unchanged.
 let private connActions = [ ConnectCredential; ReadConnectionStatus; ResolveCredential; DisconnectCredential ]
 let private onConnection subject action scope : Request =
-    { Subject = subject; Action = ConnectionAction action; Resource = SecretResource { Scope = scope; Name = name } }
+    { Subject = subject; Access = ConnectionAccess (action, { Scope = scope; Name = name }) }
 
 let private connectionPolicyTests =
     testList "connection policy rows" [
@@ -179,6 +179,7 @@ let private envelopeTests =
                 SecretsFile.empty "kek-1"
                 |> SecretsFile.upsert (entry (SessionScope sessionA) name "aXY" "Y3Q")
                 |> SecretsFile.upsert (entry (UserScope alice) name "aXYy" "Y3Qy")
+                |> SecretsFile.upsertConnection (entry (UserScope alice) name "aXYz" "Y3Qz")
             let round = SecretsCodec.toString file |> SecretsCodec.fromString |> expect
             Expect.equal round file "identical after round-trip"
 
@@ -383,14 +384,14 @@ let private storeTests =
                 let path = freshPath "roundtrip"
                 let! store = openDurable path (KeyStore.inMemory ())
                 let id = sid (SessionScope sessionA) "deploy-token"
-                let! set = store.Set id "hunter2"
+                let! set = store.Secrets.Set id "hunter2"
                 Expect.equal (expect set).Id id "metadata identifies the secret"
-                Expect.equal (store.List (SessionScope sessionA) |> List.length) 1 "listed"
-                let! resolved = store.Resolve id
+                Expect.equal (store.Secrets.List (SessionScope sessionA) |> List.length) 1 "listed"
+                let! resolved = store.Secrets.Resolve id
                 Expect.equal (expect resolved) (Some "hunter2") "resolves internally"
-                let! deleted = store.Delete id
+                let! deleted = store.Secrets.Delete id
                 Expect.isTrue (expect deleted) "existed"
-                let! resolvedAfter = store.Resolve id
+                let! resolvedAfter = store.Secrets.Resolve id
                 Expect.equal (expect resolvedAfter) None "gone"
             }
 
@@ -402,10 +403,10 @@ let private storeTests =
                 let! kek = keyStore.Get ()
                 Expect.isTrue (expect kek |> Option.isSome) "KEK persisted at open, before any entry"
                 let id = sid (SessionScope sessionA) "deploy-token"
-                let! _ = store.Set id "hunter2"
+                let! _ = store.Secrets.Set id "hunter2"
                 // A fresh store over the same file + key store (a Manager restart).
                 let! reopened = openDurable path keyStore
-                let! resolved = reopened.Resolve id
+                let! resolved = reopened.Secrets.Resolve id
                 Expect.equal (expect resolved) (Some "hunter2") "survives the restart"
                 Expect.isTrue reopened.Durable "durable mode"
             }
@@ -414,7 +415,7 @@ let private storeTests =
             async {
                 let path = freshPath "atrest"
                 let! store = openDurable path (KeyStore.inMemory ())
-                let! _ = store.Set (sid (SessionScope sessionA) "deploy-token") "hunter2-at-rest"
+                let! _ = store.Secrets.Set (sid (SessionScope sessionA) "deploy-token") "hunter2-at-rest"
                 let onDisk = Fs.readText path
                 Expect.isFalse (onDisk.Contains "hunter2-at-rest") "no plaintext at rest"
                 Expect.isTrue (onDisk.Contains "deploy-token") "metadata is cleartext by design"
@@ -432,7 +433,7 @@ let private storeTests =
             async {
                 let path = freshPath "wrongkek"
                 let! first = openDurable path (KeyStore.inMemory ())
-                let! _ = first.Set (sid (SessionScope sessionA) "deploy-token") "v"
+                let! _ = first.Secrets.Set (sid (SessionScope sessionA) "deploy-token") "v"
                 // A key store holding a different KEK (the first one is lost).
                 let! reopened = SecretStore.openStore (Some path) (KeyStore.random ())
                 match reopened with
@@ -448,7 +449,7 @@ let private storeTests =
                 // a minted one would overwrite it once the keychain unlocked.
                 let path = freshPath "lockedkeychain"
                 let! first = openDurable path (KeyStore.inMemory ())
-                let! _ = first.Set (sid (SessionScope sessionA) "deploy-token") "v"
+                let! _ = first.Secrets.Set (sid (SessionScope sessionA) "deploy-token") "v"
                 let mutable sets = 0
                 let empty = KeyStore.inMemory ()
                 let counting = { empty with Set = fun value -> async { sets <- sets + 1; return! empty.Set value } }
@@ -483,7 +484,7 @@ let private storeTests =
                 let real = KeyStore.inMemory ()
                 let! first = openDurable path real
                 let id = sid (SessionScope sessionA) "deploy-token"
-                let! _ = first.Set id "hunter2"
+                let! _ = first.Secrets.Set id "hunter2"
                 let! kek = real.Get ()
                 // Locked: reads as empty. Unlocked on the third read.
                 let mutable reads = 0
@@ -495,7 +496,7 @@ let private storeTests =
                         Set = fun value -> async { sets <- sets + 1; return! real.Set value } }
                 let! opened = SecretStore.openStoreWaiting 1 (fun _ -> waits <- waits + 1) (Some path) locking
                 let store = expect (opened |> Result.mapError SecretStore.OpenError.describe)
-                let! resolved = store.Resolve id
+                let! resolved = store.Secrets.Resolve id
                 Expect.equal (expect resolved) (Some "hunter2") "the real key opened the file"
                 Expect.isFalse store.KekMinted "loaded, not minted"
                 Expect.equal reads 3 "retried until the key was there"
@@ -516,8 +517,8 @@ let private storeTests =
                 let! store = openEphemeral ()
                 Expect.isFalse store.Durable "ephemeral"
                 let id = sid (SessionScope sessionA) "deploy-token"
-                let! _ = store.Set id "transient"
-                let! resolved = store.Resolve id
+                let! _ = store.Secrets.Set id "transient"
+                let! resolved = store.Secrets.Resolve id
                 Expect.equal (expect resolved) (Some "transient") "usable in memory"
             }
 
@@ -525,10 +526,10 @@ let private storeTests =
             async {
                 let path = freshPath "interleave"
                 let! store = openDurable path (KeyStore.inMemory ())
-                let a = store.Set (sid (SessionScope sessionA) "one") "1"
-                let b = store.Set (sid (SessionScope sessionA) "two") "2"
+                let a = store.Secrets.Set (sid (SessionScope sessionA) "one") "1"
+                let b = store.Secrets.Set (sid (SessionScope sessionA) "two") "2"
                 let! _ = [ a; b ] |> Async.Parallel
-                Expect.equal (store.List (SessionScope sessionA) |> List.length) 2 "both entries present"
+                Expect.equal (store.Secrets.List (SessionScope sessionA) |> List.length) 2 "both entries present"
             }
     ]
 
@@ -561,10 +562,10 @@ let private keyringTests =
                 let! store = openDurable path keyStore
                 Expect.isTrue store.Durable "durable over the OS store"
                 let id = sid (SessionScope sessionA) "deploy-token"
-                let! _ = store.Set id "keyring-held"
+                let! _ = store.Secrets.Set id "keyring-held"
                 // Reopen: the KEK comes back from the credential manager and decrypts.
                 let! reopened = openDurable path keyStore
-                let! resolved = reopened.Resolve id
+                let! resolved = reopened.Secrets.Resolve id
                 Expect.equal (expect resolved) (Some "keyring-held") "KEK survives via the OS store"
             }
     ]
@@ -628,10 +629,10 @@ let private execTests =
                 Expect.isTrue store.Durable "durable over the helper"
                 Expect.isTrue store.KekMinted "the Manager minted the key; the helper only kept it"
                 let id = sid (SessionScope sessionA) "deploy-token"
-                let! _ = store.Set id "helper-held"
+                let! _ = store.Secrets.Set id "helper-held"
                 let! reopened = openDurable path keyStore
                 Expect.isFalse reopened.KekMinted "the second open loaded it"
-                let! resolved = reopened.Resolve id
+                let! resolved = reopened.Secrets.Resolve id
                 Expect.equal (expect resolved) (Some "helper-held") "KEK survives via the helper"
             }
 
@@ -687,14 +688,14 @@ let private execTests =
 // --- Step 7: injection reads the session's own scope only (cheap tier) ----------------
 
 let private resolveIn (store: SecretStore.SecretStore) : SecretStore.ResolveSecret =
-    SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store
+    SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store.Secrets
 
 let private resolutionTests =
     testList "injection resolution" [
         testCaseAsync "the session's own secret resolves" <|
             async {
                 let! store = openEphemeral ()
-                let! _ = store.Set (sid (SessionScope sessionA) "deploy-token") "from-session"
+                let! _ = store.Secrets.Set (sid (SessionScope sessionA) "deploy-token") "from-session"
                 let! got = resolveIn store sessionA name
                 Expect.equal (expect got) "from-session" "the session's own secret"
             }
@@ -702,7 +703,7 @@ let private resolutionTests =
         testCaseAsync "a sibling session's secret does not resolve" <|
             async {
                 let! store = openEphemeral ()
-                let! _ = store.Set (sid (SessionScope sessionB) "deploy-token") "b's"
+                let! _ = store.Secrets.Set (sid (SessionScope sessionB) "deploy-token") "b's"
                 let! got = resolveIn store sessionA name
                 Expect.isError got "another session's scope is not read"
             }
@@ -712,7 +713,7 @@ let private resolutionTests =
         testCaseAsync "a bound user's secret of the same name does not resolve" <|
             async {
                 let! store = openEphemeral ()
-                let! _ = store.Set (sid (UserScope alice) "deploy-token") "alice's"
+                let! _ = store.Secrets.Set (sid (UserScope alice) "deploy-token") "alice's"
                 let! got = resolveIn store sessionA name
                 Expect.isError got "a user's scope is not read"
             }
@@ -720,7 +721,7 @@ let private resolutionTests =
         testCaseAsync "a deployment's local secret does not resolve" <|
             async {
                 let! store = openEphemeral ()
-                let! _ = store.Set (sid LocalScope "deploy-token") "local"
+                let! _ = store.Secrets.Set (sid LocalScope "deploy-token") "local"
                 let! got = resolveIn store sessionA name
                 Expect.isError got "LocalScope is not read"
             }
@@ -739,7 +740,7 @@ let private resolutionTests =
         testCaseAsync "each resolution reports its outcome to the observer" <|
             async {
                 let! store = openEphemeral ()
-                let! _ = store.Set (sid (SessionScope sessionA) "deploy-token") "v"
+                let! _ = store.Secrets.Set (sid (SessionScope sessionA) "deploy-token") "v"
                 let mutable observed : (string * bool) list = []
                 let observe _ n outcome =
                     let injected =
@@ -747,10 +748,114 @@ let private resolutionTests =
                         | SecretStore.SecretResolution.Injected -> true
                         | SecretStore.SecretResolution.InjectMissed _ -> false
                     observed <- (SecretName.value n, injected) :: observed
-                let resolve = SecretStore.SecretResolution.compose observe store
+                let resolve = SecretStore.SecretResolution.compose observe store.Secrets
                 let! _ = resolve sessionA name
                 let! _ = resolve sessionA (SecretName.create "OTHER" |> expect)
                 Expect.equal (List.rev observed) [ "deploy-token", true; "OTHER", false ] "one observation per resolution"
+            }
+    ]
+
+// --- The two families: a SecretRef never reaches a connection credential ---------------
+
+let private githubName = SecretName.create "github" |> expect
+let private githubAt scope : ConnectionId = { Scope = scope; Name = githubName }
+let private brokerOver (store: SecretStore.SecretStore) =
+    Broker.create (fun () -> "http://m/cb") store.Connections ignore Broker.asking
+
+/// A version 1 file at `path`, sealed under the key `keyStore` holds: entries as a Manager
+/// wrote them before the store split its families, every one under the generic AAD.
+let private writeV1 (path: string) (keyStore: KeyStore.KeyStore) (entries: (SecretScope * SecretName * string) list) =
+    async {
+        let! raw = keyStore.Get ()
+        let kekId, kek = raw |> Result.bind (function Some p -> KeyStore.splitPayload p | None -> Error "no key") |> expect
+        let! cipher = SecretsCipher.importKey kek
+        let mutable sealedEntries = []
+        for scope, entryName, value in entries do
+            let! iv, ct = cipher.Encrypt (SecretsCipher.aadFor scope entryName) value
+            sealedEntries <- sealedEntries @ [ entry scope entryName iv ct ]
+        let file = { SecretsFile.empty kekId with Version = 1; Entries = sealedEntries }
+        Fs.writeTextAtomic path (SecretsCodec.toString file)
+    }
+
+let private familyTests =
+    testList "the two families" [
+        // The type already refuses an `InjectSecret` that names a `ConnectionId`; this pins
+        // the store: a reference of the same scope and name still finds nothing.
+        testCaseAsync "a SecretRef named like a session's connection credential does not resolve it" <|
+            async {
+                let! store = openEphemeral ()
+                let! put = (brokerOver store).Put (githubAt (SessionScope sessionA)) "ghp_session"
+                expect put
+                let! got = resolveIn store sessionA githubName
+                Expect.isError got "a connection credential is not a secret"
+            }
+
+        testCaseAsync "set_secret under a connection's name leaves the connection credential as it was" <|
+            async {
+                let! store = openEphemeral ()
+                let broker = brokerOver store
+                let! put = broker.Put (githubAt (SessionScope sessionA)) "ghp_session"
+                expect put
+                let api = ProcessManager.secretsApiFor ignore (resolveIn store) store.Secrets
+                let! set =
+                    api.Set
+                        { SessionId = sessionA; Users = Set.empty; Local = false }
+                        { Scope = SessionScope sessionA; Name = githubName; Value = "agent-written" }
+                Expect.isOk set "the session's own generic secret is written"
+                let! resolved = broker.Resolve (githubAt (SessionScope sessionA))
+                Expect.equal (expect resolved |> snd) "ghp_session" "the broker reads its own credential"
+            }
+
+        testCaseAsync "a ciphertext moved between families fails authentication" <|
+            async {
+                let! cipher = SecretsCipher.importKey (SecretsCipher.generateKek ())
+                let! iv, ct = cipher.Encrypt (SecretsCipher.aadFor (SessionScope sessionA) githubName) "v"
+                let! moved = cipher.Decrypt (SecretsCipher.connectionAadFor (githubAt (SessionScope sessionA))) iv ct
+                Expect.isError moved "the connection AAD does not open a generic ciphertext"
+            }
+
+        testCaseAsync "a version 1 file's broker envelope opens as a connection credential" <|
+            async {
+                let path = freshPath "v1-connection"
+                let keyStore = KeyStore.random ()
+                let envelope = BrokeredCredentialCodec.toString (BrokeredStatic "ghp_kept")
+                do! writeV1 path keyStore [ UserScope alice, githubName, envelope ]
+                let! store = openDurable path keyStore
+                let! resolved = (brokerOver store).Resolve (githubAt (UserScope alice))
+                Expect.equal (expect resolved |> snd) "ghp_kept" "the credential survives the split"
+            }
+
+        testCaseAsync "a version 1 file's broker envelope is no longer a generic secret" <|
+            async {
+                let path = freshPath "v1-not-generic"
+                let keyStore = KeyStore.random ()
+                let envelope = BrokeredCredentialCodec.toString (BrokeredStatic "ghp_kept")
+                do! writeV1 path keyStore [ SessionScope sessionA, githubName, envelope ]
+                let! store = openDurable path keyStore
+                let! got = resolveIn store sessionA githubName
+                Expect.isError got "a reference does not reach it"
+            }
+
+        testCaseAsync "a version 1 file's generic secret stays generic" <|
+            async {
+                let path = freshPath "v1-generic"
+                let keyStore = KeyStore.random ()
+                do! writeV1 path keyStore [ SessionScope sessionA, name, "hunter2" ]
+                let! store = openDurable path keyStore
+                let! got = resolveIn store sessionA name
+                Expect.equal (expect got) "hunter2" "the session's secret resolves as before"
+            }
+
+        testCaseAsync "a sorted version 1 file opens again under this build's rules" <|
+            async {
+                let path = freshPath "v1-reopen"
+                let keyStore = KeyStore.random ()
+                let envelope = BrokeredCredentialCodec.toString (BrokeredStatic "ghp_kept")
+                do! writeV1 path keyStore [ UserScope alice, githubName, envelope ]
+                let! _ = openDurable path keyStore
+                let! reopened = openDurable path keyStore
+                let! resolved = (brokerOver reopened).Resolve (githubAt (UserScope alice))
+                Expect.equal (expect resolved |> snd) "ghp_kept" "the written-back file holds the credential"
             }
     ]
 
@@ -762,8 +867,7 @@ let private auditTests =
             let record =
                 SecretStore.Audit.authzDeny
                     sessionA
-                    (ConnectionAction ConnectCredential)
-                    (SecretResource { Scope = UserScope alice; Name = name })
+                    (ConnectionAccess (ConnectCredential, { Scope = UserScope alice; Name = name }))
                     "user is not signed in to this session"
             Expect.isTrue ((SecretStore.Audit.format record).Contains "ConnectCredential") "names the inner action"
     ]
@@ -813,7 +917,7 @@ let private caller sessionId users : Control.ControlCaller =
 /// The pre-authorized handlers over a store, with the SAME resolver the Manager composes
 /// for `resolve`.
 let private apiOver (audit: SecretStore.Audit.Sink) (store: SecretStore.SecretStore) : Control.SecretsApi =
-    ProcessManager.secretsApiFor audit (resolveIn store) store
+    ProcessManager.secretsApiFor audit (resolveIn store) store.Secrets
 
 let private routeTests =
     testList "control routes" [
@@ -902,8 +1006,8 @@ let private routeTests =
                         (Some (apiOver (fun _ -> ()) store))
                         ignore
                 let userName = SecretName.create "user-held-token" |> expect
-                let! _ = store.Set { Scope = SessionScope sessionA; Name = name } "session-held"
-                let! _ = store.Set { Scope = UserScope alice; Name = userName } "user-held"
+                let! _ = store.Secrets.Set { Scope = SessionScope sessionA; Name = name } "session-held"
+                let! _ = store.Secrets.Set { Scope = UserScope alice; Name = userName } "user-held"
                 let post secret body = postControl (url + "/control/secrets/resolve") secret body
                 let resolveBody = ControlWire.toString ControlWire.resolveSecretRequest { Name = name }
 
@@ -1039,9 +1143,9 @@ let private secretsModeTests =
                 let keyStore = KeyStore.inMemory ()
                 let id = sid LocalScope "claude-code"
                 let! before = openDurable path keyStore
-                let! _ = before.Set id "token-value"
+                let! _ = before.Secrets.Set id "token-value"
                 let! after = openDurable path keyStore
-                let! resolved = after.Resolve id
+                let! resolved = after.Secrets.Resolve id
                 Expect.equal (expect resolved) (Some "token-value") "the entry survived the reopen"
                 Expect.equal after.EntriesAtOpen 1 "and was there at open, not written again"
             }
@@ -1058,6 +1162,7 @@ let tests =
         cipherTests
         storeTests
         resolutionTests
+        familyTests
         auditTests
         Tag.needs "OS keyring" [ Tag.Keyring ] (fun () -> keyringTests)
         Tag.needs "helper key store" [ Tag.Ports ] (fun () -> execTests)
