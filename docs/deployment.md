@@ -182,6 +182,28 @@ newer file and, at its first write, drops every connected credential. Before an 
 `secrets.json` out of the data directory. If you roll back (one `nix` command), put that copy
 back in the same step. The Manager makes no copy itself: a copy would outlive Disconnect.
 
+#### Upgrading past v14.4.1-beta.1
+
+v14.4.1-beta.1 is the first build with the version 2 store. At its first start, the Manager
+converts a version 1 `secrets.json` itself and writes it back once. You convert nothing by hand.
+Under `--secrets ephemeral` there is no file, so only step 2 applies.
+
+1. Stop the Manager, and copy `secrets.json` out of the data directory.
+2. Find every `{ secret: <name> }` in the `yession.yaml` files your sessions use
+   (`rg -n 'secret:' --glob yession.yaml`). Since v14.4.1-beta.0 a reference reads only that
+   session's own secrets. Fix each one whose value came from somewhere else:
+
+   | The value came from | Now |
+   |---|---|
+   | the Manager's environment, or a user's secret | the agent writes it with `set_secret` in the session |
+   | a connection (`github`, `claude-code`) | select the connection under `uses:` or `wants:`, and use `${github.token}` |
+
+3. Deploy and start. The boot log has an `audit` line `yession.secrets.store_open` and no
+   `store_open_failed`.
+4. Check that `secrets.json` says `"version": 2`, and that the GitHub and Claude panels still show
+   their connections.
+5. A sandbox that refuses to start names the secret it is missing. Fix that reference as in step 2.
+
 #### Your own key store
 
 A headless server has no credential manager. It has something else: a cloud KMS, a Vault, a
