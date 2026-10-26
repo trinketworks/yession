@@ -106,6 +106,7 @@
   --spacing-band: 88px;     /* the header band every head shares, so baselines align across the hairline */
   --spacing-band-phone: 56px;  /* the same band on a phone, one thumb-sized row */
   --spacing-rail: 2rem;        /* the rail every line of text in a column starts on; marks hang in the gutter to its left */
+  --spacing-id-drop: calc(0.25rem + var(--text-code-sm--line-height) / 2);  /* the session id's line centre under the title's line box: `Style.titleId`'s mt-1 and half its line (`Style.navReopenMark` lands on it) */
   --spacing-side: 280px;    /* the sidebar column */
   --spacing-term: 420px;    /* the terminals column: 80 columns of mono */
   --spacing-touch: 44px;    /* the touch target: what a control grows to on a phone */

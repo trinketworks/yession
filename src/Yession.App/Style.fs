@@ -2059,6 +2059,8 @@ module Style =
     /// phone the title's box reaches down behind this line (`titleInput`), but the id still
     /// takes the presses that land ON it: it is a thing people copy, and a press that fell
     /// through to the field could only ever edit the title, never select the id.
+    /// Its `mt-1` and its line are `--spacing-id-drop`, which the chevron's mark lands on
+    /// (`navReopenMark`): change one and change the other.
     let titleId = "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full left-0 right-0 select-text"
 
     /// A collaborator's selection highlight in the title: an absolutely-positioned span the
@@ -2083,20 +2085,44 @@ module Style =
     /// (`navChevronBase`) reaching to the screen's edge and occupying 12px of flow (`-mx-4`
     /// against the band's 16px padding), which with the row's 8px gap pays 20 of the 32px
     /// indent the heading gives up there (`titleWrap`). Hidden while the sidebar is visible.
+    /// On a wide screen it stands in by `--column-gutter` as the title does (`header`), so
+    /// with the conversation centred it stays beside the title rather than at the window's
+    /// edge, which is where #1521 left it (measured at 1280: chevron at x=15, title at 306).
+    /// And it stands on the title's LINE, as it does on a phone: the title's middle is 35px
+    /// over the band's padding foot (`pb-5`, the field's 1px rule, half its 32px line, less
+    /// the field's 2px `top` nudge), and 30px, with the 6px `-m-1.5` takes back, puts the
+    /// glyph's middle on it (measured live at 1280 and 1600: glyph and title both at y=86).
+    /// It sat on `bottom-4.5` once, 12px under the title's middle.
     let navReopen =
-        "absolute left-2 bottom-4.5 w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
+        "absolute left-[calc(var(--column-gutter)+0.5rem)] bottom-[30px] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
         + "phone:relative phone:inset-auto phone:grid phone:[.nav-alt_&]:hidden phone:-mx-4"
 
     /// The session's worst standing, under the reopen chevron: the column it opens is where
     /// the standings are said, so the way in carries the one that matters most. Centred on
-    /// the chevron's axis and hung below it — under the 24px box into the band's padding on a
-    /// wide screen (its foot 6px over the hairline), inside the 44px target on a phone (3px
-    /// under the glyph) — so it adds a mark and not a pixel of width to the band. `relative`
-    /// and not `static` on a phone so the mark has the target to hang in; `inset-auto` so the
-    /// wide screen's gutter offsets do not move it out of the row.
+    /// the chevron's axis, and centred on the session id's LINE: the chevron sits on the
+    /// title's line, so the pair reads as one column beside the two lines, the glyph against
+    /// the title and the mark against the id. It adds a mark and not a pixel to the band.
+    ///
+    /// It is placed from the chevron's box, and the id from the title's, so the drop between
+    /// them is named once (`--spacing-id-drop`, `titleId`'s `mt-1` plus half its 16px line)
+    /// and the rest is where each screen puts the two boxes:
+    ///
+    /// - A phone centres both on one line, so the title line's middle is the 44px target's
+    ///   middle, and the id's is 12px (half the 24px `text-pivot` line) and the drop under it.
+    ///   The glyph is centred in the target, so the target's middle is the glyph's.
+    /// - A wide screen bottoms the title on the band's `pb-5` (20px) and lifts the box with
+    ///   its glyph onto the title's middle (`navReopen`), which leaves the id's middle, the
+    ///   drop under the title's foot, the drop and 4px under the box's. The 14px glyph
+    ///   overflows the 24px box's 12px of content to the right, so its middle is 13px in (the
+    ///   `p-1.5` and half the glyph), not the box's 12.
+    ///
+    /// `-translate-y-1/2` makes it the mark's centre that lands, so the mark's own size never
+    /// moves it. Measured live: at 390 the mark hung 8px over the id's line when it was placed
+    /// from the target's foot, and at 1280 10px under it when the margin was not counted.
     let navReopenMark =
-        "absolute left-1/2 -translate-x-1/2 top-full mt-0.5 pointer-events-none "
-        + "phone:top-auto phone:mt-0 phone:bottom-0.5"
+        "absolute left-[13px] -translate-x-1/2 -translate-y-1/2 pointer-events-none "
+        + "top-[calc(100%+4px+var(--spacing-id-drop))] "
+        + "phone:left-1/2 phone:top-[calc(50%+12px+var(--spacing-id-drop))]"
 
     // --- Timeline --------------------------------------------------------------------------
 
