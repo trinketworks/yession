@@ -344,13 +344,6 @@ type ReposService =
       /// it existed, and refusing there would leave no way out of an interrupted clone.
       RemoveRepo : RepoCaller -> RepoRef -> bool -> Async<Result<string, string>> }
 
-/// A directory's entries, and nothing for a directory that cannot be read at all — an absent
-/// repos directory, a permission, a mount that went away. The scan that reads it is asking
-/// what is THERE, and no entries is what "nothing is there" looks like whichever way it
-/// happened.
-let private readdirSafe (dir: string) : string array =
-    try Node.Api.fs.readdirSync (U2.Case1 dir) |> Array.ofSeq with _ -> [||]
-
 let private outputLimit = 20000
 
 /// Where a clone is BUILT, under the repos directory, before it is anything.
@@ -595,6 +588,36 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                 return ()
             }
 
+        /// Which repos this session has: the LOG's answer, folded once and then kept by every
+        /// append. The repos directory used to be the answer, and it answers a different
+        /// question — what directories hold a `.git`. A worktree the agent made beside a
+        /// checkout holds one too, and once a checkout had one path in every sandbox, the
+        /// listing read it as a repo of its own and the fold read its `yession.yaml` as
+        /// declaring sandboxes nobody added. Each row's STATE is still git's (`listingOf`).
+        ///
+        /// Heard before the replay lands is skipped: the replay already holds it, because
+        /// the log tells listeners only once an append is readable.
+        let mutable recorded : (ReposProjection * EventOffset option) option = None
+        let _stopHearing =
+            config.Log.OnAppended (fun appended ->
+                match recorded with
+                | Some (proj, through) when through |> Option.forall (fun o -> EventOffset.value appended.Offset > EventOffset.value o) ->
+                    recorded <- Some (ReposProjection.applyEvent proj appended.Event, Some appended.Offset)
+                | _ -> ())
+        let recordedRepos () : Async<RepoRef list> =
+            async {
+                match recorded with
+                | Some (proj, _) -> return proj.Repos |> List.map (fun r -> r.Repo)
+                | None ->
+                    let! page = config.Log.Read None Int32.MaxValue
+                    // A second caller may have finished its replay while this one read; the
+                    // first to land is kept, and appends since have been applied to it.
+                    if recorded.IsNone then
+                        let proj = page.Events |> List.fold (fun p e -> ReposProjection.applyEvent p e.Event) ReposProjection.empty
+                        recorded <- Some (proj, page.Events |> List.tryLast |> Option.map (fun e -> e.Offset))
+                    return recorded |> Option.map (fun (proj, _) -> proj.Repos |> List.map (fun r -> r.Repo)) |> Option.defaultValue []
+            }
+
         let requirePresent (repo: RepoRef) (inner: unit -> Async<Result<'a, string>>) : Async<Result<'a, string>> =
             async {
                 if not (present repo) then
@@ -708,7 +731,29 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     // a repeated add is a question, not an act. `present` can be trusted to
                     // mean WHOLE now, which is what the staging rename above buys.
                     match! listingOf repo with
-                    | Ok listing -> return Ok { Recorded.Answer = listing; Recorded.RecordedAs = None }
+                    | Ok listing ->
+                        let! known = recordedRepos ()
+                        if List.contains repo known then
+                            return Ok { Recorded.Answer = listing; Recorded.RecordedAs = None }
+                        else
+                            // A whole checkout the log never heard of: a process that died
+                            // between the staging rename and its `RepoCloned`. The listing is
+                            // the log's, so answering "already here" and recording nothing
+                            // would leave it here and invisible for good. Record it as the
+                            // clone would have.
+                            let messageId = mintMessageId ()
+                            do! append caller.Actor (SessionEvent.RepoAdded { MessageId = messageId; Repo = repo; Actor = caller.Actor })
+                            do!
+                                append
+                                    caller.Actor
+                                    (SessionEvent.RepoCloned
+                                        { MessageId = messageId
+                                          Repo = repo
+                                          Branch = listing.Branch
+                                          Actor = caller.Actor
+                                          AgentsMd = agentsMdOf repo
+                                          Skills = skillsOf repo })
+                            return Ok { Recorded.Answer = listing; Recorded.RecordedAs = Some messageId }
                     | Error e ->
                         // The one bad state the rename cannot prevent, because it predates
                         // it: a checkout an interrupted clone left at the visible path. git
@@ -739,15 +784,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
 
         let listRepos () : Async<Result<RepoRead list, string>> =
             async {
-                let refs =
-                    readdirSafe reposDir
-                    |> Array.collect (fun owner ->
-                        readdirSafe (sprintf "%s/%s" reposDir owner)
-                        |> Array.choose (fun repo ->
-                            match RepoRef.create (sprintf "%s/%s" owner repo) with
-                            | Ok ref when Fs.exists (sprintf "%s/%s/%s/.git" reposDir owner repo) -> Some ref
-                            | _ -> None))
-                    |> Array.toList
+                let! refs = recordedRepos ()
                 let mutable reads = []
                 for ref in refs do
                     match! listingOf ref with
@@ -801,8 +838,14 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                 })
 
         let removeRepo (caller: RepoCaller) (repo: RepoRef) (force: bool) : Async<Result<string, string>> =
-            requirePresent repo (fun () ->
-                async {
+            async {
+                // The log's repos are the listing's, so one it records is removable even with
+                // its directory gone: the listing shows it as unreadable, and this is the verb
+                // that row points at.
+                let! known = recordedRepos ()
+                if not (present repo || List.contains repo known) then
+                    return Error (sprintf "repo %s is not in this session. Use add_repo first." (RepoRef.value repo))
+                else
                     let remove () =
                         async {
                             Fable.NodeExtras.Files.removeTree (pathOf repo)
@@ -830,7 +873,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     // is no dirtiness to protect, because there is nothing git can tell us
                     // about — refusing here would leave that state with no way out.
                     | Error _ -> return! remove ()
-                })
+            }
 
         { AddRepo = addRepo
           ListRepos = listRepos
@@ -850,8 +893,8 @@ let agentCaller (turnActor: Principal) : RepoCaller =
 // --- the `repos` query (Plan 15) ----------------------------------------------------------
 // What was the Repos PANEL is now a registered query, and the panel's three write actions
 // are gone: a human who wants a repo added asks the agent, and the mutation lands in the
-// timeline attributed. What survives is exactly the half worth keeping — the listing,
-// which is the FILESYSTEM's answer, so it can never disagree with `git status`.
+// timeline attributed. What survives is exactly the half worth keeping — the listing: the
+// repos the log records, each as git reads it, so a row can never disagree with `git status`.
 
 let queryName : QueryName =
     match QueryName.create "repos" with

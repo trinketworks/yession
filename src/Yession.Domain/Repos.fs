@@ -52,9 +52,9 @@ module ReposProjection =
     let tryFind (repo: RepoRef) (proj: ReposProjection) : SessionRepo option =
         proj.Repos |> List.tryFind (fun s -> s.Repo = repo)
 
-/// One repo as the verbs and the panel report it: the FILESYSTEM's answer, not the
-/// projection's — the checkout is the truth, and a listing that disagreed with `git
-/// status` would teach everyone to distrust the panel.
+/// One repo as the verbs and the panel report it. WHICH repos is the log's answer (the
+/// projection above); each one's state is the FILESYSTEM's — the checkout is the truth, and
+/// a listing that disagreed with `git status` would teach everyone to distrust the panel.
 type RepoListing =
     { Repo : RepoRef
       Branch : string
@@ -67,7 +67,7 @@ type RepoListing =
       /// how a clone turns into `ls ~/repos`, twice, and then a turn that ran out of steps.
       Path : string }
 
-/// One checkout the repos directory holds, as git read it: listed, or unreadable with
+/// One repo the log records, as git read its checkout: listed, or unreadable with
 /// git's reason.
 ///
 /// A case of its own rather than a failure of the whole listing, because one directory git
