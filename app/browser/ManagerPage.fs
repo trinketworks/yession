@@ -52,6 +52,27 @@ let private selecting (root: Element) (selector: string) : Element option =
 
 let private focus (element: Element) = (element :?> HTMLElement).focus ()
 
+/// The lifecycle verbs, Stop and Start: they take turns in one place in an unfolded row.
+let private lifecycle = has Dom.Manager.stop + "," + has Dom.Manager.start
+
+/// The ONE session whose row is unfolded, if any. The server renders every row folded, so
+/// this page owns the answer and puts it back on whatever the server sends next.
+let mutable private expanded : string option = None
+
+/// Mark the open row as open, and every other row as folded, at or under `root`: a row (an
+/// action's answer), the whole section (a frame), or the live page (a press on a mark).
+let private applyExpansion (root: Element) =
+    let mark (row: Element) =
+        let isOpen = expanded.IsSome && attribute row Dom.Manager.session = expanded
+        if isOpen then row.setAttribute (Dom.Manager.expanded, "") else row.removeAttribute Dom.Manager.expanded
+        match row.querySelector (has Dom.Manager.rowMark) with
+        | null -> ()
+        | press -> press.setAttribute ("aria-expanded", (if isOpen then "true" else "false"))
+    if root.hasAttribute Dom.Manager.session then mark root
+    let rows = root.querySelectorAll (has Dom.Manager.session)
+    for i in 0 .. rows.length - 1 do
+        mark rows.[i]
+
 /// Markup the server rendered, parsed where it is going: in the context of the element it
 /// replaces, so a `<tr>` is parsed as a row of the table it lands in rather than dropped as a
 /// stray cell outside one.
@@ -75,7 +96,10 @@ let private swap (element: Element option) (markup: string) =
     match element with
     | None -> ()
     | Some element ->
-        match parseBeside element markup with
+        // The open row is put back on the fresh markup BEFORE it is compared or placed, so a
+        // frame that says nothing new is still nothing new, and an open row arrives open
+        // rather than folding and unfolding again under the reader.
+        match parseBeside element markup |> Option.map (fun fresh -> applyExpansion fresh; fresh) with
         | None -> ()
         | Some fresh when (fresh :?> HTMLElement).outerHTML = (element :?> HTMLElement).outerHTML -> ()
         | Some fresh ->
@@ -93,7 +117,7 @@ let private swap (element: Element option) (markup: string) =
             // Create rides the section's header line, so a frame arriving under a hand resting
             // on it would otherwise drop that hand onto the first chip.
             let wasCreate = (within Dom.Manager.createSession).IsSome
-            let wasAction = active |> Option.exists (fun a -> a.hasAttribute Dom.Manager.stop)
+            let wasAction = active |> Option.exists (fun a -> a.matches lifecycle)
             // A Create that is HELD (the browser is on its way to the new session, and the rows
             // stream announces that session before the redirect lands) keeps its own element
             // through the swap: the state, the tilt it was pushed at, and the focus all live on
@@ -125,9 +149,10 @@ let private swap (element: Element option) (markup: string) =
                         |> Option.bind (fun r -> attribute r Dom.Manager.session)
                         |> Option.bind (withAttribute fresh Dom.Manager.session)
                         |> Option.defaultValue fresh
-                    // A Stop that landed has taken its own control away, and the row's first
-                    // focusable is now the name — the stable open route, which is the way back in.
-                    let stillThere = if wasAction then Option.ofObj (scope.querySelector (has Dom.Manager.stop)) else None
+                    // A Stop that landed has taken its own control away and put Start in its
+                    // place (and a Start, Stop), so the hand is left on the verb that undoes
+                    // what it just did.
+                    let stillThere = if wasAction then Option.ofObj (scope.querySelector lifecycle) else None
                     let first = stillThere |> Option.orElse (Option.ofObj (scope.querySelector "a[href], button, input"))
                     first |> Option.iter focus
 
@@ -168,11 +193,24 @@ let private pressAndSwap (control: Element) (suffix: string) (into: unit -> Elem
 document.addEventListener (
     "click",
     fun event ->
-        match closestTo event Dom.Manager.stop with
+        match closestMatching event lifecycle with
         | None -> ()
-        | Some stop ->
-            let row = stop.closest "tr"
-            pressAndSwap stop "" (fun () -> row)
+        | Some verb ->
+            let row = verb.closest "tr"
+            pressAndSwap verb "" (fun () -> row)
+)
+
+// A press on a row's mark unfolds that row and folds any other; a press on the open row's
+// mark folds it.
+document.addEventListener (
+    "click",
+    fun event ->
+        match closestTo event Dom.Manager.rowMark with
+        | None -> ()
+        | Some mark ->
+            let id = attribute mark Dom.Manager.rowMark
+            expanded <- if expanded = id then None else id
+            sessionsSection () |> Option.iter applyExpansion
 )
 
 // Archiving answers with the WHOLE table, not a row: it can move a session out of the filter
