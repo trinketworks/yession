@@ -9296,6 +9296,8 @@ let pressTests =
                 // reader is another person, and one that closes with the case.
                 let! other = contexts.Page None
                 let! _ = await (other.GotoAsync (manager.At "/"))
+                // Archive is in the row's unfolding, so the other reader opens the row first.
+                do! awaitU (other.ClickAsync (sprintf "[%s]" Yession.App.Dom.Manager.rowMark))
                 do! awaitU (other.ClickAsync (sprintf "[%s]" Yession.App.Dom.Manager.archive))
                 hold.LetGo ()
                 do! Wait.until "the frame to have landed here" (fun () -> Read.count page (Sel.hook Yession.App.Dom.Manager.archive)) ((=) 0)

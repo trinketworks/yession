@@ -654,19 +654,66 @@ let private uiRenderTests =
             Expect.isTrue (text.Contains "UI &lt;Render&gt;") "the name"
             Expect.isTrue (text.Contains (SessionId.value uiRecord.SessionId)) "and the id beside it"
 
-        // The lifecycle rail carries the one verb a state admits, and Launch is not one of
-        // them in any state: a control that duplicates the name link is a second way to do
-        // the row's one act, and a stopped row that offered it had its way in split across
-        // two acts (press Launch, then find the link that appeared).
-        testCase "a running row offers Stop; a stopped or exited row offers no lifecycle verb" <| fun () ->
-            let running = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Running (8199, 42, None); Standings = [] }
+        // The unfolded row carries the one lifecycle verb a state admits, in one place: Stop
+        // while there is a child, Start where there is none and one can be started — which is
+        // launching WITHOUT opening, so it posts to Launch and not to the open route the name
+        // links to. A launch in flight admits neither.
+        testCase "a running row offers Stop; a stopped or exited row offers Start; a starting row neither" <| fun () ->
+            let row status = ManagerUi.sessionRow { Record = uiRecord; Status = status; Standings = [] }
+            let launch = ManagerRoute.path (ManagerRoute.Session (uiRecord.SessionId, SessionVerb.Launch))
+            let running = row (ProcessManager.Running (8199, 42, None))
             Expect.isTrue (running.Contains (Dom.attr Dom.Manager.stop "ui-render")) "running rows can stop"
-            let stopped = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] }
-            Expect.isFalse (stopped.Contains Dom.Manager.stop) "a stopped row has nothing to stop"
-            Expect.isFalse (stopped.Contains "data-launch") "and no Launch — its name launches it"
-            let crashed = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.Exited (Some 1); Standings = [] }
-            Expect.isFalse (crashed.Contains Dom.Manager.stop) "nor has an exited one"
-            Expect.isFalse (crashed.Contains "data-launch") "and it too relaunches by its name"
+            Expect.isFalse (running.Contains Dom.Manager.start) "and have nothing to start"
+            for name, status in [ "stopped", ProcessManager.NotRunning; "exited", ProcessManager.Exited (Some 1); "failed", ProcessManager.LaunchFailed "no sandbox" ] do
+                let shown = row status
+                Expect.isTrue (shown.Contains (Dom.attr Dom.Manager.start "ui-render")) (sprintf "a %s row can start" name)
+                Expect.isTrue (shown.Contains (sprintf "data-post=\"%s\"" launch)) (sprintf "a %s row's Start posts to Launch" name)
+                Expect.isFalse (shown.Contains Dom.Manager.stop) (sprintf "a %s row has nothing to stop" name)
+            let starting = row ProcessManager.Launching
+            Expect.isFalse (starting.Contains Dom.Manager.stop || starting.Contains Dom.Manager.start) "a launch in flight is let finish"
+
+        // The row leads with ONE mark, ranked by what the row asks of a reader, and the mark
+        // is the first line the row unfolds to — so a phone, which shows the mark and the
+        // name and nothing else, still ranks every row, and what the mark ranks first is what
+        // the reader finds first when it opens.
+        testCase "a row's mark ranks it, and names what it ranked first" <| fun () ->
+            let markOf (row: string) =
+                let at = row.IndexOf Dom.Manager.rowMark
+                let shut = row.IndexOf ("</button>", at)
+                row.Substring (at, shut - at)
+            let row status standings = ManagerUi.sessionRow { Record = uiRecord; Status = status; Standings = standings }
+            let ranked =
+                [ "stopped", row ProcessManager.NotRunning [], Yession.Domain.Standings.Rest
+                  "starting", row ProcessManager.Launching [], Yession.Domain.Standings.Moving
+                  "failed", row (ProcessManager.LaunchFailed "no sandbox") [], Yession.Domain.Standings.Wrong
+                  "exited", row (ProcessManager.Exited (Some 1)) [], Yession.Domain.Standings.Wrong
+                  "running and quiet", row (ProcessManager.Running (8199, 42, None)) [], Yession.Domain.Standings.Rest
+                  "running and stalled", row (ProcessManager.Running (8199, 42, None)) [ working; stalled ], Yession.Domain.Standings.Wrong ]
+            for name, shown, attention in ranked do
+                Expect.isTrue
+                    ((markOf shown).Contains (sprintf "data-attention=\"%s\"" (Yession.Domain.Standings.Attention.name attention)))
+                    (sprintf "a %s row is marked %A" name attention)
+            let stalledMark = markOf (row (ProcessManager.Running (8199, 42, None)) [ working; stalled ])
+            Expect.isTrue (stalledMark.Contains "aria-label=\"UI <Render>: 3 PRs · 1 stalled\"") "the mark says the session and the worst thing it said"
+            Expect.isFalse (stalledMark.Contains "working") "and only the worst"
+
+        // What the row unfolds to is in the markup, folded, and the mark is the control that
+        // says so: an `aria-expanded` press pointing at the region it opens. Folded is the
+        // server's only answer — which row is open is the page's — so the verbs are never
+        // on screen until a reader asked for them.
+        testCase "a row unfolds, under its mark, to what it says and its verbs" <| fun () ->
+            let running =
+                ManagerUi.sessionRow
+                    { Record = uiRecord; Status = ProcessManager.Running (8199, 42, None); Standings = [ working; stalled ] }
+            Expect.isTrue (running.Contains "aria-expanded=\"false\"") "the mark is a press that says the row is folded"
+            Expect.isTrue (running.Contains "aria-controls=\"row-detail-ui-render\"") "and which region it unfolds"
+            let detail = running.Substring (running.IndexOf "id=\"row-detail-ui-render\"")
+            Expect.isTrue (detail.Contains Dom.Manager.rowDetail) "the region is the row's detail"
+            let stalledAt = detail.IndexOf "3 PRs · 1 stalled"
+            let workingAt = detail.IndexOf "working"
+            Expect.isTrue (stalledAt >= 0 && workingAt > stalledAt) "every standing, worst first"
+            Expect.isTrue (detail.IndexOf (Dom.attr Dom.Manager.stop "ui-render") > workingAt) "then the verbs"
+            Expect.isFalse (running.Contains (Dom.Manager.expanded + "=")) "and no row is rendered open"
 
         // The FLOOR. A row says its state in words, in every arm. Drop a word and four of the
         // six states are one solid dot — stopped, archived, failed to start and exited — and
@@ -732,21 +779,6 @@ let private uiRenderTests =
             let bad = running.IndexOf "3 PRs · 1 stalled"
             let busy = running.IndexOf "working"
             Expect.isTrue (bad >= 0 && busy > bad) "the bad standing before the busy one"
-
-        // A phone drops the tail, and until it had a slot of its own a phone showed no
-        // standing at all. It gets one: the worst, in its tone, where the word was.
-        testCase "a phone's running row says the worst standing alone" <| fun () ->
-            let running =
-                ManagerUi.sessionRow
-                    { Record = uiRecord
-                      Status = ProcessManager.Running (8199, 42, None)
-                      Standings = [ working; stalled ] }
-            let slot = running.IndexOf Style.recordRowWorst
-            Expect.isTrue (slot >= 0) "the row has the phone's slot"
-            let phone = running.Substring(slot, running.IndexOf(Style.recordRowAside, slot) - slot)
-            Expect.isTrue (phone.Contains Style.toneBad) "in the worst standing's tone"
-            Expect.isTrue (phone.Contains "3 PRs · 1 stalled") "saying the worst standing"
-            Expect.isFalse (phone.Contains "working") "and only that one"
 
         testCase "a session's standings cross the control channel as they were said" <| fun () ->
             let said = [ stalled; working ]
@@ -944,8 +976,8 @@ let private uiRenderTests =
         testCase "an active session can be archived, by a control with a name" <| fun () ->
             let active = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] }
             Expect.isTrue (active.Contains (Dom.attr Dom.Manager.archive "ui-render")) "the row can be archived"
-            // WCAG: an icon-only control carries an accessible name, and it names WHICH
-            // session — a column of "Archive" says nothing about which row you are on.
+            // WCAG: the control's accessible name names WHICH session — a column of
+            // "Archive" says nothing about which row you are on.
             Expect.isTrue (active.Contains "aria-label=\"Archive UI &lt;Render&gt;\"") "named, and escaped"
 
         testCase "the unlit filter links to the query that adds it, computed server-side" <| fun () ->

@@ -1271,9 +1271,20 @@ module Dom =
         let session = "data-session"
         let status = "data-status"
         let stop = "data-stop"
+        /// Launch WITHOUT opening: the unfolded row's verb for a stopped, exited or failed
+        /// session, which starts it in place and leaves the reader on this page.
+        let start = "data-start"
+        /// The row's attention mark, a press that unfolds the row; carries the session id.
+        let rowMark = "data-row-mark"
+        /// What a row unfolds to. Present on every row and folded until its row is open.
+        let rowDetail = "data-row-detail"
+        /// On the ONE row that is open. The page's program sets it, and sets it again on the
+        /// same session's row after a frame swaps the table, so a stream never folds a row
+        /// out from under the reader.
+        let expanded = "data-expanded"
         /// The name, in every state a session can be opened from — it links to the stable
-        /// `/open` route, which launches a stopped session on the way in. There is no launch
-        /// hook: opening is launching.
+        /// `/open` route, which launches a stopped session on the way in. Opening is launching;
+        /// `start` is the one way to launch and stay on this page.
         let openLink = "data-open"
         /// The media query that is true where the Manager runs as an installed app — added to a
         /// phone's home screen, its window with no tabs. The Manager page's program reads it to

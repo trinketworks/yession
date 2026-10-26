@@ -52,6 +52,27 @@ let private selecting (root: Element) (selector: string) : Element option =
 
 let private focus (element: Element) = (element :?> HTMLElement).focus ()
 
+/// The lifecycle verbs, Stop and Start: they take turns in one place in an unfolded row.
+let private lifecycle = has Dom.Manager.stop + "," + has Dom.Manager.start
+
+/// The ONE session whose row is unfolded, if any. The server renders every row folded, so
+/// this page owns the answer and puts it back on whatever the server sends next.
+let mutable private expanded : string option = None
+
+/// Mark the open row as open, and every other row as folded, at or under `root`: a row (an
+/// action's answer), the whole section (a frame), or the live page (a press on a mark).
+let private applyExpansion (root: Element) =
+    let mark (row: Element) =
+        let isOpen = expanded.IsSome && attribute row Dom.Manager.session = expanded
+        if isOpen then row.setAttribute (Dom.Manager.expanded, "") else row.removeAttribute Dom.Manager.expanded
+        match row.querySelector (has Dom.Manager.rowMark) with
+        | null -> ()
+        | press -> press.setAttribute ("aria-expanded", (if isOpen then "true" else "false"))
+    if root.hasAttribute Dom.Manager.session then mark root
+    let rows = root.querySelectorAll (has Dom.Manager.session)
+    for i in 0 .. rows.length - 1 do
+        mark rows.[i]
+
 /// Markup the server rendered, parsed where it is going: in the context of the element it
 /// replaces, so a `<tr>` is parsed as a row of the table it lands in rather than dropped as a
 /// stray cell outside one.
@@ -65,6 +86,32 @@ let private parseBeside (element: Element) (markup: string) : Element option =
 let private replace (current: Node) (replacement: Node) =
     current.parentNode.replaceChild (replacement, current) |> ignore
 
+let private rowsUnder (root: Element) : Element list =
+    let found = root.querySelectorAll (has Dom.Manager.session)
+    [ for i in 0 .. found.length - 1 -> found.[i] ]
+
+/// Swap only the rows that changed, when that is all that changed: the same sessions in the
+/// same order, and everything around them as it was. A row that says nothing new stays the
+/// node it was, because its attention mark's motion lives on that node (`Style.markOrbit`):
+/// a whole-section swap on every frame restarted every orbit and replayed every arrival, on
+/// rows whose state had not moved. Anything else (a session added, gone or moved, a filter,
+/// a count) answers `false`, and the caller replaces the whole fragment as before.
+let private patchRows (element: Element) (fresh: Element) : bool =
+    let before = rowsUnder element
+    let after = rowsUnder fresh
+    let ids rows = rows |> List.map (fun row -> attribute row Dom.Manager.session)
+    // The fragment with its rows emptied: what has to match for the rows to be all that moved.
+    let frame (root: Element) =
+        let copy = root.cloneNode true :?> Element
+        rowsUnder copy |> List.iter (fun row -> row.innerHTML <- "")
+        (copy :?> HTMLElement).outerHTML
+    if before.IsEmpty || ids before <> ids after || frame element <> frame fresh then false
+    else
+        List.zip before after
+        |> List.iter (fun (old, row) ->
+            if (old :?> HTMLElement).outerHTML <> (row :?> HTMLElement).outerHTML then replace old row)
+        true
+
 /// Put a fragment the server rendered where `element` is — unless it says nothing new.
 ///
 /// Keyboard continuity (WCAG 2.0): replacing the focused element strands focus on `<body>`.
@@ -75,7 +122,10 @@ let private swap (element: Element option) (markup: string) =
     match element with
     | None -> ()
     | Some element ->
-        match parseBeside element markup with
+        // The open row is put back on the fresh markup BEFORE it is compared or placed, so a
+        // frame that says nothing new is still nothing new, and an open row arrives open
+        // rather than folding and unfolding again under the reader.
+        match parseBeside element markup |> Option.map (fun fresh -> applyExpansion fresh; fresh) with
         | None -> ()
         | Some fresh when (fresh :?> HTMLElement).outerHTML = (element :?> HTMLElement).outerHTML -> ()
         | Some fresh ->
@@ -93,29 +143,39 @@ let private swap (element: Element option) (markup: string) =
             // Create rides the section's header line, so a frame arriving under a hand resting
             // on it would otherwise drop that hand onto the first chip.
             let wasCreate = (within Dom.Manager.createSession).IsSome
-            let wasAction = active |> Option.exists (fun a -> a.hasAttribute Dom.Manager.stop)
+            let wasAction = active |> Option.exists (fun a -> a.matches lifecycle)
             // A Create that is HELD (the browser is on its way to the new session, and the rows
             // stream announces that session before the redirect lands) keeps its own element
             // through the swap: the state, the tilt it was pushed at, and the focus all live on
             // it.
-            match element.querySelector (has Dom.Manager.createSession + " [aria-busy=\"true\"]") with
-            | null -> ()
-            | held ->
-                match fresh.querySelector (has Dom.Manager.createSession + " button") with
-                | null -> ()
-                | stale -> replace stale held
-            replace element fresh
+            // Where the answer now lives: the old element with some rows swapped, or the fresh
+            // one in its place. Rows alone moving leave Create, the held one included, as it was.
+            let live =
+                if patchRows element fresh then element
+                else
+                    match element.querySelector (has Dom.Manager.createSession + " [aria-busy=\"true\"]") with
+                    | null -> ()
+                    | held ->
+                        match fresh.querySelector (has Dom.Manager.createSession + " button") with
+                        | null -> ()
+                        | stale -> replace stale held
+                    replace element fresh
+                    fresh
             match active with
             | None -> ()
+            // A hand on a row that did not change is still where it was. Asked of the document,
+            // not of the tree: the held Create is the same node in the fresh section, but moving
+            // it out of the page on the way there took its focus.
+            | Some focused when obj.ReferenceEquals (document.activeElement, focused) -> ()
             | Some _ ->
                 let back =
                     match filter |> Option.bind (fun f -> attribute f Dom.Manager.filter) with
-                    | Some name -> withAttribute fresh Dom.Manager.filter name
+                    | Some name -> withAttribute live Dom.Manager.filter name
                     | None -> None
                 let back =
                     match back with
                     | Some _ -> back
-                    | None when wasCreate -> selecting fresh (has Dom.Manager.createSession + " button")
+                    | None when wasCreate -> selecting live (has Dom.Manager.createSession + " button")
                     | None -> None
                 match back with
                 | Some control -> focus control
@@ -123,11 +183,12 @@ let private swap (element: Element option) (markup: string) =
                     let scope =
                         row
                         |> Option.bind (fun r -> attribute r Dom.Manager.session)
-                        |> Option.bind (withAttribute fresh Dom.Manager.session)
-                        |> Option.defaultValue fresh
-                    // A Stop that landed has taken its own control away, and the row's first
-                    // focusable is now the name — the stable open route, which is the way back in.
-                    let stillThere = if wasAction then Option.ofObj (scope.querySelector (has Dom.Manager.stop)) else None
+                        |> Option.bind (withAttribute live Dom.Manager.session)
+                        |> Option.defaultValue live
+                    // A Stop that landed has taken its own control away and put Start in its
+                    // place (and a Start, Stop), so the hand is left on the verb that undoes
+                    // what it just did.
+                    let stillThere = if wasAction then Option.ofObj (scope.querySelector lifecycle) else None
                     let first = stillThere |> Option.orElse (Option.ofObj (scope.querySelector "a[href], button, input"))
                     first |> Option.iter focus
 
@@ -168,11 +229,24 @@ let private pressAndSwap (control: Element) (suffix: string) (into: unit -> Elem
 document.addEventListener (
     "click",
     fun event ->
-        match closestTo event Dom.Manager.stop with
+        match closestMatching event lifecycle with
         | None -> ()
-        | Some stop ->
-            let row = stop.closest "tr"
-            pressAndSwap stop "" (fun () -> row)
+        | Some verb ->
+            let row = verb.closest "tr"
+            pressAndSwap verb "" (fun () -> row)
+)
+
+// A press on a row's mark unfolds that row and folds any other; a press on the open row's
+// mark folds it.
+document.addEventListener (
+    "click",
+    fun event ->
+        match closestTo event Dom.Manager.rowMark with
+        | None -> ()
+        | Some mark ->
+            let id = attribute mark Dom.Manager.rowMark
+            expanded <- if expanded = id then None else id
+            sessionsSection () |> Option.iter applyExpansion
 )
 
 // Archiving answers with the WHOLE table, not a row: it can move a session out of the filter

@@ -258,6 +258,11 @@ geometry, never the ink the meaning rests on. `motion-reduce` keeps every still 
 
 The mark never stands alone. A word beside it, or the name of the control it sits in, says
 the state.
+
+Where a session is listed or entered, its mark leads it. On the Manager's roster the mark sits
+on the page's rail and the name starts 32px in, where a phone's session page starts its title beside
+the chevron that wears the same mark. The roster's mark is a press: it unfolds the row to its
+words and its verbs, so a row at rest is a mark and a name and nothing to press by mistake.
 *Test: print the roster in greyscale and blur it. The five levels still read in order.*
 
 ## Hierarchy of controls

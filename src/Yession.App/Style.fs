@@ -675,67 +675,48 @@ module Style =
     /// can press to get it.
     let recordRowLink = cls [ "block no-underline"; focusRing ]
 
-    /// A listed record's name line: the name and, on a PHONE, the state after it. On a wide
-    /// screen the state is a column of its own and the copy on this line is not painted
-    /// (`recordRowState`), so the line is the name alone.
+    /// A listed record's name, clipped rather than wrapped: a row that changes height when a
+    /// session is renamed is a list you cannot keep your place in.
+    let recordRowName = "block truncate"
+
+    /// The roster's mark column (`ManagerUi.Col.mark`): the row's attention mark, at every
+    /// width, as the session page wears its worst standing under the chevron. The column is
+    /// 32px and the mark sits at its left edge, which is the page's rail — so the chips, the
+    /// section heads and every row's mark start on one line, and every name starts 32px in,
+    /// where the session page's title starts beside its chevron.
     ///
-    /// Centred, and `items-baseline` is the one thing it may not be. The doctrine's baseline
-    /// rule is about one row against the next; this is two runs on ONE line, and a flex item
-    /// that clips (`recordRowName` carries `truncate`, so `overflow` is not `visible`)
-    /// synthesizes its baseline from its margin box instead of its text. Aligning to that
-    /// baseline would hang the state word off the BOTTOM of the name. Centred, the two line
-    /// boxes share a centre and the clipping cannot move them.
-    let recordRowLine = "flex items-center gap-3"
+    /// The cell has no gutter of its own (the column's width IS the gap), and 2px above and
+    /// below a 44px target makes the row's 48px: the name cell's 12px + 24px line + 12px. Top,
+    /// not baseline, so an unfolded row keeps its mark on the name's line.
+    let recordMarkCell = "py-0.5 align-top"
 
-    /// The name inside that line. `min-w-0` is load-bearing on a phone: a flex child's
-    /// `min-width` is `auto`, so without it the name refuses to shrink below its longest word,
-    /// pushes the state off the row, and takes the page wider than the phone it is on. No
-    /// `flex-1`: the state follows the name as one phrase rather than sitting at the line's
-    /// trailing edge against the rail of verbs.
-    let recordRowName = "min-w-0 truncate"
+    /// The mark's press: a thumb's 44px, grown LEFT into the page's gutter rather than right
+    /// into the name, so the mark stays on the rail and the name's own target is untouched.
+    /// It unfolds the row (`aria-expanded`). No ground of its own: a ground would hang 12px
+    /// into the gutter, off the rail every other edge on the page keeps, and the unfolded
+    /// lines under it already say the row is open.
+    let recordMarkPress = cls [ "-ml-3 w-11 h-11 pl-3 flex items-center bg-transparent border-0 cursor-pointer"; focusRing ]
 
-    /// The state's copy on the name line — the one a PHONE paints; `wide:hidden` is
-    /// `display:none`, which takes it out of the accessibility tree too, so on a wide screen
-    /// the status column (`ManagerUi.Col.status`) is the one state a reader meets. The mark
-    /// leads the word it belongs to, and the words it would have pushed in are the name's,
-    /// which sit before it. It does not shrink, so the name is what clips — a clipped name
-    /// still says which row it is, a clipped state does not (docs/visual-design.md, Space).
-    ///
-    /// The WORD stays on a phone, where the first instinct is to drop it and let the dot carry
-    /// the state. The dot cannot. `stopped`, `archived`, `failed to start` and `exited` all
-    /// draw one solid dot, and the last two draw it in one colour, so without the word two
-    /// states are one picture and the rest differ by colour alone (WCAG 2.0 SC 1.4.1). What
-    /// the phone drops instead is the TAIL (`recordRowAside`).
-    let recordRowState = cls [ small; "truncate shrink-0 wide:hidden" ]
+    /// What a row unfolds to, under its name: each thing it says, then its verbs. Folded at
+    /// rest — `visibility` takes the verbs out of the tab order with it — and unfolded by
+    /// the ROW's `data-expanded`, which the page's program sets on the one row that is open
+    /// and carries across every frame the rows stream swaps in.
+    let recordDetail =
+        cls [ Motion.unfold; Motion.folded
+              "[[data-expanded]_&]:grid-rows-[1fr] [[data-expanded]_&]:translate-y-0"
+              "[[data-expanded]_&]:opacity-100 [[data-expanded]_&]:visible" ]
 
-    /// A state word a phone does not paint, because the row already says that state another
-    /// way: `running` by one green mark beside a full-ink name, `stopped` by a dimmed name
-    /// with no mark at all. `sr-only` and never `hidden` — `display:none` takes a thing out of
-    /// the accessibility tree as well as off the screen, and a reader who cannot see the
-    /// name's ink is exactly the one who still needs the word.
-    ///
-    /// Only the two RESTING states wear it. Starting, a launch that failed, an exit and an
-    /// archive are events, nothing else on the row says them, and they are what a list is
-    /// scanned for — so they keep their words and, on a list at rest, they are the only words
-    /// on it.
-    let recordRowWord = "phone:sr-only"
-
-    /// The tail after a state word: a running session's own standings. Shown where there is
-    /// width for it, and dropped on a phone, where it would spend the name's room on a
-    /// nicety.
-    ///
-    /// A failed launch's REASON does not wear this. `display:none` takes a thing out of the
-    /// accessibility tree as well as off the screen, and the reason is the one tail that is
-    /// the content — it is why a reader is on that row. A failed row clips its name instead.
-    let recordRowAside = "hidden wide:inline"
-
-    /// What a phone says in the tail's place: the running session's WORST standing, alone, in
-    /// the slot the `running` word leaves when it goes to the screen reader. One, because the
-    /// row rides one line and a second standing would spend the name's room; the worst,
-    /// because it is the one a list is scanned for. Capped, so a long word clips itself rather
-    /// than the name — the state block does not shrink. Gone where the full tail shows, so a
-    /// wide screen and a screen reader on it never hear the worst twice.
-    let recordRowWorst = "wide:hidden inline-block align-bottom max-w-[10rem] truncate ml-1.5"
+    /// The unfolding row, pulled back over the mark column so its lines are the column's
+    /// lines: each mark under the row's mark, each word on the name's rail.
+    let recordDetailInner = cls [ Motion.unfoldInner; "-ml-8" ]
+    let recordDetailLines = "grid grid-cols-[2rem_minmax(0,1fr)] items-center gap-y-2 pt-2"
+    /// A line's word: the sidebar status block's voice (`person`), in its attention's ink.
+    let recordDetailWord = "font-light text-small leading-5 truncate"
+    /// The verbs, on the name's rail under what the row said: Stop, Start, Archive. Bare
+    /// words, the hierarchy's quietest act, in a row a thumb can tell apart. Pulled back by a
+    /// verb's own 4px padding, so the first verb's WORD is on the name's rail, and each grown
+    /// to a thumb's height on a phone.
+    let recordDetailVerbs = "col-start-2 -ml-1 flex items-center gap-5 h-11 phone:[&>button]:h-touch"
 
     /// A filter over a listed registry — which archive states the management page is showing.
     /// Real links, because the filter IS the page's location, so these are chips only in how
