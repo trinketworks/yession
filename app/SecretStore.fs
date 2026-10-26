@@ -6,10 +6,11 @@ module Yession.Host.SecretStore
 // (encrypted file in the Manager's data dir, ManagerStore-style atomic writes);
 // `None` = ephemeral (no credential manager on this host — no file I/O at all, a
 // per-boot random KEK, everything dies with the Manager). `Resolve` feeds environment
-// injection only, and with session-owned sandboxes that injection happens at the
-// SESSION'S sandbox spawn: a value crosses only the authenticated loopback control
-// channel (`/control/secrets/resolve`, gated by the readable-scope walk below), only
-// at sandbox spawn, and never reaches the agent loop.
+// injection, and with session-owned sandboxes that injection happens at the SESSION'S
+// sandbox spawn: a value crosses only the authenticated loopback control channel
+// (`/control/secrets/resolve`), only at sandbox spawn, and never reaches the agent loop.
+// That route reads the calling session's own scope and nothing else (`SecretResolution`
+// below). The Manager's process environment is not a secret store: no reference reads it.
 
 open System
 open Yession.Domain
@@ -198,86 +199,64 @@ let openStoreWaiting (retryEveryMs: int) (onWait: OpenError -> unit) (persistPat
         }
     attempt None
 
-/// Secret resolution for environment injection (Plan 06): which value a `SecretRef`
-/// means for THIS session, in precedence order — the session's own scoped secret, then
-/// a user-scoped secret of a user the Manager verified into the session's launch, then
-/// the fallback. Every store step passes the same pure policy the control routes use
-/// (InjectSecret); a Deny simply means "not this caller's secret — next scope", and
-/// only a store FAILURE stops the walk.
+/// Secret resolution for environment injection (Plan 06): which value a `SecretRef` means
+/// for THIS session. Exactly one place: the session's own scope.
+///
+/// A `SecretRef` is written by a repository's `yession.yaml`, and whoever can push to the
+/// repo is neither the operator nor anybody in the session (docs/technical-design.md §4).
+/// So a reference may reach only what a principal gave to this session on purpose: its own
+/// secrets, which `set_secret` writes. It never reads a bound user's scope (no consent
+/// surface lets a user hand a secret to a session yet), the deployment's `LocalScope`, or
+/// the Manager's own process environment, which is the operator's and not a secret store.
 module SecretResolution =
 
     /// What one SecretRef resolution came to — the feature's own observation type; the
     /// `Audit` submodule below adapts it to a log record (`Audit.injectObserver`).
     type InjectOutcome =
-        | InjectedFromScope of SecretScope
-        | InjectedFromFallback
+        | Injected
         | InjectMissed of reason: string
 
     type Observe = SessionId -> SecretName -> InjectOutcome -> unit
 
-    /// The explicit lowest-precedence fallback: the Manager's OWN process environment —
-    /// what a `SecretRef` meant before Plan 06 gave it a store, kept so existing flows
-    /// work unseeded. docs/GAPS.md ("Secrets are a real Manager-owned store now") lists
-    /// it last in the precedence order. Inside the Manager's trust boundary; any store
-    /// entry shadows it.
-    let processEnv : ResolveSecret =
-        fun _sessionId name ->
-            async {
-                match Fable.NodeExtras.ProcessEnv.get (SecretName.value name) with
-                | None -> return Error (sprintf "secret '%s' is not available" (SecretName.value name))
-                | Some value -> return Ok value
-            }
-
-    /// The scopes a launch may read from, most specific first: the session's own, then
-    /// its bound users', then — where the Manager granted it unattributed access — the
-    /// deployment's own.
-    ///
-    /// `LocalScope` sits LAST because it is the least specific owner there is. Generic
-    /// secret injection walks it and the policy denies (there is no local rule for
-    /// `SecretAction`), so the walk simply moves on; it is here for the connection status
-    /// listing, which derives a caller's readable set from this same list.
+    /// The scopes a launch may read connection credentials from, most specific first: the
+    /// session's own, then its bound users', then — where the Manager granted it
+    /// unattributed access — the deployment's own. The connection status listing derives a
+    /// caller's readable set from this list. `SecretRef` injection does NOT walk it: a
+    /// reference resolves in the session's own scope alone (`compose`).
     let scopesFor (sessionId: SessionId) (users: Set<UserId>) (local: bool) : SecretScope list =
         SessionScope sessionId
         :: (users |> Set.toList |> List.map UserScope)
         @ (if local then [ LocalScope ] else [])
 
-    let compose (observe: Observe) (store: SecretStore) (usersOf: SessionId -> Set<UserId>) (localOf: SessionId -> bool) (fallback: ResolveSecret) : ResolveSecret =
+    /// The resolver the `/control/secrets/resolve` route serves. It builds the session's own
+    /// `SecretId` from the verified caller, passes the same pure policy the control routes
+    /// use (InjectSecret), and reads the store. A miss is an error that names the secret.
+    let compose (observe: Observe) (store: SecretStore) : ResolveSecret =
         fun sessionId name ->
             async {
-                let users = usersOf sessionId
-                let local = localOf sessionId
-                let subject : Subject = { Session = Some sessionId; Users = users; Local = local }
-                let rec walk scopes =
-                    async {
-                        match scopes with
-                        | [] ->
-                            // The walk fell through to the fallback: its outcome is the
-                            // resolution's outcome. Intermediate deny/miss steps stay
-                            // silent — that is the precedence working, not an event.
-                            match! fallback sessionId name with
-                            | Ok value ->
-                                observe sessionId name InjectedFromFallback
-                                return Ok value
-                            | Error e ->
-                                observe sessionId name (InjectMissed e)
-                                return Error e
-                        | scope :: rest ->
-                            let id : SecretId = { Scope = scope; Name = name }
-                            let request =
-                                { Subject = subject
-                                  Action = SecretAction InjectSecret
-                                  Resource = SecretResource id }
-                            match Policy.authorize request with
-                            | Deny _ -> return! walk rest
-                            | Permit ->
-                                match! store.Resolve id with
-                                | Ok (Some value) ->
-                                    observe sessionId name (InjectedFromScope scope)
-                                    return Ok value
-                                | Ok None -> return! walk rest
-                                | Error e -> return Error e
-                    }
-                return! walk (scopesFor sessionId users local)
+                let id : SecretId = { Scope = SessionScope sessionId; Name = name }
+                let request =
+                    { Subject = { Session = Some sessionId; Users = Set.empty; Local = false }
+                      Action = SecretAction InjectSecret
+                      Resource = SecretResource id }
+                let missed reason =
+                    observe sessionId name (InjectMissed reason)
+                    Error reason
+                match Policy.authorize request with
+                | Deny reason -> return missed reason
+                | Permit ->
+                    match! store.Resolve id with
+                    | Ok (Some value) ->
+                        observe sessionId name Injected
+                        return Ok value
+                    | Ok None ->
+                        return
+                            missed (
+                                sprintf
+                                    "secret '%s' is not set for this session. A reference reads only the session's own secrets (set_secret)."
+                                    (SecretName.value name)
+                            )
+                    | Error e -> return missed e
             }
 
 /// The secrets/ABAC feature's audit telemetry (Plan 06). Audit is a cross-cutting concern,
@@ -504,16 +483,10 @@ module Audit =
     /// collector alongside session telemetry is a documented follow-up.)
     let stdout : Sink = fun r -> printfn "%s" (format r)
 
-    /// Map an injection walk's outcome (SecretResolution.InjectOutcome) to a record — the
+    /// Map an injection's outcome (SecretResolution.InjectOutcome) to a record — the
     /// feature's own observation type, adapted to an audit record right here beside it.
     let injectObserver (sink: Sink) : SecretResolution.Observe =
         fun sessionId name outcome ->
             match outcome with
-            | SecretResolution.InjectedFromScope (SessionScope _) -> sink (inject sessionId name "session")
-            | SecretResolution.InjectedFromScope (UserScope _) -> sink (inject sessionId name "user")
-            // Unreachable while the policy has no local rule for `SecretAction` — generic
-            // injection never resolves at this scope. Recorded honestly rather than
-            // silently, so the day a rule is added the audit already says so.
-            | SecretResolution.InjectedFromScope LocalScope -> sink (inject sessionId name "local")
-            | SecretResolution.InjectedFromFallback -> sink (inject sessionId name "env")
+            | SecretResolution.Injected -> sink (inject sessionId name "session")
             | SecretResolution.InjectMissed reason -> sink (injectMiss sessionId name reason)

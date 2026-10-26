@@ -409,7 +409,9 @@ Secrets are Manager-owned authority:
   scopes gate each route.
   - `/control/secrets/resolve` feeds `SecretRef` env injection at the session's own sandbox
     spawn. Sandboxes are session-owned, so the injection point is there and not in the
-    Manager.
+    Manager. A repository's file writes the reference, so it reads the session's own scope
+    and nothing else: not a bound user's scope, not `LocalScope`, and not the Manager's
+    process environment.
   - `/control/connections/resolve` releases a connection credential for one agent turn.
 - Refresh tokens never leave the Manager. No agent tool wraps either route.
 
@@ -445,7 +447,7 @@ sandboxes:
     dialect: bash                         # optional: the shell a terminal opens, else detected
     workdir: ./packages/web
     env:
-      DATABASE_URL: { secret: db-url }   # a name, never a value
+      DATABASE_URL: { secret: db-url }   # a name, never a value: the session's own secret (set_secret)
       PATH: ${env.PATH}:/opt/tools       # composed over what lies beneath; `$${` is a literal `${`
     uses: [ npm-cache ]
     wants: [ github ]                     # the operator's `{ connection: { github: [git, api] } }`, where offered
@@ -620,6 +622,9 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     port (`Listener.admits`). A container may reach the host loopback (a VM daemon gives it
     no other way to the host), so everything there authenticates by capability, cookie or
     token.
+19. A `SecretRef` resolves only against what a principal gave the session on purpose: the
+    session's own secrets. It never reads another principal's scope or the Manager's
+    process environment (`SecretStore.SecretResolution`).
 
 Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
 roots, keyed by `BodyKey`, that the app co-manages outside the encoded tree, and the structural

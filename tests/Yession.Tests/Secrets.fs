@@ -80,15 +80,17 @@ let private policyTests =
             denies "inject" (onSibling InjectSecret)
             denies "list" (request callerA ListSecrets (SecretCollection (SessionScope sessionB)))
 
-        // User scope reads (list/inject) require the Manager-recorded binding.
-        testCase "bound user: list + inject permit" <| fun () ->
-            permits "inject" (onUser callerA alice InjectSecret)
+        // User scope lists require the Manager-recorded binding.
+        testCase "bound user: list permits" <| fun () ->
             permits "list" (request callerA ListSecrets (SecretCollection (UserScope alice)))
 
-        testCase "unbound user: list + inject deny" <| fun () ->
-            denies "inject other user" (onUser callerA bob InjectSecret)
-            denies "inject before any login" (onUser callerANoUsers alice InjectSecret)
+        testCase "unbound user: list denies" <| fun () ->
             denies "list other user" (request callerA ListSecrets (SecretCollection (UserScope bob)))
+
+        // A `SecretRef` comes from a repository's file, not from the user: no consent
+        // surface hands a user's secret to a session, so injection denies even when bound.
+        testCase "user scope injection denies even for a bound user" <| fun () ->
+            denies "inject" (onUser callerA alice InjectSecret)
 
         // Sessions never write user scope, binding or not.
         testCase "user scope writes deny even for a bound user" <| fun () ->
@@ -682,75 +684,73 @@ let private execTests =
             }
     ]
 
-// --- Step 7: injection precedence (pure walk over an in-memory store; cheap tier) -------
+// --- Step 7: injection reads the session's own scope only (cheap tier) ----------------
+
+let private resolveIn (store: SecretStore.SecretStore) : SecretStore.ResolveSecret =
+    SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store
 
 let private resolutionTests =
     testList "injection resolution" [
-        testCaseAsync "session scope shadows user scope shadows the fallback" <|
+        testCaseAsync "the session's own secret resolves" <|
             async {
                 let! store = openEphemeral ()
-                let id scope = sid scope "deploy-token"
-                let! _ = store.Set (id (SessionScope sessionA)) "from-session"
-                let! _ = store.Set (id (UserScope alice)) "from-user"
-                let fallback : SecretStore.ResolveSecret = fun _ _ -> async { return Ok "from-env" }
-                let resolve = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store (fun _ -> Set.singleton alice) (fun _ -> false) fallback
-
-                let! full = resolve sessionA name
-                Expect.equal (expect full) "from-session" "the session's own secret wins"
-
-                let! _ = store.Delete (id (SessionScope sessionA))
-                let! userLevel = resolve sessionA name
-                Expect.equal (expect userLevel) "from-user" "a bound user's secret is next"
-
-                let! _ = store.Delete (id (UserScope alice))
-                let! envLevel = resolve sessionA name
-                Expect.equal (expect envLevel) "from-env" "the process-env fallback is last"
+                let! _ = store.Set (sid (SessionScope sessionA) "deploy-token") "from-session"
+                let! got = resolveIn store sessionA name
+                Expect.equal (expect got) "from-session" "the session's own secret"
             }
 
-        testCaseAsync "an unbound user's secret is invisible: the policy skips the scope" <|
+        testCaseAsync "a sibling session's secret does not resolve" <|
+            async {
+                let! store = openEphemeral ()
+                let! _ = store.Set (sid (SessionScope sessionB) "deploy-token") "b's"
+                let! got = resolveIn store sessionA name
+                Expect.isError got "another session's scope is not read"
+            }
+
+        // The repository file writes the reference; a user never chose to hand this value
+        // to the session, so a binding does not make it reachable.
+        testCaseAsync "a bound user's secret of the same name does not resolve" <|
             async {
                 let! store = openEphemeral ()
                 let! _ = store.Set (sid (UserScope alice) "deploy-token") "alice's"
-                // Session B has no bound users: alice's scope is never a candidate, and
-                // even a hand-crafted walk would be denied by the policy.
-                let fallback : SecretStore.ResolveSecret = fun _ n -> async { return Error (sprintf "secret '%s' is not available" (SecretName.value n)) }
-                let resolve = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store (fun _ -> Set.empty) (fun _ -> false) fallback
-                let! outcome = resolve sessionB name
-                Expect.isError outcome "nothing resolves"
+                let! got = resolveIn store sessionA name
+                Expect.isError got "a user's scope is not read"
             }
 
-        testCaseAsync "the injection walk reports its outcome to the observer" <|
+        testCaseAsync "a deployment's local secret does not resolve" <|
+            async {
+                let! store = openEphemeral ()
+                let! _ = store.Set (sid LocalScope "deploy-token") "local"
+                let! got = resolveIn store sessionA name
+                Expect.isError got "LocalScope is not read"
+            }
+
+        // The Manager's environment is the operator's, not a secret store. PATH is set in
+        // every process that runs this suite, so the name is certainly there to be read.
+        testCaseAsync "a name set only in the Manager's environment is an error that names the secret" <|
+            async {
+                let! store = openEphemeral ()
+                let! got = resolveIn store sessionA (SecretName.create "PATH" |> expect)
+                match got with
+                | Error e -> Expect.isTrue (e.Contains "'PATH'") (sprintf "names the secret: %s" e)
+                | Ok _ -> failwith "read the Manager's environment"
+            }
+
+        testCaseAsync "each resolution reports its outcome to the observer" <|
             async {
                 let! store = openEphemeral ()
                 let! _ = store.Set (sid (SessionScope sessionA) "deploy-token") "v"
-                let mutable observed : (string * SecretStore.SecretResolution.InjectOutcome) list = []
-                let observe sid n outcome = observed <- (SecretName.value n, outcome) :: observed
-                let ok : SecretStore.ResolveSecret = fun _ _ -> async { return Ok "env-v" }
-                let miss : SecretStore.ResolveSecret = fun _ _ -> async { return Error "nope" }
-                let resolveHit = SecretStore.SecretResolution.compose observe store (fun _ -> Set.empty) (fun _ -> false) miss
-                let! _ = resolveHit sessionA name
-                let resolveEnv = SecretStore.SecretResolution.compose observe store (fun _ -> Set.empty) (fun _ -> false) ok
-                let other = SecretName.create "OTHER" |> expect
-                let! _ = resolveEnv sessionA other
-                let resolveMiss = SecretStore.SecretResolution.compose observe store (fun _ -> Set.empty) (fun _ -> false) miss
-                let! _ = resolveMiss sessionA other
-                Expect.equal
-                    (List.rev observed)
-                    [ "deploy-token", SecretStore.SecretResolution.InjectedFromScope (SessionScope sessionA)
-                      "OTHER", SecretStore.SecretResolution.InjectedFromFallback
-                      "OTHER", SecretStore.SecretResolution.InjectMissed "nope" ]
-                    "one observation per resolution, naming the source"
-            }
-
-        testCaseAsync "a total miss reports the fallback's legible error" <|
-            async {
-                let! store = openEphemeral ()
-                let resolve = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store (fun _ -> Set.empty) (fun _ -> false) SecretStore.SecretResolution.processEnv
-                let missing = SecretName.create "YESSION_DEFINITELY_MISSING" |> expect
-                let! outcome = resolve sessionA missing
-                match outcome with
-                | Error e -> Expect.isTrue (e.Contains "YESSION_DEFINITELY_MISSING") "names the missing secret"
-                | Ok _ -> failwith "expected a miss"
+                let mutable observed : (string * bool) list = []
+                let observe _ n outcome =
+                    let injected =
+                        match outcome with
+                        | SecretStore.SecretResolution.Injected -> true
+                        | SecretStore.SecretResolution.InjectMissed _ -> false
+                    observed <- (SecretName.value n, injected) :: observed
+                let resolve = SecretStore.SecretResolution.compose observe store
+                let! _ = resolve sessionA name
+                let! _ = resolve sessionA (SecretName.create "OTHER" |> expect)
+                Expect.equal (List.rev observed) [ "deploy-token", true; "OTHER", false ] "one observation per resolution"
             }
     ]
 
@@ -810,17 +810,10 @@ let private startControlServer (callers: (string * Control.ControlCaller) list) 
 let private caller sessionId users : Control.ControlCaller =
     { SessionId = sessionId; Users = users; Local = false }
 
-/// The pre-authorized handlers over a store, with the SAME readable-scope walk the
-/// Manager composes for `resolve` — the user table injected per test.
-let private apiOver (audit: SecretStore.Audit.Sink) (usersOf: SessionId -> Set<UserId>) (store: SecretStore.SecretStore) : Control.SecretsApi =
-    let walk =
-        SecretStore.SecretResolution.compose
-            (fun _ _ _ -> ())
-            store
-            usersOf
-            (fun _ -> false)
-            (fun _ n -> async { return Error (sprintf "secret '%s' is not available in any readable scope" (SecretName.value n)) })
-    ProcessManager.secretsApiFor audit walk store
+/// The pre-authorized handlers over a store, with the SAME resolver the Manager composes
+/// for `resolve`.
+let private apiOver (audit: SecretStore.Audit.Sink) (store: SecretStore.SecretStore) : Control.SecretsApi =
+    ProcessManager.secretsApiFor audit (resolveIn store) store
 
 let private routeTests =
     testList "control routes" [
@@ -834,7 +827,7 @@ let private routeTests =
                     startControlServer
                         [ "secret-a", caller sessionA (Set.singleton alice)
                           "secret-b", caller sessionB Set.empty ]
-                        (Some (apiOver (fun r -> audited <- r :: audited) (fun s -> if s = sessionA then Set.singleton alice else Set.empty) store))
+                        (Some (apiOver (fun r -> audited <- r :: audited) store))
                         (fun path -> unauthorized <- path :: unauthorized)
                 let post route secret body = postControl (sprintf "%s/control/secrets/%s" url route) secret body
                 let eventNames () =
@@ -899,15 +892,14 @@ let private routeTests =
                     Expect.isFalse ((SecretStore.Audit.format r).Contains "hunter2") "no audit record ever renders a value"
             }
 
-        testCaseAsync "resolve-at-spawn reads only the caller's readable scopes, over the authenticated channel" <|
+        testCaseAsync "resolve-at-spawn reads only the caller's own scope, over the authenticated channel" <|
             async {
                 let! store = openEphemeral ()
-                let usersOf s = if s = sessionA then Set.singleton alice else Set.empty
                 let! _, url =
                     startControlServer
                         [ "secret-a", caller sessionA (Set.singleton alice)
                           "secret-b", caller sessionB Set.empty ]
-                        (Some (apiOver (fun _ -> ()) usersOf store))
+                        (Some (apiOver (fun _ -> ()) store))
                         ignore
                 let userName = SecretName.create "user-held-token" |> expect
                 let! _ = store.Set { Scope = SessionScope sessionA; Name = name } "session-held"
@@ -921,11 +913,11 @@ let private routeTests =
                 Expect.equal own.Status 200 "own-scope resolve permits"
                 Expect.isTrue (own.Body.Contains "session-held") "the value crosses the authenticated channel"
 
-                // A bound user's scope is readable too (same walk as injection)...
+                // A bound user's scope is not: the reference comes from a repository's file.
                 let! bound = post "secret-a" (ControlWire.toString ControlWire.resolveSecretRequest { Name = userName })
-                Expect.equal bound.Status 200 "a bound user's secret resolves"
+                Expect.equal bound.Status 403 "a bound user's secret does not resolve"
 
-                // ...but a sibling session reaches neither, and the deny echoes no value.
+                // A sibling session does not reach A's scope, and the deny echoes no value.
                 let! cross = post "secret-b" resolveBody
                 Expect.equal cross.Status 403 "another session's secret does not resolve"
                 Expect.isFalse (cross.Body.Contains "session-held") "the deny carries no value"
@@ -945,7 +937,7 @@ let private routeTests =
                 let! _, url =
                     startControlServer
                         [ "secret-a", caller sessionA Set.empty ]
-                        (Some (apiOver (fun _ -> ()) (fun _ -> Set.empty) store))
+                        (Some (apiOver (fun _ -> ()) store))
                         ignore
                 // The capability a Session builds in SessionMain: pre-bound to
                 // its own scope; failures are values.
