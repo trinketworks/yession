@@ -72,6 +72,14 @@ stays generic.
   Manager and a session of different builds still agree.
 - A session-scoped generic secret and a connection credential may share a scope and a name. They
   are different entries.
+- **A rollback past this change loses every connection credential, unless the file goes back
+  too.** A Manager older than this change cannot refuse a version 2 file. It reads `entries`
+  only, and its first write saves the file as version 1 with no `connections`. So roll back only
+  together with a copy of `secrets.json` taken before the upgrade
+  ([deployment.md](../deployment.md#credentials)). This build and every later one refuse a file a
+  newer build wrote (`WrittenByNewerBuild`), as `ManagerState` does, so the hazard ends here.
+  The store keeps no automatic copy in the data directory: a copy would outlive `Disconnect`,
+  and a deleted credential would not be gone.
 - An agent that wrote a forged broker envelope with `set_secret` before this change wrote it
   over the real credential. The sort reads that entry as a connection credential, as the broker
   already did. The person connects again. This change stops the next write.

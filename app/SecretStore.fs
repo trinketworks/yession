@@ -56,6 +56,10 @@ type OpenError =
     | KeyStoreFailure of detail: string
     | CorruptStore of path: string * detail: string
     | SealedByDifferentKey of path: string * fileKekId: string * hostKekId: string
+    /// A file a newer build wrote. Read as the newest version this build knows, it would
+    /// lose what it does not recognise at the first write (every connection credential,
+    /// for a build that predates the split), so it is refused.
+    | WrittenByNewerBuild of path: string * version: int
 
 module OpenError =
     let describe (error: OpenError) : string =
@@ -64,12 +68,15 @@ module OpenError =
         | CorruptStore (path, detail) -> sprintf "corrupt secrets store %s: %s" path detail
         | SealedByDifferentKey (path, fileKekId, hostKekId) ->
             sprintf "secrets store %s was sealed by a different key (%s, this host's is %s). Restore that key, or delete the file." path fileKekId hostKekId
+        | WrittenByNewerBuild (path, version) ->
+            sprintf "secrets store %s: %s. Run that build, or restore the copy of the file taken before it." path (SecretsCodec.newerBuild version)
 
     let kind (error: OpenError) : string =
         match error with
         | KeyStoreFailure _ -> "keystore"
         | CorruptStore _ -> "corrupt"
         | SealedByDifferentKey _ -> "sealed"
+        | WrittenByNewerBuild _ -> "newer"
 
 let private now () : DateTimeOffset = DateTimeOffset.UtcNow
 
@@ -124,9 +131,13 @@ let openStore (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async
         let existing : Result<(string * SecretsFile) option, OpenError> =
             match persistPath with
             | Some path when Fs.exists path ->
-                match SecretsCodec.fromString (Fs.readText path) with
-                | Error e -> Error (CorruptStore (path, e))
-                | Ok file -> Ok (Some (path, file))
+                let json = Fs.readText path
+                match SecretsCodec.newerVersionOf json with
+                | Some version -> Error (WrittenByNewerBuild (path, version))
+                | None ->
+                    match SecretsCodec.fromString json with
+                    | Error e -> Error (CorruptStore (path, e))
+                    | Ok file -> Ok (Some (path, file))
             | _ -> Ok None
         match existing with
         | Error e -> return Error e
@@ -324,6 +335,10 @@ module SecretResolution =
         fun sessionId name ->
             async {
                 let id : SecretId = { Scope = SessionScope sessionId; Name = name }
+                // A reduced subject, on purpose: the resource is the caller's own scope, and
+                // the only rule that permits it reads the session alone. The users bound to
+                // the launch and its local access cannot change this decision, so the
+                // resolver is not handed them.
                 let request =
                     { Subject = { Session = Some sessionId; Users = Set.empty; Local = false }
                       Access = SecretAccess (InjectSecret, SecretResource id) }

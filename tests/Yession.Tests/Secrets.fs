@@ -429,6 +429,17 @@ let private storeTests =
                 Expect.isError opened "corrupt store must not look empty"
             }
 
+        testCaseAsync "a file a newer build wrote is refused, not read as this build's newest" <|
+            async {
+                let path = freshPath "newer"
+                let file = SecretsFile.empty "k"
+                Fs.writeTextAtomic path ((SecretsCodec.toString file).Replace ("\"version\": 2", "\"version\": 3"))
+                let! opened = SecretStore.openStore (Some path) (KeyStore.inMemory ())
+                match opened with
+                | Error (SecretStore.WrittenByNewerBuild (_, 3)) -> ()
+                | other -> failwithf "expected WrittenByNewerBuild 3, got %A" other
+            }
+
         testCaseAsync "a file sealed by a different key fails distinctly" <|
             async {
                 let path = freshPath "wrongkek"

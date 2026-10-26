@@ -184,6 +184,10 @@ module SecretsCodec =
                   SecretEntry.Iv = get.Required.Field "iv" Decode.string
                   SecretEntry.Ciphertext = get.Required.Field "ciphertext" Decode.string }) }
 
+    /// The refusal of a file a newer build wrote, in `ManagerCodec`'s wording.
+    let newerBuild (version: int) : string =
+        sprintf "secrets store schema version %d was written by a newer build (this one reads %d)" version SecretsFile.currentVersion
+
     let secretsFile : Codec<SecretsFile> =
         { Encode =
             fun (f: SecretsFile) ->
@@ -192,20 +196,34 @@ module SecretsCodec =
                       "kekId", Encode.string f.KekId
                       "entries", f.Entries |> List.map secretEntry.Encode |> Encode.list
                       "connections", f.Connections |> List.map secretEntry.Encode |> Encode.list ]
-          // A version 1 file has no `connections`: it predates the split, and everything it
-          // holds is in `entries` until the store sorts it. A later file must say both.
+          // Version-DISPATCHED, as `ManagerCodec` is. A version 1 file has no `connections`:
+          // it predates the split, and everything it holds is in `entries` until the store
+          // sorts it. A version this build has never heard of is refused rather than read as
+          // the newest one it knows: read that way, a downgrade would drop what it does not
+          // recognise and save the loss back over the original.
           Decode =
-            Decode.object (fun get ->
-                let version = get.Required.Field "version" Decode.int
-                { SecretsFile.Version = version
-                  SecretsFile.KekId = get.Required.Field "kekId" Decode.string
-                  SecretsFile.Entries = get.Required.Field "entries" (Decode.list secretEntry.Decode)
-                  SecretsFile.Connections =
-                    if version = 1 then []
-                    else get.Required.Field "connections" (Decode.list secretEntry.Decode) }) }
+            Decode.field "version" Decode.int
+            |> Decode.andThen (fun version ->
+                let file (connections: Decode.IGetters -> SecretEntry list) =
+                    Decode.object (fun get ->
+                        { SecretsFile.Version = version
+                          SecretsFile.KekId = get.Required.Field "kekId" Decode.string
+                          SecretsFile.Entries = get.Required.Field "entries" (Decode.list secretEntry.Decode)
+                          SecretsFile.Connections = connections get })
+                match version with
+                | 1 -> file (fun _ -> [])
+                | 2 -> file (fun get -> get.Required.Field "connections" (Decode.list secretEntry.Decode))
+                | _ -> Decode.fail (newerBuild version)) }
 
     let toString (file: SecretsFile) : string =
         secretsFile.Encode file |> Encode.toString 2
 
     let fromString (json: string) : Result<SecretsFile, string> =
         Decode.fromString secretsFile.Decode json
+
+    /// The schema version a file names, when it names one this build cannot read. Read
+    /// before the whole file, so a newer build's file is refused as that and not as corrupt.
+    let newerVersionOf (json: string) : int option =
+        match Decode.fromString (Decode.field "version" Decode.int) json with
+        | Ok version when version > SecretsFile.currentVersion -> Some version
+        | _ -> None
