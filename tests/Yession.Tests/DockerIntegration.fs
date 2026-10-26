@@ -53,9 +53,9 @@ let private withContainer (f: ContainerSpec -> ContainerSpec) (spec: Environment
 let private alpineSpec =
     { EnvironmentSpec.defaults with Runtime = Container { ContainerSpec.defaults with Image = Some { Name = "alpine"; Tag = Some "3" } } }
 
-/// The env fallback the old Manager-side injection ended on: the test process's env.
+/// A resolver with nothing to resolve: the specs that use it name no secret.
 let private envSecrets : SecretName -> Async<Result<string, string>> =
-    fun n -> SecretStore.SecretResolution.processEnv (SessionId.mint ()) n
+    fun n -> async { return Error (sprintf "secret '%s' is not set for this session" (SecretName.value n)) }
 
 /// Create a docker sandbox for a fresh minted name: the production composition
 /// (`preparePolicy` → `forBackend`), so the spec's secret refs resolve exactly as a
@@ -499,38 +499,10 @@ let tests =
                 do! sandbox.Dispose ()
             })
 
-            testCaseAsync "secret refs resolve at spawn; missing secrets fail creation" (async {
-                do! Support.withEnv [ "YESSION_TEST_SECRET", Some "s3cr3t-value" ] (fun () -> async {
-                    let resolvedSpec =
-                        { alpineSpec with EnvironmentVariables = Map.ofList [ "TOKEN", SecretRef (SecretName.create "YESSION_TEST_SECRET" |> expect) ] }
-                    let! _, sandbox =
-                        async {
-                            match! start envSecrets resolvedSpec with
-                            | Error reason -> return failwithf "docker sandbox failed: %s" reason
-                            | Ok started -> return started
-                        }
-                    let! _, out, _ = runInSandbox sandbox "printenv" [ "TOKEN" ] Map.empty None
-                    Expect.isTrue (out.Contains "s3cr3t-value") "the referenced secret reaches the container env"
-                    do! sandbox.Dispose ()
-                })
-
-                // An unresolved secret ref fails creation with a legible reason — before any
-                // container exists. `None` is the arrangement here (the name must be ABSENT),
-                // and `withEnv` still puts back whatever this box had.
-                do! Support.withEnv [ "YESSION_MISSING_SECRET", None ] (fun () -> async {
-                    let missingSpec =
-                        { alpineSpec with EnvironmentVariables = Map.ofList [ "TOKEN", SecretRef (SecretName.create "YESSION_MISSING_SECRET" |> expect) ] }
-                    match! start envSecrets missingSpec with
-                    | Error reason -> Expect.isTrue (reason.Contains "YESSION_MISSING_SECRET") "the failure names the missing secret"
-                    | Ok _ -> failwith "creation should fail when a secret ref cannot be resolved"
-                })
-            })
-
-            testCaseAsync "the Manager's secret store feeds resolve-at-spawn, gated by the ABAC walk (Plan 06)" (async {
-                // A store seeded with a session-scoped secret, a user-scoped secret,
-                // and a shadowed name that also exists in the process env — resolved
-                // through the SAME walk the control route serves, then injected at
-                // sandbox spawn.
+            testCaseAsync "the Manager's secret store feeds resolve-at-spawn from the session's own scope (Plan 06)" (async {
+                // A store seeded with a session-scoped secret and a bound user's secret,
+                // resolved through the SAME resolver the control route serves, then
+                // injected at sandbox spawn.
                 let! opened = SecretStore.openStore None (KeyStore.random ())
                 let store = expect (opened |> Result.mapError SecretStore.OpenError.describe)
                 let sessionId = SessionId.mint ()
@@ -538,30 +510,21 @@ let tests =
                 let secretName n = SecretName.create n |> expect
                 let! _ = store.Set { Scope = SessionScope sessionId; Name = secretName "SESSION_TOKEN" } "session-held"
                 let! _ = store.Set { Scope = UserScope alice; Name = secretName "USER_TOKEN" } "user-held"
-                do! Support.withEnv [ "SESSION_TOKEN", Some "env-shadowed" ] (fun () -> async {
-                    let walk = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store (fun _ -> Set.singleton alice) (fun _ -> false) SecretStore.SecretResolution.processEnv
-                    let spec =
-                        { alpineSpec with
-                            EnvironmentVariables =
-                                Map.ofList
-                                    [ "SESSION_TOKEN", SecretRef (secretName "SESSION_TOKEN")
-                                      "USER_TOKEN", SecretRef (secretName "USER_TOKEN") ] }
-                    match! start (fun n -> walk sessionId n) spec with
-                    | Error reason -> failwithf "docker sandbox failed: %s" reason
-                    | Ok (_, sandbox) ->
-                        let! _, out, _ = runInSandbox sandbox "printenv" [] Map.empty None
-                        Expect.isTrue (out.Contains "SESSION_TOKEN=session-held") "the store's session secret shadows the env fallback"
-                        Expect.isTrue (out.Contains "USER_TOKEN=user-held") "a bound user's secret injects"
-                        do! sandbox.Dispose ()
-                })
+                let resolve = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store
+                let spec = { alpineSpec with EnvironmentVariables = Map.ofList [ "SESSION_TOKEN", SecretRef (secretName "SESSION_TOKEN") ] }
+                match! start (fun n -> resolve sessionId n) spec with
+                | Error reason -> failwithf "docker sandbox failed: %s" reason
+                | Ok (_, sandbox) ->
+                    let! _, out, _ = runInSandbox sandbox "printenv" [ "SESSION_TOKEN" ] Map.empty None
+                    Expect.isTrue (out.Contains "session-held") "the session's own secret reaches the container env"
+                    do! sandbox.Dispose ()
 
-                // Without the user binding, the user-scoped secret is unreachable.
-                let unbound = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store (fun _ -> Set.empty) (fun _ -> false) SecretStore.SecretResolution.processEnv
-                let session2 = SessionId.mint ()
-                let spec2 = { alpineSpec with EnvironmentVariables = Map.ofList [ "USER_TOKEN", SecretRef (secretName "USER_TOKEN") ] }
-                match! start (fun n -> unbound session2 n) spec2 with
-                | Error reason -> Expect.isTrue (reason.Contains "USER_TOKEN") "refused: no bound user, and no env fallback"
-                | Ok _ -> failwith "an unbound session must not receive a user's secret"
+                // A user's secret is never a reference's to read, and a refusal comes before
+                // any container exists, naming the secret.
+                let userSpec = { alpineSpec with EnvironmentVariables = Map.ofList [ "USER_TOKEN", SecretRef (secretName "USER_TOKEN") ] }
+                match! start (fun n -> resolve sessionId n) userSpec with
+                | Error reason -> Expect.isTrue (reason.Contains "USER_TOKEN") "refused, naming the secret"
+                | Ok _ -> failwith "a user's secret must not reach a sandbox through a reference"
             })
 
             // The route a forwarded github credential IS (GitGateway): a listener in the

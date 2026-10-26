@@ -117,6 +117,9 @@ The last section holds trust boundaries as sharp as the first section's.
   `LocalScope` ([ADR](decisions/2026-08-10-local-scope.md)). Remaining:
   - No GENERIC `/secrets` write surface for users exists. Sessions cannot `SetSecret` on
     `UserScope`, and the management UI has no secrets page.
+  - A user's generic secret has no injection path. A `SecretRef` is written by a repository's
+    file, not by the user, so it reads the session's own scope only. A user's secret can reach
+    a sandbox only once a consent surface lets the user give it to a session on purpose.
   - Tests pin the policy rows for a session-less, user-only `AuthzSubject` (`Session = None`),
     but nothing constructs that subject yet.
 - **Under `--auth localhost` a connected credential is deployment-wide.** Every visitor is the
@@ -338,8 +341,9 @@ The last section holds trust boundaries as sharp as the first section's.
   describes it: AES-256-GCM per-entry ciphertext in `<DataDir>/secrets.json`, a KEK in the OS
   credential manager (`@napi-rs/keyring`, imported non-extractably each start), and `resolve` as
   the only value-returning `/control/secrets/*` route. A pure default-deny `Policy.authorize`
-  covers the composite session+user identity. `SecretRef` injection takes the session scope ▸
-  bound users' scopes ▸ Manager process env.
+  covers the composite session+user identity. `SecretRef` injection reads the session's own
+  scope only. It never reads a bound user's scope or the Manager's process environment, and a
+  Manager with no store answers every reference with a refusal that names it.
 
   Remaining, deliberate:
   - **Hosts without a credential manager run in-memory only, unless the operator brings a key
@@ -361,7 +365,7 @@ The last section holds trust boundaries as sharp as the first section's.
     - `/control/connections/resolve` (Plan 08) gives a connection credential to the calling
       session, because an agent turn needs the token in-process.
     - `/control/secrets/resolve` feeds `SecretRef` env injection at the session's sandbox spawn
-      (sandboxes are session-owned).
+      (sandboxes are session-owned), from the session's own scope only.
 
     Refresh tokens never leave the Manager. No agent-facing tool wraps either route.
   - **Secret-token-injection is future work.** A resolved secret enters the sandbox as a plain env
@@ -371,8 +375,7 @@ The last section holds trust boundaries as sharp as the first section's.
     declared hosts. srt implements that (`credentials.envVars` with `mode: "mask"` and
     `injectHosts`). What remains is to route `SecretRef` injection through it.
   - **No KEK rotation/recovery.** A lost credential entry orphans the store loudly, and the
-    operator deletes the file. Multi-user same-name injection precedence stays open until a real
-    multi-user strategy lands.
+    operator deletes the file.
   - `@napi-rs/keyring`'s per-platform prebuilds join `node-datachannel` in the "unsigned
     third-party native binaries" trust bucket below. CI exercises Linux/Secret Service. Only
     field use covers macOS and Windows.

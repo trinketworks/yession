@@ -94,5 +94,6 @@ name. That would destroy the one distinction an unattributed deployment can stil
 - A multi-user deployment that wants separate accounts without a proxy in front. There is no answer
   for it here by construction. The honest answer is `--auth trusted-headers`.
 - A generic secret worth holding at deployment scope. The policy permits `LocalScope` for connection
-  actions only. Widening it is a deliberate act, and the `inject … "local"` arm of
-  `SecretStore.Audit` is already there to record it.
+  actions only. Widening it is a deliberate act. Since 2026-10-26 a `SecretRef` reads the session's
+  own scope alone, so injecting from `LocalScope` would also need a consent surface (see
+  [GAPS.md](../GAPS.md#security--trust)).

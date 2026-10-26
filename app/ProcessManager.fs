@@ -386,9 +386,8 @@ let private sweepIntervalMsFor (timeout: TimeSpan) : int =
 
 /// The secrets handlers (Plan 06): the ONLY place a verified Subject is built, so
 /// the route arms stay policy-free. Every deny is logged (subject/action/scope — never
-/// values); every permitted call goes straight to the store. `resolve` is the same
-/// precedence walk env injection always used (session scope, then bound users' scopes,
-/// then the Manager's process env) — the walk IS the authorization, and its observer
+/// values); every permitted call goes straight to the store. `resolve` reads the calling
+/// session's own scope only (`SecretStore.SecretResolution.compose`), and its observer
 /// audits every resolution. Module-level so the authorization matrix is testable over
 /// a bare control server.
 let secretsApiFor
@@ -1058,19 +1057,15 @@ let createWithUi
         secretSessions
         |> Map.exists (fun secret sid -> sid = sessionId && Set.contains secret launchLocal)
 
-    // Session-scoped secret resolution (Plan 06): store-backed precedence (session
-    // scope, then bound users' scopes, then the Manager's process env) when a store is
-    // configured; bare process env otherwise. Serves the `/control/secrets/resolve`
-    // route — values now cross to the SESSION at sandbox spawn, and this walk is the
-    // authorization.
-    let resolveSecret : SecretStore.ResolveSecret =
-        match secretStore with
-        | Some store ->
-            SecretStore.SecretResolution.compose (SecretStore.Audit.injectObserver audit) store usersOf localOf SecretStore.SecretResolution.processEnv
-        | None -> SecretStore.SecretResolution.processEnv
-
+    // Session-scoped secret resolution (Plan 06): a `SecretRef` reads the calling
+    // session's own scope and nothing else (`SecretStore.SecretResolution`). It serves
+    // the `/control/secrets/resolve` route. A Manager with no store has no secrets API,
+    // so that route answers 403 "no secrets store configured" and the session's spawn
+    // fails naming the secret. Nothing reads the Manager's own environment.
     let secretsApi : Control.SecretsApi option =
-        secretStore |> Option.map (secretsApiFor audit resolveSecret)
+        secretStore
+        |> Option.map (fun store ->
+            secretsApiFor audit (SecretStore.SecretResolution.compose (SecretStore.Audit.injectObserver audit) store) store)
 
     // The per-request authenticator the UI routes gate on: the same strategy value that
     // authenticates /authorize, applied to any Manager request.

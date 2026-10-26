@@ -28,9 +28,9 @@ type SecretAction =
     | ListSecrets
     | SetSecret
     | DeleteSecret
-    /// Resolve a value into a launched environment's env vars. Manager-internal: the
-    /// value terminates in the container environment, never on the control channel.
-    /// This is the ONLY read the policy knows — there is no value-returning route.
+    /// Resolve a value into a launched environment's env vars, at the session's own
+    /// sandbox spawn. Permitted on the session's own scope only. This is the ONLY generic
+    /// read the policy knows.
     | InjectSecret
 
 type Resource =
@@ -43,7 +43,7 @@ type Resource =
 /// credentials for identities bound to them (the sign-in flow is exactly that write),
 /// and `ResolveCredential` RETURNS a value to the session (an agent turn needs the
 /// token in-process, unlike container env injection). Generic secrets stay write-only
-/// and user-scope-read-only; nothing here widens their rules.
+/// and list-only on user scope; nothing here widens their rules.
 type ConnectionAction =
     /// Begin/complete a brokered flow or store a pasted token — the narrow write.
     | ConnectCredential
@@ -70,8 +70,10 @@ type Decision =
 module Policy =
 
     /// The v1 policy. A session owns its session-scoped secrets outright; user-scoped
-    /// secrets are listable/injectable by a session a bound user signed into, and never
-    /// writable by sessions (the user surface is the recorded follow-up). Local-scoped CONNECTION credentials belong to a launch the Manager granted
+    /// secrets are listable by a session a bound user signed into, and never writable or
+    /// injectable by sessions. A `SecretRef` comes from a repository's file, not from the
+    /// user, so injecting a user's secret needs a consent surface that does not exist yet
+    /// (docs/GAPS.md); until then the default deny covers it. Local-scoped CONNECTION credentials belong to a launch the Manager granted
     /// unattributed access; generic secrets have no local rule at all, so they deny.
     /// Anything not explicitly permitted is denied.
     let authorize (request: Request) : Decision =
@@ -105,8 +107,6 @@ module Policy =
             ownSession owner
         | SecretAction ListSecrets, SecretCollection (SessionScope owner) ->
             ownSession owner
-        | SecretAction InjectSecret, SecretResource { Scope = UserScope user } ->
-            boundUser user
         | SecretAction ListSecrets, SecretCollection (UserScope user) ->
             boundUser user
         | SecretAction (SetSecret | DeleteSecret), SecretResource { Scope = UserScope _ } ->
