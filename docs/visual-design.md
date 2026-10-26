@@ -211,7 +211,9 @@ One vocabulary. Things arrive by sliding a little and fading in, at `pace`, ease
 is a tilt: in fast, back with a hair of overshoot. A pressed control is *held* (see State).
 
 A wait is a beat (`animate-beat`), not a spinner. A beating dot animates its colour between a
-role and its dim, never its opacity. `motion-reduce` rides every one: it keeps the fill and
+role and its dim, never its opacity. The one thing that goes round is the attention mark's
+Moving (see Attention): it is not a wait on the reader but work under way, and its arc is
+always at its ink. `motion-reduce` rides every one: it keeps the fill and
 drops the geometry.
 
 ### State
@@ -234,20 +236,25 @@ has several statuses and one attention: the level of its most urgent standing
 shape, because a list of sessions is read at a glance, in a blur, and colour alone may not
 carry a rank (WCAG 1.4.1).
 
-| Level | Shape | Ink | Means |
-|---|---|---|---|
-| Wrong | ring with a core | `err` | nothing moves until a person fixes it: sign in again, a PR conflicted or failed |
-| Wanted | filled | `green` | a person's turn: the agent is waiting |
-| Moving | ring half filled, beats | `ink-dim` | under way, needs nobody: working, running, checks pending |
-| Absent | dotted ring | `ink-dim` | no agent, chosen knowingly |
-| Rest | ring | `ink-faint` | nothing to say: stopped, or everything watched is fine |
+| Level | Shape | Ink | Motion | Means |
+|---|---|---|---|---|
+| Wrong | disc in a ring, the whole box | `err` | the ring draws round and the core springs in, once | nothing moves until a person fixes it: sign in again, a PR conflicted or failed |
+| Wanted | disc | `green` | the arc closes and fills, then a halo breathes out three times | a person's turn: the agent is waiting |
+| Moving | quarter arc on a faint track | `ink-dim` | goes round, 1.6s, for as long as the work does | under way, needs nobody: working, running, checks pending |
+| Absent | empty ring | `ink-dim` | none | no agent, chosen knowingly |
+| Rest | point | `ink-faint` | none | nothing to say: stopped, or everything watched is fine |
 
 Waiting outranks working. Work under way needs nobody, and the ball with a person does.
 Wanted is green because green is the people, not because it is good.
 
-The five share one geometry: a 10px box, a ring of radius 4 at a 2px stroke. They differ
-only in what is inside the ring. The mark is larger than a status's 6px dot because its shape
-carries the rank, and a 6px disc has no room inside it.
+Attention is ink: each level carries more than the one below it, so the order survives
+greyscale and a blur. The five share one 12px box, centre and the chrome's 1.5px stroke. The
+mark is larger than a status's 6px dot because its shape carries the rank.
+
+Motion goes only where a state is live or asks. Moving keeps going because the work does.
+Wanted asks a few times and then sits still, so a session left waiting does not nag. Wrong
+never fidgets: a mark that kept moving would read as a spinner, not a fault. What moves is
+geometry, never the ink the meaning rests on. `motion-reduce` keeps every still face.
 
 The mark never stands alone. A word beside it, or the name of the control it sits in, says
 the state.

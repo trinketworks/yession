@@ -1596,19 +1596,30 @@ module Style =
         | Yession.Domain.Standings.Wrong -> toneBad
         | Yession.Domain.Standings.Rest -> toneMuted
 
-    /// The attention mark's box and ink (`Icon.attention`): 10px, because its SHAPE carries
-    /// the rank and a 6px disc has no room inside it for a ring, a half or a core. Moving
-    /// beats in colour like every wait (`beat-mark`, the `color` twin of `beat-wait`, since
-    /// an SVG paints with `currentColor` and not a background), and stands still in its ink
-    /// under reduced motion.
-    let markBeat = "animate-beat-mark motion-reduce:animate-none"
-
+    /// The attention mark's box and ink (`Icon.attention`): 12px, the chrome's 1.5px stroke,
+    /// because its SHAPE carries the rank and a 6px disc has no room for a ring or a core.
+    /// `overflow-visible` because Wanted's halo breathes out past the box, over nothing.
     let attentionMark (attention: Yession.Domain.Standings.Attention) : string =
-        let beat =
-            match attention with
-            | Yession.Domain.Standings.Moving -> [ markBeat ]
-            | _ -> []
-        cls ([ "block shrink-0 w-2.5 h-2.5"; attentionInk attention ] @ beat)
+        cls [ "block shrink-0 w-3 h-3 overflow-visible"; attentionInk attention ]
+
+    // The mark's motion (docs/visual-design.md, Attention), one part each, every part turning
+    // about its own centre (`fill-box`), which for every circle here is the box's (6,6). Motion
+    // goes only where a state is live or asks, and `motion-reduce` keeps the still face.
+
+    /// Moving's arc going round its track: the one mark that never stops, because the work
+    /// under it has not. Under reduced motion the arc holds still at three o'clock.
+    let markOrbit = "origin-center [transform-box:fill-box] animate-mark-orbit motion-reduce:animate-none"
+    /// Wanted's halo: breathes out three times once the mark has arrived, then is gone, so a
+    /// session left waiting an hour does not nag. Reduced motion draws no halo at all.
+    let markHalo = "origin-center [transform-box:fill-box] animate-mark-halo motion-reduce:hidden"
+    /// Wanted arriving: the ring the arc was closes round, then the disc fills it. Once, on
+    /// arrival; reduced motion draws neither the ring nor the fill, only the disc.
+    let markClose = "animate-mark-close motion-reduce:hidden"
+    let markFill = "origin-center [transform-box:fill-box] animate-mark-fill motion-reduce:animate-none"
+    /// Wrong arriving: its ring draws round from twelve o'clock and its core springs in.
+    /// Once, then it holds; a mark that kept moving would read as a spinner, not a fault.
+    let markDraw = "animate-mark-draw motion-reduce:animate-none"
+    let markPop = "origin-center [transform-box:fill-box] animate-mark-pop motion-reduce:animate-none"
 
     /// A value, with no colour of its own. A base that carried one could not be recoloured
     /// by appending: two Tailwind text utilities on one element resolve by stylesheet order

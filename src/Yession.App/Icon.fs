@@ -281,17 +281,18 @@ module Icon =
         | ContentKind.Download -> fileSm
 
     /// How much something wants a person (docs/visual-design.md, Attention). A POINT, not an
-    /// icon, so it is round and may be filled; the five faces share one geometry — a 10-unit
-    /// box, centre (5,5), a ring of radius 4 at a 2px stroke — so they differ in what is
-    /// inside the ring and in nothing else, and they rank by shape alone, in greyscale and
-    /// under a blur:
+    /// icon, so it is round and may be filled. One rule ranks the five: attention is INK, and
+    /// each level carries more of it than the one below, so they read in order in greyscale
+    /// and under a blur. One 12-unit box, centre (6,6), and the chrome's 1.5px stroke:
     ///
-    /// - Rest: the ring.
-    /// - Absent: the ring broken into six dashes, one centred on each side and corner.
-    /// - Moving: the ring half filled.
-    /// - Wanted: filled.
-    /// - Wrong: the ring with a core, a target.
+    /// - Rest: a point, radius 1.75.
+    /// - Absent: an empty ring, radius 4.25: a seat with nobody in it.
+    /// - Moving: a quarter of that ring, going round a faint track of the rest of it.
+    /// - Wanted: a disc, radius 4, with a halo that breathes out three times on arrival.
+    /// - Wrong: a disc, radius 3, in a ring, radius 5.25: the most ink, the whole box.
     ///
+    /// The rings start at twelve o'clock (`rotate(-90 6 6)`), so an arc or a ring drawing
+    /// round sets off from the top. Motion is `Style`'s (`markOrbit` and its siblings).
     /// `data-attention` spells the level for a test (`Attention.name`). `aria-hidden`: the word
     /// beside it, or the name of the control it sits in, says the state.
     let attention (level: Yession.Domain.Standings.Attention) =
@@ -300,19 +301,19 @@ module Icon =
         match level with
         | Yession.Domain.Standings.Rest ->
             html
-                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="2"></circle></svg>"""
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="1.75" fill="currentColor"></circle></svg>"""
         | Yession.Domain.Standings.Absent ->
             html
-                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="2.0944 2.0944" stroke-dashoffset="1.0472"></circle></svg>"""
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5"></circle></svg>"""
         | Yession.Domain.Standings.Moving ->
             html
-                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="2"></circle><path d="M5 1 A4 4 0 0 0 5 9 Z" fill="currentColor"></path></svg>"""
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.35"></circle><g transform="rotate(-90 6 6)"><circle class="{Style.markOrbit}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 26.7"></circle></g></svg>"""
         | Yession.Domain.Standings.Wanted ->
             html
-                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><circle cx="5" cy="5" r="5" fill="currentColor"></circle></svg>"""
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle class="{Style.markHalo}" cx="6" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="1"></circle><g transform="rotate(-90 6 6)"><circle class="{Style.markClose}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="26.7"></circle></g><circle class="{Style.markFill}" cx="6" cy="6" r="4" fill="currentColor"></circle></svg>"""
         | Yession.Domain.Standings.Wrong ->
             html
-                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="2"></circle><circle cx="5" cy="5" r="1.5" fill="currentColor"></circle></svg>"""
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><g transform="rotate(-90 6 6)"><circle class="{Style.markDraw}" cx="6" cy="6" r="5.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="32.99"></circle></g><circle class="{Style.markPop}" cx="6" cy="6" r="3" fill="currentColor"></circle></svg>"""
 
     /// GitHub's mark, as GitHub draws it: the one FILLED shape in this file that is not a
     /// point, and the one exception to its vocabulary, because a brand's mark is not ours to redraw in strokes

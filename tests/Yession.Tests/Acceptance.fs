@@ -2004,7 +2004,7 @@ let private uiChecklistTests =
         // The attention mark ranks by SHAPE (docs/visual-design.md, Attention): five levels,
         // five faces, each told apart without its colour. What is pinned is what each face
         // draws inside the shared ring, so two levels collapsing into one shape goes red here.
-        testCase "each attention level draws its own face, and only Moving beats" <| fun () ->
+        testCase "each attention level draws its own face, and only Moving keeps moving" <| fun () ->
             let levels =
                 [ Standings.Rest; Standings.Absent; Standings.Moving; Standings.Wanted; Standings.Wrong ]
             let drawn level = Support.renderTemplate (Icon.attention level)
@@ -2019,9 +2019,17 @@ let private uiChecklistTests =
                     (sprintf "data-attention=\"%s\"" (Standings.Attention.name level))
                     "each spells its level for a test"
                 Expect.equal
-                    (html.Contains Yession.App.Style.markBeat)
+                    (html.Contains Yession.App.Style.markOrbit)
                     (level = Standings.Moving)
-                    (sprintf "%s beats only if it is under way" (Standings.Attention.name level))
+                    (sprintf "%s goes round only if it is under way" (Standings.Attention.name level))
+            // The ones that ask arrive once; the ones that do not, do not.
+            let arrives level =
+                let html = drawn level
+                html.Contains Yession.App.Style.markFill || html.Contains Yession.App.Style.markPop
+            Expect.equal
+                (levels |> List.filter arrives)
+                [ Standings.Wanted; Standings.Wrong ]
+                "only Wanted and Wrong arrive with a motion of their own"
 
         // The agent's standing rides beside the pull requests' line, under the rule the
         // Manager is sent (`AgentStatus`), read off what this page already holds.
