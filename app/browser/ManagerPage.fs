@@ -86,6 +86,32 @@ let private parseBeside (element: Element) (markup: string) : Element option =
 let private replace (current: Node) (replacement: Node) =
     current.parentNode.replaceChild (replacement, current) |> ignore
 
+let private rowsUnder (root: Element) : Element list =
+    let found = root.querySelectorAll (has Dom.Manager.session)
+    [ for i in 0 .. found.length - 1 -> found.[i] ]
+
+/// Swap only the rows that changed, when that is all that changed: the same sessions in the
+/// same order, and everything around them as it was. A row that says nothing new stays the
+/// node it was, because its attention mark's motion lives on that node (`Style.markOrbit`):
+/// a whole-section swap on every frame restarted every orbit and replayed every arrival, on
+/// rows whose state had not moved. Anything else (a session added, gone or moved, a filter,
+/// a count) answers `false`, and the caller replaces the whole fragment as before.
+let private patchRows (element: Element) (fresh: Element) : bool =
+    let before = rowsUnder element
+    let after = rowsUnder fresh
+    let ids rows = rows |> List.map (fun row -> attribute row Dom.Manager.session)
+    // The fragment with its rows emptied: what has to match for the rows to be all that moved.
+    let frame (root: Element) =
+        let copy = root.cloneNode true :?> Element
+        rowsUnder copy |> List.iter (fun row -> row.innerHTML <- "")
+        (copy :?> HTMLElement).outerHTML
+    if before.IsEmpty || ids before <> ids after || frame element <> frame fresh then false
+    else
+        List.zip before after
+        |> List.iter (fun (old, row) ->
+            if (old :?> HTMLElement).outerHTML <> (row :?> HTMLElement).outerHTML then replace old row)
+        true
+
 /// Put a fragment the server rendered where `element` is — unless it says nothing new.
 ///
 /// Keyboard continuity (WCAG 2.0): replacing the focused element strands focus on `<body>`.
@@ -122,24 +148,32 @@ let private swap (element: Element option) (markup: string) =
             // stream announces that session before the redirect lands) keeps its own element
             // through the swap: the state, the tilt it was pushed at, and the focus all live on
             // it.
-            match element.querySelector (has Dom.Manager.createSession + " [aria-busy=\"true\"]") with
-            | null -> ()
-            | held ->
-                match fresh.querySelector (has Dom.Manager.createSession + " button") with
-                | null -> ()
-                | stale -> replace stale held
-            replace element fresh
+            // Where the answer now lives: the old element with some rows swapped, or the fresh
+            // one in its place. Rows alone moving leave Create, the held one included, as it was.
+            let live =
+                if patchRows element fresh then element
+                else
+                    match element.querySelector (has Dom.Manager.createSession + " [aria-busy=\"true\"]") with
+                    | null -> ()
+                    | held ->
+                        match fresh.querySelector (has Dom.Manager.createSession + " button") with
+                        | null -> ()
+                        | stale -> replace stale held
+                    replace element fresh
+                    fresh
             match active with
             | None -> ()
+            // A hand on a row that did not change is still where it was.
+            | Some focused when live.contains focused -> ()
             | Some _ ->
                 let back =
                     match filter |> Option.bind (fun f -> attribute f Dom.Manager.filter) with
-                    | Some name -> withAttribute fresh Dom.Manager.filter name
+                    | Some name -> withAttribute live Dom.Manager.filter name
                     | None -> None
                 let back =
                     match back with
                     | Some _ -> back
-                    | None when wasCreate -> selecting fresh (has Dom.Manager.createSession + " button")
+                    | None when wasCreate -> selecting live (has Dom.Manager.createSession + " button")
                     | None -> None
                 match back with
                 | Some control -> focus control
@@ -147,8 +181,8 @@ let private swap (element: Element option) (markup: string) =
                     let scope =
                         row
                         |> Option.bind (fun r -> attribute r Dom.Manager.session)
-                        |> Option.bind (withAttribute fresh Dom.Manager.session)
-                        |> Option.defaultValue fresh
+                        |> Option.bind (withAttribute live Dom.Manager.session)
+                        |> Option.defaultValue live
                     // A Stop that landed has taken its own control away and put Start in its
                     // place (and a Start, Stop), so the hand is left on the verb that undoes
                     // what it just did.
