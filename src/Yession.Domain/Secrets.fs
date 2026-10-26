@@ -45,13 +45,32 @@ module SecretScope =
         | UserScope user -> "user:" + UserId.value user
         | LocalScope -> "local"
 
-/// A secret's identity: which scope owns it, and its name within that scope.
+/// A GENERIC secret's identity: which scope owns it, and its name within that scope. A
+/// session writes these (`set_secret`), and a `SecretRef` reads them. A connection
+/// credential is never one: it is a `ConnectionId`, a different type, so no generic action
+/// (set, delete, list, inject) can name it, and no connection action can name a secret.
 [<RequireQualifiedAccess>]
 type SecretId = { Scope : SecretScope; Name : SecretName }
 
+/// A connection credential's identity (Plan 08): the scope that owns it, and the storage
+/// name the session chose for it. The same two parts as `SecretId`, and deliberately not the
+/// same type: the store keeps the two families apart (`SecretStore`), and the policy pairs
+/// each family's actions with its own identity (`Access`). A generic secret and a connection
+/// may share a scope and a name and still never meet.
+[<RequireQualifiedAccess>]
+type ConnectionId = { Scope : SecretScope; Name : SecretName }
+
 /// Everything a listing may reveal. There is no value field — a listing cannot leak a
 /// value because the type cannot carry one.
+[<RequireQualifiedAccess>]
 type SecretMetadata =
     { Id : SecretId
+      CreatedAt : DateTimeOffset
+      UpdatedAt : DateTimeOffset }
+
+/// A stored connection credential as the store lists it. No value field, as above.
+[<RequireQualifiedAccess>]
+type ConnectionMetadata =
+    { Id : ConnectionId
       CreatedAt : DateTimeOffset
       UpdatedAt : DateTimeOffset }

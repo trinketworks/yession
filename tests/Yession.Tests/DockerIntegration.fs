@@ -508,9 +508,9 @@ let tests =
                 let sessionId = SessionId.mint ()
                 let alice = UserId.create "alice" |> expect
                 let secretName n = SecretName.create n |> expect
-                let! _ = store.Set { Scope = SessionScope sessionId; Name = secretName "SESSION_TOKEN" } "session-held"
-                let! _ = store.Set { Scope = UserScope alice; Name = secretName "USER_TOKEN" } "user-held"
-                let resolve = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store
+                let! _ = store.Secrets.Set { Scope = SessionScope sessionId; Name = secretName "SESSION_TOKEN" } "session-held"
+                let! _ = store.Secrets.Set { Scope = UserScope alice; Name = secretName "USER_TOKEN" } "user-held"
+                let resolve = SecretStore.SecretResolution.compose (fun _ _ _ -> ()) store.Secrets
                 let spec = { alpineSpec with EnvironmentVariables = Map.ofList [ "SESSION_TOKEN", SecretRef (secretName "SESSION_TOKEN") ] }
                 match! start (fun n -> resolve sessionId n) spec with
                 | Error reason -> failwithf "docker sandbox failed: %s" reason

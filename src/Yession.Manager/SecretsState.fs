@@ -29,42 +29,55 @@ type SecretEntry =
       /// base64url AES-256-GCM output (ciphertext ‖ 16-byte tag, the WebCrypto layout).
       Ciphertext : string }
 
+/// The store's two families, kept in two lists so that no key of one can name an entry of
+/// the other (`SecretId` vs `ConnectionId`). A file at `Version` 1 predates the split and
+/// holds everything in `Entries`; `SecretStore.openStore` sorts it, because sorting needs
+/// the values and only the store can decrypt them.
 type SecretsFile =
     { /// Schema version — the migration hook (ManagerState discipline).
       Version : int
       /// Names WHICH KEK sealed these entries, so a decrypt failure distinguishes
       /// "sealed by a different key" from corruption — both loud, differently worded.
       KekId : string
-      /// In first-set order; (Scope, Name) is the key.
-      Entries : SecretEntry list }
+      /// Generic secrets, in first-set order; (Scope, Name) is the key.
+      Entries : SecretEntry list
+      /// Connection credentials, in first-set order; (Scope, Name) is the key.
+      Connections : SecretEntry list }
+
+/// Insert/find/remove over one family's list, keyed by (Scope, Name). Private to this file:
+/// callers go through `SecretsFile`, whose functions name the family by the key's type.
+module private EntryList =
+
+    let tryFind (scope: SecretScope) (name: SecretName) (entries: SecretEntry list) : SecretEntry option =
+        entries |> List.tryFind (fun e -> e.Scope = scope && e.Name = name)
+
+    /// Insert or replace by (Scope, Name). A replaced entry keeps its CreatedAt.
+    let upsert (entry: SecretEntry) (entries: SecretEntry list) : SecretEntry list =
+        match tryFind entry.Scope entry.Name entries with
+        | Some existing ->
+            entries
+            |> List.map (fun e ->
+                if e.Scope = entry.Scope && e.Name = entry.Name then { entry with CreatedAt = existing.CreatedAt } else e)
+        | None -> entries @ [ entry ]
+
+    let remove (scope: SecretScope) (name: SecretName) (entries: SecretEntry list) : SecretEntry list =
+        entries |> List.filter (fun e -> not (e.Scope = scope && e.Name = name))
 
 module SecretsFile =
 
-    let currentVersion = 1
+    let currentVersion = 2
 
     let empty (kekId: string) : SecretsFile =
-        { Version = currentVersion; KekId = kekId; Entries = [] }
-
-    let private isEntry (id: SecretId) (entry: SecretEntry) =
-        entry.Scope = id.Scope && entry.Name = id.Name
+        { Version = currentVersion; KekId = kekId; Entries = []; Connections = [] }
 
     let tryFind (id: SecretId) (file: SecretsFile) : SecretEntry option =
-        file.Entries |> List.tryFind (isEntry id)
+        EntryList.tryFind id.Scope id.Name file.Entries
 
-    /// Insert or replace by (Scope, Name). A replaced entry keeps its CreatedAt.
     let upsert (entry: SecretEntry) (file: SecretsFile) : SecretsFile =
-        let id = { SecretId.Scope = entry.Scope; SecretId.Name = entry.Name }
-        match tryFind id file with
-        | Some existing ->
-            { file with
-                Entries =
-                    file.Entries
-                    |> List.map (fun e -> if isEntry id e then { entry with CreatedAt = existing.CreatedAt } else e) }
-        | None ->
-            { file with Entries = file.Entries @ [ entry ] }
+        { file with Entries = EntryList.upsert entry file.Entries }
 
     let remove (id: SecretId) (file: SecretsFile) : SecretsFile =
-        { file with Entries = file.Entries |> List.filter (isEntry id >> not) }
+        { file with Entries = EntryList.remove id.Scope id.Name file.Entries }
 
     /// The metadata listing for one scope. Returns `SecretMetadata` — a type that
     /// cannot carry a value.
@@ -72,9 +85,26 @@ module SecretsFile =
         file.Entries
         |> List.filter (fun e -> e.Scope = scope)
         |> List.map (fun e ->
-            { Id = { SecretId.Scope = e.Scope; SecretId.Name = e.Name }
-              CreatedAt = e.CreatedAt
-              UpdatedAt = e.UpdatedAt })
+            { SecretMetadata.Id = { SecretId.Scope = e.Scope; SecretId.Name = e.Name }
+              SecretMetadata.CreatedAt = e.CreatedAt
+              SecretMetadata.UpdatedAt = e.UpdatedAt })
+
+    let tryFindConnection (id: ConnectionId) (file: SecretsFile) : SecretEntry option =
+        EntryList.tryFind id.Scope id.Name file.Connections
+
+    let upsertConnection (entry: SecretEntry) (file: SecretsFile) : SecretsFile =
+        { file with Connections = EntryList.upsert entry file.Connections }
+
+    let removeConnection (id: ConnectionId) (file: SecretsFile) : SecretsFile =
+        { file with Connections = EntryList.remove id.Scope id.Name file.Connections }
+
+    let listConnections (scope: SecretScope) (file: SecretsFile) : ConnectionMetadata list =
+        file.Connections
+        |> List.filter (fun e -> e.Scope = scope)
+        |> List.map (fun e ->
+            { ConnectionMetadata.Id = { ConnectionId.Scope = e.Scope; ConnectionId.Name = e.Name }
+              ConnectionMetadata.CreatedAt = e.CreatedAt
+              ConnectionMetadata.UpdatedAt = e.UpdatedAt })
 
 module SecretsCodec =
 
@@ -154,21 +184,46 @@ module SecretsCodec =
                   SecretEntry.Iv = get.Required.Field "iv" Decode.string
                   SecretEntry.Ciphertext = get.Required.Field "ciphertext" Decode.string }) }
 
+    /// The refusal of a file a newer build wrote, in `ManagerCodec`'s wording.
+    let newerBuild (version: int) : string =
+        sprintf "secrets store schema version %d was written by a newer build (this one reads %d)" version SecretsFile.currentVersion
+
     let secretsFile : Codec<SecretsFile> =
         { Encode =
             fun (f: SecretsFile) ->
                 Encode.object
                     [ "version", Encode.int f.Version
                       "kekId", Encode.string f.KekId
-                      "entries", f.Entries |> List.map secretEntry.Encode |> Encode.list ]
+                      "entries", f.Entries |> List.map secretEntry.Encode |> Encode.list
+                      "connections", f.Connections |> List.map secretEntry.Encode |> Encode.list ]
+          // Version-DISPATCHED, as `ManagerCodec` is. A version 1 file has no `connections`:
+          // it predates the split, and everything it holds is in `entries` until the store
+          // sorts it. A version this build has never heard of is refused rather than read as
+          // the newest one it knows: read that way, a downgrade would drop what it does not
+          // recognise and save the loss back over the original.
           Decode =
-            Decode.object (fun get ->
-                { SecretsFile.Version = get.Required.Field "version" Decode.int
-                  SecretsFile.KekId = get.Required.Field "kekId" Decode.string
-                  SecretsFile.Entries = get.Required.Field "entries" (Decode.list secretEntry.Decode) }) }
+            Decode.field "version" Decode.int
+            |> Decode.andThen (fun version ->
+                let file (connections: Decode.IGetters -> SecretEntry list) =
+                    Decode.object (fun get ->
+                        { SecretsFile.Version = version
+                          SecretsFile.KekId = get.Required.Field "kekId" Decode.string
+                          SecretsFile.Entries = get.Required.Field "entries" (Decode.list secretEntry.Decode)
+                          SecretsFile.Connections = connections get })
+                match version with
+                | 1 -> file (fun _ -> [])
+                | 2 -> file (fun get -> get.Required.Field "connections" (Decode.list secretEntry.Decode))
+                | _ -> Decode.fail (newerBuild version)) }
 
     let toString (file: SecretsFile) : string =
         secretsFile.Encode file |> Encode.toString 2
 
     let fromString (json: string) : Result<SecretsFile, string> =
         Decode.fromString secretsFile.Decode json
+
+    /// The schema version a file names, when it names one this build cannot read. Read
+    /// before the whole file, so a newer build's file is refused as that and not as corrupt.
+    let newerVersionOf (json: string) : int option =
+        match Decode.fromString (Decode.field "version" Decode.int) json with
+        | Ok version when version > SecretsFile.currentVersion -> Some version
+        | _ -> None

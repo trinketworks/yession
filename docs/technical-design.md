@@ -403,8 +403,12 @@ Secrets are Manager-owned authority:
 - A pure default-deny policy authorizes access. It reads the composite identity that the
   Manager verified itself: the calling session plus the users bound to its launch at
   ID-token issuance.
-- Sessions hold pre-scoped write, list, and delete capabilities. They have no agent-facing
-  read.
+- The store keeps two families apart by type: generic secrets (`SecretId`) and connection
+  credentials (`ConnectionId`). Each family's actions take only its own identity, so no
+  generic action (set, delete, list, inject) can name a connection credential
+  ([ADR](decisions/2026-10-26-secrets-and-connections-are-two-families.md)).
+- Sessions hold pre-scoped write, list, and delete capabilities on generic secrets. They have
+  no agent-facing read.
 - Values leave the store through exactly two resolve-shaped routes. The caller's readable
   scopes gate each route.
   - `/control/secrets/resolve` feeds `SecretRef` env injection at the session's own sandbox
@@ -623,8 +627,9 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     no other way to the host), so everything there authenticates by capability, cookie or
     token.
 19. A `SecretRef` resolves only against what a principal gave the session on purpose: the
-    session's own secrets. It never reads another principal's scope or the Manager's
-    process environment (`SecretStore.SecretResolution`).
+    session's own generic secrets. It never reads another principal's scope, the Manager's
+    process environment, or a connection credential. The last is a type, not a check: the
+    resolver holds only the store's generic partition (`SecretStore.SecretResolution`).
 
 Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
 roots, keyed by `BodyKey`, that the app co-manages outside the encoded tree, and the structural

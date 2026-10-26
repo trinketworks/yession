@@ -678,8 +678,9 @@ type SandboxScope =
 /// those consumers.
 ///
 /// A pair in a single-case union rather than a record, following `RepoRef`: the two
-/// obvious field names (`Scope`, `Name`) are `SecretId`'s, and a second record wearing
-/// them would silently capture every `{ Scope = …; Name = … }` in the codebase.
+/// obvious field names (`Scope`, `Name`) are `SecretId`'s and `ConnectionId`'s, and a third
+/// record wearing them would capture every unannotated `{ Scope = …; Name = … }` in the
+/// codebase.
 type SandboxRef = private SandboxRef of scope: SandboxScope * name: SandboxName
 
 module SandboxRef =

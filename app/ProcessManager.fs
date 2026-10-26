@@ -393,17 +393,17 @@ let private sweepIntervalMsFor (timeout: TimeSpan) : int =
 let secretsApiFor
     (audit: SecretStore.Audit.Sink)
     (resolve: SecretStore.ResolveSecret)
-    (store: SecretStore.SecretStore)
+    (store: SecretStore.Partition<SecretId, SecretMetadata>)
     : Control.SecretsApi =
     let authorize (caller: Control.ControlCaller) (action: SecretAction) (resource: Resource) =
+        let access = SecretAccess (action, resource)
         let request =
             { Subject = { Session = Some caller.SessionId; Users = caller.Users; Local = caller.Local }
-              Action = SecretAction action
-              Resource = resource }
+              Access = access }
         match Policy.authorize request with
         | Permit -> Ok ()
         | Deny reason ->
-            audit (SecretStore.Audit.authzDeny caller.SessionId (SecretAction action) resource reason)
+            audit (SecretStore.Audit.authzDeny caller.SessionId access reason)
             Error (Control.SecretsDenied reason)
     { Control.SecretsApi.Set =
         fun caller request ->
@@ -461,18 +461,18 @@ let secretsApiFor
 /// control server.
 let connectionsApiFor
     (audit: SecretStore.Audit.Sink)
-    (store: SecretStore.SecretStore)
+    (store: SecretStore.Partition<ConnectionId, ConnectionMetadata>)
     (broker: Broker.BrokerService)
     : Control.ConnectionsApi =
-    let authorize (caller: Control.ControlCaller) (action: ConnectionAction) (target: SecretId) =
+    let authorize (caller: Control.ControlCaller) (action: ConnectionAction) (target: ConnectionId) =
+        let access = ConnectionAccess (action, target)
         let request =
             { Subject = { Session = Some caller.SessionId; Users = caller.Users; Local = caller.Local }
-              Action = ConnectionAction action
-              Resource = SecretResource target }
+              Access = access }
         match Policy.authorize request with
         | Permit -> Ok ()
         | Deny reason ->
-            audit (SecretStore.Audit.authzDeny caller.SessionId (ConnectionAction action) (SecretResource target) reason)
+            audit (SecretStore.Audit.authzDeny caller.SessionId access reason)
             Error (Control.SecretsDenied reason)
     let run (outcome: Async<Result<'a, string>>) : Async<Result<'a, Control.SecretsError>> =
         async {
@@ -550,9 +550,8 @@ let connectionsApiFor
       Status =
         fun caller ->
             // Every connection in the caller's own readable scopes (its session, its
-            // bound users, and — where the deployment attributes nobody — its own) — the
-            // same walk injection uses. Entries that do not decode
-            // as broker envelopes are generic secrets and stay out.
+            // bound users, and — where the deployment attributes nobody — its own). The
+            // partition holds connection credentials alone, so no generic secret is listed.
             //
             // This list is also what lets a session name `LocalScope` on every turn
             // without knowing the auth strategy: an attributed launch never sees one here,
@@ -988,8 +987,8 @@ let createWithUi
               Users = Map.tryFind secret launchUsers |> Option.defaultValue Set.empty
               Local = Set.contains secret launchLocal })
 
-    // The connection broker (Plan 08): exists exactly when the secret store does — its
-    // envelopes are ordinary encrypted entries. Standards-only; its one owned constant
+    // The connection broker (Plan 08): exists exactly when the secret store does, and
+    // holds its connection partition alone, so it cannot read or write a generic secret. Standards-only; its one owned constant
     // is the Manager's public callback URL (stable because the Manager port is fixed;
     // session ports are OS-assigned and cannot anchor a provider's redirect URI).
     let broker : Broker.BrokerService option =
@@ -997,7 +996,7 @@ let createWithUi
         |> Option.map (fun store ->
             Broker.create
                 (fun () -> issuerOf () + "/connections/callback")
-                store
+                store.Connections
                 (fun observation ->
                     // Two separate questions, so two separate statements: what this goes
                     // into the audit as, and whether it changes what a session may read.
@@ -1021,7 +1020,7 @@ let createWithUi
 
     let connectionsApi : Control.ConnectionsApi option =
         match secretStore, broker with
-        | Some store, Some b -> Some (connectionsApiFor audit store b)
+        | Some store, Some b -> Some (connectionsApiFor audit store.Connections b)
         | _ -> None
 
     broadcastConnections.Value <-
@@ -1065,7 +1064,7 @@ let createWithUi
     let secretsApi : Control.SecretsApi option =
         secretStore
         |> Option.map (fun store ->
-            secretsApiFor audit (SecretStore.SecretResolution.compose (SecretStore.Audit.injectObserver audit) store) store)
+            secretsApiFor audit (SecretStore.SecretResolution.compose (SecretStore.Audit.injectObserver audit) store.Secrets) store.Secrets)
 
     // The per-request authenticator the UI routes gate on: the same strategy value that
     // authenticates /authorize, applied to any Manager request.

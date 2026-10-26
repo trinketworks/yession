@@ -89,9 +89,17 @@ let private decrypt (key: CryptoKey) (aad: string) (ivB64u: string) (ciphertextB
         return (buffer.Buffer.from plaintext).toString utf8
     }
 
-/// The AAD binding a ciphertext to the entry it encrypts: version + scope + name.
+/// The AAD binding a GENERIC secret's ciphertext to the entry it encrypts: version + scope +
+/// name. A stored-data contract: every entry a Manager ever sealed carries it, connection
+/// credentials sealed before the store split its families included.
 let aadFor (scope: SecretScope) (name: SecretName) : string =
     sprintf "yession-secret:1:%s:%s" (SecretScope.describe scope) (SecretName.value name)
+
+/// The AAD binding a CONNECTION credential's ciphertext to its entry. A different prefix from
+/// `aadFor`, so a ciphertext moved from one family's list to the other's in the file fails
+/// GCM authentication instead of opening under the other family's rules.
+let connectionAadFor (id: ConnectionId) : string =
+    sprintf "yession-connection:1:%s:%s" (SecretScope.describe id.Scope) (SecretName.value id.Name)
 
 /// Import a raw KEK as a NON-EXTRACTABLE AES-GCM key and return the cipher over it.
 let importKey (kekB64u: string) : Async<Cipher> =

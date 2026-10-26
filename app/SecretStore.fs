@@ -11,6 +11,13 @@ module Yession.Host.SecretStore
 // (`/control/secrets/resolve`), only at sandbox spawn, and never reaches the agent loop.
 // That route reads the calling session's own scope and nothing else (`SecretResolution`
 // below). The Manager's process environment is not a secret store: no reference reads it.
+//
+// The store holds two families, one partition each (`Partition`): generic secrets keyed by
+// `SecretId`, and connection credentials keyed by `ConnectionId`. The broker holds the
+// connection partition alone, and the secrets API and the `SecretRef` resolver the generic
+// one alone, so neither can name the other's entries. Each family seals under its own AAD.
+// A version 1 file predates the split, and `migrateV1` sorts it at open
+// (docs/decisions/2026-10-26-secrets-and-connections-are-two-families.md).
 
 open System
 open Yession.Domain
@@ -18,19 +25,29 @@ open Yession.Domain.Sandboxes
 open Yession.Domain.Access
 open Yession.Manager
 
-type SecretStore =
-
-    { List : SecretScope -> SecretMetadata list
-      Set : SecretId -> string -> Async<Result<SecretMetadata, string>>
+/// One family of the store: generic secrets keyed by `SecretId`, or connection credentials
+/// keyed by `ConnectionId`. The two partitions share a file and a key, and nothing else: a
+/// key of one family cannot name an entry of the other.
+[<RequireQualifiedAccess>]
+type Partition<'Id, 'Metadata> =
+    { List : SecretScope -> 'Metadata list
+      Set : 'Id -> string -> Async<Result<'Metadata, string>>
       /// false = did not exist.
-      Delete : SecretId -> Async<Result<bool, string>>
-      /// Decrypt-on-demand for env injection. Never exposed over the control channel.
-      Resolve : SecretId -> Async<Result<string option, string>>
+      Delete : 'Id -> Async<Result<bool, string>>
+      /// Decrypt-on-demand. Never exposed over the control channel as itself: generic
+      /// values feed env injection (`SecretResolution`), connection values the broker.
+      Resolve : 'Id -> Async<Result<string option, string>> }
+
+type SecretStore =
+    { /// What sessions write (`set_secret`) and a `SecretRef` reads.
+      Secrets : Partition<SecretId, SecretMetadata>
+      /// What the connection broker writes and resolves. Nothing else holds this partition.
+      Connections : Partition<ConnectionId, ConnectionMetadata>
       /// True when backed by the encrypted file; false when in-memory only.
       Durable : bool
       /// True when the KEK was minted at this open (first run); false when loaded.
       KekMinted : bool
-      /// Entries in the envelope at open (0 for a fresh or ephemeral store).
+      /// Entries in the envelope at open, both families (0 for a fresh or ephemeral store).
       EntriesAtOpen : int }
 
 /// Why an open failed — structural, so the boot path can audit the KIND without
@@ -39,6 +56,10 @@ type OpenError =
     | KeyStoreFailure of detail: string
     | CorruptStore of path: string * detail: string
     | SealedByDifferentKey of path: string * fileKekId: string * hostKekId: string
+    /// A file a newer build wrote. Read as the newest version this build knows, it would
+    /// lose what it does not recognise at the first write (every connection credential,
+    /// for a build that predates the split), so it is refused.
+    | WrittenByNewerBuild of path: string * version: int
 
 module OpenError =
     let describe (error: OpenError) : string =
@@ -47,14 +68,48 @@ module OpenError =
         | CorruptStore (path, detail) -> sprintf "corrupt secrets store %s: %s" path detail
         | SealedByDifferentKey (path, fileKekId, hostKekId) ->
             sprintf "secrets store %s was sealed by a different key (%s, this host's is %s). Restore that key, or delete the file." path fileKekId hostKekId
+        | WrittenByNewerBuild (path, version) ->
+            sprintf "secrets store %s: %s. Run that build, or restore the copy of the file taken before it." path (SecretsCodec.newerBuild version)
 
     let kind (error: OpenError) : string =
         match error with
         | KeyStoreFailure _ -> "keystore"
         | CorruptStore _ -> "corrupt"
         | SealedByDifferentKey _ -> "sealed"
+        | WrittenByNewerBuild _ -> "newer"
 
 let private now () : DateTimeOffset = DateTimeOffset.UtcNow
+
+/// Sort a version 1 file, written before the store split its families, into the two lists.
+///
+/// A version 1 entry is a connection credential exactly when its value is a broker envelope:
+/// that is what the broker could read back, and so what it treated as one. Everything else is
+/// a generic secret, and keeps its ciphertext, because the generic AAD is the one every
+/// version 1 entry was sealed under. Each connection credential is opened under that AAD and
+/// sealed again under the connection AAD, so every entry in the result opens under its own
+/// family's AAD alone. An entry that does not open stays generic and untouched: it was
+/// unreadable before, and a later read still says so.
+///
+/// Sorted by value and not by name on purpose. A name check would be a list of the names
+/// connections happen to use today; the envelope is what made an entry a connection.
+let private migrateV1 (cipher: SecretsCipher.Cipher) (file: SecretsFile) : Async<SecretsFile> =
+    async {
+        let mutable generic = []
+        let mutable connections = []
+        for entry in file.Entries do
+            let! opened = cipher.Decrypt (SecretsCipher.aadFor entry.Scope entry.Name) entry.Iv entry.Ciphertext
+            match opened with
+            | Ok value when Result.isOk (BrokeredCredentialCodec.fromString value) ->
+                let id : ConnectionId = { Scope = entry.Scope; Name = entry.Name }
+                let! iv, ciphertext = cipher.Encrypt (SecretsCipher.connectionAadFor id) value
+                connections <- connections @ [ { entry with Iv = iv; Ciphertext = ciphertext } ]
+            | _ -> generic <- generic @ [ entry ]
+        return
+            { file with
+                Version = SecretsFile.currentVersion
+                Entries = generic
+                Connections = connections }
+    }
 
 /// How a WorkSandbox's `SecretRef` env vars resolve to values, scoped to the session
 /// whose sandbox is spawning. The ONLY consumer of `SecretStore.Resolve`; served to
@@ -76,9 +131,13 @@ let openStore (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async
         let existing : Result<(string * SecretsFile) option, OpenError> =
             match persistPath with
             | Some path when Fs.exists path ->
-                match SecretsCodec.fromString (Fs.readText path) with
-                | Error e -> Error (CorruptStore (path, e))
-                | Ok file -> Ok (Some (path, file))
+                let json = Fs.readText path
+                match SecretsCodec.newerVersionOf json with
+                | Some version -> Error (WrittenByNewerBuild (path, version))
+                | None ->
+                    match SecretsCodec.fromString json with
+                    | Error e -> Error (CorruptStore (path, e))
+                    | Ok file -> Ok (Some (path, file))
             | _ -> Ok None
         match existing with
         | Error e -> return Error e
@@ -131,27 +190,48 @@ let openStore (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async
             match initial with
             | Error e -> return Error e
             | Ok loaded ->
+                let! loaded =
+                    if loaded.Version = 1 then migrateV1 cipher loaded else async { return loaded }
                 // The single mutable envelope. Mutations are read-modify-write-save on
                 // the Node loop AFTER their (async) encryption completes, so
                 // interleaved Sets compose instead of losing entries.
                 let mutable file = loaded
                 let save () =
                     persistPath |> Option.iter (fun path -> Fs.writeTextAtomic path (SecretsCodec.toString file))
+                // A sorted version 1 file is written back at once, so the file on disk opens
+                // under the rules this build reads by, and is sorted only once.
+                match existing with
+                | Some (_, onDisk) when onDisk.Version = 1 -> save ()
+                | _ -> ()
 
-                let store =
-                    { List = fun scope -> SecretsFile.list scope file
+                let sealedEntry (scope: SecretScope) (name: SecretName) (aad: string) (value: string) =
+                    async {
+                        let! iv, ciphertext = cipher.Encrypt aad value
+                        let timestamp = now ()
+                        let entry : SecretEntry =
+                            { Scope = scope
+                              Name = name
+                              CreatedAt = timestamp
+                              UpdatedAt = timestamp
+                              Iv = iv
+                              Ciphertext = ciphertext }
+                        return entry
+                    }
+                let opened (aad: string) (entry: SecretEntry option) =
+                    async {
+                        match entry with
+                        | None -> return Ok None
+                        | Some entry ->
+                            let! decrypted = cipher.Decrypt aad entry.Iv entry.Ciphertext
+                            return decrypted |> Result.map Some
+                    }
+
+                let secrets : Partition<SecretId, SecretMetadata> =
+                    { Partition.List = fun scope -> SecretsFile.list scope file
                       Set =
                         fun id value ->
                             async {
-                                let! iv, ciphertext = cipher.Encrypt (SecretsCipher.aadFor id.Scope id.Name) value
-                                let timestamp = now ()
-                                let entry : SecretEntry =
-                                    { Scope = id.Scope
-                                      Name = id.Name
-                                      CreatedAt = timestamp
-                                      UpdatedAt = timestamp
-                                      Iv = iv
-                                      Ciphertext = ciphertext }
+                                let! entry = sealedEntry id.Scope id.Name (SecretsCipher.aadFor id.Scope id.Name) value
                                 file <- SecretsFile.upsert entry file
                                 save ()
                                 match SecretsFile.list id.Scope file |> List.tryFind (fun m -> m.Id = id) with
@@ -167,19 +247,38 @@ let openStore (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async
                                     save ()
                                 return Ok existed
                             }
-                      Resolve =
+                      Resolve = fun id -> opened (SecretsCipher.aadFor id.Scope id.Name) (SecretsFile.tryFind id file) }
+
+                let connections : Partition<ConnectionId, ConnectionMetadata> =
+                    { Partition.List = fun scope -> SecretsFile.listConnections scope file
+                      Set =
+                        fun id value ->
+                            async {
+                                let! entry = sealedEntry id.Scope id.Name (SecretsCipher.connectionAadFor id) value
+                                file <- SecretsFile.upsertConnection entry file
+                                save ()
+                                match SecretsFile.listConnections id.Scope file |> List.tryFind (fun m -> m.Id = id) with
+                                | Some metadata -> return Ok metadata
+                                | None -> return Error "connection credential vanished during set"
+                            }
+                      Delete =
                         fun id ->
                             async {
-                                match SecretsFile.tryFind id file with
-                                | None -> return Ok None
-                                | Some entry ->
-                                    let! decrypted = cipher.Decrypt (SecretsCipher.aadFor entry.Scope entry.Name) entry.Iv entry.Ciphertext
-                                    return decrypted |> Result.map Some
+                                let existed = SecretsFile.tryFindConnection id file |> Option.isSome
+                                if existed then
+                                    file <- SecretsFile.removeConnection id file
+                                    save ()
+                                return Ok existed
                             }
-                      Durable = Option.isSome persistPath
-                      KekMinted = minted
-                      EntriesAtOpen = loaded.Entries.Length }
-                return Ok store
+                      Resolve = fun id -> opened (SecretsCipher.connectionAadFor id) (SecretsFile.tryFindConnection id file) }
+
+                return
+                    Ok
+                        { Secrets = secrets
+                          Connections = connections
+                          Durable = Option.isSome persistPath
+                          KekMinted = minted
+                          EntriesAtOpen = loaded.Entries.Length + loaded.Connections.Length }
     }
 
 /// `openStore`, waiting out a credential manager that cannot answer yet instead of
@@ -228,24 +327,28 @@ module SecretResolution =
         :: (users |> Set.toList |> List.map UserScope)
         @ (if local then [ LocalScope ] else [])
 
-    /// The resolver the `/control/secrets/resolve` route serves. It builds the session's own
-    /// `SecretId` from the verified caller, passes the same pure policy the control routes
+    /// The resolver the `/control/secrets/resolve` route serves. It holds the generic
+    /// partition alone, so no name a reference writes can reach a connection credential. It
+    /// builds the session's own `SecretId` from the verified caller, passes the same pure policy the control routes
     /// use (InjectSecret), and reads the store. A miss is an error that names the secret.
-    let compose (observe: Observe) (store: SecretStore) : ResolveSecret =
+    let compose (observe: Observe) (secrets: Partition<SecretId, SecretMetadata>) : ResolveSecret =
         fun sessionId name ->
             async {
                 let id : SecretId = { Scope = SessionScope sessionId; Name = name }
+                // A reduced subject, on purpose: the resource is the caller's own scope, and
+                // the only rule that permits it reads the session alone. The users bound to
+                // the launch and its local access cannot change this decision, so the
+                // resolver is not handed them.
                 let request =
                     { Subject = { Session = Some sessionId; Users = Set.empty; Local = false }
-                      Action = SecretAction InjectSecret
-                      Resource = SecretResource id }
+                      Access = SecretAccess (InjectSecret, SecretResource id) }
                 let missed reason =
                     observe sessionId name (InjectMissed reason)
                     Error reason
                 match Policy.authorize request with
                 | Deny reason -> return missed reason
                 | Permit ->
-                    match! store.Resolve id with
+                    match! secrets.Resolve id with
                     | Ok (Some value) ->
                         observe sessionId name Injected
                         return Ok value
@@ -337,46 +440,48 @@ module Audit =
 
     // Render the inner case name only, so existing secrets log lines keep their wording
     // now that connection actions deny through the same record.
-    let private actionLabel (action: Action) : string =
-        match action with
-        | SecretAction a -> sprintf "%A" a
-        | ConnectionAction a -> sprintf "%A" a
+    let private actionLabel (access: Access) : string =
+        match access with
+        | SecretAccess (a, _) -> sprintf "%A" a
+        | ConnectionAccess (a, _) -> sprintf "%A" a
 
-    let authzDeny (sessionId: SessionId) (action: Action) (resource: Resource) (reason: string) : Record =
+    let authzDeny (sessionId: SessionId) (access: Access) (reason: string) : Record =
         let resourceAttrs =
-            match resource with
-            | SecretResource id ->
+            match access with
+            | SecretAccess (_, SecretResource id) ->
                 ("yession.secret.name", StringValue (SecretName.value id.Name)) :: scopeAttrs id.Scope
-            | SecretCollection scope -> scopeAttrs scope
+            | SecretAccess (_, SecretCollection scope) -> scopeAttrs scope
+            | ConnectionAccess (_, id) ->
+                ("yession.secret.name", StringValue (SecretName.value id.Name)) :: scopeAttrs id.Scope
         make "yession.authz.deny" Severity.warn
             ([ session sessionId
-               "yession.authz.action", StringValue (actionLabel action)
+               "yession.authz.action", StringValue (actionLabel access)
                "yession.authz.reason", StringValue reason ]
              @ resourceAttrs)
-            (sprintf "secrets: DENY %s for session %s: %s" (actionLabel action) (SessionId.value sessionId) reason)
+            (sprintf "secrets: DENY %s for session %s: %s" (actionLabel access) (SessionId.value sessionId) reason)
 
     // Connection-broker records (Plan 08): lifecycle of Manager-brokered external-service
     // credentials. Identifiers, scopes, and kinds only — the observation type these adapt
     // (`Broker.BrokerObservation`) cannot carry token material.
-    let private connectionAttrs (id: SecretId) : (string * LogValue) list =
+    let private connectionAttrs (id: ConnectionId) : (string * LogValue) list =
         ("yession.secret.name", StringValue (SecretName.value id.Name)) :: scopeAttrs id.Scope
 
-    let connectionConnected (id: SecretId) (kind: string) : Record =
+    let connectionConnected (id: ConnectionId) (kind: string) : Record =
         make "yession.connection.connected" Severity.info
             (("yession.connection.kind", StringValue kind) :: connectionAttrs id)
             "connection credential stored"
 
-    let connectionDisconnected (id: SecretId) : Record =
+    let connectionDisconnected (id: ConnectionId) : Record =
         make "yession.connection.disconnected" Severity.info (connectionAttrs id) "connection credential removed"
 
-    let connectionResolved (id: SecretId) (kind: string) (refreshed: bool) : Record =
+    let connectionResolved (id: ConnectionId) (kind: string) (refreshed: bool) : Record =
         make "yession.connection.resolved" Severity.info
             ([ "yession.connection.kind", StringValue kind
                "yession.connection.refreshed", StringValue (if refreshed then "true" else "false") ]
              @ connectionAttrs id)
             "connection credential resolved for an agent turn"
 
-    let connectionRefreshFailed (id: SecretId) (reason: string) : Record =
+    let connectionRefreshFailed (id: ConnectionId) (reason: string) : Record =
         make "yession.connection.refresh_failed" Severity.warn
             (("yession.connection.reason", StringValue reason) :: connectionAttrs id)
             "connection credential refresh failed"
@@ -384,7 +489,7 @@ module Audit =
     /// The provider refused a credential we hold, as reported by whoever spent it. `warn`
     /// like a failed refresh, and for the same reason: nothing is broken here, but a person
     /// has to do something before the next turn that needs this can run.
-    let connectionRejected (id: SecretId) (reason: string) : Record =
+    let connectionRejected (id: ConnectionId) (reason: string) : Record =
         make "yession.connection.rejected" Severity.warn
             (("yession.connection.reason", StringValue reason) :: connectionAttrs id)
             "connection credential refused by the provider"

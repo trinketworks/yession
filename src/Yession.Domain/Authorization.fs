@@ -33,6 +33,8 @@ type SecretAction =
     /// read the policy knows.
     | InjectSecret
 
+/// What a generic secret action acts on. Generic secrets only: a connection credential is
+/// a `ConnectionId`, and no case here carries one.
 type Resource =
     | SecretResource of SecretId
     | SecretCollection of SecretScope
@@ -53,14 +55,18 @@ type ConnectionAction =
     | ResolveCredential
     | DisconnectCredential
 
-type Action =
-    | SecretAction of SecretAction
-    | ConnectionAction of ConnectionAction
+/// What a request asks to do, to what. Each family's actions pair with that family's own
+/// identity, so the type cannot express a generic action on a connection credential (an
+/// `InjectSecret` that names a refresh token, a `SetSecret` that overwrites one) or a
+/// connection action on a generic secret. No policy row has to refuse those: they are not
+/// requests.
+type Access =
+    | SecretAccess of SecretAction * Resource
+    | ConnectionAccess of ConnectionAction * ConnectionId
 
 type Request =
     { Subject : Subject
-      Action : Action
-      Resource : Resource }
+      Access : Access }
 
 type Decision =
     | Permit
@@ -87,29 +93,29 @@ module Policy =
         let localAccess () =
             if request.Subject.Local then Permit
             else Deny "this deployment attributes its users. It has no local credential"
-        match request.Action, request.Resource with
+        match request.Access with
         // Connection credentials (Plan 08): every action — including the write — is
         // permitted exactly where the caller IS the scope's owner: its own session
         // scope, a user the Manager bound to it. That makes an
         // owner-scoped sign-in usable (and replaceable) from any session that owner is
         // signed into, and a session-scoped one from only that session.
-        | ConnectionAction _, SecretResource { Scope = SessionScope owner } ->
+        | ConnectionAccess (_, { ConnectionId.Scope = SessionScope owner }) ->
             ownSession owner
-        | ConnectionAction _, SecretResource { Scope = UserScope user } ->
+        | ConnectionAccess (_, { ConnectionId.Scope = UserScope user }) ->
             boundUser user
         // The unattributed deployment's own credential. Deliberately CONNECTION-only:
         // `LocalScope` exists so a shared-access deployment can name the one principal it
         // has, not as a Manager-wide secret drawer — generic secret actions on it fall
         // through to the default deny below.
-        | ConnectionAction _, SecretResource { Scope = LocalScope } ->
+        | ConnectionAccess (_, { ConnectionId.Scope = LocalScope }) ->
             localAccess ()
-        | SecretAction (SetSecret | DeleteSecret | InjectSecret), SecretResource { Scope = SessionScope owner } ->
+        | SecretAccess ((SetSecret | DeleteSecret | InjectSecret), SecretResource { SecretId.Scope = SessionScope owner }) ->
             ownSession owner
-        | SecretAction ListSecrets, SecretCollection (SessionScope owner) ->
+        | SecretAccess (ListSecrets, SecretCollection (SessionScope owner)) ->
             ownSession owner
-        | SecretAction ListSecrets, SecretCollection (UserScope user) ->
+        | SecretAccess (ListSecrets, SecretCollection (UserScope user)) ->
             boundUser user
-        | SecretAction (SetSecret | DeleteSecret), SecretResource { Scope = UserScope _ } ->
+        | SecretAccess ((SetSecret | DeleteSecret), SecretResource { SecretId.Scope = UserScope _ }) ->
             Deny "user-scoped secrets are managed by the user, not sessions"
         | _ ->
             Deny "no rule permits this request"

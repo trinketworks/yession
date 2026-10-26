@@ -174,6 +174,14 @@ Durable secrets are one AES-256-GCM file in the data directory. The key comes fr
 Keychain, the Windows Credential Manager, or the Linux Secret Service. There is no key file and
 no key variable.
 
+**Roll back only with the file you had.** The file has a schema version. A Manager refuses a
+`secrets.json` that a newer build wrote, and says so. A Manager from before the version 2
+schema (generic secrets and connection credentials kept apart,
+[ADR](decisions/2026-10-26-secrets-and-connections-are-two-families.md)) cannot: it reads the
+newer file and, at its first write, drops every connected credential. Before an upgrade, copy
+`secrets.json` out of the data directory. If you roll back (one `nix` command), put that copy
+back in the same step. The Manager makes no copy itself: a copy would outlive Disconnect.
+
 #### Your own key store
 
 A headless server has no credential manager. It has something else: a cloud KMS, a Vault, a

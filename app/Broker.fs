@@ -147,12 +147,12 @@ let resilient (waiting: TimeSpan -> Async<unit>) (policy: Resilience.Policy<Gran
 
 /// What the broker observed — identifiers only, adapted to audit records by the caller.
 type BrokerObservation =
-    | Connected of SecretId * ConnectionKind
-    | Disconnected of SecretId
-    | Resolved of SecretId * ConnectionKind * refreshed: bool
-    | RefreshFailed of SecretId * reason: string
+    | Connected of ConnectionId * ConnectionKind
+    | Disconnected of ConnectionId
+    | Resolved of ConnectionId * ConnectionKind * refreshed: bool
+    | RefreshFailed of ConnectionId * reason: string
     /// The provider refused this credential, as reported by whoever spent it.
-    | Rejected of SecretId * reason: string
+    | Rejected of ConnectionId * reason: string
 
 /// Whether this observation changes what a session may currently READ — which is the only
 /// question a status broadcast asks.
@@ -182,33 +182,33 @@ type BrokerService =
       /// Redirect completion (the public callback), state then code: the single-use
       /// state IS the authorization — minted only for a target the policy permitted
       /// at begin.
-      CompleteCallback : string -> string -> Async<Result<SecretId, string>>
+      CompleteCallback : string -> string -> Async<Result<ConnectionId, string>>
       /// Manual completion (paste): the payload is `code#state`; the pended target
       /// must be the caller-authorized one.
-      Complete : SecretId -> string -> Async<Result<unit, string>>
+      Complete : ConnectionId -> string -> Async<Result<unit, string>>
       /// Store a pasted static token verbatim.
-      Put : SecretId -> string -> Async<Result<unit, string>>
+      Put : ConnectionId -> string -> Async<Result<unit, string>>
       /// Store a grant the SESSION obtained itself (the device flow, RFC 8628) as a
       /// refreshable grant. `Put`'s sibling, and the difference is the whole point: a
       /// pasted token cannot rotate and this one can, so the two must not share a path.
       PutGrant : ControlWire.ConnectionPutGrantRequest -> Async<Result<unit, string>>
-      Disconnect : SecretId -> Async<Result<bool, string>>
+      Disconnect : ConnectionId -> Async<Result<bool, string>>
       /// Record that the PROVIDER refused this credential. The one fact about a
       /// credential's health that cannot be worked out here: a static token carries no
       /// expiry, so "it stopped working" only ever arrives from whoever spent it.
       /// Answers whether this changed anything.
-      Reject : SecretId -> string -> Async<Result<bool, string>>
+      Reject : ConnectionId -> string -> Async<Result<bool, string>>
       /// Metadata for whichever of `targets` exist — never values.
-      StatusOf : SecretId list -> Async<ConnectionStatusList>
+      StatusOf : ConnectionId list -> Async<ConnectionStatusList>
       /// The credential's current value, refreshing a due OAuth grant first (standard
       /// refresh grant at the envelope's own token URL). The ONLY value-returning path.
-      Resolve : SecretId -> Async<Result<ConnectionKind * string, string>> }
+      Resolve : ConnectionId -> Async<Result<ConnectionKind * string, string>> }
 
 // The redirect URI arrives as a thunk: it derives from the Manager's public origin,
 // which is only known once its server listens — flows begin well after that.
 let create
     (redirectUri: unit -> string)
-    (store: SecretStore.SecretStore)
+    (store: SecretStore.Partition<ConnectionId, ConnectionMetadata>)
     (observe: BrokerObservation -> unit)
     (ask: GrantLeg)
     : BrokerService =
@@ -227,13 +227,13 @@ let create
     // a fact the next use re-learns anyway. It sits beside `inFlight` because it is the same
     // kind of thing: what this Manager currently knows, not what it stores. A restart
     // forgets, and the first verb after one is told again.
-    let rejected = Dictionary<SecretId, string> ()
+    let rejected = Dictionary<ConnectionId, string> ()
 
     /// Every write to a target goes through here, so forgetting the old rejection is part of
     /// storing rather than something each caller has to remember: a credential that was just
     /// connected is by definition not the one the provider refused, and a stale mark on it
     /// would send someone to sign in again immediately after they just did.
-    let storeCredential (target: SecretId) (credential: BrokeredCredential) : Async<Result<unit, string>> =
+    let storeCredential (target: ConnectionId) (credential: BrokeredCredential) : Async<Result<unit, string>> =
         async {
             match! store.Set target (BrokeredCredentialCodec.toString credential) with
             | Ok _ ->
@@ -243,7 +243,7 @@ let create
             | Error e -> return Error e
         }
 
-    let reject (target: SecretId) (reason: string) : Async<Result<bool, string>> =
+    let reject (target: ConnectionId) (reason: string) : Async<Result<bool, string>> =
         async {
             match! store.Resolve target with
             | Error e -> return Error e
@@ -282,7 +282,7 @@ let create
                 | Ok grant -> return! storeCredential flow.Target (BrokeredOAuth grant)
         }
 
-    let loadCredential (target: SecretId) : Async<Result<BrokeredCredential option, string>> =
+    let loadCredential (target: ConnectionId) : Async<Result<BrokeredCredential option, string>> =
         async {
             match! store.Resolve target with
             | Error e -> return Error e
@@ -305,10 +305,10 @@ let create
     // awaited twice — an `Async` re-runs on each await, which is exactly the duplicate
     // this exists to prevent. Cleared in both directions, so a failed refresh does not
     // wedge the target forever.
-    let inFlight = Dictionary<SecretId, JS.Promise<Result<ConnectionKind * string, string>>> ()
+    let inFlight = Dictionary<ConnectionId, JS.Promise<Result<ConnectionKind * string, string>>> ()
 
 
-    let refreshGrant (target: SecretId) (grant: OAuthGrant) (refreshToken: string) =
+    let refreshGrant (target: ConnectionId) (grant: OAuthGrant) (refreshToken: string) =
         async {
             match! grantAt grant.TokenUrl (BrokerFlow.refreshRequest grant refreshToken) with
             | Error failure ->
@@ -341,7 +341,7 @@ let create
                         return Ok (OAuthConnection, merged.AccessToken)
         }
 
-    let refreshOnce (target: SecretId) (grant: OAuthGrant) (refreshToken: string) =
+    let refreshOnce (target: ConnectionId) (grant: OAuthGrant) (refreshToken: string) =
         async {
             let pending =
                 match inFlight.TryGetValue target with
@@ -357,7 +357,7 @@ let create
             return! Interop.awaitPromise pending
         }
 
-    let resolve (target: SecretId) : Async<Result<ConnectionKind * string, string>> =
+    let resolve (target: ConnectionId) : Async<Result<ConnectionKind * string, string>> =
         async {
             match! loadCredential target with
             | Error e -> return Error e

@@ -58,7 +58,7 @@ let private scopes = "org:create_api_key user:profile user:inference"
 /// `invalid_request_error: "Invalid request format"`, and its own clients (the Anthropic
 /// SDK's `userOAuthProvider`, `claude /login`) post JSON — with `state` replayed in the
 /// body, which the dialect carries.
-let beginRequest (target: SecretId) : ControlWire.ConnectionBeginRequest =
+let beginRequest (target: ConnectionId) : ControlWire.ConnectionBeginRequest =
     { Target = target
       AuthorizeUrl = envOr "YESSION_CLAUDE_AUTHORIZE_URL" authorizeUrl
       TokenUrl = envOr "YESSION_CLAUDE_TOKEN_URL" tokenUrl
@@ -87,7 +87,7 @@ let envVarFor (kind: ConnectionKind) (value: string) : string * string =
 
 /// The two sign-in scopes the panel offers: this session only, or the signing actor's
 /// own scope (usable from every session that actor is signed into).
-let targetFor (sessionId: SessionId) (owner: CredentialOwner) (scopeChoice: string) : Result<SecretId, string> =
+let targetFor (sessionId: SessionId) (owner: CredentialOwner) (scopeChoice: string) : Result<ConnectionId, string> =
     match scopeChoice with
     | "session" -> Ok { Scope = SessionScope sessionId; Name = secretName }
     | "mine" -> Ok { Scope = CredentialOwner.scope owner; Name = secretName }
@@ -103,12 +103,12 @@ let targetFor (sessionId: SessionId) (owner: CredentialOwner) (scopeChoice: stri
 /// is never granted local access, so the candidate filter drops it before anything is
 /// resolved. The Manager's readable set is the single authority; a second copy of that
 /// judgement here could only drift from it.
-let turnTargets (sessionId: SessionId) (credential: CredentialFor) : SecretId list =
-    [ Some { SecretId.Scope = SessionScope sessionId; SecretId.Name = secretName }
+let turnTargets (sessionId: SessionId) (credential: CredentialFor) : ConnectionId list =
+    [ Some { ConnectionId.Scope = SessionScope sessionId; ConnectionId.Name = secretName }
       CredentialFor.person credential
       |> Option.bind CredentialOwner.ofPrincipal
-      |> Option.map (fun owner -> { SecretId.Scope = CredentialOwner.scope owner; SecretId.Name = secretName })
-      Some { SecretId.Scope = LocalScope; SecretId.Name = secretName } ]
+      |> Option.map (fun owner -> { ConnectionId.Scope = CredentialOwner.scope owner; ConnectionId.Name = secretName })
+      Some { ConnectionId.Scope = LocalScope; ConnectionId.Name = secretName } ]
     |> List.choose id
 
 // --- the models lookup ------------------------------------------------------------------
@@ -476,15 +476,15 @@ let private actorOf (identity: CookieIdentity) : CredentialFor = PeerAttribution
 /// refusal computed before the account it named existed.
 let panelFor
     (sessionId: SessionId)
-    (statusOf: SecretId -> ConnectionStatus option)
+    (statusOf: ConnectionId -> ConnectionStatus option)
     (agentAvailable: unit -> bool)
     (list: ListModels)
     (identity: CookieIdentity)
     : Async<ClaudePanel> =
     async {
         let owner = ownerOf identity
-        let sessionTarget : SecretId = { Scope = SessionScope sessionId; Name = secretName }
-        let mineTarget : SecretId = { Scope = CredentialOwner.scope owner; Name = secretName }
+        let sessionTarget : ConnectionId = { Scope = SessionScope sessionId; Name = secretName }
+        let mineTarget : ConnectionId = { Scope = CredentialOwner.scope owner; Name = secretName }
         let! catalogue = list (actorOf identity)
         return
             { SessionCredential = CredentialRow.ofStatus (statusOf sessionTarget)

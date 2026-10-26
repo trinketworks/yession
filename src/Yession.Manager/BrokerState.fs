@@ -311,7 +311,7 @@ module BrokerFlow =
 /// §4.1.3), so it is pended with the flow, not re-derived.
 type PendingFlow =
     { Verifier : string
-      Target : SecretId
+      Target : ConnectionId
       TokenUrl : string
       ClientId : string
       Scopes : string

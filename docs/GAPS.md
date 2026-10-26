@@ -117,6 +117,9 @@ The last section holds trust boundaries as sharp as the first section's.
   `LocalScope` ([ADR](decisions/2026-08-10-local-scope.md)). Remaining:
   - No GENERIC `/secrets` write surface for users exists. Sessions cannot `SetSecret` on
     `UserScope`, and the management UI has no secrets page.
+  - Generic secrets and connection credentials are two families of the store, kept apart by
+    type ([ADR](decisions/2026-10-26-secrets-and-connections-are-two-families.md)). Neither
+    `set_secret` nor a `SecretRef` can name a connection credential.
   - A user's generic secret has no injection path. A `SecretRef` is written by a repository's
     file, not by the user, so it reads the session's own scope only. A user's secret can reach
     a sandbox only once a consent surface lets the user give it to a session on purpose.

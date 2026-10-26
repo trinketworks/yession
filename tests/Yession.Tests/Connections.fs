@@ -40,7 +40,7 @@ let private bob = UserId.create "bob" |> expect
 let private peer1 = PeerId.create "browser-1" |> expect
 let private claudeName = SecretName.create "claude-code" |> expect
 
-let private target scope : SecretId = { Scope = scope; Name = claudeName }
+let private target scope : ConnectionId = { Scope = scope; Name = claudeName }
 
 let private grant : OAuthGrant =
     { AccessToken = "at-1"
@@ -323,11 +323,11 @@ let private observationTests =
 // --- Pure: who a status frame says has arrived ----------------------------------------------
 
 let private arrivalTests =
-    let status (scope: SecretScope) (name: string) : SecretId * ConnectionStatus =
-        let id : SecretId = { Scope = scope; Name = SecretName.create name |> expect }
+    let status (scope: SecretScope) (name: string) : ConnectionId * ConnectionStatus =
+        let id : ConnectionId = { Scope = scope; Name = SecretName.create name |> expect }
         let status : ConnectionStatus = { Id = id; Kind = OAuthConnection; Health = ConnectionUsable; UpdatedAt = now }
         id, status
-    let frame (entries: (SecretId * ConnectionStatus) list) = Map.ofList entries
+    let frame (entries: (ConnectionId * ConnectionStatus) list) = Map.ofList entries
     let bob = UserId.create "bob" |> expect
 
     testList "arrivals between two status frames" [
@@ -429,7 +429,7 @@ let private claudeTests =
 // --- Pure: the session-side GitHub module (Plan 14) ------------------------------------------
 
 let private githubName = SecretName.create "github" |> expect
-let private githubTarget scope : SecretId = { Scope = scope; Name = githubName }
+let private githubTarget scope : ConnectionId = { Scope = scope; Name = githubName }
 
 let private githubTests =
     testList "github connection module" [
@@ -666,7 +666,7 @@ let private brokerTests =
             async {
                 let! endpoint = startTokenEndpoint ()
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://manager.local/connections/callback") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://manager.local/connections/callback") store.Connections ignore noGrantRetries
                 let request = { beginRequest with TokenUrl = endpoint.Url }
                 let! began = broker.Begin request
                 let began = expect began
@@ -676,7 +676,7 @@ let private brokerTests =
                 Expect.equal (expect completed) request.Target "completion names the pended target"
                 Expect.isTrue ((endpoint.Requests.[0]).Contains "grant_type=authorization_code") "standard grant"
                 Expect.isTrue ((endpoint.Requests.[0]).Contains "code=the-code") "the code"
-                Expect.equal (store.List (UserScope alice) |> List.length) 1 "one stored entry under the target"
+                Expect.equal (store.Connections.List (UserScope alice) |> List.length) 1 "one stored entry under the target"
                 let! resolved = broker.Resolve request.Target
                 Expect.equal (expect resolved) (OAuthConnection, "at-1") "resolves the access token"
                 let! replayed = broker.CompleteCallback began.State "another-code"
@@ -690,7 +690,7 @@ let private brokerTests =
                 // still decides it when that grant renews.
                 let! endpoint = startTokenEndpoint ()
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let request = { beginRequest with TokenUrl = endpoint.Url; TokenDialect = JsonEncoded }
                 let! began = broker.Begin request
                 let began = expect began
@@ -711,7 +711,7 @@ let private brokerTests =
                           TokenUrl = endpoint.Url
                           ClientId = "cid"
                           Dialect = JsonEncoded }
-                let! seeded = store.Set request.Target (BrokeredCredentialCodec.toString stored)
+                let! seeded = store.Connections.Set request.Target (BrokeredCredentialCodec.toString stored)
                 expect (seeded |> Result.map ignore)
                 let! resolved = broker.Resolve request.Target
                 Expect.equal (expect resolved) (OAuthConnection, "at-1") "refreshed"
@@ -722,7 +722,7 @@ let private brokerTests =
             async {
                 let! endpoint = startTokenEndpoint ()
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://manager.local/connections/callback") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://manager.local/connections/callback") store.Connections ignore noGrantRetries
                 let request =
                     { beginRequest with
                         TokenUrl = endpoint.Url
@@ -743,7 +743,7 @@ let private brokerTests =
             async {
                 let! endpoint = startTokenEndpoint ()
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let! unknown = broker.CompleteCallback "never-began" "c"
                 Expect.isError unknown "unknown state"
                 let request = { beginRequest with TokenUrl = endpoint.Url }
@@ -761,7 +761,7 @@ let private brokerTests =
             async {
                 let! endpoint = startTokenEndpoint ()
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let request = { beginRequest with TokenUrl = endpoint.Url }
                 let! began = broker.Begin request
                 let! wrongTarget = broker.Complete (target (SessionScope sessionA)) (sprintf "code#%s" (expect began).State)
@@ -778,7 +778,7 @@ let private brokerTests =
         testCaseAsync "static put stores verbatim and never refreshes" <|
             async {
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let t = target (UserScope bob)
                 let! put = broker.Put t "sk-ant-oat01-tok"
                 expect put
@@ -792,7 +792,7 @@ let private brokerTests =
             async {
                 let! endpoint = startTokenEndpoint ()
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let t = target (UserScope alice)
                 // Seed a grant already inside the refresh margin, pointing at the fake.
                 let stale =
@@ -804,14 +804,14 @@ let private brokerTests =
                           TokenUrl = endpoint.Url
                           ClientId = "cid"
                           Dialect = FormEncoded }
-                let! _ = store.Set t (BrokeredCredentialCodec.toString stale)
+                let! _ = store.Connections.Set t (BrokeredCredentialCodec.toString stale)
                 endpoint.SetResponse """{"access_token":"at-fresh","expires_in":3600}"""
                 let! resolved = broker.Resolve t
                 Expect.equal (expect resolved) (OAuthConnection, "at-fresh") "the refreshed token"
                 Expect.isTrue ((endpoint.Requests.[0]).Contains "grant_type=refresh_token") "standard refresh grant"
                 Expect.isTrue ((endpoint.Requests.[0]).Contains "refresh_token=rt-stale") "the stored refresh token"
                 // The stored envelope updated — and kept the old refresh token (none returned).
-                let! raw = store.Resolve t
+                let! raw = store.Connections.Resolve t
                 let stored =
                     match expect raw with
                     | Some s -> s
@@ -828,7 +828,7 @@ let private brokerTests =
                 let! endpoint = startTokenEndpoint ()
                 let! store = openEphemeral ()
                 let mutable observed : Broker.BrokerObservation list = []
-                let broker = Broker.create (fun () -> "http://m/cb") store (fun o -> observed <- o :: observed) noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections (fun o -> observed <- o :: observed) noGrantRetries
                 let t = target (UserScope alice)
                 let stale =
                     BrokeredOAuth
@@ -839,11 +839,11 @@ let private brokerTests =
                           TokenUrl = endpoint.Url
                           ClientId = "cid"
                           Dialect = FormEncoded }
-                let! _ = store.Set t (BrokeredCredentialCodec.toString stale)
+                let! _ = store.Connections.Set t (BrokeredCredentialCodec.toString stale)
                 endpoint.SetResponse "refused"
                 let! resolved = broker.Resolve t
                 Expect.isError resolved "refresh failure surfaces"
-                let! raw = store.Resolve t
+                let! raw = store.Connections.Resolve t
                 Expect.isTrue (expect raw |> Option.isSome) "the old entry survives for a reconnect"
                 Expect.isTrue (observed |> List.exists (function Broker.RefreshFailed _ -> true | _ -> false)) "observed"
                 // Reported as a fault to retry, NOT as a credential to re-authorize: the
@@ -869,7 +869,7 @@ let private brokerTests =
                 // 503 between a session and its provider was a turn that could not run.
                 let! endpoint = startTokenEndpoint ()
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore grantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore grantRetries
                 let t = target (UserScope alice)
                 let due =
                     BrokeredOAuth
@@ -880,7 +880,7 @@ let private brokerTests =
                           TokenUrl = endpoint.Url
                           ClientId = "cid"
                           Dialect = FormEncoded }
-                let! _ = store.Set t (BrokeredCredentialCodec.toString due)
+                let! _ = store.Connections.Set t (BrokeredCredentialCodec.toString due)
                 endpoint.FailNext 2
                 endpoint.SetResponse """{"access_token":"at-fresh","refresh_token":"rt-2","expires_in":3600}"""
                 let! resolved = broker.Resolve t
@@ -895,7 +895,7 @@ let private brokerTests =
                 // delays before a person learns they have to sign in again.
                 let! endpoint = startTokenEndpoint ()
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore grantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore grantRetries
                 let t = target (UserScope alice)
                 let due =
                     BrokeredOAuth
@@ -906,7 +906,7 @@ let private brokerTests =
                           TokenUrl = endpoint.Url
                           ClientId = "cid"
                           Dialect = FormEncoded }
-                let! _ = store.Set t (BrokeredCredentialCodec.toString due)
+                let! _ = store.Connections.Set t (BrokeredCredentialCodec.toString due)
                 endpoint.SetResponse "error=invalid_grant"
                 let! resolved = broker.Resolve t
                 Expect.isError resolved "the refresh cannot succeed"
@@ -918,7 +918,7 @@ let private brokerTests =
                 let! endpoint = startTokenEndpoint ()
                 let! store = openEphemeral ()
                 let mutable observed : Broker.BrokerObservation list = []
-                let broker = Broker.create (fun () -> "http://m/cb") store (fun o -> observed <- o :: observed) noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections (fun o -> observed <- o :: observed) noGrantRetries
                 let t = target (UserScope alice)
                 let due =
                     BrokeredOAuth
@@ -929,7 +929,7 @@ let private brokerTests =
                           TokenUrl = endpoint.Url
                           ClientId = "cid"
                           Dialect = FormEncoded }
-                let! _ = store.Set t (BrokeredCredentialCodec.toString due)
+                let! _ = store.Connections.Set t (BrokeredCredentialCodec.toString due)
                 endpoint.SetResponse "error=invalid_grant"
                 let! resolved = broker.Resolve t
                 Expect.isError resolved "the refresh cannot succeed"
@@ -945,7 +945,7 @@ let private brokerTests =
         testCaseAsync "a grant handed over by a session is refreshable, unlike a pasted one" <|
             async {
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let t = target (UserScope alice)
                 let! stored =
                     broker.PutGrant
@@ -958,7 +958,7 @@ let private brokerTests =
                           ClientId = "Iv1.test"
                           TokenDialect = FormEncoded }
                 Expect.isOk stored "stored"
-                let! raw = store.Resolve t
+                let! raw = store.Connections.Resolve t
                 let envelope =
                     match expect raw with
                     | Some s -> s
@@ -981,7 +981,7 @@ let private brokerTests =
             async {
                 let! endpoint = startTokenEndpoint ()
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let t = target (UserScope alice)
                 // Due for refresh, and holding a refresh token that has itself lapsed.
                 let finished =
@@ -993,7 +993,7 @@ let private brokerTests =
                           TokenUrl = endpoint.Url
                           ClientId = "cid"
                           Dialect = FormEncoded }
-                let! _ = store.Set t (BrokeredCredentialCodec.toString finished)
+                let! _ = store.Connections.Set t (BrokeredCredentialCodec.toString finished)
                 let! resolved = broker.Resolve t
                 match resolved with
                 | Error reason -> Expect.stringContains reason ". Sign in again." "the refusal says what to DO"
@@ -1010,7 +1010,7 @@ let private brokerTests =
             async {
                 let! endpoint = startTokenEndpoint ()
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let t = target (UserScope alice)
                 let finished =
                     BrokeredOAuth
@@ -1023,7 +1023,7 @@ let private brokerTests =
                           TokenUrl = endpoint.Url
                           ClientId = "cid"
                           Dialect = FormEncoded }
-                let! _ = store.Set t (BrokeredCredentialCodec.toString finished)
+                let! _ = store.Connections.Set t (BrokeredCredentialCodec.toString finished)
                 match! broker.Resolve t with
                 | Error reason -> Expect.stringContains reason ". Sign in again." "the refusal says what to DO"
                 | Ok _ -> failwith "a grant that cannot rotate cannot resolve, however fresh its access token"
@@ -1036,7 +1036,7 @@ let private brokerTests =
         testCaseAsync "a provider's refusal is what makes a static token read as finished" <|
             async {
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let t = target (UserScope alice)
                 let! _ = broker.Put t "ghu_expired"
                 let healthOf () =
@@ -1055,7 +1055,7 @@ let private brokerTests =
         testCaseAsync "the same refusal reported twice is news once" <|
             async {
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let t = target (UserScope alice)
                 let! _ = broker.Put t "ghu_expired"
                 let! first = broker.Reject t "github refused this credential"
@@ -1069,7 +1069,7 @@ let private brokerTests =
         testCaseAsync "a refusal cannot outlive the credential it describes" <|
             async {
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let t = target (UserScope alice)
                 // Nothing connected: there is nothing for a provider to have refused.
                 let! orphan = broker.Reject t "github refused this credential"
@@ -1090,11 +1090,11 @@ let private brokerTests =
         testCaseAsync "a status reports the same dead end a resolve refuses by" <|
             async {
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let dead = target (UserScope alice)
                 let live = target (SessionScope sessionA)
                 let! _ =
-                    store.Set
+                    store.Connections.Set
                         dead
                         (BrokeredCredentialCodec.toString (
                             BrokeredOAuth
@@ -1105,7 +1105,7 @@ let private brokerTests =
                                   TokenUrl = "http://t"
                                   ClientId = "cid"
                                   Dialect = FormEncoded }))
-                let! _ = store.Set live (BrokeredCredentialCodec.toString (BrokeredStatic "ghp_ok"))
+                let! _ = store.Connections.Set live (BrokeredCredentialCodec.toString (BrokeredStatic "ghp_ok"))
                 let! list = broker.StatusOf [ dead; live ]
                 let healthOf id =
                     list.Connections |> List.tryFind (fun c -> c.Id = id) |> Option.map (fun c -> c.Health)
@@ -1120,7 +1120,7 @@ let private brokerTests =
             async {
                 let! endpoint = startTokenEndpoint ()
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let t = target (UserScope alice)
                 let stale =
                     BrokeredOAuth
@@ -1131,7 +1131,7 @@ let private brokerTests =
                           TokenUrl = endpoint.Url
                           ClientId = "cid"
                           Dialect = FormEncoded }
-                let! _ = store.Set t (BrokeredCredentialCodec.toString stale)
+                let! _ = store.Connections.Set t (BrokeredCredentialCodec.toString stale)
                 endpoint.SetResponse """{"access_token":"at-fresh","refresh_token":"rt-fresh","expires_in":3600}"""
                 // A provider that rotates spends the refresh token it answers for. Two
                 // resolves that each redeemed `rt-stale` would leave one of them holding a
@@ -1146,7 +1146,7 @@ let private brokerTests =
         testCaseAsync "disconnect deletes and reports existence" <|
             async {
                 let! store = openEphemeral ()
-                let broker = Broker.create (fun () -> "http://m/cb") store ignore noGrantRetries
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
                 let t = target (UserScope alice)
                 let! _ = broker.Put t "sk-ant-x"
                 let! first = broker.Disconnect t
@@ -1236,10 +1236,10 @@ let private startConnectionsServer (callers: (string * Control.ControlCaller) li
         let broker =
             Broker.create
                 (fun () -> "http://manager.local/connections/callback")
-                store
+                store.Connections
                 (fun o -> if Broker.changesReadableStatus o then broadcast ())
                 noGrantRetries
-        let api = ProcessManager.connectionsApiFor (fun _ -> ()) store broker
+        let api = ProcessManager.connectionsApiFor (fun _ -> ()) store.Connections broker
         apiRef.Value <- Some api
         let dummyRegister (_: string) (_: SessionId) (_: string) : Yession.Oidc.RegisterClientResponse =
             { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused" }
@@ -1818,19 +1818,19 @@ let private stubAuth () : SessionAuth.Auth =
 /// itself is proven above, so this records rather than stores.
 type private RecordingConnections =
     { Client : ControlClient.SessionConnections
-      Puts : ResizeArray<SecretId * string>
+      Puts : ResizeArray<ConnectionId * string>
       /// Grants handed over for the Manager to refresh — the device flow's path, kept
       /// apart from `Puts` because which one a sign-in takes is the thing under test.
       Grants : ResizeArray<ControlWire.ConnectionPutGrantRequest>
-      Disconnects : ResizeArray<SecretId>
+      Disconnects : ResizeArray<ConnectionId>
       /// Credentials a verb reported the provider as having refused.
-      Rejects : ResizeArray<SecretId * string> }
+      Rejects : ResizeArray<ConnectionId * string> }
 
 let private recordingConnections () : RecordingConnections =
-    let puts = ResizeArray<SecretId * string> ()
+    let puts = ResizeArray<ConnectionId * string> ()
     let grants = ResizeArray<ControlWire.ConnectionPutGrantRequest> ()
-    let disconnects = ResizeArray<SecretId> ()
-    let rejects = ResizeArray<SecretId * string> ()
+    let disconnects = ResizeArray<ConnectionId> ()
+    let rejects = ResizeArray<ConnectionId * string> ()
     { Client =
         { Begin = fun _ -> async { return Error "not under test" }
           Complete = fun _ _ -> async { return Error "not under test" }
@@ -1847,7 +1847,7 @@ let private recordingConnections () : RecordingConnections =
 /// A bare server carrying only the /github handler, mounted at the origin root.
 /// A stored connection as the status cache would hold it. The timestamp is not what any
 /// of these cases are about, so it is fixed rather than a parameter.
-let private stored (kind: ConnectionKind) (health: ConnectionHealth) (id: SecretId) : ConnectionStatus =
+let private stored (kind: ConnectionKind) (health: ConnectionHealth) (id: ConnectionId) : ConnectionStatus =
     { Id = id; Kind = kind; Health = health; UpdatedAt = DateTimeOffset.Parse "2026-08-21T00:00:00Z" }
 
 /// The routes over a given leg to github.com. Unguarded by default — these cases are about
@@ -1879,7 +1879,7 @@ let private startGitHubRoutes (connections: ControlClient.SessionConnections) =
 let private identityOf (who: string) (attribution: Yession.Session.PeerAttribution) : Yession.Session.CookieIdentity =
     { Subject = who; DisplayName = None; Attribution = attribution }
 
-let private githubPanelFor (statusOf: SecretId -> ConnectionStatus option) (identity: Yession.Session.CookieIdentity) =
+let private githubPanelFor (statusOf: ConnectionId -> ConnectionStatus option) (identity: Yession.Session.CookieIdentity) =
     GitHubConnection.panelFor sessionA statusOf identity
 
 /// Point the module at the stub for the duration of one test, and put the environment back
@@ -1931,7 +1931,7 @@ let private githubRouteTests =
                 // origin-partitioned localStorage, so it changed under the person holding it
                 // and every new value stranded the last one's credential.
                 let recorder = recordingConnections ()
-                let storedTargets = ResizeArray<SecretId> ()
+                let storedTargets = ResizeArray<ConnectionId> ()
                 let! url = startGitHubRoutes recorder.Client
 
                 let! connected =
@@ -3074,12 +3074,12 @@ let private prBudgetTests =
 /// resolves, and there is no ambient `GITHUB_TOKEN`.
 let private watchingAs
     (stub: StubGitHubApi)
-    (heard: unit -> Map<SecretId, ConnectionStatus>)
+    (heard: unit -> Map<ConnectionId, ConnectionStatus>)
     (now: unit -> DateTimeOffset)
     (readability: RecordedReadability)
     : PrWatches.PrWatchers =
-    let alicesGitHub = { SecretId.Scope = UserScope alice; SecretId.Name = GitHubConnection.secretName }
-    let resolve (target: SecretId) =
+    let alicesGitHub = { ConnectionId.Scope = UserScope alice; ConnectionId.Name = GitHubConnection.secretName }
+    let resolve (target: ConnectionId) =
         async { return if target = alicesGitHub then Ok (OAuthConnection, "token-alice") else Error "not connected" }
     let token = GitHubConnection.tokenOver sessionA heard (Some resolve) (fun () -> None) ignore
     let fetch =
@@ -3094,8 +3094,8 @@ let private watchingAs
         (fun _ pr unreadable -> async { readability.Add (pr, unreadable) })
 
 /// What the session hears once alice's GitHub connection is in its frame.
-let private aliceConnected (at: DateTimeOffset) : Map<SecretId, ConnectionStatus> =
-    let id = { SecretId.Scope = UserScope alice; SecretId.Name = GitHubConnection.secretName }
+let private aliceConnected (at: DateTimeOffset) : Map<ConnectionId, ConnectionStatus> =
+    let id = { ConnectionId.Scope = UserScope alice; ConnectionId.Name = GitHubConnection.secretName }
     Map.ofList [ id, { Id = id; Kind = OAuthConnection; Health = ConnectionUsable; UpdatedAt = at } ]
 
 /// A watch of alice's on a pull request in `prRepo`, last known open with checks running.
