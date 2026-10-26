@@ -80,9 +80,9 @@ type SecretsError =
 
 /// The Manager's secrets handlers (Plan 06), pre-composed with authorization. `Resolve`
 /// is the one operation that returns a value: it feeds env injection at the SESSION'S
-/// sandbox spawn, gated by the caller's readable scopes (the same precedence walk
-/// Manager-side injection always used). Set answers metadata, list metadata, delete a
-/// flag — the agent-facing surface still has no read.
+/// sandbox spawn, from the caller's own scope only (`SecretStore.SecretResolution`). Set
+/// answers metadata, list metadata, delete a flag — the agent-facing surface still has no
+/// read.
 type SecretsApi =
     { Set : ControlCaller -> ControlWire.SetSecretRequest -> Async<Result<SecretMetadata, SecretsError>>
       List : ControlCaller -> ControlWire.ListSecretsRequest -> Async<Result<SecretMetadata list, SecretsError>>
