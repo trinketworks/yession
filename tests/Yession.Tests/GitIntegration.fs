@@ -1087,6 +1087,19 @@ let private compositionTests =
             TestFiles.write (sprintf "%s/README.md" checkout) "planted\n"
             hostGit [ "add"; "." ] checkout
             hostGit [ "commit"; "-m"; "planted" ] checkout
+            // And recorded, as a clone records it: the session's repos are the ones its log
+            // names, so a checkout planted without its `RepoCloned` is one nobody added.
+            let log = EventStore.openLog (sprintf "%s/events.jsonl" sessionDir) record.SessionId (fun () -> DateTimeOffset.UtcNow)
+            let! _ =
+                log.Append
+                    ActorRef.Agent
+                    (SessionEvent.RepoCloned
+                        { MessageId = MessageId.create "planted" |> expect
+                          Repo = RepoRef.create "octo/hello" |> expect
+                          Branch = "main"
+                          Actor = ActorRef.Agent
+                          AgentsMd = None
+                          Skills = [] })
 
             let! launched = pm.Launch record.SessionId
             let port = launched |> expect
