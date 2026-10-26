@@ -163,8 +163,10 @@ let private swap (element: Element option) (markup: string) =
                     fresh
             match active with
             | None -> ()
-            // A hand on a row that did not change is still where it was.
-            | Some focused when live.contains focused -> ()
+            // A hand on a row that did not change is still where it was. Asked of the document,
+            // not of the tree: the held Create is the same node in the fresh section, but moving
+            // it out of the page on the way there took its focus.
+            | Some focused when obj.ReferenceEquals (document.activeElement, focused) -> ()
             | Some _ ->
                 let back =
                     match filter |> Option.bind (fun f -> attribute f Dom.Manager.filter) with
