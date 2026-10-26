@@ -451,10 +451,11 @@ let private srtTests =
             | other -> failwithf "expected one add and its clone, got %A" other
         }
 
-        // The incident (session TNQDWN3T): a worktree made inside a container leaves a
-        // `.git` FILE naming a gitdir only that container has. Beside it, the session's own
-        // checkout must still be read — one directory git cannot read is never the listing.
-        testCaseAsync "a checkout git cannot read does not hide the one beside it" <| async {
+        // The incident (session TNQDWN3T): a worktree made beside a checkout has a `.git` of
+        // its own, and once a checkout had one path everywhere, a listing that scanned the
+        // repos directory read it as a repo nobody added — whose `yession.yaml` declared
+        // sandboxes nobody added either. The session's repos are the ones its log records.
+        testCaseAsync "a worktree beside a checkout is not a repo of the session" <| async {
             let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let service = serviceIn root (freshLog ())
@@ -462,23 +463,67 @@ let private srtTests =
             let! _ = service.AddRepo caller repo
             let stray = sprintf "%s/octo/hello-phone" (reposIn root)
             TestFiles.ensureDir stray
-            TestFiles.write (sprintf "%s/.git" stray) "gitdir: /repos/octo/hello/.git/worktrees/hello-phone\n"
+            TestFiles.write (sprintf "%s/.git" stray) (sprintf "gitdir: %s/octo/hello/.git/worktrees/hello-phone\n" (reposIn root))
             let! listed = service.ListRepos ()
-            Expect.isTrue
-                (RepoRead.listed (expect listed) |> List.exists (fun listing -> listing.Repo = repo))
-                "the healthy checkout is listed"
+            Expect.equal
+                (expect listed |> List.map (function RepoRead.Listed l -> l.Repo | RepoRead.Unreadable u -> u.Repo))
+                [ repo ]
+                "only the repo the session added"
         }
 
-        testCaseAsync "a checkout git cannot read is listed with a reason naming where it is" <| async {
+        testCaseAsync "a recorded checkout git cannot read is listed with a reason naming where it is" <| async {
             let root = mkdtemp ()
-            let stray = sprintf "%s/octo/hello-phone" (reposIn root)
-            TestFiles.ensureDir stray
-            TestFiles.write (sprintf "%s/.git" stray) "gitdir: /repos/octo/hello/.git/worktrees/hello-phone\n"
+            makeBareFixture root "hello" |> ignore
             let service = serviceIn root (freshLog ())
+            let repo = RepoRef.create "octo/hello" |> expect
+            let! _ = service.AddRepo caller repo
+            let checkout = sprintf "%s/octo/hello" (reposIn root)
+            Fable.NodeExtras.Files.removeTree (sprintf "%s/.git" checkout)
+            TestFiles.write (sprintf "%s/.git" checkout) "gitdir: /repos/octo/hello/.git\n"
             let! listed = service.ListRepos ()
             match RepoRead.unreadable (expect listed) with
-            | [ unreadable ] -> Expect.stringContains unreadable.Reason stray "git's failure names the checkout"
+            | [ unreadable ] -> Expect.stringContains unreadable.Reason checkout "git's failure names the checkout"
             | other -> failwithf "expected one unreadable checkout, got %A" other
+        }
+
+        // The listing is the log's, so a recorded repo whose directory went away out of band
+        // is still a row, and the verb that row points at has to be able to clear it.
+        testCaseAsync "a recorded repo whose checkout is gone is listed, and remove_repo clears it" <| async {
+            let root = mkdtemp ()
+            makeBareFixture root "hello" |> ignore
+            let service = serviceIn root (freshLog ())
+            let repo = RepoRef.create "octo/hello" |> expect
+            let! _ = service.AddRepo caller repo
+            Fable.NodeExtras.Files.removeTree (sprintf "%s/octo/hello" (reposIn root))
+            let! listed = service.ListRepos ()
+            Expect.equal (RepoRead.unreadable (expect listed) |> List.map (fun u -> u.Repo)) [ repo ] "still a row, unreadable"
+            let! removed = service.RemoveRepo caller repo false
+            Expect.isOk removed "the row's own verb clears it"
+            let! listed = service.ListRepos ()
+            Expect.isEmpty (expect listed) "and it is gone"
+        }
+
+        // A process that dies between the staging rename and its `RepoCloned` leaves a whole
+        // checkout the log never heard of. Re-adding it records it, rather than answering
+        // "already here" about a repo the listing will never show.
+        testCaseAsync "a checkout the log never recorded is recorded when it is added again" <| async {
+            let root = mkdtemp ()
+            makeBareFixture root "hello" |> ignore
+            let repo = RepoRef.create "octo/hello" |> expect
+            let! _ = (serviceIn root (freshLog ())).AddRepo caller repo
+            let log = freshLog ()
+            let service = serviceIn root log
+            let! listed = service.ListRepos ()
+            Expect.isEmpty (expect listed) "a log that never heard of it lists nothing"
+            let! added = service.AddRepo caller repo
+            let! events = eventsOf log
+            match events with
+            | [ SessionEvent.RepoAdded a; SessionEvent.RepoCloned c ] ->
+                Expect.equal c.MessageId a.MessageId "recorded as a clone is"
+                Expect.equal (expect added).RecordedAs (Some a.MessageId) "and the answer names it"
+            | other -> failwithf "expected the add and its clone, got %A" other
+            let! listed = service.ListRepos ()
+            Expect.equal (RepoRead.listed (expect listed) |> List.map (fun l -> l.Repo)) [ repo ] "and now it is listed"
         }
 
         // The add is said before the clone, so the timeline shows it at once; a failed clone
@@ -528,7 +573,7 @@ let private srtTests =
             Expect.equal
                 (expect listed)
                 [ RepoRead.Listed { Repo = repo; Branch = "main"; Dirty = false; Path = sprintf "%s/octo/hello" (reposIn root) } ]
-                "the listing is the filesystem's answer, and it says where"
+                "the listing names the repo the log records, as git reads it, and says where"
         }
 
         // Where an add's time goes, as spans: every step between the call and the record is
@@ -1042,6 +1087,19 @@ let private compositionTests =
             TestFiles.write (sprintf "%s/README.md" checkout) "planted\n"
             hostGit [ "add"; "." ] checkout
             hostGit [ "commit"; "-m"; "planted" ] checkout
+            // And recorded, as a clone records it: the session's repos are the ones its log
+            // names, so a checkout planted without its `RepoCloned` is one nobody added.
+            let log = EventStore.openLog (sprintf "%s/events.jsonl" sessionDir) record.SessionId (fun () -> DateTimeOffset.UtcNow)
+            let! _ =
+                log.Append
+                    ActorRef.Agent
+                    (SessionEvent.RepoCloned
+                        { MessageId = MessageId.create "planted" |> expect
+                          Repo = RepoRef.create "octo/hello" |> expect
+                          Branch = "main"
+                          Actor = ActorRef.Agent
+                          AgentsMd = None
+                          Skills = [] })
 
             let! launched = pm.Launch record.SessionId
             let port = launched |> expect
