@@ -169,12 +169,41 @@
    opacity pulse bottomed out at a quarter, where the running dot on the pane's near-black read
    as no dot at all. Every colour named here is pinned to that floor by the theme-contrast
    suite (Phase4), which reads them from this rule. */
-/* The attention mark's beat (`Style.attentionMark`, Moving): `beat-wait`'s two colours on
-   `color` rather than `background-color`, because the mark is an SVG drawn in `currentColor`
-   and a background would paint the square behind it. Pinned to 3:1 by the same suite. */
-@keyframes beat-mark {
-  0%, 100% { color: var(--color-ink-faint); }
-  50% { color: var(--color-ink-dim); }
+/* The attention mark (`Icon.attention`, `Style.markOrbit` and its siblings). None moves a
+   colour or an opacity the mark's meaning rests on: the arc, the disc and the ring are always
+   at their ink, so the mark owes 3:1 at every frame. What moves is geometry (a turn, a scale,
+   how much of a ring is drawn) and, on the halo and the closing ring, which are extras over
+   the face, opacity. The numbers are the circles' circumferences in the 12-unit box. */
+/* Moving: a quarter arc (6.68 of 26.70) going round. Linear, because it is a rate. */
+@keyframes mark-orbit {
+  to { transform: rotate(360deg); }
+}
+/* Wanted: a hairline ring breathing out from the disc's edge and gone by halfway, so each of
+   its three breaths ends in a rest. */
+@keyframes mark-halo {
+  0% { transform: scale(1); opacity: 0.75; }
+  55%, 100% { transform: scale(1.6); opacity: 0; }
+}
+/* Wanted arriving: Moving's quarter arc (offset 20.02 of 26.70) closes to a ring, then fades
+   as the disc fills it; the fill holds back until the ring is whole. */
+@keyframes mark-close {
+  0% { stroke-dashoffset: 20.02; opacity: 1; }
+  45% { stroke-dashoffset: 0; opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
+}
+@keyframes mark-fill {
+  0%, 45% { transform: scale(0); }
+  100% { transform: scale(1); }
+}
+/* Wrong arriving: the ring draws round (32.99 is its whole length), and the core springs in
+   on an overshoot, the press's own ease. */
+@keyframes mark-draw {
+  from { stroke-dashoffset: 32.99; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes mark-pop {
+  from { transform: scale(0); }
+  to { transform: scale(1); }
 }
 @keyframes beat-live {
   0%, 100% { background-color: var(--color-green-down-2); }
