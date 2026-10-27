@@ -464,7 +464,9 @@ let private addedRouted (route: Repos.GitRoute) (backend: SandboxBackend) (root:
 let private addedOn (backend: SandboxBackend) (root: string) = addedRouted Repos.GitRoute.none backend root
 
 /// A `.git/config` that rewrites github.com to `listener`, on a session whose fetch goes through
-/// a real gateway on a loan: every request the listener saw.
+/// a real gateway on a loan: every request the listener saw. The planted prefix is LONGER than
+/// the gateway's own `https://github.com/`, so git's longest match takes it without a tie to
+/// break, and the listener is asked.
 let private fetchedThroughPlantedRewrite () : Async<(string * string option * string option) list> =
     async {
         let root = mkdtemp ()
@@ -472,7 +474,7 @@ let private fetchedThroughPlantedRewrite () : Async<(string * string option * st
         let! service, checkout = addedRouted (Repos.GitRoute.through gateway "127.0.0.1") HostBackend root
         let! listener = listen ()
         hostGit [ "config"; "remote.origin.url"; "https://github.com/octo/hello.git" ] checkout
-        hostGit [ "config"; sprintf "url.http://127.0.0.1:%d/.insteadOf" listener.Port; "https://github.com/" ] checkout
+        hostGit [ "config"; sprintf "url.http://127.0.0.1:%d/.insteadOf" listener.Port; "https://github.com/octo/" ] checkout
         let! _ = service.FetchRepo caller hello
         do! listener.Close ()
         do! gateway.Close ()
@@ -550,11 +552,13 @@ let private configBoundaryTests =
 
         testCaseAsync "a github.com rewrite the checkout's config names is sent no credential" <| async {
             let! seen = fetchedThroughPlantedRewrite ()
+            Expect.isNonEmpty seen "the rewrite was honoured, so the listener was asked"
             Expect.isFalse (seen |> List.exists (fun (_, authorization, _) -> authorization.IsSome)) "no authorization header"
         }
 
         testCaseAsync "a github.com rewrite the checkout's config names is sent no loan" <| async {
             let! seen = fetchedThroughPlantedRewrite ()
+            Expect.isNonEmpty seen "the rewrite was honoured, so the listener was asked"
             Expect.isFalse (seen |> List.exists (fun (_, _, loan) -> loan.IsSome)) "no x-yession-loan header"
         }
 
