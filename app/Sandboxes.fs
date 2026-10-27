@@ -3298,6 +3298,38 @@ module AgentSandbox =
 
             proxy)
 
+    /// The line the CLI starts under on Linux: srt's proxy named by address rather than as
+    /// `localhost`, then the CLI itself.
+    ///
+    /// srt 0.0.77 sets every proxy variable to `http://<user>:<token>@localhost:3128`, and
+    /// the relay it starts inside the network namespace is `socat TCP-LISTEN:3128`, which
+    /// listens on IPv4 alone. Where `/etc/hosts` maps `localhost` to `::1` first (an Ubuntu
+    /// CI runner does), a client that tries no second address connects to `[::1]:3128`, is
+    /// refused at once, and srt's proxy never sees it. The Bun `claude` is such a client:
+    /// measured with the same CLI and srt on one box, swapping that one line of `/etc/hosts`
+    /// takes its requests from reaching the API to `connect ECONNREFUSED ::1:3128`. That is
+    /// the release gate's 3ms `Connection error.` with zero proxy connections, and why the
+    /// WorkSandbox's git and node, which fall back to `127.0.0.1`, never showed it.
+    ///
+    /// The rewrite runs INSIDE the sandbox, after srt's own `--setenv`, because the token is
+    /// srt's and this process never sees it. It touches only a value that ends in
+    /// `localhost:<port>`. srt 0.0.80 listens on both families (`TCP6-LISTEN` with IPv4
+    /// mapped in), and moving to it is what removes this. Linux only: on macOS srt's proxy
+    /// listens on the host, not through this relay, and nothing there was measured.
+    let loopbackProxyLine : string =
+        "for v in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; do "
+        + "p=${!v}; case $p in *localhost:[0-9]*) export \"$v=${p%localhost:*}127.0.0.1:${p##*localhost:}\" ;; esac; "
+        + "done; exec \"$@\""
+
+    /// `wrap`, with the CLI started through `loopbackProxyLine` where that applies.
+    let throughLoopbackProxy
+        (platform: Node.Base.Platform)
+        (wrap: string -> string list -> string option -> Async<string list>)
+        : string -> string list -> string option -> Async<string list> =
+        match platform with
+        | Node.Base.Platform.Darwin -> wrap
+        | _ -> fun executable arguments directory -> wrap "bash" ([ "-c"; loopbackProxyLine; "bash"; executable ] @ arguments) directory
+
     /// The spawner for the configured agent backend. Docker is not one: `parseAgent`
     /// refused it at boot.
     let claudeSpawnerFor (backend: SandboxBackend) (ambient: Map<string, string>) (home: string) (env: Map<string, string>) : Sdk.Spawner =
@@ -3309,7 +3341,7 @@ module AgentSandbox =
             | Error reason -> failwithf "agent sandbox: %s" reason
             | Ok tools ->
                 let policy = policyFor ambient home env
-                srtClaudeSpawner (SrtSandbox.wrapperFor tools policy)
+                srtClaudeSpawner (throughLoopbackProxy (platform ()) (SrtSandbox.wrapperFor tools policy))
         | HostBackend
         | DockerBackend -> hostClaudeSpawner ()
 

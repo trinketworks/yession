@@ -452,6 +452,29 @@ let tests =
                 Expect.equal out "round-trip" "stdin reached it and its stdout came back"
             })
 
+            // srt names its proxy `localhost`, and its relay inside the namespace listens on
+            // IPv4 alone, so a CLI that resolves `localhost` to `::1` is refused
+            // (`AgentSandbox.loopbackProxyLine` has the measurement). What the CLI is handed
+            // has to be the address the relay answers on, in every proxy variable it reads.
+            // Linux only: the rewrite is.
+            (if platform () = Node.Base.Platform.Darwin then
+                ptestCase "the agent CLI reaches srt's proxy by address, not by `localhost` (Linux only)" (fun () -> ())
+             else
+             testCaseAsync "the agent CLI reaches srt's proxy by address, not by `localhost`" (async {
+                let workspace = TestFiles.tempDir "yession-srt-"
+                let policy = policyIn workspace []
+                let spawner =
+                    Sandboxes.AgentSandbox.srtClaudeSpawner (
+                        Sandboxes.AgentSandbox.throughLoopbackProxy (platform ()) (Sandboxes.SrtSandbox.wrapperFor (srtTools ()) policy))
+                let! out, code =
+                    driveSpawner spawner "/bin/sh" [| "-c"; "printf '%s\\n' \"$HTTPS_PROXY\" \"$https_proxy\" \"$HTTP_PROXY\" \"$http_proxy\" \"$ALL_PROXY\" \"$all_proxy\"" |] workspace policy.Env ""
+                Expect.equal code 0 "the probe ran"
+                let proxies = out.Split '\n' |> Array.filter (fun line -> line <> "")
+                Expect.hasLength proxies 6 (sprintf "srt set every proxy variable: %s" out)
+                for proxy in proxies do
+                    Expect.isTrue (proxy.EndsWith "@127.0.0.1:3128") (sprintf "the proxy is named by address: %s" proxy)
+             }))
+
             // srt probes ripgrep by forking `which` under a one-second timeout, and reports
             // every way that fork can fail as `ripgrep (<path>) not found`. Taking a PATH
             // away is the deterministic member of that family — the others (a box too busy
