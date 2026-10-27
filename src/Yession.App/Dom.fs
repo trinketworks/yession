@@ -825,6 +825,10 @@ module Dom =
         let historyNotKeptWhy =
             "It is served over plain HTTP. A browser withholds storage of this kind outside a secure "
             + "context. Serving it over HTTPS restores it."
+        let historyUnread = "This device's copy of the session could not be read, so this page runs without it."
+        let historyUnreadWhy =
+            "The conversation comes from the session instead, and what arrives may not be kept on "
+            + "this device until the page is opened again."
         /// What the composer's keys do, shown in the composer while you are in it. Enter
         /// stays a prose key, same as a plain textarea, because a phone's return key has no
         /// modifier to reach for; sending is the explicit second key beside it, reachable

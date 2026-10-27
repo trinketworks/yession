@@ -1267,33 +1267,44 @@ let private start () =
         // merged remote edit settle it and nothing else does.
         DraftSlot.follow doc registry peerId (fun msg -> dispatchRef msg) |> ignore
 
-        // Local-first: the doc persists in IndexedDB keyed by the session's address. Cold
-        // loads render local state (drafts, queued messages) before — and without — the
-        // network; on reconnect the full-state exchange reconciles.
-        let persistence = Fable.YIndexeddb.create (persistenceKey ()) doc
-        do! persistence.whenSynced () |> Async.AwaitPromise
-
-        // The replayed doc is state that did not arrive as a body change, so settle the rule
-        // against it explicitly: a doc stored before publication followed the body can hold an
-        // empty-bodied slot, and this is where it goes.
-        DraftSlot.settle doc registry peerId (fun msg -> dispatchRef msg)
-
-        // Durable history, out of this client's own store, BEFORE anything asks the network
-        // and regardless of what `/me` is about to say (Plan 20). The probe decides whether
-        // this client may CONNECT; it has never had any business deciding whether a client may
-        // read what it was already given. That it did is why an offline open rendered an empty
-        // conversation rather than the one it had been reading.
         // The worker first, because it is what makes the NEXT cold open work; this one is
         // already served. Fire and forget: nothing here depends on it, and a client that
         // cannot have one loses only the offline open.
         registerWorker (Page.href ServiceWorker)
 
-        let! historyCache = openHistoryCache ()
-        let! transcriptCaches = openTranscriptCaches ()
-        // `Connecting`, then the events, then the transcripts — the sequence a person watches
-        // between the first paint and the connection, and the one the harness measures
-        // (`Client.LocalOpen`, which says why the order is that).
-        do! Client.LocalOpen.replay historyCache transcriptCaches (fun msg -> dispatchRef msg)
+        // Local-first: the doc persists in IndexedDB keyed by the session's address. Cold
+        // loads render local state (drafts, queued messages) before — and without — the
+        // network; on reconnect the full-state exchange reconciles. Durable history comes out
+        // of this client's own store too, BEFORE anything asks the network and regardless of
+        // what `/me` is about to say (Plan 20). The probe decides whether this client may
+        // CONNECT; it has never had any business deciding whether a client may read what it
+        // was already given.
+        //
+        // Every step is bounded (`Client.LocalOpen.run`): a store that never answers or throws
+        // is gone without for this page load, and the page says so, rather than sitting at
+        // `Connecting` before it has asked the session anything. A provider whose load runs
+        // over is left in place: if it loads late, what it kept merges into the doc like any
+        // other update, which is what a CRDT is for.
+        let docStep =
+            async {
+                let persistence = Fable.YIndexeddb.create (persistenceKey ()) doc
+                do! persistence.whenSynced () |> Async.AwaitPromise
+            }
+        let! opened =
+            Client.LocalOpen.run
+                Resilience.Policy.sleep
+                Client.LocalOpen.limit
+                { Doc = docStep
+                  History = openHistoryCache ()
+                  Transcripts = openTranscriptCaches () }
+                (fun msg -> dispatchRef msg)
+        let historyCache = opened.History
+        let transcriptCaches = opened.Transcripts
+
+        // The replayed doc is state that did not arrive as a body change, so settle the rule
+        // against it explicitly: a doc stored before publication followed the body can hold an
+        // empty-bodied slot, and this is where it goes.
+        DraftSlot.settle doc registry peerId (fun msg -> dispatchRef msg)
 
         // Authorization by renavigation: probe `/me` for a peer token. 401 -> bounce
         // through `/login` (code + PKCE via the Manager) and land back on this shell,
