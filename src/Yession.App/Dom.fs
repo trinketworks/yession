@@ -1033,7 +1033,8 @@ module Dom =
         let newTerminalIn (sandbox: string) = sprintf "New terminal in %s" sandbox
         /// The hidden pane's edge tab (P1-4): what the column holds, counted, so that a
         /// session with work in it says so with the pane shut. With none open it is still the
-        /// door to making one, and says what kind of thing is behind it.
+        /// door to making one, and says what kind of thing is behind it. The tab's FACE is the
+        /// terminal mark and the bare number (`View.contentReopen`); these words are its name.
         let terminalsCount (n: int) =
             match n with
             | 0 -> "terminals"
@@ -1043,7 +1044,7 @@ module Dom =
         let showTerminals = "Show terminals"
         /// Its accessible name: the act and the count, and WHICH terminals are running a
         /// command, by the names the strip and the list call them (`Entity.terminalName`) —
-        /// the face says that with a dot alone. It CONTAINS the visible words, so a voice
+        /// the face does not say it at all. It contains the count the face shows, so a voice
         /// control that hears "2 terminals" can still press it.
         let showTerminalsNamed (n: int) (running: string list) =
             let count = terminalsCount n

@@ -227,26 +227,15 @@ let private edgeTabOnBand (desktop: bool) : string list =
           if not (paintedAt tab (at.left + at.width / 2.0) (at.top + at.height / 2.0)) then
               "covered at its centre"
           if desktop then
-              match first (Root.Under tab) "[data-terminals-count]", first Root.Document "#shell [data-session-title]" with
-              | Some words, Some title ->
-                  let tabBaseline = baselineIn words
-                  // An input's baseline is its text's, and it lends it to a line box only in
-                  // flow — so its OFFSET inside the input is read with the wrapper laid out as a
-                  // block for a moment, and added to where the input really is.
-                  let top = title.getBoundingClientRect().top
-                  let wrap = title.parentElement
-                  let was = wrap.getAttribute "style"
-                  wrap.setAttribute ("style", (match was with null -> "" | was -> was + ";") + "display:block")
-                  let theirs = baselineMarker ()
-                  title.parentElement.insertBefore (theirs, title.nextSibling) |> ignore
-                  let offset = theirs.getBoundingClientRect().bottom - title.getBoundingClientRect().top
-                  theirs.remove ()
-                  (match was with
-                   | null -> wrap.removeAttribute "style"
-                   | was -> wrap.setAttribute ("style", was))
-                  let drift = tabBaseline - (top + offset)
-                  if abs drift > 2.0 then sprintf "off the title baseline by %gpx" drift
-              | _ -> "the tab's words or the title are missing" ]
+              // A mark, not words: it stands on the title's LINE, its middle on the title's
+              // middle, as the sidebar's chevron across the band does (`Style.navReopen`).
+              match first (Root.Under tab) "svg", first Root.Document "#shell [data-session-title]" with
+              | Some mark, Some title ->
+                  let m = mark.getBoundingClientRect ()
+                  let t = title.getBoundingClientRect ()
+                  let drift = (m.top + m.height / 2.0) - (t.top + t.height / 2.0)
+                  if abs drift > 2.0 then sprintf "off the title's line by %gpx" drift
+              | _ -> "the tab's mark or the title is missing" ]
     | _ -> [ "the edge tab or the header is missing" ]
 
 let private roomBelowShell (height: int) : string list =

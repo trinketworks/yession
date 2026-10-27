@@ -1357,8 +1357,10 @@ module View =
     /// were nowhere on the first screen until somebody went looking. A running command is
     /// said to the eye by the composer's tray (`composerTray`), which can take the reader to
     /// it; here only in the tab's accessible name.
-    /// Still the pivot's vocabulary — words and a chevron, no box — because it is still the
-    /// way to the column beside this one, and only what it SAYS has changed.
+    /// A mark, not words: the terminal glyph, and the count as a bare number beside it while
+    /// any are open. "‹ terminals" spent a third of a phone's band saying what the mark says,
+    /// and was the one word in the band that is not the session's own. The words live on in
+    /// the accessible name and the hover title.
     let private contentReopen (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         if model.TerminalsOpen then Lit.nothing
         else
@@ -1369,12 +1371,16 @@ module View =
                 // By the name the strip and the list give it (P1-1), so the edge tab's spoken
                 // "build running" is the word a reader will find once the pane is open.
                 |> List.map (TerminalName.display model.Terminals)
+            let count =
+                match List.length live with
+                | 0 -> Lit.nothing
+                | n -> html $"""<span data-terminals-count>{n}</span>"""
             html $"""
                 <button type="button" class="{Style.terminalReopen}"
                         title="{Dom.Text.showTerminals}" aria-label="{Dom.Text.showTerminalsNamed (List.length live) running}"
                         data-content-toggle="show" data-terminals-open="{string (List.length live)}"
                         ?data-terminals-running={not (List.isEmpty running)}
-                        @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.left}<span data-terminals-count>{Dom.Text.terminalsCount (List.length live)}</span></button>"""
+                        @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.terminal}{count}</button>"""
 
     let private header (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let titleStr = Ylmish.Text.toString model.Synced.Title
