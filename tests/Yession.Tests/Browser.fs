@@ -1150,6 +1150,25 @@ let tests =
                 do! sent "B's timeline to show the sent message" pageB
             }
 
+        // A page whose doc store closes under it (the browser cleared the site's data; mobile
+        // Safari also loses the connection by itself) still collaborates. The store wrote each
+        // change from inside the doc's `update` listener, and the throw there wedged the doc
+        // for the rest of the page load (`Fable.YIndexeddb.catchWrites`): the first keystroke
+        // went out, and nothing after it.
+        sessionPair "a page whose doc store closed under it still sends what is typed" <|
+            fun pageA pageB ->
+            async {
+                let! cdp = await (pageA.Context.NewCDPSessionAsync pageA)
+                let clear = Collections.Generic.Dictionary<string, obj> ()
+                clear.["origin"] <- box (Uri(pageA.Url).GetLeftPart UriPartial.Authority)
+                clear.["storageTypes"] <- box "indexeddb"
+                let! _ = await (cdp.SendAsync ("Storage.clearDataForOrigin", clear))
+                do! waitVisible "A's composer" pageA composer
+                do! awaitU (pageA.ClickAsync composer)
+                do! awaitU (pageA.Keyboard.TypeAsync "kept nowhere")
+                do! waitOwnText "B to see all of what A typed" pageB ".ProseMirror p" "kept nowhere"
+            }
+
         // Who is in the room is everyone CONNECTED, not everyone editing something: two people
         // who have only opened the session are each on the other's roster. It listed a peer
         // only while their caret was in a field, so a collaborator reading the timeline was
