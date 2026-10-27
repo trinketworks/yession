@@ -149,11 +149,9 @@ let private grantsFor (uses: ResourceName list) (wants: ResourceName list) : Res
 // The default is `host`, which is NOT the WorkSandbox's answer and is not what this ought
 // to be. It is what the srt agent path has actually been proven to do: #364 made this
 // `srt`, and the release gate's live turn then stalled its full 90s having streamed
-// nothing. The live tier since settled why (docs/GAPS.md): the vendored `claude` is a Bun
-// binary whose API egress does not honour `HTTP_PROXY`, so under srt's `--unshare-net` it
-// connects DIRECT to the API, fails instantly, and retries to the deadline. srt confines
-// the COMMANDS the agent runs (the WorkSandbox), not the agent CLI itself, so `host` stays
-// the default until either the CLI runs on Node or the agent gets its own Session.
+// nothing. The live tier has since passed under `=srt` (docs/GAPS.md, the agent CLI entry,
+// has the measurements; the Bun CLI does honour the proxy). The default stays `host` until a
+// macOS run under `=srt` is measured, because the deployment it serves is macOS.
 let private agentBackend =
     match SandboxBackend.parseAgent (Interop.envOr "YESSION_SESSION_AGENT_BACKEND" "host") with
     | Ok backend -> backend
