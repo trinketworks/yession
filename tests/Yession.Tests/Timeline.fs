@@ -1111,7 +1111,7 @@ let private edgeTabTests =
         testCase "the hidden pane's edge tab counts the open terminals" <| fun () ->
             let tab = edgeTab (clientOf twoOpenOneEnded)
             Expect.stringContains tab (Dom.attr Dom.Hooks.terminalsOpen "2") "two open, the ended one not counted"
-            Expect.stringContains tab (Dom.Text.terminalsCount 2) "and says so in words"
+            Expect.stringContains tab (Dom.Text.terminalsCount 2) "and its name says so in words"
 
         testCase "the edge tab marks a terminal running a command" <| fun () ->
             let running = clientOf (twoOpenOneEnded @ [ at 5L 4.0 (started terminalA "1" byAda "make" 1) ])

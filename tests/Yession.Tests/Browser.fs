@@ -4252,12 +4252,11 @@ let editorTests =
         // the last control before the pane, so the very next Tab is the one that would enter
         // it, and walked with the real keyboard, because "reachable by Tab" is the question.
         // The shut pane's edge tab (P1-4) is the one thing on the first screen that says
-        // terminals exist, so it has to BE on that screen: inside the header band rather than
-        // pushed out of it by the words it now carries, inside the viewport, and big enough to
-        // press. On a desktop it also stands on the title's baseline, which is the band's whole
-        // reason for being one band — measured as an equality of baselines, never as pixels.
-        // A phone's band centres its group on the title's line instead (`Style.headerAside`),
-        // so there the baseline is not the promise and is not asserted.
+        // terminals exist, so it has to BE on that screen: inside the header band, inside the
+        // viewport, and big enough to press. On a desktop its mark also stands on the title's
+        // line, as the sidebar chevron across the band does — measured as an equality of
+        // middles, never as pixels. A phone's band centres its whole row on one line
+        // (`Style.headerAside`), so there it is not asserted separately.
         let edgeTabOnTheBand (desktop: bool) (page: IPage) =
             async {
                 do! waitVisible "the shut pane's edge tab" page "#shell [data-content-toggle='show']"
@@ -4265,7 +4264,7 @@ let editorTests =
                 Expect.isEmpty wrong "the edge tab sits on the header band"
             }
 
-        editorCaseIn 1440 900 "the edge tab is on the header's baseline and inside the viewport, on a desktop" <| edgeTabOnTheBand true
+        editorCaseIn 1440 900 "the edge tab is on the title's line and inside the viewport, on a desktop" <| edgeTabOnTheBand true
         editorCaseIn 390 844 "the edge tab is inside the header and the viewport, on a phone" <| edgeTabOnTheBand false
 
         editorCase "a hidden pane takes no Tab stops" <| fun page ->

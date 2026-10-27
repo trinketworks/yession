@@ -113,6 +113,9 @@ module Icon =
     /// A keyboard: a frame, a row of keys as zero-length subpaths (the dot trick `morePath`
     /// uses), and the space bar.
     let private keyboardPath = "M1.5 4 L14.5 4 L14.5 12 L1.5 12 Z M4.5 7 L4.5 7 M7 7 L7 7 M9.5 7 L9.5 7 M12 7 L12 7 M5 9.5 L11 9.5"
+    /// A terminal: a screen with a prompt and a cursor on it. The door to the terminals column
+    /// (`View.contentReopen`), where the word "terminals" was.
+    let private terminalPath = "M1.5 2.5 L14.5 2.5 L14.5 13.5 L1.5 13.5 Z M4.5 6 L6.75 8.25 L4.5 10.5 M8.5 10.5 L11.5 10.5"
     /// A caret pointing down: this opens something beneath it (the pane head's switcher).
     let private caretPath = "M4 6.25 L8 10.25 L12 6.25"
     /// An archive box: a lid across the top, the body under it, and a notch in the middle of
@@ -222,6 +225,7 @@ module Icon =
     /// A terminal's acts in the pane's toolbar: taking the keyboard, going back through its
     /// recording, and playing a closed one's.
     let keyboard = stroked keyboardPath
+    let terminal = stroked terminalPath
     let list = stroked listPath
     let rewind = stroked rewindPath
     let play = stroked playPath

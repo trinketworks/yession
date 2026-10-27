@@ -351,7 +351,7 @@ module Probes =
         /// screen's left edge.
         | GrabEdgeClear
         /// The shut pane's edge tab inside the header band and the viewport, big enough to
-        /// press, painted where it stands — and, asked with 1, on the title's baseline.
+        /// press, painted where it stands — and, asked with 1, its mark on the title's line.
         | EdgeTabOnBand
         /// An arrangement rather than a judgement, answering nothing: room this many pixels
         /// tall below the shell, and the shell's foot brought to the bottom of the screen.

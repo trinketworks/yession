@@ -1725,7 +1725,7 @@ module Style =
     let chatColumn = "flex-1 min-h-0 flex flex-col min-w-0 mx-(--column-gutter)"
 
     /// The phone's band is a ROW, not a compressed copy of the desktop's stack: the two
-    /// chevrons a phone always has in this band — the sidebar's and the terminals' — and the
+    /// doors a phone always has in this band — the sidebar's chevron and the terminals' mark — and the
     /// title between them, on one line, because that is what they are. Stacked, the 28/32
     /// heading over its id spent 80px of an 844px screen (10%) restating the tab you are on;
     /// the title steps down a size (`titleInput`) and the id keeps hanging out of flow under
@@ -1768,10 +1768,12 @@ module Style =
 
     /// The header's right-hand group: the way back to the terminals. The session's standings
     /// are the sidebar's (`standingsSection`), and the band only wears the worst of them,
-    /// under the chevron that opens it (`navReopenMark`). `pb-[1px]` is optical, not rhythm: it drops the 11px caps line's
-    /// baseline onto the wordmark/title baseline (pb-1 left it 3px high, measured live). On a
-    /// phone there is no wordmark to meet: the group centres on the title's line instead.
-    let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-[1px] phone:items-center phone:gap-3 phone:pb-0"
+    /// under the chevron that opens it (`navReopenMark`). The door is a mark, not words
+    /// (`View.contentReopen`), so it stands on the title's LINE as the sidebar's chevron does
+    /// across the band (`navReopen`): `pb-2` lifts the 14px mark's middle onto the title's
+    /// (measured live at 1440: mark and chevron both at y=52, the title's middle 52.5; the
+    /// words' `pb-[1px]` left it 6.5px low). On a phone the group centres on the title's line.
+    let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-2 phone:items-center phone:gap-3 phone:pb-0"
     let headerStatus = "shrink-0"
 
     /// The nav column's own mount of the connection report. Hidden on a phone, where the bar
