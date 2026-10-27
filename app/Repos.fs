@@ -22,7 +22,12 @@ module Yession.Host.Repos
 // On top of the confinement, repo-controlled EXECUTION is disabled
 // per invocation — hooks, fsmonitor, ext transport — because the WorkSandbox can write
 // the repos directory by design, so a poisoned `.git/config` is assumed and made inert
-// rather than trusted-by-placement.
+// rather than trusted-by-placement. The same reasoning turns off the rest of what a flag or
+// an env variable can turn off: symlinks in the work tree (`core.symlinks=false`), diff
+// drivers (`--no-ext-diff --no-textconv`), and under `host` any proxy the config names
+// (`NO_PROXY=*`). A checkout whose `.git` is not a directory of its own is not a checkout
+// (`present`). One vector is left, because nothing switches it off: a `filter.<driver>.smudge`
+// runs on `switch_branch`, with the git sandbox's reach (docs/GAPS.md).
 //
 // The credential (the acting human's GitHub token, Plan 08 precedence) reaches exactly
 // one place: the env of the single confined git invocation that needs it. It is never
@@ -70,12 +75,25 @@ let validBranchName (raw: string) : Result<string, string> =
 /// helpers. A helper here is never useful — the token rides in as a header — and under
 /// launchd the keychain helper blocks forever on a prompt nobody can answer, so a 401
 /// became a clone hung for days. Cleared, the same fault fails in under a second.
-let hardenedEnv (allowProtocol: string) (token: string option) : (string * string) list =
+///
+/// `core.symlinks=false` checks a committed symlink out as a plain file that holds the link
+/// text. A checkout is read by processes that follow links, and a link a repository names can
+/// point anywhere on the host, so a link in the work tree is a path the repository chose
+/// outside it. The cost is that a repository which commits symlinks has plain files in its
+/// checkout (docs/GAPS.md).
+///
+/// Under the `host` backend `NO_PROXY=*` disables any proxy a `.git/config` names: git hands
+/// it to curl as `CURLOPT_NOPROXY`, and `http.<url>.proxy` matches by the longest URL, so a
+/// proxy of our own could never outrank a planted one. Under srt the proxy IS the way out of
+/// the sandbox (srt's own `HTTP_PROXY`), and its network namespace already makes any other
+/// address unreachable, so the variable is left unset there.
+let hardenedEnv (backend: SandboxBackend) (allowProtocol: string) (token: string option) : (string * string) list =
     let configs =
         [ "core.hooksPath", "/dev/null"
           "core.fsmonitor", "false"
           "protocol.ext.allow", "never"
-          "credential.helper", "" ]
+          "credential.helper", ""
+          "core.symlinks", "false" ]
         @ (match token with
            | Some token ->
                let basic =
@@ -87,6 +105,9 @@ let hardenedEnv (allowProtocol: string) (token: string option) : (string * strin
       "GIT_TERMINAL_PROMPT", "0"
       "GIT_ALLOW_PROTOCOL", allowProtocol
       "GIT_CONFIG_COUNT", string (List.length configs) ]
+    @ (match backend with
+       | HostBackend -> [ "NO_PROXY", "*" ]
+       | SrtBackend | DockerBackend -> [])
     @ (configs
        |> List.mapi (fun i (key, value) ->
            [ sprintf "GIT_CONFIG_KEY_%d" i, key
@@ -183,6 +204,7 @@ let gitExecutable (ambient: Map<string, string>) : string =
 /// to hand back the home it exists to deny.
 let gitExec
     (git: string)
+    (backend: SandboxBackend)
     (workingDirectory: string)
     (allowProtocol: string)
     (token: string option)
@@ -190,7 +212,7 @@ let gitExec
     : SandboxExec =
     { Executable = git
       Arguments = args
-      Env = hardenedEnv allowProtocol token |> Map.ofList
+      Env = hardenedEnv backend allowProtocol token |> Map.ofList
       WorkingDirectory = Some workingDirectory
       // Housekeeping: git by path needs no toolchain and must not pay for one.
       Via = Direct }
@@ -400,7 +422,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// Every git this service spawns, built in the one place that carries the hardened
         /// env (`gitExec`) — so the probe below cannot drift from the verbs it speaks for.
         let execFor (token: string option) (args: string list) : SandboxExec =
-            gitExec config.Git reposDir config.AllowProtocol token args
+            gitExec config.Git config.Backend reposDir config.AllowProtocol token args
 
         /// `git --version` inside the sandbox, before any verb runs one. A sandbox that
         /// cannot run git is not a git sandbox, and this is where it says so: the
@@ -517,7 +539,16 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// reports, and the only path anything outside the git sandbox can act on.
         let visiblePathOf (repo: RepoRef) =
             SandboxPath.reachedFrom (config.StartsAt ()) (pathOf repo)
-        let present (repo: RepoRef) = Fs.exists (sprintf "%s/.git" (pathOf repo))
+        /// A checkout is here when its owner directory, its own directory and its `.git` are
+        /// each a DIRECTORY, by `lstat`. A work sandbox can write the repos directory, so any of
+        /// the three can be a symlink to another repository on the host, and every verb would
+        /// then run on that one: under `host`, `switch_branch` would check its files out where
+        /// the work sandbox reads them. A link or a file at any of the three is "not here".
+        let present (repo: RepoRef) =
+            [ sprintf "%s/%s" reposDir (RepoRef.owner repo)
+              pathOf repo
+              sprintf "%s/.git" (pathOf repo) ]
+            |> List.forall Fs.isOwnDirectory
 
         /// The checkout's own root `AGENTS.md`, read once at the moment the clone lands
         /// (repo AGENTS.md into per-turn context). Missing or unreadable is `None`, never a
@@ -561,20 +592,28 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                 |> Array.sortBy (fun skill -> skill.Name)
                 |> Array.toList
 
+        /// Why a path in the repos directory is not a checkout, when `present` says it is not.
+        let notACheckout (repo: RepoRef) : string =
+            sprintf
+                "%s is not a checkout: its .git, or a directory above it, is not a directory of its own. Use remove_repo on it, then add it again."
+                (visiblePathOf repo)
+
         let listingOf (repo: RepoRef) : Async<Result<RepoListing, string>> =
             async {
-                match! runOk confined None [ "-C"; pathOf repo; "rev-parse"; "--abbrev-ref"; "HEAD" ] with
-                | Error e -> return Error e
-                | Ok branch ->
-                    match! runOk confined None [ "-C"; pathOf repo; "status"; "--porcelain" ] with
+                if not (present repo) then return Error (notACheckout repo)
+                else
+                    match! runOk confined None [ "-C"; pathOf repo; "rev-parse"; "--abbrev-ref"; "HEAD" ] with
                     | Error e -> return Error e
-                    | Ok status ->
-                        return
-                            Ok
-                                { Repo = repo
-                                  Branch = branch.Stdout.Trim ()
-                                  Dirty = status.Stdout.Trim () <> ""
-                                  Path = visiblePathOf repo }
+                    | Ok branch ->
+                        match! runOk confined None [ "-C"; pathOf repo; "status"; "--porcelain" ] with
+                        | Error e -> return Error e
+                        | Ok status ->
+                            return
+                                Ok
+                                    { Repo = repo
+                                      Branch = branch.Stdout.Trim ()
+                                      Dirty = status.Stdout.Trim () <> ""
+                                      Path = visiblePathOf repo }
             }
 
         let mintMessageId () : MessageId =
@@ -766,6 +805,11 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                                     "%s is already checked out here, but git cannot read that checkout: %s. An interrupted clone leaves a checkout like this. Use remove_repo on it, then add it again."
                                     (RepoRef.value repo)
                                     e)
+                elif Fs.lexists (pathOf repo) then
+                    // Something is at the checkout's path that `present` will not call a
+                    // checkout. A clone would fail at the rename, and git must not be asked
+                    // about it.
+                    return Error (notACheckout repo)
                 else
                     let key = RepoRef.value repo
                     let pending =
@@ -881,7 +925,9 @@ let create (config: ReposConfig) : Result<ReposService, string> =
           FetchRepo = fetchRepo
           RepoStatus = inspect (fun path -> [ "-C"; path; "status"; "--porcelain=v1"; "--branch" ])
           RepoLog = inspect (fun path -> [ "-C"; path; "log"; "--oneline"; "-30" ])
-          RepoDiff = inspect (fun path -> [ "-C"; path; "diff" ])
+          // A diff driver is a program the config names, and the config is writable by every
+          // work sandbox. Both flags turn every driver off, whatever the config says.
+          RepoDiff = inspect (fun path -> [ "-C"; path; "diff"; "--no-ext-diff"; "--no-textconv" ])
           RemoveRepo = removeRepo })
 
 /// The agent-facing capability set for one turn: events attribute the AGENT (it is
