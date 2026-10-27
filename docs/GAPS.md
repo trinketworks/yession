@@ -937,11 +937,12 @@ After the fixes land, one pass rewrites it to what still reproduces.
       which the sandbox that wrote the config already had. Under `host` it runs as the operator,
       unconfined. `YESSION_SESSION_GIT_BACKEND=host` is choosing that: every work sandbox can
       then run a program as the operator on the next `switch_branch`.
-    - **`core.worktree` in a `.git/config` moves the work tree of every verb** to any
-      directory the git sandbox can reach. `repo_status` then lists that directory's files, and
-      `switch_branch` writes the branch's files into it. Under srt the reach is the repos
-      directory. Under `host` it is the operator's whole filesystem. Not fixed yet: pinning
-      `GIT_DIR` and `GIT_WORK_TREE` per verb would close it.
+    - **`core.worktree` in a `.git/config` no longer moves a verb's work tree.** It could move
+      it to any directory the git sandbox can reach: `repo_status` listed that directory's
+      files, and `switch_branch` wrote into it, which under `host` is the operator's whole
+      filesystem. Every verb in a checkout now runs with `GIT_DIR`, `GIT_WORK_TREE` and
+      `GIT_COMMON_DIR` pinned to that checkout (`checkoutPins` in `app/Repos.fs`), and env
+      outranks config. The pin closes a `.git/commondir` file the same way.
   - **The session's git checks a committed symlink out as a plain file** (`core.symlinks=false`
     in `hardenedEnv`). The file holds the link text. A link in the checkout would be a path the
     repository chose, and the session and every sandbox read the checkout through calls that

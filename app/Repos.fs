@@ -26,7 +26,9 @@ module Yession.Host.Repos
 // an env variable can turn off: symlinks in the work tree (`core.symlinks=false`), diff
 // drivers (`--no-ext-diff --no-textconv`), and under `host` any proxy the config names
 // (`NO_PROXY=*`). A checkout whose `.git` is not a directory of its own is not a checkout
-// (`present`). One vector is left, because nothing switches it off: a `filter.<driver>.smudge`
+// (`present`), and a verb in a checkout has its repository and work tree pinned in its env
+// (`checkoutPins`), so `core.worktree` cannot move it. One vector is left, because nothing
+// switches it off: a `filter.<driver>.smudge`
 // runs on `switch_branch`, with the git sandbox's reach (docs/GAPS.md).
 //
 // The credential (the acting human's GitHub token, Plan 08 precedence) reaches no git
@@ -188,6 +190,20 @@ let gitExecutable (ambient: Map<string, string>) : string =
     |> Option.filter (fun path -> path <> "")
     |> Option.defaultValue "git"
 
+/// Which repository and which work tree a verb in a checkout acts on, pinned in its env.
+///
+/// `core.worktree` in `.git/config` moves a verb's work tree to any directory, and a
+/// `.git/commondir` file moves where its objects, refs and config are read. A work sandbox can
+/// write both. `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` outrank them, so a verb in a
+/// checkout acts on that checkout and nothing else. The clone names no checkout (`-C`) and gets
+/// none: it creates the repository.
+let checkoutPins (args: string list) : (string * string) list =
+    match args with
+    | "-C" :: checkout :: _ ->
+        let gitDir = sprintf "%s/.git" checkout
+        [ "GIT_DIR", gitDir; "GIT_WORK_TREE", checkout; "GIT_COMMON_DIR", gitDir ]
+    | _ -> []
+
 /// The one exec any git invocation here is built from — the probe and every verb alike.
 ///
 /// A function rather than a record literal per call site, because `hardenedEnv` is not
@@ -214,7 +230,7 @@ let gitExec
     : SandboxExec =
     { Executable = git
       Arguments = args
-      Env = hardenedEnv backend allowProtocol |> Map.ofList |> Sandboxes.withGitConfig route
+      Env = hardenedEnv backend allowProtocol @ checkoutPins args |> Map.ofList |> Sandboxes.withGitConfig route
       WorkingDirectory = Some workingDirectory
       // Housekeeping: git by path needs no toolchain and must not pay for one.
       Via = Direct }
