@@ -247,7 +247,7 @@ let private deadlineTests =
             async {
                 let bounded : unit -> Async<Result<string, Flaky>> =
                     (fun (_: unit) -> async { return Ok "served" })
-                    |> Resilience.Policy.deadline (fun _ -> never ()) (ms 10.0) Congested
+                    |> Resilience.Policy.deadline (fun _ -> never ()) (ms 10.0) Congested (fun _ -> Refused)
                 let! result = bounded ()
                 Expect.equal result (Ok "served") "the limit never came due, so it never spoke"
             }
@@ -256,7 +256,7 @@ let private deadlineTests =
             async {
                 let bounded : unit -> Async<Result<string, Flaky>> =
                     (fun (_: unit) -> never ())
-                    |> Resilience.Policy.deadline instant (ms 10.0) Congested
+                    |> Resilience.Policy.deadline instant (ms 10.0) Congested (fun _ -> Refused)
                 let! result = bounded ()
                 Expect.equal result (Error Congested) "a hang is a fault a policy can act on, not a wait forever"
             }
@@ -267,12 +267,41 @@ let private deadlineTests =
             let mutable late : (Result<string, Flaky> -> unit) option = None
             let bounded : unit -> Async<Result<string, Flaky>> =
                 (fun (_: unit) -> Async.FromContinuations (fun (ok, _, _) -> late <- Some ok))
-                |> Resilience.Policy.deadline instant (ms 10.0) Congested
+                |> Resilience.Policy.deadline instant (ms 10.0) Congested (fun _ -> Refused)
             let settled = ResizeArray<Result<string, Flaky>> ()
             Async.StartWithContinuations (bounded (), settled.Add, ignore, ignore)
             Expect.equal (List.ofSeq settled) [ Error Congested ] "the deadline answered first"
             late |> Option.iter (fun answer -> answer (Ok "served"))
             Expect.equal (List.ofSeq settled) [ Error Congested ] "and the late answer reached nobody"
+
+        testCaseAsync "an operation that throws settles as the fault the throw maps to" <|
+            async {
+                let bounded : unit -> Async<Result<string, Flaky>> =
+                    (fun (_: unit) -> async { return failwith "the store is gone" })
+                    |> Resilience.Policy.deadline (fun _ -> never ()) (ms 10.0) Congested (fun _ -> Refused)
+                let! result = bounded ()
+                Expect.equal result (Error Refused) "a throw is a fault on the railway, not an exception past it"
+            }
+
+        testCaseAsync "under a guard, a throw is ruled on like any other fault" <|
+            async {
+                // The case the decorator exists for: a throw used to skip the policy and
+                // leave through the caller's exception path, so a retry nobody refused
+                // was never made.
+                let calls = ref 0
+                let delays = ResizeArray<TimeSpan> ()
+                let throwingOnce (_: unit) : Async<Result<string, Flaky>> =
+                    async {
+                        calls.Value <- calls.Value + 1
+                        if calls.Value = 1 then return failwith "dropped" else return Ok "served"
+                    }
+                let guarded =
+                    throwingOnce
+                    |> Resilience.Policy.deadline instant (ms 10.0) Congested (fun _ -> Congested)
+                    |> Resilience.Policy.guard (held delays 3)
+                let! result = guarded ()
+                Expect.equal result (Ok "served") "the throw was retried"
+            }
 
         testCaseAsync "under a guard, the limit is spent per attempt rather than per operation" <|
             async {
@@ -287,7 +316,7 @@ let private deadlineTests =
                     }
                 let guarded =
                     hangingTwice
-                    |> Resilience.Policy.deadline instant (ms 10.0) Congested
+                    |> Resilience.Policy.deadline instant (ms 10.0) Congested (fun _ -> Refused)
                     |> Resilience.Policy.guard (held delays 3)
                 let! result = guarded ()
                 Expect.equal result (Ok "served") "the attempt that answered is the one that counted"
@@ -1653,6 +1682,13 @@ let private answerTests =
             async {
                 let! answer = WebRtc.Answering.within neverElapses (TimeSpan.FromSeconds 2.0) (async.Return "complete") (fun () -> Some "so far")
                 Expect.equal answer (Ok "complete") "a finished gathering is the whole answer"
+            }
+
+        testCaseAsync "an answer goes with what was gathered when gathering fails" <|
+            async {
+                let failed : Async<string> = async { return failwith "gathering failed" }
+                let! answer = WebRtc.Answering.within neverElapses (TimeSpan.FromSeconds 2.0) failed (fun () -> Some "so far")
+                Expect.equal answer (Ok "so far") "a failed gathering still has candidates to send"
             }
 
         testCaseAsync "with nothing to send when time runs out, the session says so" <|

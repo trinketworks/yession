@@ -13,7 +13,7 @@ open System
 ///     a VALUE: composable, printable, and testable without an operation to run it against.
 ///   * a `Verdict` — what one fault says about trying again, which is a decision with three
 ///     answers rather than two (see the type).
-///   * `Policy.guard` and `Policy.deadline` — decorators. Each takes an operation
+///   * `Policy.guard`, `Policy.deadline` and `Policy.caught` — decorators. Each takes an operation
 ///     `'a -> Async<Result<'b, 'e>>` and returns the SAME shape, so they compose with `|>`
 ///     in whatever order a resource wants and stay invisible to every caller downstream.
 ///
@@ -96,7 +96,32 @@ module Resilience =
         /// Real waiting — what the shipped composition passes for `Sleep`.
         let sleep (delay: TimeSpan) : Async<unit> = Async.Sleep (int delay.TotalMilliseconds)
 
-        /// Bound ONE attempt in time, reporting `timedOut` when it runs over.
+        /// Settle a THROW as a fault: `thrown` says which one.
+        ///
+        /// A thrown exception is the one way an operation of this shape can leave without
+        /// a `Result`, and nothing above it handles one. `guard` rules only on a settled
+        /// `Error`, so a throw skips the policy entirely, and a caller that matched on the
+        /// railway is resumed down its exception path instead. Every operation that was
+        /// bounded here had made itself total by hand first (an `Async.Catch` over a fetch,
+        /// a `try` around a decode), and an operation that had not was a crash where a
+        /// fault was meant to be. `deadline` composes this in, so a bounded operation is
+        /// total by construction. Use it alone where nothing needs a time limit.
+        ///
+        /// Cancellation is not caught. It is not an outcome of the operation: it is its
+        /// caller withdrawing, and `deadline` uses it to stop the loser of its race.
+        let caught
+            (thrown: exn -> 'error)
+            (operation: 'a -> Async<Result<'b, 'error>>)
+            : 'a -> Async<Result<'b, 'error>> =
+            fun input ->
+                async {
+                    match! operation input |> Async.Catch with
+                    | Choice1Of2 outcome -> return outcome
+                    | Choice2Of2 error -> return Error (thrown error)
+                }
+
+        /// Bound ONE attempt in time, reporting `timedOut` when it runs over and `thrown`
+        /// when it throws (`caught`): every way an attempt can end is a `Result`.
         ///
         /// An operation that never answers is not a failure any schedule can act on:
         /// `guard` only ever sees a settled `Error`, so a request that hangs is a policy
@@ -116,8 +141,10 @@ module Resilience =
             (sleep: TimeSpan -> Async<unit>)
             (limit: TimeSpan)
             (timedOut: 'error)
+            (thrown: exn -> 'error)
             (operation: 'a -> Async<Result<'b, 'error>>)
             : 'a -> Async<Result<'b, 'error>> =
+            let operation = caught thrown operation
             fun input ->
                 Async.FromContinuations (fun (settle, fail, _) ->
                     let losing = new System.Threading.CancellationTokenSource ()
