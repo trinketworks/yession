@@ -1080,6 +1080,79 @@ module Client =
                 do! TranscriptFetch.replay transcripts dispatch
             }
 
+        /// How long one step of the local open may take before the page goes on without it.
+        ///
+        /// Every step reads this device's own storage, which answers in milliseconds or not
+        /// at all: an IndexedDB open that fails never settles y-indexeddb's `synced`, and
+        /// iOS can leave a store wedged after the page was suspended. Nothing past the open
+        /// asks the session (`/me` comes after it), so a step that never settled was a page
+        /// at "Connecting" for good, with nothing on the wire to say why. Five seconds is
+        /// past a long replay on a phone and short of a person giving up on the page.
+        let limit = System.TimeSpan.FromSeconds 5.0
+
+        /// The steps of the local open, as the platform performs them. A browser opens
+        /// IndexedDB and the Cache API; a test passes steps that hang or throw.
+        type Steps =
+            { /// The saved collaborative document, loaded into the live one.
+              Doc : Async<unit>
+              History : Async<HistoryCache>
+              Transcripts : Async<TranscriptCaches> }
+
+        /// The stores the page goes on with. A store whose step failed is the one that keeps
+        /// nothing, so a wedged store is never asked again in this page load: a network read
+        /// that kept its answer in it would hang where the open did.
+        type Opened = { History : HistoryCache; Transcripts : TranscriptCaches }
+
+        let private bounded
+            (sleep: System.TimeSpan -> Async<unit>)
+            (limit: System.TimeSpan)
+            (what: string)
+            (step: Async<'a>)
+            : Async<Result<'a, string>> =
+            let attempt () = async { let! value = step in return Ok value }
+            Resilience.Policy.deadline
+                sleep
+                limit
+                (sprintf "%s did not answer in %g seconds" what limit.TotalSeconds)
+                (fun error -> sprintf "%s failed: %s" what error.Message)
+                attempt
+                ()
+
+        /// Open this client's own store and replay what it kept, each step bounded by
+        /// `limit` and total (`Resilience.Policy.deadline`). A step that runs over or throws
+        /// is not retried: a store that did not answer once will not answer sooner for being
+        /// asked again, and a replay that threw throws again. The page goes on without that
+        /// store, says why (`LocalStoreFaultMsg`), and returns to what it does with or
+        /// without one: asking the session.
+        let run
+            (sleep: System.TimeSpan -> Async<unit>)
+            (limit: System.TimeSpan)
+            (steps: Steps)
+            (dispatch: ClientMsg -> unit)
+            : Async<Opened> =
+            async {
+                let faults = ResizeArray<string> ()
+                let settled (fallback: 'a) (outcome: Result<'a, string>) : 'a =
+                    match outcome with
+                    | Ok value -> value
+                    | Error fault ->
+                        faults.Add fault
+                        fallback
+                let! doc = bounded sleep limit "the saved document" steps.Doc
+                settled () doc
+                let! history = bounded sleep limit "the saved history" steps.History
+                let history = settled HistoryCache.none history
+                let! transcripts = bounded sleep limit "the saved terminals" steps.Transcripts
+                let transcripts = settled TranscriptCaches.none transcripts
+                dispatch ConnectingMsg
+                let! events = bounded sleep limit "replaying the saved history" (EventFetch.replay history dispatch)
+                let history = events |> Result.map (fun () -> history) |> settled HistoryCache.none
+                let! screens = bounded sleep limit "replaying the saved terminals" (TranscriptFetch.replay transcripts dispatch)
+                let transcripts = screens |> Result.map (fun () -> transcripts) |> settled TranscriptCaches.none
+                if faults.Count > 0 then dispatch (LocalStoreFaultMsg (String.concat ". " faults))
+                return { History = history; Transcripts = transcripts }
+            }
+
     /// Opening the session transport. The browser's WebRTC handshake is a promise that used
     /// to settle ONLY on success, so a session that never answered left the shell in
     /// `Connecting` forever — the same silent dead end the event feed had, one leg over. As a

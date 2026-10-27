@@ -10,9 +10,8 @@ module Yession.Tests.GitIntegration
 // Those tiers substitute the two things a person's request actually carries: a model choosing
 // the verb, and github.com over https. The [LiveAgent] suite at the bottom is that same path
 // with neither substituted — a real model choosing `add_repo`, a real checkout landing — and
-// it runs on the release gate and passes on the default `host` agent backend. Under
-// `YESSION_SESSION_AGENT_BACKEND=srt` it stalls, for a reason that is the Bun CLI's and not
-// this verb's (docs/GAPS.md); srt is not the default, so the gate stays green.
+// it runs on the release gate on the default `host` agent backend. It also passes under
+// `YESSION_SESSION_AGENT_BACKEND=srt` (docs/GAPS.md, the agent CLI entry).
 
 open System
 open Fable.Core
@@ -575,6 +574,96 @@ let private configBoundaryTests =
         }
     ]
 
+// --- A repository's files reach the session only through git's object store ------------
+
+/// A file outside the repos directory that a fixture's symlink points at, and what it holds.
+/// The text is one no fixture would write, so finding it anywhere is the leak.
+let private secretIn (root: string) : string =
+    let path = sprintf "%s/secret.txt" root
+    TestFiles.write path "SECRET-0f3a9c-not-for-the-session\n"
+    path
+
+/// `octo/hello` cloned from a fixture with `link` committed as a symlink to `secretIn`, and the
+/// log of the add.
+let private addedWithLink (link: string) : Async<Repos.ReposService * SessionEvent list> =
+    async {
+        let root = mkdtemp ()
+        let secret = secretIn root
+        makeBareFixtureArranged root "hello" (fun work ->
+            let at = sprintf "%s/%s" work link
+            TestFiles.ensureDir (at.Substring (0, at.LastIndexOf '/'))
+            TestFiles.symlink secret at)
+        |> ignore
+        let log = freshLog ()
+        let service = serviceIn root log
+        let! _ = service.AddRepo caller (RepoRef.create "octo/hello" |> expect)
+        let! events = eventsOf log
+        return service, events
+    }
+
+let private clonedOf (events: SessionEvent list) : RepoCloned =
+    match events |> List.choose (function SessionEvent.RepoCloned c -> Some c | _ -> None) with
+    | [ cloned ] -> cloned
+    | other -> failwithf "expected one clone, got %A" other
+
+/// `octo/hello` cloned with `yession.yaml` declaring one sandbox, and the checkout's path.
+let private addedDeclaring (root: string) : Async<Repos.ReposService * string> =
+    async {
+        makeBareFixtureArranged root "hello" (fun work ->
+            TestFiles.write (sprintf "%s/yession.yaml" work) "version: 2\nsandboxes:\n  dev: {}\n")
+        |> ignore
+        let service = serviceIn root (freshLog ())
+        let! _ = service.AddRepo caller (RepoRef.create "octo/hello" |> expect)
+        return service, sprintf "%s/octo/hello" (reposIn root)
+    }
+
+let private declaredNames (service: Repos.ReposService) : Async<string list> =
+    async {
+        match! RepoConfig.read service.ReadCommitted (RepoRef.create "octo/hello" |> expect) with
+        | Ok (Some read) -> return read.File.Sandboxes |> Map.toList |> List.map (fst >> SandboxName.value)
+        | Ok None -> return []
+        | Error e -> return failwith e
+    }
+
+let private committedReadTests =
+    testList "a repository's files, as HEAD commits them" [
+        testCaseAsync "an AGENTS.md that is a symlink rides on the add as none" <| async {
+            let! _, events = addedWithLink "AGENTS.md"
+            Expect.isNone (clonedOf events).AgentsMd "a link is not a file"
+        }
+
+        testCaseAsync "what an AGENTS.md symlink points at is in no event" <| async {
+            let! _, events = addedWithLink "AGENTS.md"
+            Expect.isFalse ((sprintf "%A" events).Contains "SECRET-0f3a9c") "the target was never read"
+        }
+
+        testCaseAsync "a SKILL.md that is a symlink declares no skill" <| async {
+            let! _, events = addedWithLink ".agents/skills/leak/SKILL.md"
+            Expect.isEmpty (clonedOf events).Skills "a link is not a skill"
+        }
+
+        testCaseAsync "a yession.yaml that is a symlink declares nothing" <| async {
+            let! service, _ = addedWithLink "yession.yaml"
+            let! read = RepoConfig.read service.ReadCommitted (RepoRef.create "octo/hello" |> expect)
+            Expect.equal read (Ok None) "a link is not a file"
+        }
+
+        testCaseAsync "a yession.yaml edited and not committed declares what HEAD declares" <| async {
+            let! service, checkout = addedDeclaring (mkdtemp ())
+            TestFiles.write (sprintf "%s/yession.yaml" checkout) "version: 2\nsandboxes:\n  gate: {}\n"
+            let! names = declaredNames service
+            Expect.equal names [ "dev" ] "the working tree declares nothing"
+        }
+
+        testCaseAsync "a yession.yaml edit declares once it is committed" <| async {
+            let! service, checkout = addedDeclaring (mkdtemp ())
+            TestFiles.write (sprintf "%s/yession.yaml" checkout) "version: 2\nsandboxes:\n  gate: {}\n"
+            hostGit [ "commit"; "-am"; "gate" ] checkout
+            let! names = declaredNames service
+            Expect.equal names [ "gate" ] "the commit is the declaration"
+        }
+    ]
+
 let private layoutTests =
     testList "the session's layout" [
 
@@ -771,7 +860,7 @@ let private srtTests =
         // Where an add's time goes, as spans: every step between the call and the record is
         // its own child of the add, and a sandbox's first-use cost sits inside the verb that
         // paid it — so "the clone is slow" and "the sandbox is slow" read differently.
-        testCaseAsync "an add is one span tree: token, name, clone (with its sandbox), listing, record" <| async {
+        testCaseAsync "an add is one span tree: token, name, clone (with its sandbox), listing, files, record" <| async {
             let root = mkdtemp ()
             makeBareFixture root "hello" |> ignore
             let exporter = Fable.OpenTelemetry.inMemorySpanExporter ()
@@ -800,7 +889,7 @@ let private srtTests =
             Expect.equal (parentOf add) None "the add is the root here"
             Expect.equal
                 (childrenOf add)
-                [ "git clone"; "repo.canonical"; "repo.listing"; "repo.record"; "repo.record_added"; "repo.resolve_token" ]
+                [ "git clone"; "repo.canonical"; "repo.listing"; "repo.read_files"; "repo.record"; "repo.record_added"; "repo.resolve_token" ]
                 "each step of the add is its own child"
             Expect.equal (childrenOf (named "git clone")) [ "git.probe"; "git.sandbox.create" ] "the clone's sandbox is brought up inside it"
             Expect.equal (childrenOf (named "repo.listing")) [ "git rev-parse"; "git status" ] "the listing is two git runs"
@@ -1527,6 +1616,7 @@ let tests =
         layoutTests
         Tag.needs "Repo verbs (srt)" [ Tag.Sandbox ] (fun () -> srtTests)
         Tag.needs "A checkout's own config and content (srt and host)" [ Tag.Sandbox; Tag.Ports ] (fun () -> configBoundaryTests)
+        Tag.needs "A repository's files, read from git (srt)" [ Tag.Sandbox ] (fun () -> committedReadTests)
         Tag.needs
             "Repos the session reports"
             [ Tag.Ports; Tag.Native; Tag.Sandbox ]
