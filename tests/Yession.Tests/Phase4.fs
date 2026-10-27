@@ -714,6 +714,10 @@ let private uiRenderTests =
             Expect.isTrue (stalledAt >= 0 && workingAt > stalledAt) "every standing, worst first"
             Expect.isTrue (detail.IndexOf (Dom.attr Dom.Manager.stop "ui-render") > workingAt) "then the verbs"
             Expect.isFalse (running.Contains (Dom.Manager.expanded + "=")) "and no row is rendered open"
+            // The row's own mark rides down to the first line, so that line draws none, and
+            // the lines after it each draw their own.
+            Expect.isFalse (detail.Substring(0, stalledAt).Contains "data-attention=") "the first line repeats no mark"
+            Expect.isTrue (detail.Substring(stalledAt, workingAt - stalledAt).Contains "data-attention=\"moving\"") "a later line draws its own"
 
         // The FLOOR. A row says its state in words, in every arm. Drop a word and four of the
         // six states are one solid dot — stopped, archived, failed to start and exited — and

@@ -246,29 +246,32 @@ The last section holds trust boundaries as sharp as the first section's.
   is BY DESIGN not an agent backend: a container per session boot is the opposite of the
   sub-second start the agent needs.
   - **The default is `host`, and unlike the WorkSandbox's that is a shortfall, not a decision.**
-    `YESSION_SESSION_AGENT_BACKEND=srt` is the answer this wants, but it does not work yet. The
-    comment above `agentBackend` in `app/SessionMain.fs` gives the history (#364, the 90s
-    stall) and the cause: the **Bun** `claude` binary ignores `HTTP_PROXY`, so its API egress
-    goes DIRECT into srt's `--unshare-net`. What the live tier measured beyond that:
-    - A `verify.yml` dispatch with `=srt` teed the CLI's stdio and its `DEBUG=1` log. The CLI
-      comes up FULLY (MCP server connected, tools listed, credential accepted, `init` emitted).
-      Then every request to `api.anthropic.com` fails in about 3ms with a transport-level
-      `Connection error.` (no HTTP status), and srt's proxy logs ZERO connections.
-    - Claude Code's proxy support goes through undici's
-      `setGlobalDispatcher(EnvHttpProxyAgent)`, which Bun's native `fetch` ignores. The
-      WorkSandbox's git and node honour the proxy: every `Srt` suite is green.
-    - **Not the cause**, each checked:
-      - the async spawn seam (the `Srt` suite drives it)
-      - the read scope (`process.execPath` allows `/nix/store` back)
-      - the policy env (srt bakes the proxy env into the wrapped argv: bwrap `--setenv` on
-        Linux, an `env VAR=…` prefix on macOS)
-      - a missing CA bundle (srt runs a plain authenticated CONNECT proxy, with no MITM CA)
-    - **Why it is not a small fix.** Each srt sandbox now runs its `SandboxManager` in its own
-      process (`SrtSandbox.HostWire`), so the agent's network policy could change alone. What
-      remains is the binary: only the Bun one ships (the SDK's per-platform optional deps). On
-      Node, undici's dispatcher governs `fetch` and the proxy works, but that means a large
-      dependency packaged under Nix. Until then the agent CLI has only its env allowlist and
-      scratch HOME, the same standing as `host` everywhere else.
+    `YESSION_SESSION_AGENT_BACKEND=srt` is the answer this wants. #364 made it the default, the
+    release gate's live turn then stalled for 90 seconds, and the default went back. The gate
+    now passes under `=srt`. The default stays `host` until a macOS run under `=srt` is
+    measured: the deployment in [deployment.md](deployment.md) is macOS, and every run so far
+    is Linux.
+    - What #373 recorded: the CLI came up FULLY (MCP server connected, tools listed, credential
+      accepted, `init` emitted), then every request to `api.anthropic.com` failed in about 3ms
+      with a transport-level `Connection error.`, and srt's proxy logged ZERO connections.
+    - **The Bun CLI honours the proxy.** #373 read the stall as Bun's `fetch` ignoring undici's
+      dispatcher. That reading is wrong. The vendored `claude` (nixpkgs 2.1.283), run outside
+      srt against two loopback listeners, sends `CONNECT api.anthropic.com:443` to
+      `HTTPS_PROXY` and to `https_proxy`, with `Proxy-Authorization: Basic` from a credential
+      in the URL. With `ANTHROPIC_BASE_URL` at the second listener, its requests go through
+      the proxy when one is set and direct when none is.
+    - **The gate passes under `=srt` on master.** A `verify.yml` dispatch with only
+      `YESSION_SESSION_AGENT_BACKEND: srt` added (`LiveAgent Ports Native Srt`, the live
+      `add_repo` case) was green, and the clone landed in 7.6s (run 40490505787). Three changes
+      since #373 can each have cleared the stall, and none was measured alone: the nixpkgs pin
+      move (#980, a newer CLI), srt 0.0.67 to 0.0.77 (#989), and a separate srt manager per
+      sandbox (#1005).
+    - **srt 0.0.77 names its proxy `localhost`, and its relay listens on IPv4 alone.** Every
+      proxy variable is `http://<user>:<token>@localhost:3128`, and the relay inside the
+      network namespace is `socat TCP-LISTEN:3128`. With `::1 localhost` in `/etc/hosts`,
+      some of the CLI's calls fail with `connect ECONNREFUSED ::1:3128`; its API call still
+      got through on the box that measured it. srt 0.0.80 listens on both families, which
+      fixes this upstream.
   - The SDK's spawn seam is SYNCHRONOUS and srt's wrap is not. So the srt tier gives the SDK a
     stand-in process whose streams are live at once, and joins the real child to them when the
     wrap resolves. The `Srt` suite drives it end to end (stdin in, stdout out, exit code).
@@ -966,6 +969,11 @@ After the fixes land, one pass rewrites it to what still reproduces.
     both said something" has a total answer: the keys are (repo, name) pairs and the repos are
     disjoint, so the union is disjoint by construction. **That is the rule for every future key:
     a key belongs in `yession.yaml` only if its scope is a sandbox.** Left out, deliberately:
+    - **The file is read from `HEAD`, never from the working tree.** Whoever can push to the
+      repo authors the file (technical-design §4), so an edit that nobody has committed
+      declares nothing. Commit it, and the next fold (any verb that changes a checkout, or
+      a boot) reads it. `AGENTS.md` and `.agents/skills/*/SKILL.md` are read the same way,
+      when the clone lands. A symlink at `HEAD` is no file for any of the three (rule 20).
     - **No inter-sandbox networking.** A `db:` sandbox's process is reachable from inside that
       sandbox only. A compose-like shared network is a design of its own.
     - **A `command` (`cmd`), an `entrypoint`, the limits (`memory`, `oom-score-adj`,

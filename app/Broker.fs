@@ -106,6 +106,13 @@ let private grantTimedOut =
       Final = false
       Outcome = Resilience.Http.Unreached }
 
+/// A leg that threw rather than answered. `askFor` settles every outcome it knows of, so this
+/// is the one it does not: retried like an unreached endpoint, because nothing was heard.
+let private grantThrew (error: exn) =
+    { Message = sprintf "asking the token endpoint failed: %s" error.Message
+      Final = false
+      Outcome = Resilience.Http.Unreached }
+
 /// Asking a token endpoint, as everything below the composition root sees it: a settled body
 /// or a failure, with whatever resilience was put behind it. A tuple because that is the
 /// shape the decorators compose over.
@@ -142,7 +149,7 @@ let grantPolicy
 /// hypothetical; it is what this function was written to stop being possible.
 let resilient (waiting: TimeSpan -> Async<unit>) (policy: Resilience.Policy<GrantFailure>) : GrantLeg =
     asking
-    |> Resilience.Policy.deadline waiting grantDeadline grantTimedOut
+    |> Resilience.Policy.deadline waiting grantDeadline grantTimedOut grantThrew
     |> Resilience.Policy.guard policy
 
 /// What the broker observed — identifiers only, adapted to audit records by the caller.

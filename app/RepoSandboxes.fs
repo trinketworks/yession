@@ -192,7 +192,6 @@ let capabilitiesOn
               Sensitive = ResourceClosure.isSensitive closure })
 
 let create
-    (reposDir: string)
     (repos: unit -> Repos.ReposService option)
     (sandboxes: unit -> WorkSandboxes.WorkSandboxes)
     (run: RunGatedCommand)
@@ -246,7 +245,7 @@ let create
                 | Error reason -> declarations <- Declarations.after declarations (Error reason)
                 | Ok reads ->
                     let unreadableCheckouts = RepoRead.unreadable reads
-                    let read = RepoConfig.readAll reposDir (RepoRead.listed reads |> List.map (fun listing -> listing.Repo))
+                    let! read = RepoConfig.readAll service.ReadCommitted (RepoRead.listed reads |> List.map (fun listing -> listing.Repo))
                     // One checkout git cannot read says nothing about its neighbours, so they
                     // are read as they are and the fold stays `Read`. Nor does it say anything
                     // about its OWN file, so what that repo declared last time stands, beside
@@ -571,7 +570,8 @@ let create
                     // no now: say why, rather than "asks for nothing".
                     | Some unreadable -> return Error (sprintf "git cannot read the checkout at %s: %s" unreadable.Path unreadable.Reason)
                     | None ->
-                        let declared = (RepoConfig.readAll reposDir (RepoRead.listed reads |> List.map (fun listing -> listing.Repo))).Declared
+                        let! read = RepoConfig.readAll service.ReadCommitted (RepoRead.listed reads |> List.map (fun listing -> listing.Repo))
+                        let declared = read.Declared
                         match askedBy declared repo with
                         | None -> return Error (sprintf "%s asks for nothing this session can resolve" (RepoRef.value repo))
                         // The set that arrived is the set a person read. If it is not what

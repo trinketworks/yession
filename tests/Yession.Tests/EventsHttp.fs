@@ -419,6 +419,88 @@ let private storeTests =
 // The arithmetic is pinned apart from the HTTP, because they fail for different reasons: the
 // bounds are a rule about where ranges fall, and the endpoint is about authorization, framing
 // and the empty case.
+/// A step that never settles: the wedged store the bound exists for.
+let private never () : Async<'a> = Async.FromContinuations (fun _ -> ())
+
+/// A clock whose every wait has already run out, so a bound is spent with no real time.
+let private elapsed (_: TimeSpan) : Async<unit> = async.Return ()
+
+/// A clock that never runs out, so only the steps decide how an open ends.
+let private neverElapses (_: TimeSpan) : Async<unit> = never ()
+
+/// Healthy steps over `store`: a document that loads, the given history, no terminals.
+let private stepsOver (store: Client.HistoryCache) : Client.LocalOpen.Steps =
+    { Doc = async.Return ()
+      History = async.Return store
+      Transcripts = async.Return Client.TranscriptCaches.none }
+
+/// The model after a local open, from `ClientModel.init`.
+let private openedModel (seen: ResizeArray<ClientMsg>) =
+    seen
+    |> Seq.fold
+        (fun m msg -> Support.step msg m)
+        (ClientModel.init { PeerId = PeerId.create "p" |> expect; DisplayName = "P" })
+
+let private localOpenTests =
+    testList "A local open that its store does not answer" [
+        testCaseAsync "a saved document that never loads still lets the page go on to the session" <|
+            async {
+                // The phone this was found on: the page drew `Connecting` and never asked for
+                // `/me`, because the open waited on a store that never answered.
+                let seen = ResizeArray ()
+                let! _ = Client.LocalOpen.run elapsed (TimeSpan.FromSeconds 5.0) { stepsOver (storeOf []) with Doc = never () } seen.Add
+                Expect.isTrue
+                    (seen |> Seq.exists (function LocalStoreFaultMsg _ -> true | _ -> false))
+                    "the open ended, and said what it went without"
+            }
+
+        testCaseAsync "a store that throws is a page without its copy, and says so" <|
+            async {
+                let seen = ResizeArray ()
+                let! _ =
+                    Client.LocalOpen.run
+                        neverElapses
+                        (TimeSpan.FromSeconds 5.0)
+                        { stepsOver (storeOf []) with History = async { return failwith "the store is gone" } }
+                        seen.Add
+                match (openedModel seen).LocalCopy with
+                | LocalCopy.Unread reason -> Expect.stringContains reason "the store is gone" "the reason is the store's own"
+                | other -> failwithf "expected a page without its copy, got %A" other
+            }
+
+        testCaseAsync "a store whose replay hangs is not asked again" <|
+            async {
+                // A network read keeps its answer in the store it was given. A store that hung
+                // once would hang that read too, so the page goes on with one that keeps nothing.
+                let wedged =
+                    { storeOf [ answerOf 0L 3 ] with Client.HistoryCache.Read = fun _ -> never () }
+                let! opened = Client.LocalOpen.run elapsed (TimeSpan.FromSeconds 5.0) (stepsOver wedged) ignore
+                let! stored = opened.History.Stored ()
+                Expect.isEmpty stored "the page goes on with the store that keeps nothing"
+            }
+
+        testCaseAsync "history already drawn stays drawn when the saved document fails" <|
+            async {
+                let seen = ResizeArray ()
+                let! _ =
+                    Client.LocalOpen.run
+                        neverElapses
+                        (TimeSpan.FromSeconds 5.0)
+                        { stepsOver (storeOf [ answerOf 0L 3 ]) with Doc = async { return failwith "no document" } }
+                        seen.Add
+                Expect.equal (openedModel seen).LocalCopy (LocalCopy.Kept None) "the conversation kept is still the reader's picture"
+            }
+
+        testCaseAsync "a store that answers says nothing about faults" <|
+            async {
+                let seen = ResizeArray ()
+                let! _ = Client.LocalOpen.run neverElapses (TimeSpan.FromSeconds 5.0) (stepsOver (storeOf [ answerOf 0L 3 ])) seen.Add
+                Expect.isFalse
+                    (seen |> Seq.exists (function LocalStoreFaultMsg _ -> true | _ -> false))
+                    "a healthy open has nothing to explain"
+            }
+    ]
+
 let private aheadTests =
     testList "What is ahead" [
         testCase "the addresses are the ones the cursor would have chosen, one at a time" <| fun () ->
@@ -719,6 +801,7 @@ let tests =
     testList "EventsHttp" [
         endpointTests
         storeTests
+        localOpenTests
         aheadTests
         feedTests
         pagingTests

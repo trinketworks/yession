@@ -1068,6 +1068,13 @@ module View =
                   <span class="{Style.small}">{Dom.Text.historyNotKept}</span>
                   {detailNote "history-store" [ Dom.Text.historyNotKeptWhy ]}
                 </section>"""
+        | LocalCopy.Unread reason ->
+            html $"""
+                <section class="{Style.sideSection}" data-history-store="unread">
+                  <span class="{Style.label}">history</span>
+                  <span class="{Style.small}">{Dom.Text.historyUnread}</span>
+                  {detailNote "history-store" [ reason; Dom.Text.historyUnreadWhy ]}
+                </section>"""
 
     /// Which build served this session, at the column's foot on BOTH faces — chrome that
     /// belongs to the column like its collapse chevron, so it does not come and go as the
@@ -1357,7 +1364,7 @@ module View =
     /// were nowhere on the first screen until somebody went looking. A running command is
     /// said to the eye by the composer's tray (`composerTray`), which can take the reader to
     /// it; here only in the tab's accessible name.
-    /// A mark, not words: the terminal glyph, and the count as a bare number beside it while
+    /// A mark, not words: a terminal on a stack (`Icon.content`), and the count as a bare number beside it while
     /// any are open. "‹ terminals" spent a third of a phone's band saying what the mark says,
     /// and was the one word in the band that is not the session's own. The words live on in
     /// the accessible name and the hover title.
@@ -1380,7 +1387,7 @@ module View =
                         title="{Dom.Text.showTerminals}" aria-label="{Dom.Text.showTerminalsNamed (List.length live) running}"
                         data-content-toggle="show" data-terminals-open="{string (List.length live)}"
                         ?data-terminals-running={not (List.isEmpty running)}
-                        @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.terminal}{count}</button>"""
+                        @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.content}{count}</button>"""
 
     let private header (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let titleStr = Ylmish.Text.toString model.Synced.Title
@@ -3516,16 +3523,17 @@ module View =
             | LocalCopy.Reading
             | LocalCopy.Kept _
             | LocalCopy.NoneKept
-            | LocalCopy.Unkeepable -> None
+            | LocalCopy.Unkeepable
+            | LocalCopy.Unread _ -> None
         // The same case with nothing kept at all: a page that has not read the log through, has
         // no copy of it, and cannot reach the session to read it. Not the idle caret, which says
         // the session is EMPTY — nobody here knows that. A store that has not answered yet says
         // nothing either way; it may yet answer with the conversation.
         let absent =
             match model.LocalCopy, SessionLink.phase model.Link with
-            | (LocalCopy.NoneKept | LocalCopy.Unkeepable), Phase.Opening when SessionLink.cutOff model.Link ->
+            | (LocalCopy.NoneKept | LocalCopy.Unkeepable | LocalCopy.Unread _), Phase.Opening when SessionLink.cutOff model.Link ->
                 Some (reasonLine Dom.Text.historyNotOnDevice)
-            | (LocalCopy.Reading | LocalCopy.Kept _ | LocalCopy.NoneKept | LocalCopy.Unkeepable), _ -> None
+            | (LocalCopy.Reading | LocalCopy.Kept _ | LocalCopy.NoneKept | LocalCopy.Unkeepable | LocalCopy.Unread _), _ -> None
         // This client is fetching the log and has not read it through, so a message may still be
         // a round trip from landing. Shaped like the row that will take its place — an author
         // line: the beating dot where an avatar stands, the words where a name does, on the

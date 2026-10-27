@@ -227,14 +227,15 @@ let private edgeTabOnBand (desktop: bool) : string list =
           if not (paintedAt tab (at.left + at.width / 2.0) (at.top + at.height / 2.0)) then
               "covered at its centre"
           if desktop then
-              // A mark, not words: it stands on the title's LINE, its middle on the title's
-              // middle, as the sidebar's chevron across the band does (`Style.navReopen`).
+              // A mark, not words: it stands on the title's LINE, its middle on the middle
+              // stroke of the title's lowercase `e`, as the sidebar's chevron across the band
+              // does (`Style.navReopen`). At 28/32 that stroke is 3.2px under the line's middle.
               match first (Root.Under tab) "svg", first Root.Document "#shell [data-session-title]" with
               | Some mark, Some title ->
                   let m = mark.getBoundingClientRect ()
                   let t = title.getBoundingClientRect ()
-                  let drift = (m.top + m.height / 2.0) - (t.top + t.height / 2.0)
-                  if abs drift > 2.0 then sprintf "off the title's line by %gpx" drift
+                  let drift = (m.top + m.height / 2.0) - (t.top + t.height / 2.0) - 3.0
+                  if abs drift > 1.5 then sprintf "off the title's x-height by %gpx" drift
               | _ -> "the tab's mark or the title is missing" ]
     | _ -> [ "the edge tab or the header is missing" ]
 
