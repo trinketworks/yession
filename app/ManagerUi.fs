@@ -266,7 +266,8 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
 ///
 /// The mark is a press. It UNFOLDS the row, under the name: one line per thing the row says
 /// (`rowSays`), each mark under the row's mark and each word on the name's rail, and then
-/// the verbs. The server always renders a row folded; which row is open is the page's
+/// the verbs. The first line's mark IS the row's mark, riding down to it on a faint track
+/// (`Style.recordMarkRider`), so what the mark ranked first is never drawn twice. The server always renders a row folded; which row is open is the page's
 /// own state (`ManagerPage.fs`), carried across every frame the rows stream swaps in.
 ///
 /// The id is stated ONCE. An unnamed session's name IS its id (`SessionRecord.isNamed`), so
@@ -292,14 +293,16 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
         | None ->
             let openUrl = ManagerRoute.path (ManagerRoute.OpenSession view.Record.SessionId)
             html $"""<a class="{Style.recordRowLink}" href="{openUrl}" target="_blank" data-open>{line}</a>"""
-    let saidLine (attention: Attention, word: string, facet: string option) =
+    // The first line's mark is the row's own, which rides down to it (`Style.recordMarkRider`);
+    // its seat in the line stays, empty, so the word keeps the name's rail.
+    let saidLine (index: int) (attention: Attention, word: string, facet: string option) =
         let word =
             match facet with
             | Some facet ->
                 html $"""<span class="{Style.cls [ Style.recordDetailWord; Style.attentionInk attention ]}" {Dom.Manager.standing}="{facet}">{word}</span>"""
             | None ->
                 html $"""<span class="{Style.cls [ Style.recordDetailWord; Style.attentionInk attention ]}">{word}</span>"""
-        html $"""{Icon.attention attention}{word}"""
+        if index = 0 then html $"""<span></span>{word}""" else html $"""{Icon.attention attention}{word}"""
     let detailId = sprintf "row-detail-%s" id
     // The mark's name says the session and what it ranked first: the press is the one thing
     // a screen reader meets on a folded row besides the name.
@@ -308,14 +311,14 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
         <tr class="{Style.tableRow}" data-session="{id}">
           <td class="{Style.recordMarkCell} {Col.mark}">
             <button type="button" class="{Style.recordMarkPress}" data-row-mark="{id}" aria-expanded="false"
-                    aria-controls="{detailId}" aria-label="{markName}">{Icon.attention attention}</button>
+                    aria-controls="{detailId}" aria-label="{markName}"><span class="{Style.recordMarkSeat}"></span><span class="{Style.recordMarkTrack}"></span><span class="{Style.recordMarkRider}">{Icon.attention attention}</span></button>
           </td>
           <td class="{Style.tableCell}" title="{name}">
             {nameLine}
             <div class="{Style.recordDetail}" id="{detailId}" data-row-detail>
               <div class="{Style.recordDetailInner}">
                 <div class="{Style.recordDetailLines}">
-                  {says |> List.map saidLine}
+                  {says |> List.mapi saidLine}
                   <div class="{Style.recordDetailVerbs}">{actions view}</div>
                 </div>
               </div>
