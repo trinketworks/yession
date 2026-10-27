@@ -202,8 +202,11 @@ jobs:
       # product changes.
       - name: Let unprivileged user namespaces keep their capabilities (srt needs them)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: TEMPORARY hosts file (agent srt investigation)
+        run: cat /etc/hosts
       - name: Verification gate
         env:
+          YESSION_SESSION_AGENT_BACKEND: srt  # TEMPORARY: agent srt investigation
           # The credential the live agent suites run on. This job used to name
           # CLAUDE_CODE_OAUTH_TOKEN, which is not a secret this repository has, so the variable
           # arrived empty — and back when an unavailable capability was silently dropped, that
