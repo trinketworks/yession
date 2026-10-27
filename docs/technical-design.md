@@ -587,7 +587,10 @@ Three properties make the file safe to read from code a session just cloned:
 - **Whoever can push to the repo authors the file**, and that person is neither the operator
   nor anybody in the session. So the file's acts are `ActorRef.Configured`, and it owns no
   credential. The schema refuses what a repo may not name: the whole `YESSION_` prefix in
-  `env:`, a host path as a volume source, and a `workdir` outside the checkout.
+  `env:`, a host path as a volume source, and a `workdir` outside the checkout. So the session
+  reads the file from the checkout's `HEAD`, out of git's object store, and never from the
+  working tree. An edit in the working tree declares nothing until somebody commits it. A
+  `yession.yaml` that `HEAD` commits as a symlink is no file (rule 20).
 
 This repository's own `yession.yaml` is the schema's acceptance test: what yession needs to
 maintain yession measures whether the file can say anything real.
@@ -630,6 +633,10 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     session's own generic secrets. It never reads another principal's scope, the Manager's
     process environment, or a connection credential. The last is a type, not a check: the
     resolver holds only the store's generic partition (`SecretStore.SecretResolution`).
+20. A repository's file reaches the session only through git's object store, read in the git
+    sandbox (`ReposService.ReadCommitted`). The session process opens no path that a
+    repository names. A work sandbox can write the checkout, so a path in it can be a symlink
+    to anything the session's user can read, and a check before the open races the write.
 21. No git process holds a GitHub credential. git reaches github.com only through the git
     gateway (`GitGateway`), which adds the credential of a loan on the way. A work sandbox's
     git and the session's own clone and fetch take the same route.

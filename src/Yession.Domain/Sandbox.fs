@@ -77,6 +77,11 @@ module SandboxBackend =
 /// the weaker state on BOTH rather than run a path in production that no CI here
 /// exercises.
 ///
+/// What the clone writes, the session never reads back as a file: a repository's files reach
+/// it only through git's object store (technical-design §5, rule 20). So the exemption widens
+/// what the one `git clone` process can touch, and nothing about what the work tree it
+/// leaves can make the session open.
+///
 /// UNDO when srt can exempt a SUBTREE from those refusals (or macOS adopts the Linux
 /// scan, which exempts a not-yet-existing checkout by construction): then the clone takes
 /// the ordinary confined policy and this case has no callers left — delete it, rather

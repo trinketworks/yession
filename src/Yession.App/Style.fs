@@ -695,7 +695,32 @@ module Style =
     /// It unfolds the row (`aria-expanded`). No ground of its own: a ground would hang 12px
     /// into the gutter, off the rail every other edge on the page keeps, and the unfolded
     /// lines under it already say the row is open.
-    let recordMarkPress = cls [ "-ml-3 w-11 h-11 pl-3 flex items-center bg-transparent border-0 cursor-pointer"; focusRing ]
+    let recordMarkPress = cls [ "relative -ml-3 w-11 h-11 pl-3 flex items-center bg-transparent border-0 cursor-pointer"; focusRing ]
+
+    /// The row's mark, which RIDES when the row unfolds: down a track to the first unfolded
+    /// line, which is the one it ranks first, so that line says its word with no mark of its
+    /// own rather than repeating the one above it (`--spacing-mark-slide`). A wrapper, so the
+    /// mark's own motion (`markOrbit` and its siblings) runs on undisturbed while it travels.
+    let recordMarkRider =
+        cls [ "relative flex transition-[translate]"; Motion.pace
+              "[[data-expanded]_&]:translate-y-(--spacing-mark-slide)" ]
+
+    /// What the mark leaves behind as it rides: a faint 2px line from its seat to where it
+    /// stops, drawn down with it (scaled from the top, at the same pace). Centred on the
+    /// mark's 12px box: the box sits 12px into the press, so its centre is 18px in and the
+    /// press's own middle down.
+    let recordMarkTrack =
+        cls [ "absolute left-[17px] top-1/2 w-0.5 h-(--spacing-mark-slide) bg-ink-faint origin-top scale-y-0"
+              "transition-[scale]"; Motion.pace
+              "[[data-expanded]_&]:scale-y-100" ]
+
+    /// The track's start: a 4px point on the mark's seat, so the line begins round rather
+    /// than squared. Its own element, not the line's `::before`, so the line's scale does not
+    /// squash it; it fades in where the mark leaves rather than travelling.
+    let recordMarkSeat =
+        cls [ "absolute left-4 top-1/2 -mt-0.5 size-1 rounded-full bg-ink-faint opacity-0"
+              "transition-[opacity]"; Motion.pace
+              "[[data-expanded]_&]:opacity-100" ]
 
     /// What a row unfolds to, under its name: each thing it says, then its verbs. Folded at
     /// rest — `visibility` takes the verbs out of the tab order with it — and unfolded by
@@ -1771,8 +1796,9 @@ module Style =
     /// under the chevron that opens it (`navReopenMark`). The door is a mark, not words
     /// (`View.contentReopen`), so it stands on the title's LINE as the sidebar's chevron does
     /// across the band (`navReopen`): `pb-2` lifts the 14px mark's middle onto the title's
-    /// (measured live at 1440: mark and chevron both at y=52, the title's middle 52.5; the
-    /// words' `pb-[1px]` left it 6.5px low). On a phone the group centres on the title's line.
+    /// line (measured live at 1440: mark and chevron both at y=52, the title's middle 52.5; the
+    /// words' `pb-[1px]` left it 6.5px low), and the glyph then drops onto the x-height as the
+    /// chevron's does (`terminalReopen`). On a phone the group centres on the title's line.
     let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-2 phone:items-center phone:gap-3 phone:pb-0"
     let headerStatus = "shrink-0"
 
@@ -2098,8 +2124,19 @@ module Style =
     /// padding and half the avatar, 26px from the edge: the 44px target starts 4px in
     /// (`-ml-3` against the band's 16px) and pays the other side back (`-mr-5`) so the title
     /// does not move. `-mx-4` centred it at 22px, 4px left of every avatar under it.
+    ///
+    /// Down, the glyph points at the middle stroke of the title's lowercase `e`, not at the
+    /// middle of its line box: a lowercase title's ink is its x-height, and the line's middle
+    /// is above it. Noto Sans ExtraLight holds that stroke 0.28em over the baseline, which
+    /// lands 3.2px under the line's middle at 28/32 and 1.7px under it at 19/24 (measured
+    /// live at 390, 1024 and 1440 by scanning a drawn `e`). Only the GLYPH drops
+    /// (`*:first`, the button's first child; not `[&>svg]`, because a `>` in a class string
+    /// ends the tag for the tests that read classes off the render, and not `[&_svg]`,
+    /// because the mark is an svg too), so the box, and the mark placed from it (`navReopenMark`), stay on the
+    /// id's line. The terminals' mark across the band drops the same way (`terminalReopen`).
     let navReopen =
         "absolute left-[calc(var(--column-gutter)+var(--spacing-rail)+0.625rem-7px)] bottom-[30px] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
+        + "*:first:translate-y-[3px] phone:*:first:translate-y-[1.5px] "
         + "phone:relative phone:inset-auto phone:grid phone:[.nav-alt_&]:hidden phone:-ml-3 phone:-mr-5"
 
     /// The session's worst standing, under the reopen chevron: the column it opens is where
@@ -4953,7 +4990,11 @@ module Style =
     /// leaning the way the column travels. Rendered from the model rather than hidden by a
     /// variant: whether the control exists is a fact about the model, and a button that is
     /// merely invisible is still in the tab order.
-    let terminalReopen = navChevronBack + " shrink-0"
+    ///
+    /// Its glyph drops onto the title's x-height by the sidebar chevron's own amounts
+    /// (`navReopen`), so the two marks either side of the title point at one stroke.
+    let terminalReopen =
+        navChevronBack + " shrink-0 *:first:translate-y-[3px] phone:*:first:translate-y-[1.5px]"
 
     // --- ANSI styling ---------------------------------------------------------------------------
     // Turning a parsed `AnsiStyle` into what a span wears. Split in two on purpose:
