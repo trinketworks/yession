@@ -10,9 +10,8 @@ module Yession.Tests.GitIntegration
 // Those tiers substitute the two things a person's request actually carries: a model choosing
 // the verb, and github.com over https. The [LiveAgent] suite at the bottom is that same path
 // with neither substituted — a real model choosing `add_repo`, a real checkout landing — and
-// it runs on the release gate and passes on the default `host` agent backend. Under
-// `YESSION_SESSION_AGENT_BACKEND=srt` it stalls, for a reason that is the Bun CLI's and not
-// this verb's (docs/GAPS.md); srt is not the default, so the gate stays green.
+// it runs on the release gate on the default `host` agent backend. It also passes under
+// `YESSION_SESSION_AGENT_BACKEND=srt` (docs/GAPS.md, the agent CLI entry).
 
 open System
 open Fable.Core
