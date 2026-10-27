@@ -34,11 +34,26 @@ examples use the prefix too (`YESSION_PROXY_PORT`, `YESSION_SERIAL_PORT`).
 | an option | you, the operator, for this Manager | `--port`, `--idle-timeout`, `--data-dir` |
 | `YESSION_MANAGER_URL` / `YESSION_SESSION_URL` | you, and every session reads them too | see §Addressing |
 | `YESSION_BIN_*` | you or the package. It names an executable a session runs | `YESSION_BIN_GIT`, `YESSION_BIN_BWRAP` |
-| `YESSION_SESSION_*` | you. It is per-session policy, today set once per host | `YESSION_SESSION_WORK_BACKEND`, `YESSION_SESSION_RESOURCES` |
+| `YESSION_SESSION_*` | you. It is per-session policy, today set once per host | `YESSION_SESSION_WORK_BACKEND`, `YESSION_SESSION_GIT_BACKEND`, `YESSION_SESSION_RESOURCES` |
 | `YESSION_LAUNCH` | nobody — the Manager mints it per launch | — |
 
 The Manager **refuses** a variable that moved onto the command line. The boot stops and names
 the option to write instead. `app/Retirements.fs` lists the retired names and says why.
+
+A session runs three sandbox families, and each has its own backend variable. Each is parsed
+at boot and fails closed: a value it does not know stops the session.
+
+| variable | runs | values | default |
+|---|---|---|---|
+| `YESSION_SESSION_WORK_BACKEND` | the agent's terminals, blocks and `setup:` | `host`, `srt`, `docker` | `srt` |
+| `YESSION_SESSION_AGENT_BACKEND` | the `claude` CLI | `host`, `srt` | `host` |
+| `YESSION_SESSION_GIT_BACKEND` | the session's own git verbs: clone, fetch, switch, status, log, diff | `host`, `srt` | `srt` |
+
+The git verbs work on checkouts that every work sandbox can write, `.git/config` included. Under
+`srt` a program that config names runs with the git sandbox's reach: the repos directory, and
+the git gateway as its only egress. `YESSION_SESSION_GIT_BACKEND=host` runs the verbs as you,
+unconfined, so a work sandbox can then run a program as you through a checkout's
+`filter.<driver>.smudge` (docs/GAPS.md). Choose it only where srt cannot run.
 
 `YESSION_LAUNCH` is the launch's control secret. It grants custody of the session's secrets
 and the right to register as an OIDC client. Setting it by hand impersonates a session. It

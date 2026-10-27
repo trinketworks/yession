@@ -50,6 +50,21 @@ module SandboxBackend =
             | DockerBackend -> Error "docker is a backend for the work sandbox only. The agent sandbox is host or srt"
             | backend -> Ok backend)
 
+    /// The git sandbox's backend, from `YESSION_SESSION_GIT_BACKEND` as read (`None` = unset).
+    /// The git sandbox runs the session's own git verbs: clone, fetch, switch, status, log and
+    /// diff. They read and write checkouts that every work sandbox can also write, so the
+    /// default is srt: a planted `filter.<driver>.smudge` then runs with the git sandbox's
+    /// reach, not the operator's. `host` is the operator's explicit choice. Docker is not a
+    /// git backend, for the agent sandbox's reason: a container per session boot.
+    let parseGit (raw: string option) : Result<SandboxBackend, string> =
+        match raw |> Option.map (fun r -> r.Trim ()) with
+        | None | Some "" -> Ok SrtBackend
+        | Some value ->
+            parse value
+            |> Result.bind (function
+                | DockerBackend -> Error "docker is a backend for the work sandbox only. The git sandbox is host or srt"
+                | backend -> Ok backend)
+
 /// Whether a sandbox confines the FILESYSTEM at all. Egress, env and process
 /// confinement are unaffected either way — this is only about paths.
 ///

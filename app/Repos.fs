@@ -14,9 +14,9 @@ module Yession.Host.Repos
 // authorization path, the second set of inputs to validate, and the second place a
 // mutation's record can go missing.
 //
-// Git itself runs through the sandbox seam under the AGENT backend (`host` is the
-// explicitly lax choice; `srt` confines each spawn to the repos directory and the
-// allowlisted egress). CLONE is the one exception, and it is a whole sandbox rather
+// Git itself runs through the sandbox seam under the GIT backend
+// (`YESSION_SESSION_GIT_BACKEND`, default `srt`, which confines each spawn to the repos
+// directory and the gateway's route; `host` is the operator's explicitly lax choice). CLONE is the one exception, and it is a whole sandbox rather
 // than a flag on a spawn: it writes a work tree whose names are the repo's, and srt
 // refuses some of those names anywhere on the disk. See `unconfined` below.
 // On top of the confinement, repo-controlled EXECUTION is disabled

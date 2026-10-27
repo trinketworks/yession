@@ -269,6 +269,15 @@ let private sandboxPolicyTests =
             Expect.equal (SandboxBackend.parseAgent "srt") (Ok SrtBackend) "the agent sandbox accepts srt"
             Expect.isError (SandboxBackend.parseAgent "docker") "docker is a work-sandbox backend only, by design"
 
+        testCase "the git sandbox is srt when nobody set its backend" <| fun () ->
+            Expect.equal (SandboxBackend.parseGit None) (Ok SrtBackend) "unset is srt"
+
+        testCase "the git sandbox refuses docker" <| fun () ->
+            Expect.isError (SandboxBackend.parseGit (Some "docker")) "host or srt, nothing else"
+
+        testCase "the git sandbox refuses a backend it does not know" <| fun () ->
+            Expect.isError (SandboxBackend.parseGit (Some "hots")) "a typo is a loud error, never a fallback"
+
         testCase "the host baseline is an allowlist: credentials never pass it" <| fun () ->
             let ambient =
                 Map.ofList

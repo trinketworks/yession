@@ -159,12 +159,22 @@ let private agentBackend =
     | Ok backend -> backend
     | Error e -> failwithf "agent sandbox: %s" e
 
+// The git sandbox's backend (`YESSION_SESSION_GIT_BACKEND`): where the session's own git
+// verbs run — clone, fetch, switch, status, log and diff. host or srt, default srt
+// (`SandboxBackend.parseGit` says why), parsed here at boot and fail closed like the two
+// above. It is not the agent backend: the reason that one stays `host` is the Bun CLI's
+// egress, and git honours srt's proxy (the `Srt` suite drives it).
+let private gitBackend =
+    match SandboxBackend.parseGit (match Interop.envOr "YESSION_SESSION_GIT_BACKEND" "" with "" -> None | raw -> Some raw) with
+    | Ok backend -> backend
+    | Error e -> failwithf "git sandbox: %s" e
+
 // srt's own configuration — the confinement tools and how far the nesting can go — is
-// parsed here too, whenever either sandbox will use it. It would otherwise first be read
+// parsed here too, whenever any sandbox will use it. It would otherwise first be read
 // where the sandbox is created: for the WorkSandbox that is the agent's first
 // `ensure_environment`, minutes into a session, which is no place to discover a typo.
 do
-    if agentBackend = SrtBackend || workBackend = SrtBackend then
+    if agentBackend = SrtBackend || workBackend = SrtBackend || gitBackend = SrtBackend then
         match Sandboxes.SrtSandbox.toolsFrom (Sandboxes.ambientEnv ()) with
         | Ok _ -> ()
         | Error e -> failwithf "sandbox: %s" e
@@ -962,17 +972,16 @@ Async.StartImmediate (
         // starts before the repo manager does (`GitGateway`, rule 21).
         let doors = Sandboxes.hostDoorsHere ()
         let! gitGateway = GitGateway.start doors "https://github.com" (fun fault -> eprintfn "[session %s] git gateway: %s" (SessionId.value sessionId) fault)
-        // The repo manager (Plan 14), over the same log and the agent backend's sandbox
-        // family. A backend that cannot host it fails the boot — the same fail-closed
+        // The repo manager (Plan 14), over the same log, in the git sandbox (`gitBackend`). A backend that cannot host it fails the boot — the same fail-closed
         // stance as the WorkSandbox composition above. Its route to the gateway is the one a
         // work sandbox on its backend would get; a backend with none cannot host it.
         let gitRouteHost =
-            match Sandboxes.hostAddressHere (Interop.hostname ()) agentBackend with
+            match Sandboxes.hostAddressHere (Interop.hostname ()) gitBackend with
             | Some host -> host
-            | None -> failwithf "repos: a %s git sandbox has no route to this session's git gateway" (SandboxBackend.describe agentBackend)
+            | None -> failwithf "repos: a %s git sandbox has no route to this session's git gateway" (SandboxBackend.describe gitBackend)
         do
             match Repos.create
-                    { Backend = agentBackend
+                    { Backend = gitBackend
                       Network = dockerNetwork
                       ReposDir = reposDir
                       StartsAt =
@@ -983,7 +992,7 @@ Async.StartImmediate (
                       ExtraReadPaths = []
                       Git = Repos.gitExecutable (Sandboxes.ambientEnv ())
                       AllowedDomains =
-                        Sandboxes.hostRouteHere (Interop.ownAddresses ()) agentBackend gitRouteHost gitGateway.Port
+                        Sandboxes.hostRouteHere (Interop.ownAddresses ()) gitBackend gitRouteHost gitGateway.Port
                       AllowProtocol = "http"
                       Route = Repos.GitRoute.through gitGateway gitRouteHost
                       CloneUrl = RepoRef.cloneUrl

@@ -914,8 +914,11 @@ After the fixes land, one pass rewrites it to what still reproduces.
     macOS answer for srt is the box's own hostname. Where the box does not resolve its own name,
     a confined git gets a proxy error that names the host. A `Provision` carries the host it
     needs as a `Domains` entry, and the composition widens a filtering backend's allowlist by it.
-  - **Under `YESSION_SESSION_AGENT_BACKEND=host` the git verbs run unconfined**, the operator's
-    explicitly lax choice. The per-invocation hardening (`hardenedEnv` in `app/Repos.fs`) still
+  - **The git verbs run in a sandbox of their own, `srt` by default**
+    (`YESSION_SESSION_GIT_BACKEND`). They used to take the agent backend, whose default is
+    `host` for a reason that is the Bun CLI's and not git's, so in every deployment that kept
+    the default they ran unconfined. **Under `YESSION_SESSION_GIT_BACKEND=host` the git verbs
+    run unconfined**, the operator's explicitly lax choice. The per-invocation hardening (`hardenedEnv` in `app/Repos.fs`) still
     applies. The filesystem and egress boundaries do not. A proxy that a `.git/config` names is
     off there (`NO_PROXY=*`). No git process holds a credential (clone and fetch go through
     the git gateway on a loan), so what a planted proxy or `insteadOf` can still reach is the
@@ -932,7 +935,8 @@ After the fixes land, one pass rewrites it to what still reproduces.
     - **One exec vector is left: `filter.<driver>.smudge` runs on `switch_branch`.** No flag
       and no env variable switches a filter off. Under srt it runs with the git sandbox's reach,
       which the sandbox that wrote the config already had. Under `host` it runs as the operator,
-      unconfined. Choosing `host` for the git verbs is choosing that.
+      unconfined. `YESSION_SESSION_GIT_BACKEND=host` is choosing that: every work sandbox can
+      then run a program as the operator on the next `switch_branch`.
     - **`core.worktree` in a `.git/config` moves the work tree of every verb** to any
       directory the git sandbox can reach. `repo_status` then lists that directory's files, and
       `switch_branch` writes the branch's files into it. Under srt the reach is the repos
