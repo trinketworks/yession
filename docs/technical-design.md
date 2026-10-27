@@ -630,6 +630,9 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     session's own generic secrets. It never reads another principal's scope, the Manager's
     process environment, or a connection credential. The last is a type, not a check: the
     resolver holds only the store's generic partition (`SecretStore.SecretResolution`).
+21. No git process holds a GitHub credential. git reaches github.com only through the git
+    gateway (`GitGateway`), which adds the credential of a loan on the way. A work sandbox's
+    git and the session's own clone and fetch take the same route.
 
 Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
 roots, keyed by `BodyKey`, that the app co-manages outside the encoded tree, and the structural

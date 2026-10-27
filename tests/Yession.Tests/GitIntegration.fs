@@ -43,7 +43,7 @@ let private expect =
 let private pureTests =
     testList "git invocation hardening (pure)" [
         testCase "the hardened env disables global/system config, prompts, and repo-driven execution" <| fun () ->
-            let env = Repos.hardenedEnv SrtBackend "https" None |> Map.ofList
+            let env = Repos.hardenedEnv SrtBackend "https" |> Map.ofList
             Expect.equal (Map.tryFind "GIT_CONFIG_GLOBAL" env) (Some "/dev/null") "no global config"
             Expect.equal (Map.tryFind "GIT_CONFIG_SYSTEM" env) (Some "/dev/null") "no system config"
             Expect.equal (Map.tryFind "GIT_TERMINAL_PROMPT" env) (Some "0") "never prompts"
@@ -69,7 +69,7 @@ let private pureTests =
         // helper blocks forever on a keychain prompt nobody can answer — a rejected token
         // must FAIL the verb, not hang it.
         testCase "the hardened env clears every credential helper" <| fun () ->
-            let env = Repos.hardenedEnv SrtBackend "https" None |> Map.ofList
+            let env = Repos.hardenedEnv SrtBackend "https" |> Map.ofList
             let configs =
                 [ 0 .. 4 ]
                 |> List.map (fun i ->
@@ -77,7 +77,7 @@ let private pureTests =
             Expect.isTrue (configs |> List.contains ("credential.helper", "")) "helper list reset to empty"
 
         testCase "the hardened env checks a symlink out as a plain file" <| fun () ->
-            let env = Repos.hardenedEnv SrtBackend "https" None |> Map.ofList
+            let env = Repos.hardenedEnv SrtBackend "https" |> Map.ofList
             let configs =
                 [ 0 .. 4 ]
                 |> List.map (fun i ->
@@ -87,25 +87,22 @@ let private pureTests =
         // Under srt the sandbox's own proxy is the only way out, so a NO_PROXY there would cut
         // the verbs off from github.com.
         testCase "the hardened env turns every proxy off under host" <| fun () ->
-            let env = Repos.hardenedEnv HostBackend "https" None |> Map.ofList
+            let env = Repos.hardenedEnv HostBackend "https" |> Map.ofList
             Expect.equal (Map.tryFind "NO_PROXY" env) (Some "*") "no proxy for any host"
 
         testCase "the hardened env leaves srt's proxy alone" <| fun () ->
-            let env = Repos.hardenedEnv SrtBackend "https" None |> Map.ofList
+            let env = Repos.hardenedEnv SrtBackend "https" |> Map.ofList
             Expect.isNone (Map.tryFind "NO_PROXY" env) "srt's proxy still applies"
 
-        testCase "a token rides as one extra header config, never a bare env value" <| fun () ->
-            let entries = Repos.hardenedEnv SrtBackend "https" (Some "gho_secret")
-            let env = Map.ofList entries
-            Expect.equal (Map.tryFind "GIT_CONFIG_COUNT" env) (Some "6") "one more config"
-            Expect.equal
-                (Map.tryFind "GIT_CONFIG_KEY_5" env)
-                (Some "http.https://github.com/.extraheader")
-                "scoped to github.com over https"
-            let value = Map.find "GIT_CONFIG_VALUE_5" env
-            Expect.isTrue (value.StartsWith "AUTHORIZATION: basic ") "a basic auth header"
-            Expect.isFalse (value.Contains "gho_secret") "the raw token is base64-wrapped, not pasted"
-            Expect.isFalse (entries |> List.exists (fun (_, v) -> v = "gho_secret")) "no entry carries the bare token"
+        // No git process holds a credential (technical-design §5, rule 21): every `http.*` key
+        // is one a planted `.git/config` could outrank or route elsewhere, so there is none.
+        testCase "the hardened env sets no http key, under any backend" <| fun () ->
+            let keys =
+                [ HostBackend; SrtBackend; DockerBackend ]
+                |> List.collect (fun backend -> Repos.hardenedEnv backend "http")
+                |> List.filter (fun (name, _) -> name.StartsWith "GIT_CONFIG_KEY_")
+                |> List.map snd
+            Expect.isFalse (keys |> List.exists (fun key -> key.StartsWith "http.")) "no http.* config"
 
         testCase "branch names: real ones pass, option-injection and traversal shapes fail" <| fun () ->
             Expect.equal (Repos.validBranchName "  feature/log-in  ") (Ok "feature/log-in") "ordinary, trimmed"
@@ -182,10 +179,10 @@ let private pureTests =
         // deny. Every git spawned here is now built by `gitExec`, which cannot be called
         // without the env.
         testCase "the probe runs the verbs' hardened environment, never an empty one" <| fun () ->
-            let probe = Repos.gitExec "/nix/store/x/bin/git" SrtBackend "/repos" "https" None [ "--version" ]
+            let probe = Repos.gitExec "/nix/store/x/bin/git" SrtBackend "/repos" "https" [] [ "--version" ]
             Expect.equal
                 probe.Env
-                (Repos.hardenedEnv SrtBackend "https" None |> Map.ofList)
+                (Repos.hardenedEnv SrtBackend "https" |> Map.ofList)
                 "a probe that runs a different environment gates verbs it cannot speak for"
 
         // The words an operator gets when git cannot run confined. What shipped instead was
@@ -344,6 +341,7 @@ let private makeBareFixtureArranged (root: string) (name: string) (arrange: stri
 let private serviceBuilt
     (backend: SandboxBackend)
     (allowProtocol: string)
+    (route: Repos.GitRoute)
     (tracer: Telemetry.Tracer)
     (git: string)
     (token: string option)
@@ -369,6 +367,7 @@ let private serviceBuilt
           Git = git
           AllowedDomains = []
           AllowProtocol = allowProtocol
+          Route = route
           CloneUrl = fun ref -> sprintf "file://%s/%s.git" fixtures (RepoRef.repo ref)
           ResolveToken = fun _ -> async { return token }
           Canonical = canonical
@@ -381,7 +380,7 @@ let private serviceBuilt
 /// network failure. The credential and the recorder are the caller's because whether a verb
 /// spent a credential is exactly what decides whether a failure says anything about one.
 let private serviceTracing tracer git token failures canonical root log : Repos.ReposService =
-    serviceBuilt SrtBackend "file" tracer git token failures canonical root log
+    serviceBuilt SrtBackend "file" Repos.GitRoute.none tracer git token failures canonical root log
 
 let private serviceAsking = serviceTracing Telemetry.Tracer.Off
 
@@ -451,14 +450,33 @@ let private listen () : Async<Listener> =
 
 let private hello = RepoRef.create "octo/hello" |> expect
 
-/// `octo/hello` added on `backend`, over file and http, and the checkout's path.
-let private addedOn (backend: SandboxBackend) (root: string) : Async<Repos.ReposService * string> =
+/// `octo/hello` added on `backend` with `route` to github.com, over file and http, and the
+/// checkout's path.
+let private addedRouted (route: Repos.GitRoute) (backend: SandboxBackend) (root: string) : Async<Repos.ReposService * string> =
     async {
         makeBareFixture root "hello" |> ignore
         let service =
-            serviceBuilt backend "file:http" Telemetry.Tracer.Off namedGit None (ResizeArray ()) (fun _ _ -> async { return None }) root (freshLog ())
+            serviceBuilt backend "file:http" route Telemetry.Tracer.Off namedGit (Some "ghu_lent") (ResizeArray ()) (fun _ _ -> async { return None }) root (freshLog ())
         let! _ = service.AddRepo caller hello
         return service, sprintf "%s/octo/hello" (reposIn root)
+    }
+
+let private addedOn (backend: SandboxBackend) (root: string) = addedRouted Repos.GitRoute.none backend root
+
+/// A `.git/config` that rewrites github.com to `listener`, on a session whose fetch goes through
+/// a real gateway on a loan: every request the listener saw.
+let private fetchedThroughPlantedRewrite () : Async<(string * string option * string option) list> =
+    async {
+        let root = mkdtemp ()
+        let! gateway = GitGateway.start [ "127.0.0.1" ] "http://127.0.0.1:1" ignore
+        let! service, checkout = addedRouted (Repos.GitRoute.through gateway "127.0.0.1") HostBackend root
+        let! listener = listen ()
+        hostGit [ "config"; "remote.origin.url"; "https://github.com/octo/hello.git" ] checkout
+        hostGit [ "config"; sprintf "url.http://127.0.0.1:%d/.insteadOf" listener.Port; "https://github.com/" ] checkout
+        let! _ = service.FetchRepo caller hello
+        do! listener.Close ()
+        do! gateway.Close ()
+        return List.ofSeq listener.Requests
     }
 
 /// A `.git/config` that names a proxy at `listener`, for an origin over http. The origin's
@@ -517,6 +535,16 @@ let private configBoundaryTests =
         testCaseAsync "under host, a proxy the checkout's config names is never dialled" <| async {
             let! dialled = fetchedThroughPlantedProxy HostBackend
             Expect.equal dialled 0 "the listener saw nothing"
+        }
+
+        testCaseAsync "a github.com rewrite the checkout's config names is sent no credential" <| async {
+            let! seen = fetchedThroughPlantedRewrite ()
+            Expect.isFalse (seen |> List.exists (fun (_, authorization, _) -> authorization.IsSome)) "no authorization header"
+        }
+
+        testCaseAsync "a github.com rewrite the checkout's config names is sent no loan" <| async {
+            let! seen = fetchedThroughPlantedRewrite ()
+            Expect.isFalse (seen |> List.exists (fun (_, _, loan) -> loan.IsSome)) "no x-yession-loan header"
         }
 
         testCaseAsync "a checkout whose .git is a symlink is refused by repo_status" <| async {
@@ -850,6 +878,7 @@ let private srtTests =
                       Git = namedGit
                       AllowedDomains = []
                       AllowProtocol = "file"
+                      Route = Repos.GitRoute.none
                       CloneUrl = fun ref -> sprintf "file://%s/%s.git" (fixturesIn fixtures) (RepoRef.repo ref)
                       ResolveToken = fun _ -> async { return None }
                       Canonical = fun _ _ -> async { return None }
@@ -913,26 +942,6 @@ let private srtTests =
         // session gets to find out that credential stopped working — nothing else here can
         // tell. What the failure MEANS is not decided here (git cannot tell an expired token
         // from a repo that is not there); this only has to say that one was spent.
-        testCaseAsync "a network verb that fails while spending a credential says so" <| async {
-            let root = mkdtemp ()
-            let failures = ResizeArray<CredentialFor * string> ()
-            // No fixture made, so the clone has nothing to clone.
-            let service = serviceSpending namedGit (Some "ghu_whatever") failures root (freshLog ())
-            let! added = service.AddRepo caller (RepoRef.create "octo/missing" |> expect)
-            Expect.isError added "the clone fails"
-            Expect.equal (List.ofSeq failures |> List.map fst) [ caller.Credential ] "reported once, against the credential's actor"
-            Expect.isTrue (failures |> Seq.forall (fun (_, said) -> said <> "")) "and carries what git said"
-        }
-
-        testCaseAsync "a network verb that fails anonymously says nothing about anyone's sign-in" <| async {
-            let root = mkdtemp ()
-            let failures = ResizeArray<CredentialFor * string> ()
-            let service = serviceSpending namedGit None failures root (freshLog ())
-            let! added = service.AddRepo caller (RepoRef.create "octo/missing" |> expect)
-            Expect.isError added "the clone still fails"
-            Expect.isEmpty failures "no credential was spent, so none can have been refused"
-        }
-
         // A clone follows a renamed repo's old name through the provider's redirect and
         // keeps an origin the provider no longer answers to by that name — which a session
         // then never notices. Asked first, the provider's current name is what is refused

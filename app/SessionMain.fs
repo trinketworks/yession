@@ -957,9 +957,19 @@ Async.StartImmediate (
         // second read of the same variable is a second default, and the two would disagree
         // the first time one moved.
         let githubApi = Interop.envOr "YESSION_GITHUB_API_URL" "https://api.github.com"
+        // The git gateway: how every git in this session reaches github.com without holding a
+        // credential — a work sandbox's, and the repo manager's own clone and fetch, so it
+        // starts before the repo manager does (`GitGateway`, rule 21).
+        let doors = Sandboxes.hostDoorsHere ()
+        let! gitGateway = GitGateway.start doors "https://github.com" (fun fault -> eprintfn "[session %s] git gateway: %s" (SessionId.value sessionId) fault)
         // The repo manager (Plan 14), over the same log and the agent backend's sandbox
         // family. A backend that cannot host it fails the boot — the same fail-closed
-        // stance as the WorkSandbox composition above.
+        // stance as the WorkSandbox composition above. Its route to the gateway is the one a
+        // work sandbox on its backend would get; a backend with none cannot host it.
+        let gitRouteHost =
+            match Sandboxes.hostAddressHere (Interop.hostname ()) agentBackend with
+            | Some host -> host
+            | None -> failwithf "repos: a %s git sandbox has no route to this session's git gateway" (SandboxBackend.describe agentBackend)
         do
             match Repos.create
                     { Backend = agentBackend
@@ -972,8 +982,10 @@ Async.StartImmediate (
                                 (ShellProfileProjection.workingDirectory SandboxRef.defaultRef (terminals.Profiles ()))
                       ExtraReadPaths = []
                       Git = Repos.gitExecutable (Sandboxes.ambientEnv ())
-                      AllowedDomains = [ "github.com" ]
-                      AllowProtocol = "https"
+                      AllowedDomains =
+                        Sandboxes.hostRouteHere (Interop.ownAddresses ()) agentBackend gitRouteHost gitGateway.Port
+                      AllowProtocol = "http"
+                      Route = Repos.GitRoute.through gitGateway gitRouteHost
                       CloneUrl = RepoRef.cloneUrl
                       ResolveToken = resolveGitHubToken
                       Canonical =
@@ -1258,8 +1270,8 @@ Async.StartImmediate (
         // never holds a value worth printing.
         // Both listen where this session's sandboxes reach this host (`hostDoorsHere`), and on
         // its Docker network's gateway once a native daemon makes one (`network` below).
-        let doors = Sandboxes.hostDoorsHere ()
-        let! gitGateway = GitGateway.start doors "https://github.com" (fun fault -> eprintfn "[session %s] git gateway: %s" (SessionId.value sessionId) fault)
+        // The git gateway itself started before the repo manager, whose clone and fetch go
+        // through it too.
         // The same idea for the API: a block's `gh` holds a stand-in, and the proxy swaps in
         // the credential of that block's act on the way to api.github.com.
         let! credentialProxy =
@@ -1339,7 +1351,7 @@ Async.StartImmediate (
                                                 "github cannot be forwarded by git into a %s sandbox: its git would have no route to this session's gateway"
                                                 (SandboxBackend.describe backend))
                                     | Some host ->
-                                        let cap = gitGateway.Grant sandbox
+                                        let cap = gitGateway.Grant (GitGateway.Routed.Sandbox sandbox)
                                         Ok
                                             { WorkSandboxes.Provision.empty with
                                                 GitConfig = GitGateway.gitConfig host gitGateway.Port cap
@@ -1383,8 +1395,8 @@ Async.StartImmediate (
                                         | Some host ->
                                             let secret =
                                                 gitGateway.Lend
-                                                    sandbox
-                                                    terminal
+                                                    (GitGateway.Routed.Sandbox sandbox)
+                                                    (GitGateway.Borrower.Terminal terminal)
                                                     { Owner = owner
                                                       Resolve = fun () -> resolveGitHubToken owner
                                                       Refused = fun () -> reportGitHubNetworkFailure owner "the git gateway was answered 401"
@@ -1427,7 +1439,7 @@ Async.StartImmediate (
                         }
                 Retire =
                     fun terminal ->
-                        gitGateway.Retire terminal
+                        gitGateway.Retire (GitGateway.Borrower.Terminal terminal)
                         credentialProxy.Retire terminal } ]
         let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials (CredentialProxy.provider credentialProxy sandboxBackend gatewayHostFor))) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity agentReport telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
