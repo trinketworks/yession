@@ -1460,7 +1460,6 @@ Async.StartImmediate (
         terminalCommands <- host.TerminalCommands
         repoSandboxes <-
             RepoSandboxes.create
-                reposDir
                 (fun () -> reposService)
                 (fun () -> workSandboxes)
                 host.RunGated

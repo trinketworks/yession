@@ -945,6 +945,11 @@ After the fixes land, one pass rewrites it to what still reproduces.
     both said something" has a total answer: the keys are (repo, name) pairs and the repos are
     disjoint, so the union is disjoint by construction. **That is the rule for every future key:
     a key belongs in `yession.yaml` only if its scope is a sandbox.** Left out, deliberately:
+    - **The file is read from `HEAD`, never from the working tree.** Whoever can push to the
+      repo authors the file (technical-design §4), so an edit that nobody has committed
+      declares nothing. Commit it, and the next fold (any verb that changes a checkout, or
+      a boot) reads it. `AGENTS.md` and `.agents/skills/*/SKILL.md` are read the same way,
+      when the clone lands. A symlink at `HEAD` is no file for any of the three (rule 20).
     - **No inter-sandbox networking.** A `db:` sandbox's process is reachable from inside that
       sandbox only. A compose-like shared network is a design of its own.
     - **A `command` (`cmd`), an `entrypoint`, the limits (`memory`, `oom-score-adj`,
