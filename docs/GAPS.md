@@ -919,14 +919,38 @@ After the fixes land, one pass rewrites it to what still reproduces.
     needs as a `Domains` entry, and the composition widens a filtering backend's allowlist by it.
   - **Under `YESSION_SESSION_AGENT_BACKEND=host` the git verbs run unconfined**, the operator's
     explicitly lax choice. The per-invocation hardening (`hardenedEnv` in `app/Repos.fs`) still
-    applies. The filesystem and egress boundaries do not.
+    applies. The filesystem and egress boundaries do not. A proxy that a `.git/config` names is
+    off there (`NO_PROXY=*`), because nothing else stops the token in the git process reaching it.
   - **Every srt sandbox may write a checkout's `.git/config`** (`AllowGitConfig` in
     `app/Sandboxes.fs` says why, and that scoping it to the git sandbox is not done yet). So the
-    WorkSandbox and the agent can plant a `core.fsmonitor`, an alias, or a pager that runs when
-    git next runs in that checkout. Inside the session, that is the shared-trust boundary above,
-    and the verbs are immune because the per-invocation `GIT_CONFIG_*` hardening wins over repo
-    config. A human who runs git in the checkout on their own host is NOT immune. `.git/hooks`
-    stays denied.
+    WorkSandbox and the agent can plant config that git reads when it next runs in that
+    checkout. The verbs are NOT immune to it. The per-invocation `GIT_CONFIG_*` hardening wins
+    over repo config only for the keys it sets: hooks, fsmonitor, the ext transport, credential
+    helpers and symlinks. Flags and env turn off what they can: diff drivers and textconv
+    (`--no-ext-diff --no-textconv` on `repo_diff`), and under `host` a configured proxy.
+    `.git/hooks` stays denied. A human who runs git in the checkout on their own host is not
+    covered by any of it.
+    - **One exec vector is left: `filter.<driver>.smudge` runs on `switch_branch`.** No flag
+      and no env variable switches a filter off. Under srt it runs with the git sandbox's reach,
+      which the sandbox that wrote the config already had. Under `host` it runs as the operator,
+      unconfined. Choosing `host` for the git verbs is choosing that.
+    - **`core.worktree` in a `.git/config` no longer moves a verb's work tree.** It could move
+      it to any directory the git sandbox can reach: `repo_status` listed that directory's
+      files, and `switch_branch` wrote into it, which under `host` is the operator's whole
+      filesystem. Every verb in a checkout now runs with `GIT_DIR`, `GIT_WORK_TREE` and
+      `GIT_COMMON_DIR` pinned to that checkout (`checkoutPins` in `app/Repos.fs`), and env
+      outranks config. The pin closes a `.git/commondir` file the same way.
+  - **The session's git checks a committed symlink out as a plain file** (`core.symlinks=false`
+    in `hardenedEnv`). The file holds the link text. A link in the checkout would be a path the
+    repository chose, and the session and every sandbox read the checkout through calls that
+    follow links. The cost: a repository that commits symlinks has plain files in its checkout,
+    and a build that needs the links does not work there.
+  - **A checkout whose `.git` is not a directory is not in the session.** A work sandbox can
+    write the repos directory, so it can put a symlink named `.git` (or a symlinked checkout or
+    owner directory) in place of the real one, pointed at another repository on the host.
+    `present` in `app/Repos.fs` asks `lstat` about all three, and every verb refuses such a
+    checkout. Under srt the git sandbox could not follow such a link out of the repos directory
+    anyway. Under `host` it could.
   - **The clone verb runs with no filesystem confinement.** The comment on
     `FilesystemConfinement` in `src/Yession.Domain/Sandbox.fs` says why, lists the names, and
     says when to undo it. For that one command, git can read and write whatever the session's
