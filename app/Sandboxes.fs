@@ -3303,13 +3303,14 @@ module AgentSandbox =
     ///
     /// srt 0.0.77 sets every proxy variable to `http://<user>:<token>@localhost:3128`, and
     /// the relay it starts inside the network namespace is `socat TCP-LISTEN:3128`, which
-    /// listens on IPv4 alone. Where `/etc/hosts` maps `localhost` to `::1` first (an Ubuntu
-    /// CI runner does), a client that tries no second address connects to `[::1]:3128`, is
-    /// refused at once, and srt's proxy never sees it. The Bun `claude` is such a client:
-    /// measured with the same CLI and srt on one box, swapping that one line of `/etc/hosts`
-    /// takes its requests from reaching the API to `connect ECONNREFUSED ::1:3128`. That is
-    /// the release gate's 3ms `Connection error.` with zero proxy connections, and why the
-    /// WorkSandbox's git and node, which fall back to `127.0.0.1`, never showed it.
+    /// listens on IPv4 alone. Where `/etc/hosts` also maps `localhost` to `::1` (an Ubuntu
+    /// runner's does), the resolver can answer `::1` first, and a client that tries no
+    /// second address connects to `[::1]:3128`, is refused at once, and srt's proxy never
+    /// sees it. The Bun `claude` is such a client: with the same CLI and srt on one box,
+    /// adding `::1 localhost` to `/etc/hosts` turns its requests into
+    /// `connect ECONNREFUSED ::1:3128`. That is the release gate's 3ms `Connection error.`
+    /// with zero proxy connections, and why the WorkSandbox's git and node, which fall back
+    /// to `127.0.0.1`, never showed it.
     ///
     /// The rewrite runs INSIDE the sandbox, after srt's own `--setenv`, because the token is
     /// srt's and this process never sees it. It touches only a value that ends in

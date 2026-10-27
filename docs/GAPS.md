@@ -246,29 +246,31 @@ The last section holds trust boundaries as sharp as the first section's.
   is BY DESIGN not an agent backend: a container per session boot is the opposite of the
   sub-second start the agent needs.
   - **The default is `host`, and unlike the WorkSandbox's that is a shortfall, not a decision.**
-    `YESSION_SESSION_AGENT_BACKEND=srt` is the answer this wants, but it does not work yet. The
-    comment above `agentBackend` in `app/SessionMain.fs` gives the history (#364, the 90s
-    stall) and the cause: the **Bun** `claude` binary ignores `HTTP_PROXY`, so its API egress
-    goes DIRECT into srt's `--unshare-net`. What the live tier measured beyond that:
-    - A `verify.yml` dispatch with `=srt` teed the CLI's stdio and its `DEBUG=1` log. The CLI
-      comes up FULLY (MCP server connected, tools listed, credential accepted, `init` emitted).
-      Then every request to `api.anthropic.com` fails in about 3ms with a transport-level
-      `Connection error.` (no HTTP status), and srt's proxy logs ZERO connections.
-    - Claude Code's proxy support goes through undici's
-      `setGlobalDispatcher(EnvHttpProxyAgent)`, which Bun's native `fetch` ignores. The
-      WorkSandbox's git and node honour the proxy: every `Srt` suite is green.
-    - **Not the cause**, each checked:
-      - the async spawn seam (the `Srt` suite drives it)
-      - the read scope (`process.execPath` allows `/nix/store` back)
-      - the policy env (srt bakes the proxy env into the wrapped argv: bwrap `--setenv` on
-        Linux, an `env VAR=…` prefix on macOS)
-      - a missing CA bundle (srt runs a plain authenticated CONNECT proxy, with no MITM CA)
-    - **Why it is not a small fix.** Each srt sandbox now runs its `SandboxManager` in its own
-      process (`SrtSandbox.HostWire`), so the agent's network policy could change alone. What
-      remains is the binary: only the Bun one ships (the SDK's per-platform optional deps). On
-      Node, undici's dispatcher governs `fetch` and the proxy works, but that means a large
-      dependency packaged under Nix. Until then the agent CLI has only its env allowlist and
-      scratch HOME, the same standing as `host` everywhere else.
+    `YESSION_SESSION_AGENT_BACKEND=srt` is the answer this wants. #364 made it the default, and
+    the release gate's live turn then stalled for 90 seconds, so the default went back. The
+    cause is now fixed, and moving the default is a separate change.
+    - What the live tier recorded: the CLI comes up FULLY (MCP server connected, tools listed,
+      credential accepted, `init` emitted), then every request to `api.anthropic.com` fails in
+      about 3ms with a transport-level `Connection error.`, and srt's proxy logs ZERO
+      connections.
+    - **The Bun CLI honours the proxy.** The vendored `claude` (nixpkgs 2.1.283), run outside
+      srt against two loopback listeners, sends `CONNECT api.anthropic.com:443` to
+      `HTTPS_PROXY`, in either case of the name, with `Proxy-Authorization: Basic` from a
+      credential in the URL. The earlier reading (undici's dispatcher, which Bun's `fetch`
+      ignores) was wrong.
+    - **The cause is `localhost`.** srt 0.0.77 names its proxy
+      `http://<user>:<token>@localhost:3128` and relays it inside the namespace with
+      `socat TCP-LISTEN:3128`, which listens on IPv4 alone. An Ubuntu runner's `/etc/hosts`
+      maps `localhost` to `::1` as well, so the CLI can connect to `[::1]:3128`, and it tries
+      no second address. On a box whose `/etc/hosts` names
+      only `127.0.0.1`, the same CLI under the same srt config reaches the API; adding
+      `::1 localhost` gives `connect ECONNREFUSED ::1:3128`. The WorkSandbox's git and node
+      fall back to `127.0.0.1`, which is why every `Srt` suite stayed green.
+    - **The fix.** On Linux the agent CLI starts through `AgentSandbox.loopbackProxyLine`,
+      which rewrites a proxy variable ending in `localhost:<port>` to `127.0.0.1:<port>`
+      inside the sandbox. With it, a `verify.yml` dispatch with `=srt` and
+      `LiveAgent Ports Native Srt` is green, the live `add_repo` case included. srt 0.0.80
+      listens on both families, and moving to it removes the rewrite.
   - The SDK's spawn seam is SYNCHRONOUS and srt's wrap is not. So the srt tier gives the SDK a
     stand-in process whose streams are live at once, and joins the real child to them when the
     wrap resolves. The `Srt` suite drives it end to end (stdin in, stdout out, exit code).
