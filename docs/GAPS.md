@@ -920,8 +920,9 @@ After the fixes land, one pass rewrites it to what still reproduces.
   - **The git verbs run in a sandbox of their own, `srt` by default**
     (`YESSION_SESSION_GIT_BACKEND`). They used to take the agent backend, which stays `host`
     until a macOS run under srt is measured (the agent CLI entry above), so in every deployment
-    that kept the default they ran unconfined. **Under `YESSION_SESSION_GIT_BACKEND=host` the git verbs
-    run unconfined**, the operator's explicitly lax choice. The per-invocation hardening (`hardenedEnv` in `app/Repos.fs`) still
+    that kept the default they ran unconfined. **Under `YESSION_SESSION_GIT_BACKEND=host` the
+    git verbs run unconfined**, the operator's explicitly lax choice. The per-invocation
+    hardening (`hardenedEnv` in `app/Repos.fs`) still
     applies. The filesystem and egress boundaries do not. A proxy that a `.git/config` names is
     off there (`NO_PROXY=*`). No git process holds a credential (clone and fetch go through
     the git gateway on a loan), so what a planted proxy or `insteadOf` can still reach is the

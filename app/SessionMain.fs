@@ -971,8 +971,9 @@ Async.StartImmediate (
         // starts before the repo manager does (`GitGateway`, rule 21).
         let doors = Sandboxes.hostDoorsHere ()
         let! gitGateway = GitGateway.start doors "https://github.com" (fun fault -> eprintfn "[session %s] git gateway: %s" (SessionId.value sessionId) fault)
-        // The repo manager (Plan 14), over the same log, in the git sandbox (`gitBackend`). A backend that cannot host it fails the boot — the same fail-closed
-        // stance as the WorkSandbox composition above. Its route to the gateway is the one a
+        // The repo manager (Plan 14), over the same log, in the git sandbox (`gitBackend`). A
+        // backend that cannot host it fails the boot — the same fail-closed stance as the
+        // WorkSandbox composition above. Its route to the gateway is the one a
         // work sandbox on its backend would get; a backend with none cannot host it.
         let gitRouteHost =
             match Sandboxes.hostAddressHere (Interop.hostname ()) gitBackend with

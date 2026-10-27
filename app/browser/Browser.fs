@@ -1285,9 +1285,18 @@ let private start () =
         // `Connecting` before it has asked the session anything. A provider whose load runs
         // over is left in place: if it loads late, what it kept merges into the doc like any
         // other update, which is what a CRDT is for.
+        //
+        // A change the store cannot keep later on (its connection closed under the open page)
+        // is lost to this device only: the doc goes on, and so does everything sent to peers.
+        // Said once, because a closed store fails every change after it.
+        let writeFailedSaid = ref false
+        let writeFailed (error: exn) =
+            if not writeFailedSaid.Value then
+                writeFailedSaid.Value <- true
+                JS.console.warn ("yession/doc-store: changes are no longer kept on this device: " + error.Message)
         let docStep =
             async {
-                let persistence = Fable.YIndexeddb.create (persistenceKey ()) doc
+                let persistence = Fable.YIndexeddb.create (persistenceKey ()) doc writeFailed
                 do! persistence.whenSynced () |> Async.AwaitPromise
             }
         let! opened =

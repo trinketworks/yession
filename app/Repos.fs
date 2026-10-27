@@ -650,11 +650,18 @@ let create (config: ReposConfig) : Result<ReposService, string> =
 
         /// Every regular file `HEAD` commits under `paths`, with its object id (`committedBlobs`).
         /// `-r` walks into directories; a path that names no entry answers nothing.
+        ///
+        /// A repository with no commit yet (an unborn `HEAD`) commits nothing, which is no file,
+        /// not a failure: `ls-tree` refuses such a `HEAD`, so a refusal is asked about once more,
+        /// by exit code rather than by git's words.
         let committedUnder (repo: RepoRef) (paths: string list) : Async<Result<(string * string) list, string>> =
             async {
                 match! runOk confined None ([ "-C"; pathOf repo; "ls-tree"; "-r"; "-z"; "HEAD"; "--" ] @ paths) with
-                | Error e -> return Error e
                 | Ok run -> return Ok (committedBlobs run.Stdout)
+                | Error e ->
+                    match! runGit confined None [ "-C"; pathOf repo; "rev-parse"; "--verify"; "--quiet"; "HEAD^{commit}" ] with
+                    | Ok run when run.Code <> 0 -> return Ok []
+                    | _ -> return Error e
             }
 
         /// One blob's text, by object id. By id rather than `HEAD:<path>`, so what is read is

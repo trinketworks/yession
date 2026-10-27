@@ -1451,10 +1451,10 @@ module Style =
     ///
     /// BREAKS the second half of that rule, and says so here rather than pretending: on a
     /// phone the band is `spacing-band-phone` and this head is still `spacing-band`, so a
-    /// drawer open over the conversation shows two hairlines 32px apart. It cannot take the
+    /// drawer open over the conversation shows two hairlines 28px apart. It cannot take the
     /// phone band as it stands — the head holds the lockup, whose mark is 56px with its foot
     /// 15px below the wordmark's line box, and no bottom padding seats 71px of object inside
-    /// 56px of band. The fix is a phone step on `lockup`/`lockupMark`/`wordmark` (Typography),
+    /// 60px of band. The fix is a phone step on `lockup`/`lockupMark`/`wordmark` (Typography),
     /// after which this is one `phone:h-band-phone` and a smaller `pb`.
     let sideHead = "h-band shrink-0 flex items-end justify-between pb-5 " + Stroke.dividerBottom
     /// A group in the column: its head, then its rows. There is one of these and not two —
@@ -1754,11 +1754,12 @@ module Style =
     /// title between them, on one line, because that is what they are. Stacked, the 28/32
     /// heading over its id spent 80px of an 844px screen (10%) restating the tab you are on;
     /// the title steps down a size (`titleInput`) and the id keeps hanging out of flow under
-    /// it (`titleId`), which seats the whole band in 56px.
+    /// it (`titleId`), which seats the whole band in 60px.
     ///
-    /// `pb-[11px]` leaves the row 44px over the band's 1px rule, which is what every control
+    /// `pb-[15px]` leaves the row 44px over the band's 1px rule, which is what every control
     /// in it is on a phone: the chevrons, the edge tab and the title's own box are thumb-sized
-    /// and fill the row exactly, and the id hangs into the 11px under it.
+    /// and fill the row exactly, and the id hangs into the 15px under it. It was 11px in a
+    /// 56px band, which left the id's ink under 6px off the hairline.
     ///
     /// On a wide screen the stack stays: the header and the sidebar wordmark share one bottom edge
     /// (`h-band`, `items-end`), and that shared baseline is the whole reason the band exists.
@@ -1768,7 +1769,7 @@ module Style =
     /// `spacing-band-phone`). The phone one was the literal `h-14`, which is the same 56px
     /// said in a second place, and a second place is where two heads come to disagree: the
     /// column's own head is still 88px under a thumb, so the two hairlines a drawer shows at
-    /// once sit 32px apart (see `sideHead`).
+    /// once sit 28px apart (see `sideHead`).
     ///
     /// The left padding is the timeline's own plus `--column-gutter` (`mainColumn`), so the
     /// title stands in exactly as far as the conversation does: with the pane shut and the
@@ -1778,12 +1779,12 @@ module Style =
     /// opens from.
     let header =
         "relative h-band shrink-0 flex items-end gap-4 pl-[calc(var(--column-gutter)+2rem)] pr-8 pb-5 "
-        + "phone:h-band-phone phone:items-center phone:gap-2 phone:px-4 phone:pb-[11px] "
+        + "phone:h-band-phone phone:items-center phone:gap-2 phone:px-4 phone:pb-[15px] "
         + Stroke.dividerBottom
 
     /// A slow catch-up's progress, drawn ON the header's bottom rule: the rule is the one
     /// line every screen has under the title, and a bar growing along it says "loading, this
-    /// far" without taking a pixel of room from the band — which on a phone is 56px and
+    /// far" without taking a pixel of room from the band — which on a phone is 60px and
     /// geometry-pinned. Two pixels tall over the one-pixel rule, so it reads as a bar and not
     /// as the rule changing colour. Its width moves once per paced render (`Render`, every
     /// half second while a client stays behind), and the transition carries it between.
@@ -2032,7 +2033,7 @@ module Style =
     /// (S1-7) still open for a thumb. It does not close here because the band has no room: the
     /// rule belongs under the title's 24px line, and the 44px the floor asks of the field is
     /// what puts its bottom edge 20px further down. Moving it would mean moving the id out of
-    /// the field's box, and a 56px band has nowhere to put it.
+    /// the field's box, and a 60px band has nowhere to put it.
     ///
     /// ONE tone, and no hover or focus tone of its own, which is the opposite of what a `ring`
     /// does — because here the rule answers a different question from the fill. The rule says
@@ -2054,7 +2055,7 @@ module Style =
     /// on one line (measured live). A phone has no cross-column baseline to meet and no room
     /// for 28px in a 56px row, so it takes the pivot step (19/24) and no nudge.
     ///
-    /// And on a phone the field is a thumb's height, which a 24px line in a 56px band does
+    /// And on a phone the field is a thumb's height, which a 24px line in a 60px band does
     /// not leave room for — unless the box takes in the id under it. So it does: 44px tall,
     /// its last 20 of them padding (`pb-5`) that the id hangs in (`titleId`), and the same 20
     /// paid back to the flow (`-mb-5`), so the row lays out the 24px line it always did. The
@@ -4190,7 +4191,7 @@ module Style =
     /// pins its FIRST row to the token, so it needs no second row to land on the band.
     ///
     /// `items-stretch`, not the chat header's own `items-end` + `pb-5` (`phone:items-center` +
-    /// `phone:pb-[11px]`) copied at first, because that alignment is the header's TEXT settling
+    /// `phone:pb-[15px]`) copied at first, because that alignment is the header's TEXT settling
     /// short of the hairline with room a title doesn't need to fill. A tab is not text: a
     /// `h-touch` chip centred or end-anchored in the now-taller row left its own fill — the
     /// thing that is supposed to say which tab the page belongs to (`pivotItemOn`'s `bg-panel`)
