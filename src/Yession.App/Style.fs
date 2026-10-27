@@ -2076,8 +2076,8 @@ module Style =
     /// collapsing the sidebar never shifts the heading off the content column. On a phone it
     /// is IN the row — the band is a line of chrome with the title in it, and a control
     /// hovering over that line would be the one thing on it that is not. It is a 44px target
-    /// (`navChevronBase`) reaching to the screen's edge and occupying 12px of flow (`-mx-4`
-    /// against the band's 16px padding), which with the row's 8px gap pays 20 of the 32px
+    /// (`navChevronBase`) reaching nearly to the screen's edge and occupying 12px of flow (`-ml-3`
+    /// and `-mr-5` against the band's 16px padding), which with the row's 8px gap pays 20 of the 32px
     /// indent the heading gives up there (`titleWrap`). Hidden while the sidebar is visible.
     /// On a wide screen it stands in by `--column-gutter` as the title does (`header`), so
     /// with the conversation centred it stays beside the title rather than at the window's
@@ -2087,9 +2087,20 @@ module Style =
     /// the field's 2px `top` nudge), and 30px, with the 6px `-m-1.5` takes back, puts the
     /// glyph's middle on it (measured live at 1280 and 1600: glyph and title both at y=86).
     /// It sat on `bottom-4.5` once, 12px under the title's middle.
+    ///
+    /// Across, it stands on the AVATAR's column: the glyph and the mark under it centred on the
+    /// middle of the `w-5` every group head's avatar fills (`messageGroupHead`), so the band's
+    /// marks and the conversation's share one vertical line. A wide screen names that middle
+    /// from the tokens — the rail and half the avatar — less half the 14px glyph, which starts
+    /// at `left` because the box's `-m-1.5` and `p-1.5` cancel (measured live at 1024 and
+    /// 1440: glyph, mark and avatar all centred on one x). It sat at `gutter + 0.5rem`, 27px
+    /// left of the avatars. A phone's avatar middle is the 16px
+    /// padding and half the avatar, 26px from the edge: the 44px target starts 4px in
+    /// (`-ml-3` against the band's 16px) and pays the other side back (`-mr-5`) so the title
+    /// does not move. `-mx-4` centred it at 22px, 4px left of every avatar under it.
     let navReopen =
-        "absolute left-[calc(var(--column-gutter)+0.5rem)] bottom-[30px] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
-        + "phone:relative phone:inset-auto phone:grid phone:[.nav-alt_&]:hidden phone:-mx-4"
+        "absolute left-[calc(var(--column-gutter)+var(--spacing-rail)+0.625rem-7px)] bottom-[30px] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
+        + "phone:relative phone:inset-auto phone:grid phone:[.nav-alt_&]:hidden phone:-ml-3 phone:-mr-5"
 
     /// The session's worst standing, under the reopen chevron: the column it opens is where
     /// the standings are said, so the way in carries the one that matters most. Centred on
