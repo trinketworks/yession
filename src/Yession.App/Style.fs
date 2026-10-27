@@ -1771,8 +1771,9 @@ module Style =
     /// under the chevron that opens it (`navReopenMark`). The door is a mark, not words
     /// (`View.contentReopen`), so it stands on the title's LINE as the sidebar's chevron does
     /// across the band (`navReopen`): `pb-2` lifts the 14px mark's middle onto the title's
-    /// (measured live at 1440: mark and chevron both at y=52, the title's middle 52.5; the
-    /// words' `pb-[1px]` left it 6.5px low). On a phone the group centres on the title's line.
+    /// line (measured live at 1440: mark and chevron both at y=52, the title's middle 52.5; the
+    /// words' `pb-[1px]` left it 6.5px low), and the glyph then drops onto the x-height as the
+    /// chevron's does (`terminalReopen`). On a phone the group centres on the title's line.
     let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-2 phone:items-center phone:gap-3 phone:pb-0"
     let headerStatus = "shrink-0"
 
@@ -2098,8 +2099,19 @@ module Style =
     /// padding and half the avatar, 26px from the edge: the 44px target starts 4px in
     /// (`-ml-3` against the band's 16px) and pays the other side back (`-mr-5`) so the title
     /// does not move. `-mx-4` centred it at 22px, 4px left of every avatar under it.
+    ///
+    /// Down, the glyph points at the middle stroke of the title's lowercase `e`, not at the
+    /// middle of its line box: a lowercase title's ink is its x-height, and the line's middle
+    /// is above it. Noto Sans ExtraLight holds that stroke 0.28em over the baseline, which
+    /// lands 3.2px under the line's middle at 28/32 and 1.7px under it at 19/24 (measured
+    /// live at 390, 1024 and 1440 by scanning a drawn `e`). Only the GLYPH drops
+    /// (`*:first`, the button's first child; not `[&>svg]`, because a `>` in a class string
+    /// ends the tag for the tests that read classes off the render, and not `[&_svg]`,
+    /// because the mark is an svg too), so the box, and the mark placed from it (`navReopenMark`), stay on the
+    /// id's line. The terminals' mark across the band drops the same way (`terminalReopen`).
     let navReopen =
         "absolute left-[calc(var(--column-gutter)+var(--spacing-rail)+0.625rem-7px)] bottom-[30px] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
+        + "*:first:translate-y-[3px] phone:*:first:translate-y-[1.5px] "
         + "phone:relative phone:inset-auto phone:grid phone:[.nav-alt_&]:hidden phone:-ml-3 phone:-mr-5"
 
     /// The session's worst standing, under the reopen chevron: the column it opens is where
@@ -4953,7 +4965,11 @@ module Style =
     /// leaning the way the column travels. Rendered from the model rather than hidden by a
     /// variant: whether the control exists is a fact about the model, and a button that is
     /// merely invisible is still in the tab order.
-    let terminalReopen = navChevronBack + " shrink-0"
+    ///
+    /// Its glyph drops onto the title's x-height by the sidebar chevron's own amounts
+    /// (`navReopen`), so the two marks either side of the title point at one stroke.
+    let terminalReopen =
+        navChevronBack + " shrink-0 *:first:translate-y-[3px] phone:*:first:translate-y-[1.5px]"
 
     // --- ANSI styling ---------------------------------------------------------------------------
     // Turning a parsed `AnsiStyle` into what a span wears. Split in two on purpose:
