@@ -1357,7 +1357,7 @@ module View =
     /// were nowhere on the first screen until somebody went looking. A running command is
     /// said to the eye by the composer's tray (`composerTray`), which can take the reader to
     /// it; here only in the tab's accessible name.
-    /// A mark, not words: the terminal glyph, and the count as a bare number beside it while
+    /// A mark, not words: a terminal on a stack (`Icon.content`), and the count as a bare number beside it while
     /// any are open. "‹ terminals" spent a third of a phone's band saying what the mark says,
     /// and was the one word in the band that is not the session's own. The words live on in
     /// the accessible name and the hover title.
@@ -1380,7 +1380,7 @@ module View =
                         title="{Dom.Text.showTerminals}" aria-label="{Dom.Text.showTerminalsNamed (List.length live) running}"
                         data-content-toggle="show" data-terminals-open="{string (List.length live)}"
                         ?data-terminals-running={not (List.isEmpty running)}
-                        @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.terminal}{count}</button>"""
+                        @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.content}{count}</button>"""
 
     let private header (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let titleStr = Ylmish.Text.toString model.Synced.Title
