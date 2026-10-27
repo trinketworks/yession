@@ -55,6 +55,11 @@ type LocalCopy =
     /// the server renders starts `Reading`, rather than announcing a missing store before the
     /// client that knows has had a chance to look.
     | Unkeepable
+    /// The store did not answer in time, or failed, so this page runs without what this
+    /// device kept: nothing of it is drawn, and nothing it is sent is kept. `reason` says
+    /// which part of the store and how. Unlike `Unkeepable`, this is not how the page was
+    /// served. It is this page load, and the next one may read the store again.
+    | Unread of reason: string
 
 module LocalCopy =
 
@@ -64,7 +69,8 @@ module LocalCopy =
         | LocalCopy.Kept _ -> true
         | LocalCopy.Reading
         | LocalCopy.NoneKept
-        | LocalCopy.Unkeepable -> false
+        | LocalCopy.Unkeepable
+        | LocalCopy.Unread _ -> false
 
     /// What the store answered at boot (`LocalHistoryMsg`): `folded`, whether any of what it
     /// kept was folded, and `gapAt`, where the rest of it resumes when the run stopped short.
@@ -75,7 +81,20 @@ module LocalCopy =
         | LocalCopy.Unkeepable -> LocalCopy.Unkeepable
         | LocalCopy.Reading
         | LocalCopy.Kept _
-        | LocalCopy.NoneKept -> if folded then LocalCopy.Kept gapAt else LocalCopy.NoneKept
+        | LocalCopy.NoneKept
+        | LocalCopy.Unread _ -> if folded then LocalCopy.Kept gapAt else LocalCopy.NoneKept
+
+    /// Part of the store failed this page load (`LocalStoreFaultMsg`). History that was
+    /// already folded stays the reader's picture: what failed then was another part of the
+    /// store (the saved document), and the conversation on screen is still what was kept.
+    /// A page that keeps nothing by how it was served stays that.
+    let unread (reason: string) (local: LocalCopy) : LocalCopy =
+        match local with
+        | LocalCopy.Kept _
+        | LocalCopy.Unkeepable -> local
+        | LocalCopy.Reading
+        | LocalCopy.NoneKept
+        | LocalCopy.Unread _ -> LocalCopy.Unread reason
 
     /// A page off the NETWORK: it resumes at the cursor and runs unbroken from it, so whatever
     /// the store was missing before it is being filled, and what is left to arrive is ordinary
@@ -86,7 +105,8 @@ module LocalCopy =
         | LocalCopy.Reading
         | LocalCopy.Kept None
         | LocalCopy.NoneKept
-        | LocalCopy.Unkeepable -> local
+        | LocalCopy.Unkeepable
+        | LocalCopy.Unread _ -> local
 
 /// An attempt that failed: why, and how many have failed in a row.
 type Failure = { Reason : string; Count : int }
@@ -2218,6 +2238,9 @@ type ClientMsg =
     /// flashed a red "history paused" over every cold open with an out-of-order store,
     /// moments before the first page fixed it.
     | LocalHistoryMsg of kept: EventPage<SessionEvent> * gapAt: EventOffset option
+    /// Part of this client's own store did not answer in time, or failed, at boot
+    /// (`Client.LocalOpen.run`): the page goes on without it (`LocalCopy.Unread`).
+    | LocalStoreFaultMsg of reason: string
     /// A read of the log failed and is being tried again: reported by the resilience policy
     /// composed with the transport, which is the one place that knows a retry is under way.
     /// A read that fails for good is its answer's to say (`EventsReadMsg`), and a page that
@@ -4918,6 +4941,7 @@ module ClientModel =
         holdList (say (notice model (reconcileLaunch (landsWhenHeard model (openOfItself model (settle (recall (
         match msg with
         | ConnectingMsg -> { model with Link = SessionLink.connecting model.Link }
+        | LocalStoreFaultMsg reason -> { model with LocalCopy = LocalCopy.unread reason model.LocalCopy }
         // Late: the wait it timed has already ended, and slow describes only a running one.
         | EffortSlowMsg -> { model with Link = SessionLink.slowed model.Link }
         | PageWaitedMsg -> { model with Waited = true; Link = SessionLink.waited model.Link }

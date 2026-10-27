@@ -1068,6 +1068,13 @@ module View =
                   <span class="{Style.small}">{Dom.Text.historyNotKept}</span>
                   {detailNote "history-store" [ Dom.Text.historyNotKeptWhy ]}
                 </section>"""
+        | LocalCopy.Unread reason ->
+            html $"""
+                <section class="{Style.sideSection}" data-history-store="unread">
+                  <span class="{Style.label}">history</span>
+                  <span class="{Style.small}">{Dom.Text.historyUnread}</span>
+                  {detailNote "history-store" [ reason; Dom.Text.historyUnreadWhy ]}
+                </section>"""
 
     /// Which build served this session, at the column's foot on BOTH faces — chrome that
     /// belongs to the column like its collapse chevron, so it does not come and go as the
@@ -3516,16 +3523,17 @@ module View =
             | LocalCopy.Reading
             | LocalCopy.Kept _
             | LocalCopy.NoneKept
-            | LocalCopy.Unkeepable -> None
+            | LocalCopy.Unkeepable
+            | LocalCopy.Unread _ -> None
         // The same case with nothing kept at all: a page that has not read the log through, has
         // no copy of it, and cannot reach the session to read it. Not the idle caret, which says
         // the session is EMPTY — nobody here knows that. A store that has not answered yet says
         // nothing either way; it may yet answer with the conversation.
         let absent =
             match model.LocalCopy, SessionLink.phase model.Link with
-            | (LocalCopy.NoneKept | LocalCopy.Unkeepable), Phase.Opening when SessionLink.cutOff model.Link ->
+            | (LocalCopy.NoneKept | LocalCopy.Unkeepable | LocalCopy.Unread _), Phase.Opening when SessionLink.cutOff model.Link ->
                 Some (reasonLine Dom.Text.historyNotOnDevice)
-            | (LocalCopy.Reading | LocalCopy.Kept _ | LocalCopy.NoneKept | LocalCopy.Unkeepable), _ -> None
+            | (LocalCopy.Reading | LocalCopy.Kept _ | LocalCopy.NoneKept | LocalCopy.Unkeepable | LocalCopy.Unread _), _ -> None
         // This client is fetching the log and has not read it through, so a message may still be
         // a round trip from landing. Shaped like the row that will take its place — an author
         // line: the beating dot where an avatar stands, the words where a name does, on the

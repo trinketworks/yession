@@ -1118,6 +1118,13 @@ let private uiChecklistTests =
                 (denied.Contains "HTTPS")
                 "and names the remedy, which is the operator's and is one flag"
 
+        testCase "a client that could not read its own store says so, with the reason" <| fun () ->
+            // Availability: a page running without what this device kept says so, rather
+            // than looking like a session with no history.
+            let unread = Support.render { representativeModel with LocalCopy = LocalCopy.Unread "the saved history did not answer in 5 seconds" }
+            Expect.isTrue (unread.Contains "data-history-store") "the page says it runs without its copy"
+            Expect.isTrue (unread.Contains "did not answer in 5 seconds") "and why"
+
         testCase "live mode: the lease bar names the holder and offers the steal" <| fun () ->
             let html = Support.render leasedTerminalModel
             let required =
