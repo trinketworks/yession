@@ -596,6 +596,12 @@ let create (config: ReposConfig) : Result<ReposService, string> =
               sprintf "%s/.git" (pathOf repo) ]
             |> List.forall Fs.isOwnDirectory
 
+        /// Why a path in the repos directory is not a checkout, when `present` says it is not.
+        let notACheckout (repo: RepoRef) : string =
+            sprintf
+                "%s is not a checkout: its .git, or a directory above it, is not a directory of its own. Use remove_repo on it, then add it again."
+                (visiblePathOf repo)
+
         /// Every regular file `HEAD` commits under `paths`, with its object id (`committedBlobs`).
         /// `-r` walks into directories; a path that names no entry answers nothing.
         let committedUnder (repo: RepoRef) (paths: string list) : Async<Result<(string * string) list, string>> =
@@ -616,14 +622,16 @@ let create (config: ReposConfig) : Result<ReposService, string> =
 
         let readCommitted (repo: RepoRef) (path: string) : Async<Result<string option, string>> =
             async {
-                match! committedUnder repo [ path ] with
-                | Error e -> return Error e
-                | Ok blobs ->
-                    match blobs |> List.tryFind (fun (named, _) -> named = path) with
-                    | None -> return Ok None
-                    | Some (_, objectId) ->
-                        let! text = blobText repo objectId
-                        return text |> Result.map Some
+                if not (present repo) then return Error (notACheckout repo)
+                else
+                    match! committedUnder repo [ path ] with
+                    | Error e -> return Error e
+                    | Ok blobs ->
+                        match blobs |> List.tryFind (fun (named, _) -> named = path) with
+                        | None -> return Ok None
+                        | Some (_, objectId) ->
+                            let! text = blobText repo objectId
+                            return text |> Result.map Some
             }
 
         /// The checkout's own root `AGENTS.md`, as `HEAD` commits it, read once at the moment
@@ -668,12 +676,6 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                         | _ -> ()
                     return skills |> List.sortBy (fun skill -> skill.Name)
             }
-
-        /// Why a path in the repos directory is not a checkout, when `present` says it is not.
-        let notACheckout (repo: RepoRef) : string =
-            sprintf
-                "%s is not a checkout: its .git, or a directory above it, is not a directory of its own. Use remove_repo on it, then add it again."
-                (visiblePathOf repo)
 
         let listingOf (repo: RepoRef) : Async<Result<RepoListing, string>> =
             async {
