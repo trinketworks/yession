@@ -182,7 +182,8 @@ module Answering =
           Linger = System.TimeSpan.FromSeconds 5.0 }
 
     /// The answer, bounded: what gathering resolves with when it finishes inside `limit`,
-    /// and otherwise what `soFar` has gathered at the limit. `Error` only when there is
+    /// and otherwise what `soFar` has gathered when the limit passes or gathering fails.
+    /// `Error` only when there is
     /// nothing to send at all. `sleep` is a parameter so a test drives this rule on its own
     /// clock.
     let within
@@ -193,7 +194,7 @@ module Answering =
         : Async<Result<string, string>> =
         async {
             let complete () = async { let! answer = gathered in return Ok answer }
-            match! Resilience.Policy.deadline sleep limit () complete () with
+            match! Resilience.Policy.deadline sleep limit () ignore complete () with
             | Ok answer -> return Ok answer
             | Error () ->
                 match soFar () with

@@ -363,7 +363,7 @@ let policy
 /// The whole leg as it ships: each attempt bounded, the settled faults retried.
 let resilient (sleep: TimeSpan -> Async<unit>) (random: unit -> float) (post: GitHubPost) : GitHubPost =
     post
-    |> Resilience.Policy.deadline sleep callDeadline GitHubTimedOut
+    |> Resilience.Policy.deadline sleep callDeadline GitHubTimedOut (fun error -> GitHubUnreachable error.Message)
     |> Resilience.Policy.guard (policy sleep random)
 
 /// Ask GitHub whether a token is still good, as GitHub itself.
