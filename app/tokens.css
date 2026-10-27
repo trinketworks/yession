@@ -104,9 +104,9 @@
   /* --- Structure: lengths that layouts must agree on, so they compose a name rather than repeat a number. --- */
   --spacing-control: 32px;  /* every button, field and select — a row is things of one height */
   --spacing-band: 88px;     /* the header band every head shares, so baselines align across the hairline */
-  --spacing-band-phone: 56px;  /* the same band on a phone, one thumb-sized row */
+  --spacing-band-phone: 60px;  /* the same band on a phone, one thumb-sized row and the session id under it */
   --spacing-rail: 2rem;        /* the rail every line of text in a column starts on; marks hang in the gutter to its left */
-  --spacing-id-drop: calc(0.25rem + var(--text-code-sm--line-height) / 2);  /* the session id's line centre under the title's line box: `Style.titleId`'s mt-1 and half its line (`Style.navReopenMark` lands on it) */
+  --spacing-id-drop: calc(0.25rem + var(--text-code-sm--line-height) / 2 - 1px);  /* the session id's ink centre under the title's line box: `Style.titleId`'s mt-1, half its line, and the 1px the id's capitals and digits centre above the line's middle (measured) — `Style.navReopenMark` lands on it */
   --spacing-mark-slide: calc(0.75rem + var(--text-body--line-height) + 0.5rem + 0.625rem - 0.125rem - var(--spacing-touch) / 2);  /* how far a roster row's mark travels when the row unfolds: from its seat (`Style.recordMarkCell`'s py-0.5, the middle of its 44px press) to the middle of the first unfolded line (`Style.tableCell`'s py-3, the name's line, `Style.recordDetailLines`' pt-2, half a 20px line) */
   --spacing-side: 280px;    /* the sidebar column */
   --spacing-term: 420px;    /* the terminals column: 80 columns of mono */
