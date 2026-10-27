@@ -695,7 +695,32 @@ module Style =
     /// It unfolds the row (`aria-expanded`). No ground of its own: a ground would hang 12px
     /// into the gutter, off the rail every other edge on the page keeps, and the unfolded
     /// lines under it already say the row is open.
-    let recordMarkPress = cls [ "-ml-3 w-11 h-11 pl-3 flex items-center bg-transparent border-0 cursor-pointer"; focusRing ]
+    let recordMarkPress = cls [ "relative -ml-3 w-11 h-11 pl-3 flex items-center bg-transparent border-0 cursor-pointer"; focusRing ]
+
+    /// The row's mark, which RIDES when the row unfolds: down a track to the first unfolded
+    /// line, which is the one it ranks first, so that line says its word with no mark of its
+    /// own rather than repeating the one above it (`--spacing-mark-slide`). A wrapper, so the
+    /// mark's own motion (`markOrbit` and its siblings) runs on undisturbed while it travels.
+    let recordMarkRider =
+        cls [ "relative flex transition-[translate]"; Motion.pace
+              "[[data-expanded]_&]:translate-y-(--spacing-mark-slide)" ]
+
+    /// What the mark leaves behind as it rides: a faint 2px line from its seat to where it
+    /// stops, drawn down with it (scaled from the top, at the same pace). Centred on the
+    /// mark's 12px box: the box sits 12px into the press, so its centre is 18px in and the
+    /// press's own middle down.
+    let recordMarkTrack =
+        cls [ "absolute left-[17px] top-1/2 w-0.5 h-(--spacing-mark-slide) bg-ink-faint origin-top scale-y-0"
+              "transition-[scale]"; Motion.pace
+              "[[data-expanded]_&]:scale-y-100" ]
+
+    /// The track's start: a 4px point on the mark's seat, so the line begins round rather
+    /// than squared. Its own element, not the line's `::before`, so the line's scale does not
+    /// squash it; it fades in where the mark leaves rather than travelling.
+    let recordMarkSeat =
+        cls [ "absolute left-4 top-1/2 -mt-0.5 size-1 rounded-full bg-ink-faint opacity-0"
+              "transition-[opacity]"; Motion.pace
+              "[[data-expanded]_&]:opacity-100" ]
 
     /// What a row unfolds to, under its name: each thing it says, then its verbs. Folded at
     /// rest — `visibility` takes the verbs out of the tab order with it — and unfolded by
