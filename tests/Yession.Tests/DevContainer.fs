@@ -83,7 +83,7 @@ let private declaredDev (reposDir: string) : EnvironmentSpec =
     // bind source that does not exist is one docker invents, owned by root.
     let artifactsDir = reposDir + "/../artifacts"
     TestFiles.ensureDir artifactsDir
-    let file = (RepoConfig.read reposDir repoRef |> expect |> Option.get).File
+    let file = (RepoConfig.fromText (TestFiles.read (sprintf "%s/%s/%s" reposDir (RepoRef.relativePath repoRef) Yession.Session.ConfigFile.FileName)) |> expect).File
     let decl = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
     let request = SandboxDecl.toRequest (Some (Sandboxes.checkoutAt reposDir repoRef)) decl |> expect
     match request.Spec.Runtime with

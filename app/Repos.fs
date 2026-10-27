@@ -24,6 +24,13 @@ module Yession.Host.Repos
 // the repos directory by design, so a poisoned `.git/config` is assumed and made inert
 // rather than trusted-by-placement.
 //
+// A repository's FILES reach this process only through git's object store, read in the git
+// sandbox (`ReadCommitted`: `ls-tree` judges the entry, `cat-file` reads the blob). This
+// process opens no path a repository names. `AGENTS.md`, the skills and `yession.yaml` were
+// read off the work tree with calls that follow symlinks, so a repository whose `AGENTS.md`
+// linked to `~/.ssh/id_ed25519` put that key in the log for everyone in the session. A link
+// at `HEAD` is mode `120000`, and here that is no file (docs/technical-design.md §5, rule 20).
+//
 // The credential (the acting human's GitHub token, Plan 08 precedence) reaches exactly
 // one place: the env of the single confined git invocation that needs it. It is never
 // in the sandbox policy env, so nothing that outlives the invocation can read it.
@@ -321,6 +328,24 @@ type Recorded<'a> =
     { Answer : 'a
       RecordedAs : MessageId option }
 
+/// A repository's file at `HEAD`, by its path in the repository: its text, `None` when there
+/// is none (or a symlink), or why git could not say.
+type CommittedFile = RepoRef -> string -> Async<Result<string option, string>>
+
+/// One `ls-tree -z` entry: `<mode> <type> <object>\t<path>`. A regular file is a `blob`
+/// whose mode is `100644` or `100755`; `120000` is a symlink and `160000` a submodule, and
+/// neither is a file here.
+let committedBlobs (lsTree: string) : (string * string) list =
+    lsTree.Split '\000'
+    |> Array.choose (fun entry ->
+        match entry.Split ('\t', 2) with
+        | [| meta; path |] ->
+            match meta.Split ' ' with
+            | [| ("100644" | "100755"); "blob"; objectId |] -> Some (path, objectId)
+            | _ -> None
+        | _ -> None)
+    |> Array.toList
+
 /// The Process-side repo manager. Caller-taking members append the acting party onto
 /// the event; the read-only inspectors take none because they record nothing.
 type ReposService =
@@ -334,6 +359,11 @@ type ReposService =
       RepoStatus : RepoRef -> Async<Result<string, string>>
       RepoLog : RepoRef -> Async<Result<string, string>>
       RepoDiff : RepoRef -> Async<Result<string, string>>
+      /// A file as the checkout's `HEAD` commits it, read out of git's object store in the git
+      /// sandbox (`committedFile`). `None` when `HEAD` has no such file, or has a symlink there.
+      /// The one way a repository's file reaches this process: the session opens no path a
+      /// repository names (docs/technical-design.md §5, rule 20).
+      ReadCommitted : CommittedFile
       /// Delete a checkout, and answer with the path it was at AS A TERMINAL SAW IT (Plan
       /// 26). That path rather than `unit`, because it is the one fact only this service has
       /// and the only one a shell profile could have been holding — the git sandbox's own
@@ -519,47 +549,78 @@ let create (config: ReposConfig) : Result<ReposService, string> =
             SandboxPath.reachedFrom (config.StartsAt ()) (pathOf repo)
         let present (repo: RepoRef) = Fs.exists (sprintf "%s/.git" (pathOf repo))
 
-        /// The checkout's own root `AGENTS.md`, read once at the moment the clone lands
-        /// (repo AGENTS.md into per-turn context). Missing or unreadable is `None`, never a
-        /// reason to fail an otherwise-successful clone -- an optional file's absence is not
-        /// an error. Capped in characters, the same shape as Claude Code's own CLAUDE.md
-        /// size ceiling, so one repo cannot dominate every turn's context; a file over the
-        /// cap is truncated, not dropped, so a maintainer's opening lines still land.
-        let agentsMdOf (repo: RepoRef) : string option =
-            let path = sprintf "%s/AGENTS.md" (pathOf repo)
-            if not (Fs.exists path) then None
-            else
-                try
-                    let text = Fs.readText path
-                    if text.Length > agentsMdCharCap then
-                        Some (text.Substring (0, agentsMdCharCap) + "\n\n[truncated -- AGENTS.md is longer than this session reads]")
-                    else
-                        Some text
-                with _ -> None
+        /// Every regular file `HEAD` commits under `paths`, with its object id (`committedBlobs`).
+        /// `-r` walks into directories; a path that names no entry answers nothing.
+        let committedUnder (repo: RepoRef) (paths: string list) : Async<Result<(string * string) list, string>> =
+            async {
+                match! runOk confined None ([ "-C"; pathOf repo; "ls-tree"; "-r"; "-z"; "HEAD"; "--" ] @ paths) with
+                | Error e -> return Error e
+                | Ok run -> return Ok (committedBlobs run.Stdout)
+            }
 
-        /// Every skill a checkout's `.agents/skills/` declares, read at the same moment and
-        /// for the same reason `agentsMdOf` is: right after the staging rename, the one
-        /// moment a repo-authored file is trustworthy. A directory with no `SKILL.md`, one
-        /// with no frontmatter, or frontmatter that does not decode contributes nothing --
-        /// malformed is not a reason to fail an otherwise-successful clone, the same
-        /// tolerance `agentsMdOf` already has. Sorted by name, so the menu reads the same on
-        /// every clone whatever order the filesystem happens to answer in.
-        let skillsOf (repo: RepoRef) : SkillSummary list =
-            let skillsDir = sprintf "%s/.agents/skills" (pathOf repo)
-            if not (Fs.exists skillsDir) then []
-            else
-                Fable.NodeExtras.Files.entries skillsDir
-                |> Array.filter (fun entry -> entry.isDirectory ())
-                |> Array.choose (fun entry ->
-                    let path = sprintf "%s/%s/SKILL.md" skillsDir entry.name
-                    if not (Fs.exists path) then None
-                    else
-                        try
-                            SkillFile.frontmatterOf (Fs.readText path)
-                            |> Option.bind (fun yaml -> SkillFile.decode (Fable.Yaml.Plain.json (Fable.Yaml.parse yaml)) |> Result.toOption)
-                        with _ -> None)
-                |> Array.sortBy (fun skill -> skill.Name)
-                |> Array.toList
+        /// One blob's text, by object id. By id rather than `HEAD:<path>`, so what is read is
+        /// the entry `ls-tree` judged, and a path is never parsed twice.
+        let blobText (repo: RepoRef) (objectId: string) : Async<Result<string, string>> =
+            async {
+                match! runOk confined None [ "-C"; pathOf repo; "cat-file"; "blob"; objectId ] with
+                | Error e -> return Error e
+                | Ok run -> return Ok run.Stdout
+            }
+
+        let readCommitted (repo: RepoRef) (path: string) : Async<Result<string option, string>> =
+            async {
+                match! committedUnder repo [ path ] with
+                | Error e -> return Error e
+                | Ok blobs ->
+                    match blobs |> List.tryFind (fun (named, _) -> named = path) with
+                    | None -> return Ok None
+                    | Some (_, objectId) ->
+                        let! text = blobText repo objectId
+                        return text |> Result.map Some
+            }
+
+        /// The checkout's own root `AGENTS.md`, as `HEAD` commits it, read once at the moment
+        /// the clone lands (repo AGENTS.md into per-turn context). Missing, a symlink, or
+        /// unreadable is `None`, never a reason to fail an otherwise-successful clone -- an
+        /// optional file's absence is not an error. Capped in characters, the same shape as
+        /// Claude Code's own CLAUDE.md size ceiling, so one repo cannot dominate every turn's
+        /// context; a file over the cap is truncated, not dropped, so a maintainer's opening
+        /// lines still land.
+        let agentsMdOf (repo: RepoRef) : Async<string option> =
+            async {
+                match! readCommitted repo "AGENTS.md" with
+                | Ok (Some text) when text.Length > agentsMdCharCap ->
+                    return Some (text.Substring (0, agentsMdCharCap) + "\n\n[truncated -- AGENTS.md is longer than this session reads]")
+                | Ok (Some text) -> return Some text
+                | Ok None | Error _ -> return None
+            }
+
+        /// Every skill `HEAD` declares under `.agents/skills/`, read at the same moment and for
+        /// the same reason `agentsMdOf` is. A directory with no `SKILL.md` (or a symlink there),
+        /// one with no frontmatter, or frontmatter that does not decode contributes nothing --
+        /// malformed is not a reason to fail an otherwise-successful clone, the same tolerance
+        /// `agentsMdOf` already has. Sorted by name, so the menu reads the same on every clone.
+        let skillsOf (repo: RepoRef) : Async<SkillSummary list> =
+            async {
+                match! committedUnder repo [ ".agents/skills" ] with
+                | Error _ -> return []
+                | Ok blobs ->
+                    let mutable skills = []
+                    for path, objectId in blobs do
+                        match path.Split '/' with
+                        | [| ".agents"; "skills"; _; "SKILL.md" |] ->
+                            match! blobText repo objectId with
+                            | Ok text ->
+                                let decoded =
+                                    try
+                                        SkillFile.frontmatterOf text
+                                        |> Option.bind (fun yaml -> SkillFile.decode (Fable.Yaml.Plain.json (Fable.Yaml.parse yaml)) |> Result.toOption)
+                                    with _ -> None
+                                skills <- skills @ Option.toList decoded
+                            | Error _ -> ()
+                        | _ -> ()
+                    return skills |> List.sortBy (fun skill -> skill.Name)
+            }
 
         let listingOf (repo: RepoRef) : Async<Result<RepoListing, string>> =
             async {
@@ -696,6 +757,16 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                             (SessionEvent.RepoCloneFailed { MessageId = messageId; Repo = repo; Reason = e; Actor = caller.Actor })
                     return Error e
                 | Ok listing ->
+                    let! agentsMd, skills =
+                        Telemetry.span
+                            config.Tracer
+                            "repo.read_files"
+                            []
+                            (async {
+                                let! agentsMd = agentsMdOf repo
+                                let! skills = skillsOf repo
+                                return agentsMd, skills
+                            })
                     do!
                         Telemetry.span
                             config.Tracer
@@ -708,8 +779,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                                       Repo = repo
                                       Branch = listing.Branch
                                       Actor = caller.Actor
-                                      AgentsMd = agentsMdOf repo
-                                      Skills = skillsOf repo }))
+                                      AgentsMd = agentsMd
+                                      Skills = skills }))
                     return Ok { Recorded.Answer = listing; Recorded.RecordedAs = Some messageId }
             }
 
@@ -742,6 +813,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                             // would leave it here and invisible for good. Record it as the
                             // clone would have.
                             let messageId = mintMessageId ()
+                            let! agentsMd = agentsMdOf repo
+                            let! skills = skillsOf repo
                             do! append caller.Actor (SessionEvent.RepoAdded { MessageId = messageId; Repo = repo; Actor = caller.Actor })
                             do!
                                 append
@@ -751,8 +824,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                                           Repo = repo
                                           Branch = listing.Branch
                                           Actor = caller.Actor
-                                          AgentsMd = agentsMdOf repo
-                                          Skills = skillsOf repo })
+                                          AgentsMd = agentsMd
+                                          Skills = skills })
                             return Ok { Recorded.Answer = listing; Recorded.RecordedAs = Some messageId }
                     | Error e ->
                         // The one bad state the rename cannot prevent, because it predates
@@ -882,6 +955,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
           RepoStatus = inspect (fun path -> [ "-C"; path; "status"; "--porcelain=v1"; "--branch" ])
           RepoLog = inspect (fun path -> [ "-C"; path; "log"; "--oneline"; "-30" ])
           RepoDiff = inspect (fun path -> [ "-C"; path; "diff" ])
+          ReadCommitted = readCommitted
           RemoveRepo = removeRepo })
 
 /// The agent-facing capability set for one turn: events attribute the AGENT (it is

@@ -159,6 +159,7 @@ let private reposAnswering (add: RepoRef -> Async<Result<RepoListing, string>>) 
       RepoStatus = denied
       RepoLog = denied
       RepoDiff = denied
+      ReadCommitted = fun _ _ -> async { return Error "not part of this test" }
       RemoveRepo = fun _ _ _ -> async { return Error "not part of this test" } }
 
 /// A pull request service that answers `create_pr` with whatever the test says, and refuses
@@ -774,6 +775,7 @@ let private reposHolding (initial: RepoListing list) (clone: RepoRef -> Result<R
           RepoStatus = denied
           RepoLog = denied
           RepoDiff = denied
+          ReadCommitted = fun _ _ -> async { return Error "not part of this test" }
           RemoveRepo = fun _ _ _ -> async { return Error "not part of this test" } } }
 
 /// Services over a held repo service whose profile writes land in the same call record.
