@@ -160,8 +160,9 @@ let private agentBackend =
 // The git sandbox's backend (`YESSION_SESSION_GIT_BACKEND`): where the session's own git
 // verbs run — clone, fetch, switch, status, log and diff. host or srt, default srt
 // (`SandboxBackend.parseGit` says why), parsed here at boot and fail closed like the two
-// above. It is not the agent backend: the reason that one stays `host` is the Bun CLI's
-// egress, and git honours srt's proxy (the `Srt` suite drives it).
+// above. It is not the agent backend, which stays `host` until a macOS run under srt is
+// measured (docs/GAPS.md, the agent CLI entry, has the measurements). That reason is the
+// CLI's, not git's: git honours srt's proxy (the `Srt` suite drives it).
 let private gitBackend =
     match SandboxBackend.parseGit (match Interop.envOr "YESSION_SESSION_GIT_BACKEND" "" with "" -> None | raw -> Some raw) with
     | Ok backend -> backend

@@ -918,9 +918,9 @@ After the fixes land, one pass rewrites it to what still reproduces.
     a confined git gets a proxy error that names the host. A `Provision` carries the host it
     needs as a `Domains` entry, and the composition widens a filtering backend's allowlist by it.
   - **The git verbs run in a sandbox of their own, `srt` by default**
-    (`YESSION_SESSION_GIT_BACKEND`). They used to take the agent backend, whose default is
-    `host` for a reason that is the Bun CLI's and not git's, so in every deployment that kept
-    the default they ran unconfined. **Under `YESSION_SESSION_GIT_BACKEND=host` the git verbs
+    (`YESSION_SESSION_GIT_BACKEND`). They used to take the agent backend, which stays `host`
+    until a macOS run under srt is measured (the agent CLI entry above), so in every deployment
+    that kept the default they ran unconfined. **Under `YESSION_SESSION_GIT_BACKEND=host` the git verbs
     run unconfined**, the operator's explicitly lax choice. The per-invocation hardening (`hardenedEnv` in `app/Repos.fs`) still
     applies. The filesystem and egress boundaries do not. A proxy that a `.git/config` names is
     off there (`NO_PROXY=*`). No git process holds a credential (clone and fetch go through

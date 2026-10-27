@@ -12,9 +12,9 @@ The git sandbox runs the session's own git verbs: clone, fetch, switch, status, 
 It took the agent backend. So in every deployment that kept the defaults, the git verbs ran as
 the operator, unconfined.
 
-The agent backend is `host` for a reason that is the CLI's: the Bun `claude` binary ignores
-`HTTP_PROXY`, so under srt its API egress fails. That reason does not hold for git. The `Srt`
-suite shows that git and node honour srt's proxy.
+The agent backend stays `host` until a macOS run under srt is measured. docs/GAPS.md (the
+agent CLI entry) has the measurements. That reason is about the `claude` CLI, and it does not
+hold for git. The `Srt` suite shows that git and node honour srt's proxy.
 
 The git verbs work on checkouts that every work sandbox can write, `.git/config` included. One
 exec vector stays open whatever the env says: `filter.<driver>.smudge` runs on `switch_branch`.
@@ -31,8 +31,8 @@ Under `host` it runs as the operator.
 
 ## Alternatives rejected
 
-**Change the agent backend's default to srt.** The CLI does not work there yet, and that is a
-separate change.
+**Change the agent backend's default to srt.** Its default waits on a macOS measurement, and
+that is a separate change.
 
 **Keep one variable for both.** The two defaults have different reasons. One variable makes
 the weaker default win for both.
