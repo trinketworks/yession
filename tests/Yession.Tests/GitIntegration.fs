@@ -527,6 +527,17 @@ let private configBoundaryTests =
             Expect.isFalse (TestFiles.exists marker) "the external diff did not run"
         }
 
+        testCaseAsync "a work tree the checkout's config names is not the one repo_status reads" <| async {
+            let root = mkdtemp ()
+            let! service, checkout = addedOn SrtBackend root
+            let elsewhere = sprintf "%s/elsewhere" (reposIn root)
+            TestFiles.ensureDir elsewhere
+            TestFiles.write (sprintf "%s/OUTSIDE-the-checkout" elsewhere) "x\n"
+            hostGit [ "config"; "core.worktree"; elsewhere ] checkout
+            let! status = service.RepoStatus hello
+            Expect.isFalse ((expect status).Contains "OUTSIDE-the-checkout") "the checkout's own work tree, not the one the config names"
+        }
+
         testCaseAsync "under srt, a proxy the checkout's config names is never dialled" <| async {
             let! dialled = fetchedThroughPlantedProxy SrtBackend
             Expect.equal dialled 0 "the listener saw nothing"
