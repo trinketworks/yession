@@ -473,6 +473,16 @@ let private committedReadTests =
             Expect.equal read (Ok None) "a link is not a file"
         }
 
+        testCaseAsync "a repository with no commit yet declares nothing, and that is not an error" <| async {
+            let root = mkdtemp ()
+            let checkout = sprintf "%s/octo/empty" (reposIn root)
+            TestFiles.ensureDir checkout
+            hostGit [ "init"; "-b"; "main" ] checkout
+            let service = serviceIn root (freshLog ())
+            let! read = RepoConfig.read service.ReadCommitted (RepoRef.create "octo/empty" |> expect)
+            Expect.equal read (Ok None) "an unborn HEAD commits no file"
+        }
+
         testCaseAsync "a yession.yaml edited and not committed declares what HEAD declares" <| async {
             let! service, checkout = addedDeclaring (mkdtemp ())
             TestFiles.write (sprintf "%s/yession.yaml" checkout) "version: 2\nsandboxes:\n  gate: {}\n"
