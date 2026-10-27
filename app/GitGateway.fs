@@ -48,6 +48,14 @@ module Yession.Host.GitGateway
 // act's credential, and a request arriving after that is refused in words rather than
 // answered with somebody else's.
 //
+// The session's own git takes the same route. `Repos`' clone and fetch run in the git
+// sandbox, which is no work sandbox and has no terminal, so a route is minted for
+// `Routed.SessionGit` and each verb borrows on its own key (`Borrower.Verb`): lent before the
+// git process starts and returned when it exits, because two verbs can run at once. Before
+// this the token rode in that git process as an `extraheader`, and a `.git/config` that any
+// work sandbox can write could route it to a proxy or rewrite github.com away (rule 21 of
+// docs/technical-design.md §5). One mechanism carries a credential to github.com now.
+//
 // What this does NOT do: every process in a sandbox is one uid, and a block can read another
 // block's live loan out of `/proc` — or the block's own can print it, since it sits in the
 // environment `env` dumps. That is the trust boundary a sandbox already is (docs/GAPS.md),
@@ -299,6 +307,21 @@ let private basicAuthorization (token: string) : string =
 
 // --- the gateway ---------------------------------------------------------------------------
 
+/// Whose git a route is minted for: a work sandbox's, or the session's own git verbs (`clone`
+/// and `fetch` in `Repos`), which run in the git sandbox and have no `SandboxRef` of their own.
+[<RequireQualifiedAccess>]
+type Routed =
+    | Sandbox of SandboxRef
+    | SessionGit
+
+/// What a loan is lent to, and what returns it. A terminal runs one block at a time, so its
+/// next loan returns its last. A session verb holds its loan for the one git process it spawns,
+/// and two verbs can run at once, so each verb is a borrower of its own.
+[<RequireQualifiedAccess>]
+type Borrower =
+    | Terminal of TerminalId
+    | Verb of Guid
+
 type Gateway =
     { /// The bound port, at every address it answers on.
       Port : int
@@ -307,23 +330,24 @@ type Gateway =
       Open : string -> Async<Result<unit, string>>
       /// Mint the route for one sandbox, replacing any it had: the cap its git will name. A
       /// route answers nothing by itself — what answers on it is the loan a request carries.
-      Grant : SandboxRef -> string
-      /// Lend a block's requests a credential: the secret the block's line exports, live
-      /// until the terminal's next loan or `Retire`. One live loan per terminal, because a
-      /// terminal runs one block at a time — lending the next returns the last.
-      Lend : SandboxRef -> TerminalId -> Lender -> string
-      /// The loan on a terminal is returned. A request still carrying it is refused in
-      /// words; the last returned loan per terminal is kept for that sentence, and no more.
-      Retire : TerminalId -> unit
+      Grant : Routed -> string
+      /// Lend a borrower's requests a credential: the secret its git carries, live until the
+      /// borrower's next loan or `Retire`. One live loan per borrower — lending the next
+      /// returns the last.
+      Lend : Routed -> Borrower -> Lender -> string
+      /// The loan a borrower holds is returned. A request still carrying a terminal's is
+      /// refused in words; the last returned loan per terminal is kept for that sentence, and
+      /// no more. A verb's is dropped: its git has exited.
+      Retire : Borrower -> unit
       /// Take a sandbox's route, and every loan under it, away — what makes the cap die
       /// with the sandbox.
       Revoke : SandboxRef -> unit
       Close : unit -> Async<unit> }
 
-/// One block's loan: where it was lent, and who answers on it.
+/// One loan: where it was lent, to whom, and who answers on it.
 type private Loan =
-    { Sandbox : SandboxRef
-      Terminal : TerminalId
+    { Routed : Routed
+      Borrower : Borrower
       Lender : Lender }
 
 /// Start the gateway at `addresses` (`Sandboxes.hostDoors`), on one port. `upstream` is the origin github.com's git endpoints live under — a
@@ -333,17 +357,20 @@ type private Loan =
 /// and a fault swallowed there is a fault nobody hears — which for a push's audit record is
 /// a push that went out on somebody's credential with no line saying so.
 let start (addresses: string list) (upstream: string) (report: string -> unit) : Async<Gateway> =
-    let mutable grants : Map<string, SandboxRef> = Map.empty
+    let mutable grants : Map<string, Routed> = Map.empty
     /// Live loans, by secret.
     let mutable live : Map<string, Loan> = Map.empty
     /// The last loan each terminal returned, by terminal — so a request still carrying it
     /// is told so, rather than 404'd like a secret nobody ever minted.
     let mutable returned : Map<string, string * Loan> = Map.empty
 
-    let retire (terminal: TerminalId) =
-        for KeyValue (secret, loan) in live do
-            if loan.Terminal = terminal then returned <- Map.add (TerminalId.value terminal) (secret, loan) returned
-        live <- live |> Map.filter (fun _ loan -> loan.Terminal <> terminal)
+    let retire (borrower: Borrower) =
+        match borrower with
+        | Borrower.Terminal terminal ->
+            for KeyValue (secret, loan) in live do
+                if loan.Borrower = borrower then returned <- Map.add (TerminalId.value terminal) (secret, loan) returned
+        | Borrower.Verb _ -> ()
+        live <- live |> Map.filter (fun _ loan -> loan.Borrower <> borrower)
 
     let answer (res: ServerResponse) (status: int) (contentType: string) (body: string) =
         res.writeHead (status, [ ResponseHeader.ContentType contentType; ResponseHeader.CacheControl "no-store" ])
@@ -377,7 +404,7 @@ let start (addresses: string list) (upstream: string) (report: string -> unit) :
                     // never minted, and is answered like one: every process in a sandbox
                     // shares one uid, so what this bounds is how far a loan read out of a
                     // neighbour's environment can travel — one sandbox, not the session.
-                    let onThisRoute (loan: Loan) = loan.Sandbox = routed
+                    let onThisRoute (loan: Loan) = loan.Routed = routed
                     match Map.tryFind secret live |> Option.filter onThisRoute with
                     | None ->
                         match
@@ -439,21 +466,22 @@ let start (addresses: string list) (upstream: string) (report: string -> unit) :
             { Port = doors.Port
               Open = doors.Open
               Grant =
-                fun sandbox ->
+                fun routed ->
                     let cap = randomSecret ()
-                    grants <- grants |> Map.filter (fun _ held -> held <> sandbox) |> Map.add cap sandbox
+                    grants <- grants |> Map.filter (fun _ held -> held <> routed) |> Map.add cap routed
                     cap
               Lend =
-                fun sandbox terminal lender ->
-                    retire terminal
+                fun routed borrower lender ->
+                    retire borrower
                     let secret = randomSecret ()
-                    live <- Map.add secret { Sandbox = sandbox; Terminal = terminal; Lender = lender } live
+                    live <- Map.add secret { Routed = routed; Borrower = borrower; Lender = lender } live
                     secret
               Retire = retire
               Revoke =
                 fun sandbox ->
-                    grants <- grants |> Map.filter (fun _ held -> held <> sandbox)
-                    live <- live |> Map.filter (fun _ loan -> loan.Sandbox <> sandbox)
-                    returned <- returned |> Map.filter (fun _ (_, loan) -> loan.Sandbox <> sandbox)
+                    let routed = Routed.Sandbox sandbox
+                    grants <- grants |> Map.filter (fun _ held -> held <> routed)
+                    live <- live |> Map.filter (fun _ loan -> loan.Routed <> routed)
+                    returned <- returned |> Map.filter (fun _ (_, loan) -> loan.Routed <> routed)
               Close = doors.Close }
     }

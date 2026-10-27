@@ -920,7 +920,9 @@ After the fixes land, one pass rewrites it to what still reproduces.
   - **Under `YESSION_SESSION_AGENT_BACKEND=host` the git verbs run unconfined**, the operator's
     explicitly lax choice. The per-invocation hardening (`hardenedEnv` in `app/Repos.fs`) still
     applies. The filesystem and egress boundaries do not. A proxy that a `.git/config` names is
-    off there (`NO_PROXY=*`), because nothing else stops the token in the git process reaching it.
+    off there (`NO_PROXY=*`). No git process holds a credential (clone and fetch go through
+    the git gateway on a loan), so what a planted proxy or `insteadOf` can still reach is the
+    loan, which the gateway answers only for the git sandbox's route while the verb runs.
   - **Every srt sandbox may write a checkout's `.git/config`** (`AllowGitConfig` in
     `app/Sandboxes.fs` says why, and that scoping it to the git sandbox is not done yet). So the
     WorkSandbox and the agent can plant config that git reads when it next runs in that

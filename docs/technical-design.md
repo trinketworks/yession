@@ -637,6 +637,9 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     sandbox (`ReposService.ReadCommitted`). The session process opens no path that a
     repository names. A work sandbox can write the checkout, so a path in it can be a symlink
     to anything the session's user can read, and a check before the open races the write.
+21. No git process holds a GitHub credential. git reaches github.com only through the git
+    gateway (`GitGateway`), which adds the credential of a loan on the way. A work sandbox's
+    git and the session's own clone and fetch take the same route.
 
 Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
 roots, keyed by `BodyKey`, that the app co-manages outside the encoded tree, and the structural
