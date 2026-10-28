@@ -2181,6 +2181,18 @@ type DomMove =
     /// Scroll the conversation to one command's chip and mark it — the tray's `running`
     /// press, which takes a reader to the command the way a chapter takes them to a message.
     | RevealCommand of TerminalId * BlockId
+    /// Scroll the settings pane to one query's panel, and mark one of its rows when the
+    /// press can name exactly one — the status strip's pull-requests line, taken to the
+    /// row it is about the way a chapter is taken to a message. `None` when the press
+    /// cannot name a single row (more than one pull request, or none), where the panel
+    /// itself is still a landing worth having.
+    ///
+    /// Carries its own focus, unlike `ToggleSettingsMsg`'s `FocusSettingsToggle`: that one
+    /// lands on the face's own pivot, at the pane's foot, which is the right place to land
+    /// a reader who only asked to GO to settings, and the wrong one for a reader who asked
+    /// to be shown something in it — landing there would drag the scrollport down past
+    /// what this move just scrolled to.
+    | RevealQueryRow of query: string * row: string option
     /// Scroll the pane's strip the least distance that shows its selected tab whole
     /// (`ClientModel.pivotReveal`).
     | RevealPivot
@@ -4631,6 +4643,19 @@ module ClientModel =
                 | None -> None)
         | _ -> []
 
+    /// The one row the status strip's pull-requests line can point a press at: the
+    /// `pull_requests` query's row, when it has exactly one — read off the SAME values
+    /// `prStandings` reads, for `prStandings`' own reason (one parse, so the strip's word
+    /// and the panel's row never disagree about which pull request is which). `None` with
+    /// more than one row, or none, where naming one would be a guess.
+    let prPanelRow (model: ClientModel) : string option =
+        match model.Queries.Values |> Map.tryFind PrStatus.Columns.query with
+        | Some (RowsOf [ row ]) ->
+            row
+            |> List.tryFind (fun (key, _) -> key = PrStatus.Columns.pr)
+            |> Option.map (snd >> QueryCell.describe)
+        | _ -> None
+
     /// Whether a Claude credential this person can see wants signing in again. The sidebar's
     /// agent row and the header's agent standing both ask it, so it is asked here once.
     let claudeNeedsSignIn (model: ClientModel) : bool =
@@ -5622,6 +5647,12 @@ module ClientModel =
             match TimelineProjection.blockTurn block model.Timeline with
             | Some turn -> { model with OpenFolds = Set.add (FoldKey.Task turn) model.OpenFolds }
             | None -> model
+        // The settings face has to be the one on screen before anything in it can be
+        // scrolled to — `columnOn` for the reason every other way into the column goes
+        // through it: the next press into settings must not find a drawer open and a
+        // pane forgotten.
+        | MoveMsg (DomMove.RevealQueryRow _) ->
+            columnOn { model with Column = { model.Column with Face = ColumnFace.Settings } }
         // The way back pressed: the reader follows the surface's end from here, which is
         // what takes them to it (`Tail` puts a follower at the end after the render).
         | MoveMsg (DomMove.JumpToLatest surface) -> reading surface None model

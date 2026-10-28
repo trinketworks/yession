@@ -216,6 +216,15 @@ module Scrolling =
     [<Emit("(function (el) { el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }) })($0)")>]
     let scrollToBottomSmooth (element: Browser.Types.HTMLElement) : unit = jsNative
 
+    /// `element.focus({ preventScroll: true })`: move focus without the browser's own
+    /// scroll-into-view. Plain `focus()` drags the nearest scrollport to wherever the
+    /// element sits — right for a control the reader needs to SEE, wrong for one that is
+    /// chrome at a fixed corner (a face's own back/forward pivot): bringing a corner
+    /// control on screen by scrolling a whole pane to it undoes whatever scroll position
+    /// the pane opened to, or a reveal just set.
+    [<Emit("$0.focus({ preventScroll: true })")>]
+    let focusPreventScroll (element: Browser.Types.HTMLElement) : unit = jsNative
+
 /// What a key event is, beyond the keystroke: whether an IME was mid-composition when it
 /// arrived.
 ///

@@ -513,8 +513,14 @@ module View =
                 let mark = html $"""<span class="{Style.standingMarkSeat}">{Icon.attention standing.Attention}</span>"""
                 let word = html $"""<span class="{Style.cls [ Style.givesWay; Style.attentionInk standing.Attention ]}">{standing.Word}</span>"""
                 if standing.Facet = PrStatus.facet then
+                    // Taken to the pull-requests panel, and to its one row when the strip
+                    // can name it (`ClientModel.prPanelRow`) — the same jump a chapter
+                    // makes to a message, not the generic `ToggleSettingsMsg` that used to
+                    // sit here and land on the settings face's own pivot instead of on
+                    // what was pressed.
+                    let target = ClientModel.prPanelRow model
                     html $"""
-                        <button type="button" class="{Style.standingRowPress}" data-pr-strip @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>
+                        <button type="button" class="{Style.standingRowPress}" data-pr-strip @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealQueryRow (PrStatus.Columns.query, target))))}>
                           {mark}<span class="{Style.srOnly}">pull requests: </span>{word}<span class="{Style.standingRowGo}">{Icon.right}</span>
                         </button>"""
                 else
@@ -1058,7 +1064,7 @@ module View =
                         | CellAbsent -> false
                         | _ -> true)
                 html $"""
-                    <div class="{shell}" data-query-row="{QueryCell.describe named}">
+                    <div class="{shell}" data-query-row="{QueryCell.describe named}" tabindex="-1">
                       <span class="{Style.queryRecordName}" data-query-cell="{key}" data-query-tone="{toneHook named}">{QueryCell.describe named}</span>
                       <dl class="{Style.queryFields}">{pairs row present}</dl>
                     </div>"""
@@ -1072,7 +1078,7 @@ module View =
         |> List.map (fun def ->
             let name = QueryName.value def.Name
             html $"""
-                <section class="{Style.cls [ Style.sideSection; Style.settingsLane1 ]}" data-query-panel="{name}">
+                <section class="{Style.cls [ Style.sideSection; Style.settingsLane1 ]}" data-query-panel="{name}" tabindex="-1">
                   <span class="{Style.label}">{def.Title}</span>
                   {legendView def.Legend}
                   {queryValueView def.Shape (Map.tryFind name queries.Values)}
