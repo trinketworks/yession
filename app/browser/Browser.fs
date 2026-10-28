@@ -1294,9 +1294,9 @@ let private start () =
         // CONNECT; it has never had any business deciding whether a client may read what it
         // was already given.
         //
-        // Every step is bounded (`Client.LocalOpen.run`): a store that never answers or throws
-        // is gone without for this page load, and the page says so, rather than sitting at
-        // `Connecting` before it has asked the session anything. A provider whose load runs
+        // Every step is bounded (`Client.LocalOpen.run`): a store that never answers, or throws
+        // what a store throws, is gone without for this page load, and the page says so,
+        // rather than sitting at `Connecting` before it has asked the session anything. A provider whose load runs
         // over is left in place: if it loads late, what it kept merges into the doc like any
         // other update, which is what a CRDT is for.
         //
@@ -1317,6 +1317,7 @@ let private start () =
             Client.LocalOpen.run
                 Resilience.Policy.sleep
                 Client.LocalOpen.limit
+                (Client.LocalOpen.expected DomException.name)
                 { Doc = docStep
                   History = openHistoryCache ()
                   Transcripts = openTranscriptCaches () }

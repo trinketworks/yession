@@ -149,7 +149,7 @@ let grantPolicy
 /// hypothetical; it is what this function was written to stop being possible.
 let resilient (waiting: TimeSpan -> Async<unit>) (policy: Resilience.Policy<GrantFailure>) : GrantLeg =
     asking
-    |> Resilience.Policy.deadline waiting grantDeadline grantTimedOut grantThrew
+    |> Resilience.Policy.deadline waiting grantDeadline grantTimedOut (grantThrew >> Some)
     |> Resilience.Policy.guard policy
 
 /// What the broker observed — identifiers only, adapted to audit records by the caller.

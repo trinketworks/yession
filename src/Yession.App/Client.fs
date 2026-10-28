@@ -1103,9 +1103,35 @@ module Client =
         /// that kept its answer in it would hang where the open did.
         type Opened = { History : HistoryCache; Transcripts : TranscriptCaches }
 
+        /// The errors a browser's own storage raises, by their `DOMException` name: what
+        /// IndexedDB and the Cache API throw or reject with when the store is closed, lost,
+        /// full, refused or gone. iOS Safari's "Connection to Indexed Database server lost" is
+        /// an `UnknownError`; a store its connection closed under is `InvalidStateError`; a
+        /// store with no room is `QuotaExceededError`; storage the browser will not give this
+        /// page (private browsing, blocked site data) is `SecurityError`.
+        let storageErrors : Set<string> =
+            set
+                [ "AbortError"
+                  "InvalidStateError"
+                  "NotFoundError"
+                  "QuotaExceededError"
+                  "SecurityError"
+                  "TransactionInactiveError"
+                  "UnknownError"
+                  "VersionError" ]
+
+        /// The reason a step of the local open gives for `error`, when `error` is one a store
+        /// raises (`storageErrors`); `None` for anything else. `nameOf` reads an error's
+        /// `DOMException` name, which only the platform can.
+        let expected (nameOf: exn -> string option) (error: exn) : string option =
+            nameOf error
+            |> Option.filter storageErrors.Contains
+            |> Option.map (fun name -> sprintf "%s: %s" name error.Message)
+
         let private bounded
             (sleep: System.TimeSpan -> Async<unit>)
             (limit: System.TimeSpan)
+            (expected: exn -> string option)
             (what: string)
             (step: Async<'a>)
             : Async<Result<'a, string>> =
@@ -1114,22 +1140,25 @@ module Client =
                 sleep
                 limit
                 (sprintf "%s did not answer in %g seconds" what limit.TotalSeconds)
-                (fun error -> sprintf "%s failed: %s" what error.Message)
+                (expected >> Option.map (sprintf "%s failed: %s" what))
                 attempt
                 ()
 
         /// Open this client's own store and replay what it kept, each step bounded by
-        /// `limit` and total (`Resilience.Policy.deadline`). A step that runs over or throws
-        /// is not retried: a store that did not answer once will not answer sooner for being
-        /// asked again, and a replay that threw throws again. The page goes on without that
-        /// store, says why (`LocalStoreFaultMsg`), and returns to what it does with or
-        /// without one: asking the session.
+        /// `limit` (`Resilience.Policy.deadline`). A step that runs over, or throws what a
+        /// store throws (`expected`), is not retried: a store that did not answer once will
+        /// not answer sooner for being asked again. The page goes on without that store,
+        /// says why (`LocalStoreFaultMsg`), and returns to what it does with or without one:
+        /// asking the session. A step that throws anything else is a defect in the page, not
+        /// a fault in the store, and is raised on, to whatever reports errors nothing handled.
         let run
             (sleep: System.TimeSpan -> Async<unit>)
             (limit: System.TimeSpan)
+            (expected: exn -> string option)
             (steps: Steps)
             (dispatch: ClientMsg -> unit)
             : Async<Opened> =
+            let bounded what step = bounded sleep limit expected what step
             async {
                 let faults = ResizeArray<string> ()
                 let settled (fallback: 'a) (outcome: Result<'a, string>) : 'a =
@@ -1138,16 +1167,16 @@ module Client =
                     | Error fault ->
                         faults.Add fault
                         fallback
-                let! doc = bounded sleep limit "the saved document" steps.Doc
+                let! doc = bounded "the saved document" steps.Doc
                 settled () doc
-                let! history = bounded sleep limit "the saved history" steps.History
+                let! history = bounded "the saved history" steps.History
                 let history = settled HistoryCache.none history
-                let! transcripts = bounded sleep limit "the saved terminals" steps.Transcripts
+                let! transcripts = bounded "the saved terminals" steps.Transcripts
                 let transcripts = settled TranscriptCaches.none transcripts
                 dispatch ConnectingMsg
-                let! events = bounded sleep limit "replaying the saved history" (EventFetch.replay history dispatch)
+                let! events = bounded "replaying the saved history" (EventFetch.replay history dispatch)
                 let history = events |> Result.map (fun () -> history) |> settled HistoryCache.none
-                let! screens = bounded sleep limit "replaying the saved terminals" (TranscriptFetch.replay transcripts dispatch)
+                let! screens = bounded "replaying the saved terminals" (TranscriptFetch.replay transcripts dispatch)
                 let transcripts = screens |> Result.map (fun () -> transcripts) |> settled TranscriptCaches.none
                 if faults.Count > 0 then dispatch (LocalStoreFaultMsg (String.concat ". " faults))
                 return { History = history; Transcripts = transcripts }
