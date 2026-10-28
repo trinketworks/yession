@@ -744,3 +744,12 @@ module Selection =
     /// What the selection holds, as text; empty when nothing is selected.
     [<Emit("String(globalThis.getSelection ? globalThis.getSelection() : '')")>]
     let text () : string = jsNative
+
+/// The errors the browser's own APIs raise, as far as anything here tells them apart.
+[<RequireQualifiedAccess>]
+module DomException =
+    /// The name of `error` when it is a `DOMException` (`UnknownError`, `QuotaExceededError`,
+    /// …), which is how IndexedDB and the Cache API say what went wrong; `None` for anything
+    /// else, and wherever there is no `DOMException` to ask about.
+    [<Emit("(function (error) { return typeof DOMException !== 'undefined' && error instanceof DOMException ? error.name : undefined })($0)")>]
+    let name (error: exn) : string option = jsNative
