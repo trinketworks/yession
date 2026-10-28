@@ -661,11 +661,17 @@ module Style =
     let recordLinkQuiet =
         cls [ bodyDim; "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"; focusRing ]
 
-    /// The mark that says a record link LEAVES (the session serves its own origin). Faint:
-    /// it is a signpost, not a second status. The gap and the ink are all this carries —
-    /// `Icon.leavesSm` is the mark, and a drawn mark brings its own box and its own place on
-    /// the line, so the `text-code` that used to size a text glyph here sized nothing.
-    let recordLinkMark = "text-ink-faint ml-1"
+    /// The mark that says a record link LEAVES (the session serves its own origin). Fainter
+    /// than the faintest ink (`opacity-70` over `ink-faint`, safe because this is decorative
+    /// — `aria-hidden`, and never the only way a reader learns the link leaves): it is a
+    /// signpost, not a second status. `inline-flex` so the idle nudge below has a box a
+    /// transform actually applies to (a bare inline element ignores `transform`). The nudge
+    /// itself — a 1px lift toward the corner the mark points at, and a rest, slow and mostly
+    /// still — is `animate-leave-nudge` (app/tokens.css; the keyframe and why it moves this
+    /// little are in app/tailwind.css). `Icon.leavesSm` is the mark; the gap and the ink are
+    /// all this carries otherwise.
+    let recordLinkMark =
+        cls [ "inline-flex ml-1 text-ink-faint opacity-70"; "animate-leave-nudge motion-reduce:animate-none" ]
 
     /// The hit area for a listed record's whole cell — the state word beside the name
     /// included, not just the name's own glyphs. `block` so the link's box is the cell's full
@@ -675,9 +681,19 @@ module Style =
     /// can press to get it.
     let recordRowLink = cls [ "block no-underline"; focusRing ]
 
-    /// A listed record's name, clipped rather than wrapped: a row that changes height when a
-    /// session is renamed is a list you cannot keep your place in.
-    let recordRowName = "block truncate"
+    /// A listed record's name and its leaves mark (`recordLinkMark`), as two flex children
+    /// rather than one truncating block: on a narrow row (a phone) something has to give, and
+    /// it must be the NAME, never the mark that says the link leaves — that is exactly the
+    /// fact a reader on a thumb's-width row most needs, and a single truncating block let the
+    /// browser clip it away first since it sat last. `min-w-0` so this box can itself shrink
+    /// inside whatever fixed-width cell holds it.
+    let recordRowName = "flex items-baseline min-w-0"
+
+    /// The name's own box inside `recordRowName`: `flex-1` takes what the mark beside it
+    /// leaves, `min-w-0` lets that shrink below its content's width, and `truncate` is what
+    /// clips there — a row that changes height when a session is renamed is a list you
+    /// cannot keep your place in, so this still clips rather than wraps.
+    let recordRowNameText = "flex-1 min-w-0 truncate"
 
     /// The roster's mark column (`ManagerUi.Col.mark`): the row's attention mark, at every
     /// width, as the session page wears its worst standing under the chevron. The column is
