@@ -384,14 +384,16 @@ module Turn =
 
 // --- one turn, run ------------------------------------------------------------------------
 
-/// Everything one query runs under, assembled from what the session decided.
-let private optionsFor
+/// Everything one query runs under, assembled from what the session decided. `home` is the
+/// CLI's scratch HOME (`AgentSandbox.prepare`).
+let optionsFor
     (systemPrompt: string array)
     (model: string option)
     (registry: ToolRegistry)
     (controller: Fable.NodeExtras.AbortController)
     (claudePath: string)
     (agentEnv: Environment)
+    (home: string)
     (claudeSpawner: Spawner)
     : Options =
     jsOptions<Options> (fun o ->
@@ -406,6 +408,13 @@ let private optionsFor
         // Claude Code runs under. A turn ends when the model is done or somebody
         // interrupts it, never at a step count this file picked.
         o.settingSources <- [||]
+        // The registry's servers are the turn's ONLY servers. `settingSources = [||]` skips the
+        // settings layers, and this skips the rest the CLI would load an MCP server from: a
+        // `.mcp.json` in its working directory, plugins, agent frontmatter.
+        o.strictMcpConfig <- true
+        // The CLI starts in its scratch HOME, the one directory its policy lets it read, and
+        // not in whatever directory this session process happens to run in.
+        o.cwd <- home
         // Ask for the reasoning, summarised — the only two choices the provider offers are a
         // summary and nothing, and unasked it answers with a signed empty block: proof that
         // something was thought, and nothing about what.
@@ -434,6 +443,7 @@ let private runQuery
     (model: string option)
     (registry: ToolRegistry)
     (agentEnv: Environment)
+    (home: string)
     (claudePath: string)
     (claudeSpawner: Spawner)
     (registerAbort: (unit -> unit) -> unit)
@@ -447,7 +457,7 @@ let private runQuery
         try
             let controller = Fable.NodeExtras.Aborting.abortController ()
             registerAbort (fun () -> controller.abort ())
-            let options = optionsFor systemPrompt model registry controller claudePath agentEnv claudeSpawner
+            let options = optionsFor systemPrompt model registry controller claudePath agentEnv home claudeSpawner
             let running = query prompt options
             let mutable finished = false
             while not finished do
@@ -558,6 +568,7 @@ let runWith (profile: AgentProfile) (dataDir: string) (backend: SandboxBackend) 
                     (context.Model |> Option.map ModelId.value)
                     registry
                     (Environment.ofMap cli.Env)
+                    cli.Home
                     (claudePath ())
                     cli.Spawner
                     signal.OnAbort
