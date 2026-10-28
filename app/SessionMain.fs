@@ -424,7 +424,7 @@ let private managerOrigin =
 // User authorization: with a Manager, this session is an OIDC client of it; the RP
 // configuration completes after listen (the redirect URI needs the bound port).
 let private auth =
-    controlChannel |> Option.map (fun _ -> SessionAuth.create sessionId sessionMount)
+    controlChannel |> Option.map (fun _ -> SessionAuth.create sessionId sessionMount (Cookies.schemeFor publicAccess))
 
 // Telemetry: this session is a direct OTel emitter — one OTel log record per completed turn.
 // Destination (stdout / a collector / both / off) comes from the standard OTEL_* env the

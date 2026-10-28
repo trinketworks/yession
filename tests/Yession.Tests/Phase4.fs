@@ -3602,8 +3602,23 @@ let private publicAccessTests =
         testCase "the auth cookie is scoped to the path the session is served under" <| fun () ->
             // A real narrowing where sessions share a host: a path-mounted session's
             // cookie is no longer sent to its siblings. At an origin root, unchanged.
-            Expect.isTrue ((Cookies.set "yession_auth_x" "/s/ui-render" "v").Contains "Path=/s/ui-render/") "scoped to the mount"
-            Expect.isTrue ((Cookies.set "yession_auth_x" "" "v").Contains "Path=/") "root-mounted is unchanged"
+            Expect.isTrue ((Cookies.set CookieScheme.AnyScheme "yession_auth_x" "/s/ui-render" "v").Contains "Path=/s/ui-render/") "scoped to the mount"
+            Expect.isTrue ((Cookies.set CookieScheme.AnyScheme "yession_auth_x" "" "v").Contains "Path=/") "root-mounted is unchanged"
+
+        // A session served over https keeps its cookie off plain HTTP. One served over http
+        // cannot: a browser drops a `Secure` cookie that an http response set.
+        testCase "the auth cookie is Secure where the sessions are served over https" <| fun () ->
+            let scheme = PublicAccess.create "https://example.com" "https://example.com/s/{id}" |> Result.map Cookies.schemeFor
+            let cookie = scheme |> Result.map (fun s -> Cookies.set s "yession_auth_x" "/s/x" "v")
+            Expect.equal cookie (Ok "yession_auth_x=v; Path=/s/x/; HttpOnly; SameSite=Lax; Secure") "https carries Secure"
+
+        testCase "the auth cookie is not Secure on loopback" <| fun () ->
+            let cookie = Cookies.set (Cookies.schemeFor Loopback) "yession_auth_x" "" "v"
+            Expect.equal cookie "yession_auth_x=v; Path=/; HttpOnly; SameSite=Lax" "loopback http carries no Secure"
+
+        testCase "the auth cookie is not Secure where the sessions are fronted over http" <| fun () ->
+            let scheme = PublicAccess.create "https://example.com" "http://example.com:{port}" |> Result.map Cookies.schemeFor
+            Expect.equal scheme (Ok CookieScheme.AnyScheme) "the session's own scheme decides, not the Manager's"
 
         testCase "a session template without a placeholder is refused" <| fun () ->
             // Before this type the port was appended implicitly, so a bare origin was the
