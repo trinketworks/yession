@@ -421,6 +421,15 @@ module Templates =
     [<Emit("(function (markup) { const template = document.createElement('template'); template.innerHTML = markup; const first = template.content.firstElementChild; return first ? document.adoptNode(first) : undefined })($0)")>]
     let firstElement (markup: string) : Element option = jsNative
 
+/// What `Fable.Browser.Dom` leaves off: the event a Content-Security-Policy raises when it
+/// refuses something.
+module PolicyViolations =
+
+    /// Hear every refusal from now on, as `<directive> <what was refused>`. On the document,
+    /// where the event arrives whichever element caused it.
+    [<Emit("(function (heard) { document.addEventListener('securitypolicyviolation', function (event) { heard(event.violatedDirective + ' ' + event.blockedURI) }) })($0)")>]
+    let listen (heard: string -> unit) : unit = jsNative
+
 /// Resolving one address against another: what the `URL` constructor is for, and what string
 /// concatenation cannot be made to do. A reference may be absolute, rooted at the origin, or
 /// relative to the base's DIRECTORY, and which of those it is decides how much of the base

@@ -29,6 +29,25 @@ The last section holds trust boundaries as sharp as the first section's.
 
 ## Security & trust
 
+- **A Manager route that changes state trusts a request that names no origin.** The
+  request-origin rule (`ManagerUi.requestOrigin`, [§5 rule 22](technical-design.md#5-architectural-invariants))
+  accepts `Sec-Fetch-Site: same-origin` or `none`, or, without it, an `Origin` whose host and
+  port are the request's `Host`. Its third branch accepts a request with neither header.
+  - Why: a browser sends at least one of the two on every POST, so such a request is no
+    browser's, and the identity header already names its sender (automation, the tests).
+  - Open: a browser old enough to send neither is treated as that client. No supported browser
+    is.
+- **The pages' Content-Security-Policy allows inline styles.** The Manager's documents and the
+  session shell carry one policy (`Ssr.ContentPolicy`): scripts from this origin or with the
+  response's nonce, no framing (`frame-ancestors 'none'`, the one framing defence), forms to
+  this origin only.
+  - `style-src 'unsafe-inline'` stays for the `style="..."` attributes the session templates
+    write (`View.fs`). A policy cannot allow an attribute by nonce. An injected style can
+    restyle a page, not run script.
+  - The session shell is revalidated by ETag, and a 304 carries no policy, so a kept shell
+    keeps the nonce it was first sent with. A nonce is a secret of one response, so this costs
+    nothing while the shell's markup holds no injected script.
+
 - **A lent token rotates per command, and whether that earns its keep is open.** A declaration's
   `${github.token}` (`EnvironmentVariableRef.Lent`) is a stand-in. Each command borrows it for
   the act the command runs as, and gives it back when the next command starts.

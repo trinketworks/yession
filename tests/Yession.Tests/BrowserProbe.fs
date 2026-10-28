@@ -82,6 +82,9 @@ module Probe =
     /// The window as the page lays out in it.
     let window (page: IPage) : Async<Probes.Window> = ask page Probes.window 0
 
+    /// What the page's Content-Security-Policy has refused since it loaded.
+    let violations (page: IPage) : Async<string list> = ask page Probes.violations 0
+
     /// Where the first occurrence of some words in an element is drawn.
     let textAt (page: IPage) (selector: string) (words: string) : Async<Probes.Box option> =
         ask page Probes.textAt (selector, words)

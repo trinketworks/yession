@@ -791,6 +791,19 @@ let private respond (res: ServerResponse) (status: int) (contentType: string) (b
 
 let private html (res: ServerResponse) (body: string) = respond res 200 "text/html; charset=utf-8" body
 
+/// A whole DOCUMENT, as against a fragment the page's script swaps in: the Manager page, the
+/// opening screen, a problem page. Each is sent with a nonce of its own and the policy that
+/// names it (`Ssr.ContentPolicy`), and rendered with that nonce, so an inline script on it
+/// runs only because this response put it there.
+let private document (res: ServerResponse) (status: int) (render: string -> string) =
+    let nonce = Ssr.ContentPolicy.nonce ()
+    res.writeHead (
+        status,
+        [ ResponseHeader.ContentType "text/html; charset=utf-8"
+          ResponseHeader.CacheControl "no-store"
+          Ssr.ContentPolicy.header nonce ])
+    res.``end`` (render nonce)
+
 /// POST-redirect-GET. `303` rather than `302` so the browser is required to follow it with a
 /// GET: what the caller lands on is a resource, not a resubmission of the form waiting to be
 /// re-fired by a reload.
@@ -914,7 +927,7 @@ let problemPage (title: string) (detail: string) : string =
 
 /// A refusal a BROWSER is holding: the status it deserves, and a page that says so.
 let private problem (res: ServerResponse) (status: int) (title: string) (detail: string) =
-    respond res status "text/html; charset=utf-8" (problemPage title detail)
+    document res status (fun _ -> problemPage title detail)
 
 /// The `/sessions/{id}/open` landing page (Plan 11).
 ///
@@ -1101,7 +1114,9 @@ let private openingProgram =
 /// (`PublicAccess.stableSessionAddress`). A browser that keeps a copy of that shell is sent
 /// there at once and skips the wait (`openingProgram`). Where it is `None` the screen has no
 /// such attribute, and every browser waits.
-let openingPage (sessionId: SessionId) (target: string) (launchUrl: string) (readyUrl: string) (shell: string option) : string =
+///
+/// `nonce` is the response's (`Ssr.ContentPolicy`), and the program's `<script>` carries it.
+let openingPage (nonce: string) (sessionId: SessionId) (target: string) (launchUrl: string) (readyUrl: string) (shell: string option) : string =
     let shellAttr =
         match shell with
         | Some url -> sprintf " %s=\"%s\"" Dom.Manager.openingShell (Ssr.escapeAttr url)
@@ -1116,7 +1131,7 @@ let openingPage (sessionId: SessionId) (target: string) (launchUrl: string) (rea
 <p id="status" role="status" class="%s %s" %s="%s"><span class="%s"></span><span %s>starting</span><span class="%s">%s</span></p>
 <p class="%s"><a id="target" class="%s" href="%s">Open it directly</a> · <a class="%s" href="%s">Back to the session manager</a></p>
 </main>
-<script>%s</script>"""
+<script nonce="%s">%s</script>"""
             Style.startScreen
             Dom.Manager.openingLaunch
             (Ssr.escapeAttr launchUrl)
@@ -1141,6 +1156,7 @@ let openingPage (sessionId: SessionId) (target: string) (launchUrl: string) (rea
             (Ssr.escapeAttr target)
             Style.pageWayBack
             (ManagerRoute.path ManagerRoute.Home)
+            (Ssr.escapeAttr nonce)
             openingProgram)
 
 /// Did a request that changes state come from the Manager's own pages?
@@ -1227,7 +1243,7 @@ let tryHandle
     let handle (route: ManagerRoute) : unit =
         match route with
         | ManagerRoute.Home ->
-            html res (page cssUrl managerProgramUrl pm.Public query (pm.Sessions ()) (pm.McpServers ()) pm.HookEndpoints)
+            document res 200 (fun _ -> page cssUrl managerProgramUrl pm.Public query (pm.Sessions ()) (pm.McpServers ()) pm.HookEndpoints)
         | ManagerRoute.Asset (build, file) ->
             // Everything static this build ships, served by path and by nothing else — the
             // same service the Session runs, over this process's own set. The Manager
@@ -1371,15 +1387,17 @@ let tryHandle
                 | ProcessManager.Launching
                 | ProcessManager.LaunchFailed _
                 | ProcessManager.Exited _ ->
-                    html
-                        res
-                        (openingPage
+                    let shell =
+                        PublicAccess.stableSessionAddress sessionId pm.Public
+                        |> Option.map (fun address -> address.Url + "/")
+                    document res 200 (fun nonce ->
+                        openingPage
+                            nonce
                             sessionId
                             (ManagerRoute.path (ManagerRoute.OpenSession sessionId))
                             (ManagerRoute.path (ManagerRoute.Session (sessionId, SessionVerb.Launch)))
                             (ManagerRoute.path (ManagerRoute.SessionReady sessionId))
-                            (PublicAccess.stableSessionAddress sessionId pm.Public
-                             |> Option.map (fun address -> address.Url + "/")))
+                            shell)
         // Does this deployment's front door reach the session yet? The question the
         // opening page above is really asking, answered HERE because here is the only
         // place it CAN be answered: a browser can read the status of a same-origin

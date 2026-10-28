@@ -28,6 +28,7 @@ open Yession.Domain
 open Yession.App
 open Lit
 open Fable.LitExtras
+open Fable.NodeExtras
 
 /// The binding syntax lit-html reads off the end of a static part — `@x=`, `.x=`, `?x=`, with
 /// or without the opening quote of the value. These carry a listener/property a string cannot.
@@ -145,6 +146,43 @@ let render (template: TemplateResult) : string = renderParts (Parts.ofTemplate t
 let renderModel (model: ClientModel) : string =
     render (View.view ViewActions.ssr model ignore)
 
+/// The Content-Security-Policy of every HTML document this process serves: the Manager's
+/// pages and the session's shell. A script runs only from this origin, or inline with the
+/// response's own nonce; nothing frames the page; a form posts only here.
+///
+/// `'wasm-unsafe-eval'` lets the session's client compile its WebAssembly, and nothing else:
+/// it does not admit `eval` or a string of script.
+///
+/// `style-src 'unsafe-inline'` is for the `style="..."` attributes the session's templates
+/// write (`View.fs`): a policy cannot allow an attribute by nonce. `script-src` has no
+/// `'unsafe-inline'` and no `'unsafe-eval'`. `frame-ancestors 'none'` is the one framing
+/// defence, so no response carries `X-Frame-Options` beside it. WebRTC is outside any policy;
+/// the event streams and `fetch` are `connect-src 'self'`.
+[<RequireQualifiedAccess>]
+module ContentPolicy =
+
+    /// A fresh nonce: 16 random bytes, base64. One per response, so a nonce read off one
+    /// page names nothing on the next.
+    let nonce () : string =
+        (Node.Api.crypto.randomBytes 16).toString Node.Buffer.BufferEncoding.Base64
+
+    /// The policy that admits the inline script carrying `nonce`, as the header that says it.
+    let header (nonce: string) : ResponseHeader =
+        ResponseHeader.ContentSecurityPolicy (
+            String.concat "; " [
+                "default-src 'self'"
+                sprintf "script-src 'self' 'nonce-%s' 'wasm-unsafe-eval'" nonce
+                "style-src 'self' 'unsafe-inline'"
+                "img-src 'self' data: blob:"
+                "font-src 'self'"
+                "connect-src 'self'"
+                "worker-src 'self'"
+                "frame-ancestors 'none'"
+                "base-uri 'self'"
+                "form-action 'self'"
+                "object-src 'none'"
+            ])
+
 /// The full bootstrap document: the served page IS the client shell. Embeds the serving
 /// session id (so the browser keys its local doc store before any connection), the local
 /// stylesheet, and the `#app` mount whose classes persist across the browser's re-renders.
@@ -161,7 +199,9 @@ let renderModel (model: ClientModel) : string =
 /// makes the assets cacheable forever and the shell the only thing that has to be fresh. The
 /// shell names the files it links and nothing else knows they exist; a build that adds one
 /// changes nothing here but the line that links it.
-let page (sessionId: SessionId) (mount: string) (managerOrigin: string option) (ephemeralStorage: bool) (assets: AssetBuild) (model: ClientModel) : string =
+///
+/// `nonce` is the response's (`ContentPolicy`): the one inline script carries it.
+let page (nonce: string) (sessionId: SessionId) (mount: string) (managerOrigin: string option) (ephemeralStorage: bool) (assets: AssetBuild) (model: ClientModel) : string =
     let declared, baseTag = DocumentBase.declare mount
     let href (route: SessionRoute) = RelativeUrl.inDocument declared (SessionRoute.relative route)
     let asset (file: AssetFile) = RelativeUrl.inDocument declared (AssetBuild.url assets file)
@@ -210,7 +250,7 @@ let page (sessionId: SessionId) (mount: string) (managerOrigin: string option) (
         // applying it from the bundle would paint the sidebar open and then shut it. Desktop
         // only — below the breakpoint the same class means "the drawer is open" (Style.sidebar),
         // which is never a preference.
-        "<script>try{if(matchMedia('" + Style.wideMedia + "').matches"
+        "<script nonce=\"" + escapeAttr nonce + "\">try{if(matchMedia('" + Style.wideMedia + "').matches"
         + "&&localStorage.getItem('yession.nav')==='collapsed')"
         + "document.documentElement.classList.add('nav-alt')}catch(e){}</script>"
         "</head><body>"

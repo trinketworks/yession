@@ -437,6 +437,14 @@ let private window (_: int) : Probes.Window =
     let w = Browser.Dom.window
     Probes.Window.create w.innerWidth w.innerHeight Browser.Dom.document.documentElement.scrollWidth (Viewport.visualHeight ())
 
+/// What the page's policy refused. Heard from the moment this bundle runs, which is before any
+/// script of the page's own, so a refusal during the first parse is heard too.
+let private refused = ResizeArray<string> ()
+
+PolicyViolations.listen refused.Add
+
+let private violations (_: int) : string list = List.ofSeq refused
+
 /// Publish a probe that answers at once.
 let private answering (probe: Probes.Probe<'Ask, 'Answer>) (answer: 'Ask -> 'Answer) : unit =
     PageGlobal.set
@@ -490,6 +498,7 @@ awaiting Probes.stood stood
 awaiting Probes.pageState pageState
 answering Probes.controls controls
 answering Probes.attrAt attrAt
+answering Probes.violations violations
 
 for measure in Probes.Measure.all do
     Measures.verdict measure |> Option.iter (awaiting (Probes.verdict measure))
