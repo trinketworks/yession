@@ -1494,6 +1494,17 @@ let private releaseTests =
 
 // --- What the failure looks like ----------------------------------------------------------
 
+/// The error iOS Safari raises when it loses the page's IndexedDB connection: one a page
+/// could plausibly stop on.
+let private indexedDbLost : PageFault =
+    { Name = "UnknownError"
+      Message = "Connection to Indexed Database server lost"
+      Stack = [ "openDB@https://example.test/assets/client.js:1:2" ] }
+
+/// A page on `link` that has heard `indexedDbLost`.
+let private heardOnTheWay (link: SessionLink) : ClientModel =
+    { ClientModel.init (peer "ada" "Ada") with Link = link; PageFault = Some indexedDbLost }
+
 let private surfaceTests =
     testList "Degradation is visible and never blocking" [
         testCase "a refused client is offered a way back in; a connected one is not" <| fun () ->
@@ -1553,6 +1564,39 @@ let private surfaceTests =
             let model = ClientModel.init (peer "ada" "Ada")
             let html = Support.render { model with Link = SessionLink.Connecting { Effort.fresh with Slow = true } }
             Expect.isFalse (html.Contains "data-retry-now") "an attempt that is still running is not offered again"
+
+        // An error nothing handled can stop the page on its way to its session, and the page
+        // then said "connecting" for as long as it was open: no reason, nothing to press, and
+        // on a phone no console to read why.
+        testCase "an error heard on the way to the session is behind the connect's disclosure" <| fun () ->
+            let html = Support.render (heardOnTheWay (SessionLink.Connecting { Effort.fresh with Slow = true }))
+            Expect.isTrue
+                (html.Contains (Dom.Text.pageFaultWhy "UnknownError" "Connection to Indexed Database server lost"))
+                "the error is there for whoever asks"
+
+        testCase "an error heard on the way to the session offers a reload" <| fun () ->
+            let html = Support.render (heardOnTheWay (SessionLink.Connecting { Effort.fresh with Slow = true }))
+            Expect.isTrue (html.Contains "data-page-reload") "a reload is the way to start again"
+
+        testCase "an error heard on the way to the session keeps the connect's word" <| fun () ->
+            // Whether the error stopped anything is not knowable: one the page recovered from
+            // looks the same. So the line does not claim it did.
+            let html = Support.render (heardOnTheWay (SessionLink.Connecting { Effort.fresh with Slow = true }))
+            Expect.isTrue
+                (html.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedConnecting))
+                "the strip still reports a connect"
+
+        testCase "an error on a page that has its session is not on the strip" <| fun () ->
+            let html = Support.render (heardOnTheWay SessionLink.Current)
+            Expect.isFalse (html.Contains "data-page-reload") "a working page offers no reload"
+
+        testCase "the first error a page hears is the one it keeps" <| fun () ->
+            let model = ClientModel.init (peer "ada" "Ada")
+            let later = { Name = "TypeError"; Message = "a consequence"; Stack = [] }
+            let kept =
+                [ PageFaultMsg indexedDbLost; PageFaultMsg later ]
+                |> List.fold (fun m msg -> fst (ClientModel.update msg m)) model
+            Expect.equal kept.PageFault (Some indexedDbLost) "the cause, not what followed it"
 
         // A state has one name (docs/visual-design.md, Colour): a failing attempt to connect is
         // still connecting, and the failure is its reason. It used to change its word to

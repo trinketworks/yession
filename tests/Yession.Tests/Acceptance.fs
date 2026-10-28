@@ -96,6 +96,7 @@ let private representativeModel : ClientModel =
       // A representative client is one that kept what it was given; the case that cannot
       // keep anything is the exception, and says so where it matters.
       LocalCopy = LocalCopy.Kept None
+      PageFault = None
       Synced =
         // Draft/queue bodies are rich-text `Y.XmlFragment`s mounted by the browser editor,
         // not fields on the model — so the SSR fixture carries only the slot's identity; the

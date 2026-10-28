@@ -206,6 +206,9 @@ module View =
         /// Sign in again, through the session's own sign-in, which comes back to this page. It
         /// goes somewhere, so it is a link, in blue.
         | SignInAgain
+        /// Load the page again (`PageFault`). It goes somewhere, the page it is on, so it is a
+        /// link, like `SignInAgain`.
+        | Reload
 
     /// What the status line says, when the page's link is worth a word at all.
     type private StatusLine =
@@ -264,51 +267,65 @@ module View =
             | None -> model.Link
         // One state, so one report: a page that cannot reach its session is not reading its
         // history either, and is not said to be.
-        match link with
-        // The one state that waits on a person: the session would not have this page. What
-        // fixes it is signing in again, which is where the line goes.
-        | SessionLink.Refused (reason, _) ->
+        let report =
+            match link with
+            // The one state that waits on a person: the session would not have this page. What
+            // fixes it is signing in again, which is where the line goes.
+            | SessionLink.Refused (reason, _) ->
+                Some
+                    { Token = Dom.Text.degradedSignedOut
+                      Word = Dom.Text.signedOutStatus
+                      Wrong = true
+                      Promise = Some Dom.Text.signedOutPromise
+                      Why = [ reason ]
+                      Verb = Some StatusVerb.SignInAgain }
+            | SessionLink.Connecting { Failed = Some failure } ->
+                Some (waiting Dom.Text.degradedRetrying Dom.Text.connectingStatus (Some failure))
+            | SessionLink.Reconnecting ({ Failed = Some failure }, _) ->
+                Some (waiting Dom.Text.degradedRetrying Dom.Text.reconnectingStatus (Some failure))
+            // An attempt that has run past `ClientModel.connectingQuietMs`. Every client starts
+            // connecting, and one that lands inside the window says nothing, so this is never a
+            // flash on a healthy load — but one that does not land is news, and a page that said
+            // nothing through it looked exactly like a page that had loaded and had nothing in it.
+            // A link lost and found again inside the same window is the same: a phone drops its
+            // link each time it leaves the app, and has it back as it returns.
+            | SessionLink.Connecting { Slow = true } ->
+                Some (waiting Dom.Text.degradedConnecting Dom.Text.connectingStatus None)
+            | SessionLink.Reconnecting ({ Slow = true }, _) ->
+                Some (waiting Dom.Text.degradedReconnecting Dom.Text.reconnectingStatus None)
+            // Reads failing while the policy tries them again: said, with nothing to press, because
+            // the policy is already doing what a press would.
+            | SessionLink.Fetching (_, { Failed = Some failure }, _) ->
+                Some { waiting Dom.Text.feedRetrying Dom.Text.historyRetryingStatus (Some failure) with Verb = None }
+            // History stopped arriving, and nothing will re-arm it until the session has news. It
+            // is wrong rather than a wait, and a press asks again now.
+            | SessionLink.Stalled (_, reason, _) ->
+                Some
+                    { Token = Dom.Text.feedPaused
+                      Word = Dom.Text.historyPausedStatus
+                      Wrong = true
+                      Promise = None
+                      Why = promise :: reason :: why
+                      Verb = Some StatusVerb.TryAgain }
+            // A wait inside its quiet window is not a degradation and says nothing — a strip that
+            // flashed on every load would be chrome, not news.
+            | SessionLink.Connecting _
+            | SessionLink.Reconnecting _
+            | SessionLink.Fetching _
+            | SessionLink.Current -> None
+        // An error nothing handled, heard while the page is on its way to its session, may be
+        // what keeps it there: the way to the session can stop on one, and the page then waits
+        // in `Connecting` for as long as it is open. Whether it did stop is not knowable here,
+        // because an error some part of the page recovered from looks the same, so the line
+        // keeps its word and says the error behind its disclosure, with a reload, which starts
+        // the way again whichever it was. A page that has its session says nothing of one.
+        match report, model.PageFault, link with
+        | Some line, Some fault, (SessionLink.Connecting _ | SessionLink.Reconnecting _) ->
             Some
-                { Token = Dom.Text.degradedSignedOut
-                  Word = Dom.Text.signedOutStatus
-                  Wrong = true
-                  Promise = Some Dom.Text.signedOutPromise
-                  Why = [ reason ]
-                  Verb = Some StatusVerb.SignInAgain }
-        | SessionLink.Connecting { Failed = Some failure } ->
-            Some (waiting Dom.Text.degradedRetrying Dom.Text.connectingStatus (Some failure))
-        | SessionLink.Reconnecting ({ Failed = Some failure }, _) ->
-            Some (waiting Dom.Text.degradedRetrying Dom.Text.reconnectingStatus (Some failure))
-        // An attempt that has run past `ClientModel.connectingQuietMs`. Every client starts
-        // connecting, and one that lands inside the window says nothing, so this is never a
-        // flash on a healthy load — but one that does not land is news, and a page that said
-        // nothing through it looked exactly like a page that had loaded and had nothing in it.
-        // A link lost and found again inside the same window is the same: a phone drops its
-        // link each time it leaves the app, and has it back as it returns.
-        | SessionLink.Connecting { Slow = true } ->
-            Some (waiting Dom.Text.degradedConnecting Dom.Text.connectingStatus None)
-        | SessionLink.Reconnecting ({ Slow = true }, _) ->
-            Some (waiting Dom.Text.degradedReconnecting Dom.Text.reconnectingStatus None)
-        // Reads failing while the policy tries them again: said, with nothing to press, because
-        // the policy is already doing what a press would.
-        | SessionLink.Fetching (_, { Failed = Some failure }, _) ->
-            Some { waiting Dom.Text.feedRetrying Dom.Text.historyRetryingStatus (Some failure) with Verb = None }
-        // History stopped arriving, and nothing will re-arm it until the session has news. It
-        // is wrong rather than a wait, and a press asks again now.
-        | SessionLink.Stalled (_, reason, _) ->
-            Some
-                { Token = Dom.Text.feedPaused
-                  Word = Dom.Text.historyPausedStatus
-                  Wrong = true
-                  Promise = None
-                  Why = promise :: reason :: why
-                  Verb = Some StatusVerb.TryAgain }
-        // A wait inside its quiet window is not a degradation and says nothing — a strip that
-        // flashed on every load would be chrome, not news.
-        | SessionLink.Connecting _
-        | SessionLink.Reconnecting _
-        | SessionLink.Fetching _
-        | SessionLink.Current -> None
+                { line with
+                    Why = line.Why @ Dom.Text.pageFaultLead :: Dom.Text.pageFaultWhy fault.Name fault.Message :: List.truncate 8 fault.Stack
+                    Verb = line.Verb |> Option.orElse (Some StatusVerb.Reload) }
+        | _ -> report
 
     /// A status line's dot, on its own: it stands in the bar's gutter, and hangs to the left of
     /// the word in the nav column, so in neither does it push the word off the rail. A wait's
@@ -333,6 +350,9 @@ module View =
         | Some StatusVerb.SignInAgain ->
             let target = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative SessionRoute.Login)
             html $"""<a class="{Style.statusVerbLink}" href="{target}" data-session-signin>{Dom.Text.signInAgain}</a>"""
+        | Some StatusVerb.Reload ->
+            let target = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative SessionRoute.Shell)
+            html $"""<a class="{Style.statusVerbLink}" href="{target}" data-page-reload>{Dom.Text.reload}</a>"""
 
     /// The line's disclosure: the rest of the answer somebody asks next, and — while an attempt
     /// is failing — the way back through the Manager (`reopenAction`), beside the reason it

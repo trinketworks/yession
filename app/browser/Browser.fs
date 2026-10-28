@@ -577,6 +577,19 @@ let private cacheWrite (cache: Cache) (url: string) (body: string) : JS.Promise<
     cache.put (url, keptResponse body [ "content-type", ndjson ])
     |> Promise.catch (fun _ -> ())
 
+
+/// A heard error as the model keeps it. The frames are the stack's lines, less the one some
+/// browsers lead it with that repeats the name and message.
+let private pageFault (name: string, message: string, stack: string) : PageFault =
+    let headline = Dom.Text.pageFaultWhy name message
+    { Name = name
+      Message = message
+      Stack =
+        stack.Split '\n'
+        |> Array.map (fun line -> line.Trim ())
+        |> Array.filter (fun line -> line <> "" && line <> headline)
+        |> List.ofArray }
+
 /// Register the worker that makes a cold open possible with no network (Plan 20).
 ///
 /// Best-effort and deliberately unawaited-for-correctness: a client whose registration fails
@@ -1255,6 +1268,7 @@ let private start () =
         |> Program.run
 
         renderer.Attach ()
+        Unhandled.hear (fun heard -> dispatchRef (PageFaultMsg (pageFault heard)))
         caretHeld <- renderer.Caret
 
         // The column is beside the chat or a drawer over it according to the stylesheet's
