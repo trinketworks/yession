@@ -2134,6 +2134,25 @@ let tests =
                         (List.exists (fun seen -> seen.Painted))
             }
 
+        // An error nothing handled, raised while the page is on its way to its session, is
+        // said where a phone reader can see it: the page had said "connecting" for as long as
+        // it was open. The handshake is held as above, so the page is still on its way when
+        // the error comes (`Probes.unhandled`).
+        sessionCase "an error that stops a page on its way to its session is on screen" <|
+            fun page ->
+            async {
+                let signal = "**" + Yession.App.RelativeUrl.under "" (Yession.App.SessionRoute.relative Yession.App.SessionRoute.Signal)
+                do! awaitU (page.RouteAsync (signal, fun route ->
+                        if route.Request.Method <> "POST" then route.ContinueAsync () |> ignore))
+                do! awaitU (page.SetViewportSizeAsync (390, 844))
+                let! _ = await (page.ReloadAsync ())
+                do! Probe.unhandled page "stopped on purpose"
+                let report = "[" + Yession.App.Dom.attr Yession.App.Dom.Hooks.degraded Yession.App.Dom.Text.degradedStopped + "]"
+                do! Wait.until "the stop to be reported where a phone reader can see it"
+                        (fun () -> Probe.seen page report)
+                        (List.exists (fun seen -> seen.Painted))
+            }
+
         // A session that answers but cannot be reached is not a session that said nothing. The
         // route between the two is taken away on the wire: the offer reaches the session with
         // none of the browser's candidates, so the session cannot find the browser either, and

@@ -637,6 +637,26 @@ module PersistentStorage =
     [<Emit("(typeof globalThis !== 'undefined' && globalThis.navigator && globalThis.navigator.storage && globalThis.navigator.storage.persist) ? globalThis.navigator.storage : undefined")>]
     let storage () : StorageManager option = jsNative
 
+/// The page's errors that nothing handled, as far as anything here hears them.
+[<RequireQualifiedAccess>]
+module Unhandled =
+    /// Hear every error this page did not handle, as `heard (name, message, stack)`: a throw
+    /// nothing caught (`error`) and a rejection nobody waited on (`unhandledrejection`). Nothing
+    /// is caught by this: the browser still reports each one to the console, and whatever the
+    /// error stopped stays stopped. It is heard so the page can say it. A rejection with no
+    /// error in it is named `Rejected`, with what was rejected as its message.
+    [<Emit("""(function (heard) {
+        const describe = (thrown) => {
+          if (thrown !== null && typeof thrown === 'object' && 'message' in thrown)
+            return [String(thrown.name || 'Error'), String(thrown.message || ''), String(thrown.stack || '')]
+          return ['Rejected', String(thrown), '']
+        }
+        addEventListener('error', (event) =>
+          heard(event.error != null ? describe(event.error) : ['Error', String(event.message || ''), '']))
+        addEventListener('unhandledrejection', (event) => heard(describe(event.reason)))
+      })($0)""")>]
+    let hear (heard: string * string * string -> unit) : unit = jsNative
+
 /// The origin's IndexedDB, as far as anything here reads it.
 [<RequireQualifiedAccess>]
 module IndexedDb =

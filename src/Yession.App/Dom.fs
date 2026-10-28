@@ -760,6 +760,7 @@ module Dom =
         let degradedReconnecting = "reconnecting"
         let degradedRetrying = "session-retrying"
         let degradedConnecting = "session-connecting"
+        let degradedStopped = "page-stopped"
         /// What a client says while its first attempt to reach the session is still running,
         /// once that has lasted long enough to say (`ClientModel.connectingQuietMs`) — and while
         /// that attempt is failing, because a failing attempt to connect is still connecting.
@@ -767,6 +768,15 @@ module Dom =
         let connectingStatus = "connecting"
         /// The same, for a page that had its session and lost it.
         let reconnectingStatus = "reconnecting"
+        /// A page whose way to its session was stopped by an error nothing handled
+        /// (`PageFault`): it is not connecting any more, whatever it last said.
+        let pageStoppedStatus = "stopped"
+        /// What a stopped page costs and what fixes it, said under the status.
+        let pageStoppedPromise = "This page hit an error before it reached the session. Reloading it starts again."
+        /// The error itself, first behind the disclosure; its frames follow it.
+        let pageFaultWhy (name: string) (message: string) = if message = "" then name else name + ": " + message
+        /// Load this page again, which is what starts its way to the session again.
+        let reload = "Reload"
         /// Why it is still trying, behind the disclosure: the last attempt's fault and how many
         /// have failed, in the shape the history feed's retries already use.
         let retryingWhy (reason: string) (failures: int) = sprintf "%s · attempt %d" reason failures

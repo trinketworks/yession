@@ -61,6 +61,20 @@ type LocalCopy =
     /// served. It is this page load, and the next one may read the store again.
     | Unread of reason: string
 
+/// An error this page did not expect and nothing handled: thrown, or a promise rejected, with
+/// nobody waiting on it. The browser reports it to the page (`error`, `unhandledrejection`)
+/// and to the console, and to no person. When it is raised while the page is still on its way
+/// to its session, the way there has stopped: the page sits on its last word, "connecting",
+/// for as long as it is open, with nothing to press and no reason given. It is kept so the
+/// page can say it stopped, and so somebody who asks (the status line's disclosure) can read
+/// what stopped it on a phone with no console.
+type PageFault =
+    { /// The error's kind (`TypeError`, a `DOMException`'s name), or what was rejected.
+      Name : string
+      Message : string
+      /// The frames the browser reported, innermost first. Empty where it reported none.
+      Stack : string list }
+
 module LocalCopy =
 
     /// Whether what is folded is the reader's own picture, drawn at once.
@@ -1677,6 +1691,9 @@ type ClientModel =
       /// What this device holds of the session's history, and whether it can hold any
       /// (`LocalCopy`).
       LocalCopy : LocalCopy
+      /// The first unexpected error on this page (`PageFault`). The first, because what
+      /// follows one is usually its consequence.
+      PageFault : PageFault option
       Synced        : SyncedSessionState<Ylmish.Text>
       Conversation  : ConversationProjection
       /// The terminal half of the chat (Plan 14, stage 1): block chips and lease-stretch
@@ -2245,6 +2262,8 @@ type ClientMsg =
     /// Part of this client's own store did not answer in time, or failed, at boot
     /// (`Client.LocalOpen.run`): the page goes on without it (`LocalCopy.Unread`).
     | LocalStoreFaultMsg of reason: string
+    /// An error nothing handled (`PageFault`).
+    | PageFaultMsg of PageFault
     /// A read of the log failed and is being tried again: reported by the resilience policy
     /// composed with the transport, which is the one place that knows a retry is under way.
     /// A read that fails for good is its answer's to say (`EventsReadMsg`), and a page that
@@ -2897,6 +2916,7 @@ module ClientModel =
           // The browser says otherwise when it has nowhere to keep history; the server
           // renders this shell too, and has no store to read.
           LocalCopy = LocalCopy.Reading
+          PageFault = None
           Synced = (SyncedSessionState.empty CollabText.ylmish)
           Conversation = ConversationProjection.empty
           Approvals = RepoApprovals.empty
@@ -4946,6 +4966,7 @@ module ClientModel =
         match msg with
         | ConnectingMsg -> { model with Link = SessionLink.connecting model.Link }
         | LocalStoreFaultMsg reason -> { model with LocalCopy = LocalCopy.unread reason model.LocalCopy }
+        | PageFaultMsg fault -> { model with PageFault = model.PageFault |> Option.orElse (Some fault) }
         // Late: the wait it timed has already ended, and slow describes only a running one.
         | EffortSlowMsg -> { model with Link = SessionLink.slowed model.Link }
         | PageWaitedMsg -> { model with Waited = true; Link = SessionLink.waited model.Link }

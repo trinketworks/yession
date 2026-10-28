@@ -206,6 +206,9 @@ module View =
         /// Sign in again, through the session's own sign-in, which comes back to this page. It
         /// goes somewhere, so it is a link, in blue.
         | SignInAgain
+        /// Load the page again (`PageFault`). It goes somewhere, the page it is on, so it is a
+        /// link, like `SignInAgain`.
+        | Reload
 
     /// What the status line says, when the page's link is worth a word at all.
     type private StatusLine =
@@ -265,6 +268,20 @@ module View =
         // One state, so one report: a page that cannot reach its session is not reading its
         // history either, and is not said to be.
         match link with
+        // The way to the session stopped on an error nothing handled: the page will not
+        // connect, however long it says it is connecting, and only a reload starts it again.
+        // Said only on the way there: a page that has its session is working, whatever else
+        // threw.
+        | SessionLink.Connecting _
+        | SessionLink.Reconnecting _ when Option.isSome model.PageFault ->
+            model.PageFault
+            |> Option.map (fun fault ->
+                { Token = Dom.Text.degradedStopped
+                  Word = Dom.Text.pageStoppedStatus
+                  Wrong = true
+                  Promise = Some Dom.Text.pageStoppedPromise
+                  Why = Dom.Text.pageFaultWhy fault.Name fault.Message :: List.truncate 8 fault.Stack
+                  Verb = Some StatusVerb.Reload })
         // The one state that waits on a person: the session would not have this page. What
         // fixes it is signing in again, which is where the line goes.
         | SessionLink.Refused (reason, _) ->
@@ -333,6 +350,9 @@ module View =
         | Some StatusVerb.SignInAgain ->
             let target = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative SessionRoute.Login)
             html $"""<a class="{Style.statusVerbLink}" href="{target}" data-session-signin>{Dom.Text.signInAgain}</a>"""
+        | Some StatusVerb.Reload ->
+            let target = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative SessionRoute.Shell)
+            html $"""<a class="{Style.statusVerbLink}" href="{target}" data-page-reload>{Dom.Text.reload}</a>"""
 
     /// The line's disclosure: the rest of the answer somebody asks next, and — while an attempt
     /// is failing — the way back through the Manager (`reopenAction`), beside the reason it
