@@ -4671,7 +4671,7 @@ module ClientModel =
     /// reports them to the Manager in. The sidebar's status block says each of them, and the
     /// reopen chevron wears the worst while the sidebar is shut.
     let standings (model: ClientModel) : Standings.Standing list =
-        Option.toList (agentStanding model) @ Option.toList (PrStatus.summary (prStandings model))
+        Standings.AgentStatus.withWatched (Option.toList (PrStatus.summary (prStandings model))) (agentStanding model)
 
     /// What a pull-request watch puts in front of the tab name, for somebody who is not
     /// looking at this tab at all — the only surface that reaches them there.

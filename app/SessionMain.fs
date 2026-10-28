@@ -578,7 +578,7 @@ let private publishStatus () =
     match reportStatus with
     | Some report ->
         let prs = PrWatches.summaryOf (prWatchers.Rows ()) |> Option.toList
-        Async.StartImmediate (report (Option.toList agentStanding @ prs))
+        Async.StartImmediate (report (Standings.AgentStatus.withWatched prs agentStanding))
     | None -> ()
 
 /// Whether every Claude credential this session knows of wants somebody to sign in again,
