@@ -3084,6 +3084,10 @@ module private Holes =
 
     let afterQuoteInText (value: string) = html $"""<p>say "{value}</p>"""
 
+    let valueAfterComment (value: string) = html $"""<!-- the column's rail --><p title="{value}">t</p>"""
+
+    let textAfterComment (value: string) = html $"""<!-- the column's rail --><p>{value}</p>"""
+
 // The renderer's sequence arm (`Ssr.renderValue`), which every surface reaches through and no
 // view test can tell apart from the markup around it. A view builds its sequences with
 // `List.map`, so the list shape is the only one the suite was exercising by accident — while
@@ -3178,6 +3182,18 @@ let private holeContextTests =
                 (Support.renderTemplate (Holes.afterQuoteInText hostile))
                 (sprintf "<p>say \"%s</p>" asText)
                 "a quote between tags opens nothing"
+
+        testCase "an apostrophe in a comment leaves a later value hole a value" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.valueAfterComment hostile))
+                (sprintf "<!-- the column's rail --><p title=\"%s\">t</p>" asValue)
+                "a comment's prose opens no value"
+
+        testCase "an apostrophe in a comment leaves a later text hole text" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.textAfterComment hostile))
+                (sprintf "<!-- the column's rail --><p>%s</p>" asText)
+                "a comment's prose opens no value"
     ]
 
 // The bootstrap shell itself (`Ssr.page`), which had no Node-tier coverage. What matters

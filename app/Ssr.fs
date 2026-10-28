@@ -19,8 +19,9 @@ module Yession.Host.Ssr
 // it (`="Stop {x}`) alike, which a test of the part's last characters missed — `"` passed
 // through the text escaper and closed the attribute. A hole after an unquoted `=` is a value
 // too, and the renderer writes the quotes around it. Everything else is text. A `"` between
-// tags is text and moves nothing. The binding checks come first: a `@ . ?` hole is not text
-// or a value, whatever the scanner says.
+// tags is text and moves nothing, and so is a quote in an HTML comment: `<!--` to `-->` is
+// a state of its own, which only its end leaves. The binding checks come first: a `@ . ?`
+// hole is not text or a value, whatever the scanner says.
 
 open System.Text.RegularExpressions
 open Yession.Domain
@@ -47,16 +48,20 @@ type private Context =
     | InText
     | InTag
     | InValue of char
+    | InComment
 
 /// Walk one static part from `context`. `<` opens a tag only before what can start one (a
-/// name, `/` or `!`), or at the end of the part, so `a < b` in text stays text. In a tag, a
-/// quote opens a value and `>` ends the tag; in a value, only its own quote ends it.
+/// name, `/` or `!`), or at the end of the part, so `a < b` in text stays text. `<!--` opens a
+/// comment instead, and only `-->` ends it: nothing inside moves the state, so an apostrophe
+/// in a comment's prose opens no value. In a tag, a quote opens a value and `>` ends the tag;
+/// in a value, only its own quote ends it.
 let private scan (context: Context) (part: string) : Context =
     let mutable context = context
     for i in 0 .. part.Length - 1 do
         let c = part.[i]
         context <-
             match context with
+            | InText when c = '<' && part.Substring(i).StartsWith "<!--" -> InComment
             | InText when c = '<' ->
                 if i + 1 = part.Length then InTag
                 else
@@ -68,6 +73,8 @@ let private scan (context: Context) (part: string) : Context =
             | InTag -> InTag
             | InValue q when c = q -> InTag
             | InValue q -> InValue q
+            | InComment when c = '>' && i >= 2 && part.[i - 1] = '-' && part.[i - 2] = '-' -> InText
+            | InComment -> InComment
     context
 
 /// A hole after `name=` with no quote: a value the renderer has to quote itself.
@@ -125,7 +132,8 @@ and private renderParts (parts: Parts) : string =
             | InTag when unquotedValue.IsMatch s ->
                 sb.Append('"').Append(renderValue true values.[i]).Append('"') |> ignore
             | InTag
-            | InText -> sb.Append (renderValue false values.[i]) |> ignore
+            | InText
+            | InComment -> sb.Append (renderValue false values.[i]) |> ignore
     sb.Append strings.[strings.Length - 1] |> ignore
     sb.ToString ()
 
