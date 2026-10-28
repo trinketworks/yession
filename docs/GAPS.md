@@ -41,6 +41,9 @@ The last section holds trust boundaries as sharp as the first section's.
   session shell carry one policy (`Ssr.ContentPolicy`): scripts from this origin or with the
   response's nonce, no framing (`frame-ancestors 'none'`, the one framing defence), forms to
   this origin only.
+  - The session shell's policy also has `'wasm-unsafe-eval'`, for asciinema-player's terminal
+    emulator (WebAssembly). It admits compiling WebAssembly, not `eval`. The Manager's
+    documents compile none and do not have it.
   - `style-src 'unsafe-inline'` stays for the `style="..."` attributes the session templates
     write (`View.fs`). A policy cannot allow an attribute by nonce. An injected style can
     restyle a page, not run script.

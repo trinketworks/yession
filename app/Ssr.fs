@@ -150,8 +150,10 @@ let renderModel (model: ClientModel) : string =
 /// pages and the session's shell. A script runs only from this origin, or inline with the
 /// response's own nonce; nothing frames the page; a form posts only here.
 ///
-/// `'wasm-unsafe-eval'` lets the session's client compile its WebAssembly, and nothing else:
-/// it does not admit `eval` or a string of script.
+/// `'wasm-unsafe-eval'` is the session shell's alone (`SessionShell`): its client compiles the
+/// terminal emulator asciinema-player ships as WebAssembly (`Replay.fs`). It admits compiling
+/// WebAssembly and nothing else, not `eval` or a string of script. No Manager document
+/// compiles any, so none is allowed it.
 ///
 /// `style-src 'unsafe-inline'` is for the `style="..."` attributes the session's templates
 /// write (`View.fs`): a policy cannot allow an attribute by nonce. `script-src` has no
@@ -166,12 +168,23 @@ module ContentPolicy =
     let nonce () : string =
         (Node.Api.crypto.randomBytes 16).toString Node.Buffer.BufferEncoding.Base64
 
-    /// The policy that admits the inline script carrying `nonce`, as the header that says it.
-    let header (nonce: string) : ResponseHeader =
+    /// Which document the policy is for: the two differ in whether WebAssembly may compile.
+    [<RequireQualifiedAccess>]
+    type Document =
+        | ManagerDocument
+        | SessionShell
+
+    /// The policy for `document` that admits the inline script carrying `nonce`, as the header
+    /// that says it.
+    let header (document: Document) (nonce: string) : ResponseHeader =
+        let scripts =
+            match document with
+            | Document.ManagerDocument -> sprintf "script-src 'self' 'nonce-%s'" nonce
+            | Document.SessionShell -> sprintf "script-src 'self' 'nonce-%s' 'wasm-unsafe-eval'" nonce
         ResponseHeader.ContentSecurityPolicy (
             String.concat "; " [
                 "default-src 'self'"
-                sprintf "script-src 'self' 'nonce-%s' 'wasm-unsafe-eval'" nonce
+                scripts
                 "style-src 'self' 'unsafe-inline'"
                 "img-src 'self' data: blob:"
                 "font-src 'self'"

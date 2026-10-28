@@ -388,7 +388,7 @@ let start
                     [ ResponseHeader.ContentType "text/html; charset=utf-8"
                       ResponseHeader.CacheControl CachePolicy.shell
                       ResponseHeader.ETag shellEtag
-                      Ssr.ContentPolicy.header nonce ])
+                      Ssr.ContentPolicy.header Ssr.ContentPolicy.Document.SessionShell nonce ])
                 res.``end`` (bootstrapHtml nonce)
         | Some (Asset (build, path)) ->
             // Whatever this build left in its asset directory — the bundle, the stylesheet, a

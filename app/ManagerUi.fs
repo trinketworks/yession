@@ -801,7 +801,7 @@ let private document (res: ServerResponse) (status: int) (render: string -> stri
         status,
         [ ResponseHeader.ContentType "text/html; charset=utf-8"
           ResponseHeader.CacheControl "no-store"
-          Ssr.ContentPolicy.header nonce ])
+          Ssr.ContentPolicy.header Ssr.ContentPolicy.Document.ManagerDocument nonce ])
     res.``end`` (render nonce)
 
 /// POST-redirect-GET. `303` rather than `302` so the browser is required to follow it with a
