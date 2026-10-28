@@ -3337,10 +3337,12 @@ let audit () =
     for advisory in unlisted do
         eprintfn "%-8s %s  %s\n         %s" advisory.Severity advisory.Package advisory.Url advisory.Title
     if not unlisted.IsEmpty then
-        failwithf
+        // An exit, not a `failwith`: the lines above are the finding, and a stack trace would bury them.
+        eprintfn
             "audit: %d advisor%s against the production tree, not in audit-exceptions.json. Move the package out of the range (`npm update <name>`, or a bump in package.json); list it only when no release does, with the reason and the date."
             unlisted.Length
             (if unlisted.Length = 1 then "y" else "ies")
+        exit 1
     printfn "audit: no advisory outside audit-exceptions.json"
 
 // --- pr-gate: lint and check at once ----------------------------------------------------------
