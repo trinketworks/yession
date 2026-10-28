@@ -127,3 +127,18 @@ module AgentStatus =
         elif situation.NoAgent then say noAgent Absent
         elif List.isEmpty situation.BusyTerminals then say "waiting" Wanted
         else say "running" Moving
+
+    /// Where a session stands, in the order it reports it: its agent, then what it watches.
+    /// The one way the two are put together, so the Manager's roster and the session page
+    /// cannot disagree about it.
+    ///
+    /// An idle agent is a person's turn only while nothing it watches is under way. With a
+    /// pull request still checking, the agent is waiting on the checks, not on anybody, and a
+    /// green "waiting" ranked over them sent a person to a session that had nothing for them.
+    /// It still says "waiting", at rest, so the sidebar still names what the agent is doing.
+    let withWatched (watched: Standing list) (agent: Standing option) : Standing list =
+        let underWay = watched |> List.exists (fun s -> s.Attention = Moving)
+        let agent =
+            agent
+            |> Option.map (fun a -> if underWay && a.Attention = Wanted then { a with Attention = Rest } else a)
+        Option.toList agent @ watched

@@ -244,7 +244,10 @@ carry a rank (WCAG 1.4.1).
 | Absent | empty ring | `ink-dim` | none | no agent, chosen knowingly |
 | Rest | point | `ink-faint` | none | nothing to say: stopped, or everything watched is fine |
 
-Waiting outranks working. Work under way needs nobody, and the ball with a person does.
+Waiting outranks working. Work under way needs nobody, and the ball with a person does. But an
+idle agent is only a person's turn while nothing the session watches is under way: with checks
+still running it is waiting on them, so it says "waiting" at Rest and the checks lead
+(`AgentStatus.withWatched`).
 Wanted is green because green is the people, not because it is good.
 
 Attention is ink: each level carries more than the one below it, so the order survives
