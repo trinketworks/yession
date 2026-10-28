@@ -865,11 +865,14 @@ module View =
                     | None ->
                         html $"""
                             <button type="button" class="{Style.btn}" data-claude-connect @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Connect))}>Connect Claude</button>
-                            <label class="{Style.label} pt-2" for="claude-token">setup token / api key</label>
-                            <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…"
-                                   .value={claude.Token}
-                                   @input={EvVal(fun v -> dispatch (ClaudeTokenTyped v))} />
-                            <button type="button" class="{Style.btn}" data-claude-save-token @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.SaveToken))}>Save token</button>"""
+                            <details class="{Style.cls [ Style.detailNote; "pt-2" ]}" data-claude-token-form>
+                              <summary class="{Style.detailSummary}" data-claude-use-token>{Dom.Text.useTokenInstead}</summary>
+                              <label class="{Style.label} pt-2" for="claude-token">setup token / api key</label>
+                              <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…"
+                                     .value={claude.Token}
+                                     @input={EvVal(fun v -> dispatch (ClaudeTokenTyped v))} />
+                              <button type="button" class="{Style.btn}" data-claude-save-token @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.SaveToken))}>Save token</button>
+                            </details>"""
                 html $"""
                     <label class="{Style.label}" for="claude-scope">sign in for</label>
                     <div class="{Style.fieldSelectWrap}">
@@ -955,11 +958,14 @@ module View =
                     | None ->
                         html $"""
                             <button type="button" class="{Style.btn}" data-github-connect @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.Connect))}>Connect GitHub</button>
-                            <label class="{Style.label} pt-2" for="github-token">personal access token</label>
-                            <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…"
-                                   .value={github.Token}
-                                   @input={EvVal(fun v -> dispatch (GitHubTokenTyped v))} />
-                            <button type="button" class="{Style.btn}" data-github-save-token @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.SaveToken))}>Save token</button>"""
+                            <details class="{Style.cls [ Style.detailNote; "pt-2" ]}" data-github-token-form>
+                              <summary class="{Style.detailSummary}" data-github-use-token>{Dom.Text.useTokenInstead}</summary>
+                              <label class="{Style.label} pt-2" for="github-token">personal access token</label>
+                              <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…"
+                                     .value={github.Token}
+                                     @input={EvVal(fun v -> dispatch (GitHubTokenTyped v))} />
+                              <button type="button" class="{Style.btn}" data-github-save-token @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.SaveToken))}>Save token</button>
+                            </details>"""
                 html $"""
                     <label class="{Style.label}" for="github-scope">sign in for</label>
                     <div class="{Style.fieldSelectWrap}">

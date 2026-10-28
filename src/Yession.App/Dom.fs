@@ -796,6 +796,10 @@ module Dom =
         /// one is there, so the remedy is the disconnect already on the row above, not a
         /// second control that would try to do the same thing twice.
         let alreadyConnected = "already connected — disconnect above to connect a different account"
+        /// What opens the pasted-token fallback, behind its own disclosure: signing in is
+        /// the way in, and the token is the exception for where that flow does not reach, so
+        /// it should not sit at the same weight as the button that starts the flow.
+        let useTokenInstead = "use a token instead"
         /// What a dead credential COSTS, on the prompt over the timeline. The button beside
         /// it already says what to do; this says why doing it matters, which is the half a
         /// status word and a button cannot carry between them.
