@@ -39,7 +39,10 @@ let private expect =
 /// What the Manager minted for this launch, decoded ONCE. Blank means nobody launched us —
 /// `Launch.unlaunched`, a bare `yession-session` — and a malformed envelope fails the boot
 /// rather than booting under a fabricated identity.
-let private launch = Launch.parse (Interop.envOr Launch.Variable "") |> expect
+///
+/// TAKEN, not read: the envelope carries the launch's control secret, and every child this
+/// process spawns with its own environment (the srt host helper among them) would inherit it.
+let private launch = Launch.parse (Interop.takeEnv Launch.Variable "") |> expect
 
 let private sessionId = launch.Session
 let private port = launch.Port
