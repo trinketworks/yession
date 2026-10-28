@@ -773,6 +773,13 @@ module View =
         | Some OwnedByDeployment
         | None -> "All sessions"
 
+    /// The credential, if any, that a panel's OWN scope choice already names — "mine" reads
+    /// `mine`, anything else (only "session" today) reads `session`. One function because
+    /// both panels read the same two rows under the same choice (`ConnectionExpectation.landed`
+    /// reads them this way already, for the wait that lands on a command).
+    let private chosenCredential (scope: string) (mine: CredentialRow option) (session: CredentialRow option) : CredentialRow option =
+        if scope = "session" then session else mine
+
     /// How a connected credential reads on a panel row: green and its kind, or the fault
     /// style and the words that name the fix. ONE function, because both connection panels
     /// say the same thing about the same shape — a credential that read "sign in again" in
@@ -837,6 +844,26 @@ module View =
                       <button type="button" class="{Style.btn}" data-claude-cancel @click={Ev(fun _ -> dispatch (ClaudeFlowMsg ClaudeIdle))}>Cancel</button>
                     </div>"""
             | ClaudeIdle ->
+                let chosen =
+                    chosenCredential
+                        claude.Scope
+                        (claude.Status |> Option.bind (fun panel -> panel.MineCredential))
+                        (claude.Status |> Option.bind (fun panel -> panel.SessionCredential))
+                // Connecting the scope just chosen makes no sense while a credential is
+                // already sitting under it — the remedy is the disconnect already on that
+                // scope's row above, not a second control trying to do the same thing again.
+                let connectOrHint =
+                    match chosen with
+                    | Some _ ->
+                        html $"""<span class="{Style.label} pt-2" data-claude-already-connected>{Dom.Text.alreadyConnected}</span>"""
+                    | None ->
+                        html $"""
+                            <button type="button" class="{Style.btn}" data-claude-connect @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Connect))}>Connect Claude</button>
+                            <label class="{Style.label} pt-2" for="claude-token">setup token / api key</label>
+                            <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…"
+                                   .value={claude.Token}
+                                   @input={EvVal(fun v -> dispatch (ClaudeTokenTyped v))} />
+                            <button type="button" class="{Style.btn}" data-claude-save-token @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.SaveToken))}>Save token</button>"""
                 html $"""
                     <label class="{Style.label}" for="claude-scope">sign in for</label>
                     <div class="{Style.fieldSelectWrap}">
@@ -847,12 +874,7 @@ module View =
                       </select>
                       <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
                     </div>
-                    <button type="button" class="{Style.btn}" data-claude-connect @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Connect))}>Connect Claude</button>
-                    <label class="{Style.label} pt-2" for="claude-token">setup token / api key</label>
-                    <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…"
-                           .value={claude.Token}
-                           @input={EvVal(fun v -> dispatch (ClaudeTokenTyped v))} />
-                    <button type="button" class="{Style.btn}" data-claude-save-token @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.SaveToken))}>Save token</button>"""
+                    {connectOrHint}"""
         let error =
             match Pending.refusal claude.Pending with
             | Some reason -> html $"""<span class="{Style.statusErr}" data-claude-error>{reason}</span>"""
@@ -914,6 +936,24 @@ module View =
                       <button type="button" class="{Style.btn}" data-github-cancel @click={Ev(fun _ -> dispatch (GitHubFlowMsg GitHubIdle))}>Cancel</button>
                     </div>"""
             | GitHubIdle ->
+                let chosen =
+                    chosenCredential
+                        github.Scope
+                        (github.Status |> Option.bind (fun panel -> panel.MineCredential))
+                        (github.Status |> Option.bind (fun panel -> panel.SessionCredential))
+                // As Claude's, for its reason.
+                let connectOrHint =
+                    match chosen with
+                    | Some _ ->
+                        html $"""<span class="{Style.label} pt-2" data-github-already-connected>{Dom.Text.alreadyConnected}</span>"""
+                    | None ->
+                        html $"""
+                            <button type="button" class="{Style.btn}" data-github-connect @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.Connect))}>Connect GitHub</button>
+                            <label class="{Style.label} pt-2" for="github-token">personal access token</label>
+                            <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…"
+                                   .value={github.Token}
+                                   @input={EvVal(fun v -> dispatch (GitHubTokenTyped v))} />
+                            <button type="button" class="{Style.btn}" data-github-save-token @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.SaveToken))}>Save token</button>"""
                 html $"""
                     <label class="{Style.label}" for="github-scope">sign in for</label>
                     <div class="{Style.fieldSelectWrap}">
@@ -924,12 +964,7 @@ module View =
                       </select>
                       <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
                     </div>
-                    <button type="button" class="{Style.btn}" data-github-connect @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.Connect))}>Connect GitHub</button>
-                    <label class="{Style.label} pt-2" for="github-token">personal access token</label>
-                    <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…"
-                           .value={github.Token}
-                           @input={EvVal(fun v -> dispatch (GitHubTokenTyped v))} />
-                    <button type="button" class="{Style.btn}" data-github-save-token @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.SaveToken))}>Save token</button>"""
+                    {connectOrHint}"""
         let error =
             match Pending.refusal github.Pending with
             | Some reason -> html $"""<span class="{Style.statusErr}" data-github-error>{reason}</span>"""
