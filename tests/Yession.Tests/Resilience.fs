@@ -1502,7 +1502,7 @@ let private indexedDbLost : PageFault =
       Stack = [ "openDB@https://example.test/assets/client.js:1:2" ] }
 
 /// A page on `link` that has heard `indexedDbLost`.
-let private stoppedOnTheWay (link: SessionLink) : ClientModel =
+let private heardOnTheWay (link: SessionLink) : ClientModel =
     { ClientModel.init (peer "ada" "Ada") with Link = link; PageFault = Some indexedDbLost }
 
 let private surfaceTests =
@@ -1568,27 +1568,27 @@ let private surfaceTests =
         // An error nothing handled can stop the page on its way to its session, and the page
         // then said "connecting" for as long as it was open: no reason, nothing to press, and
         // on a phone no console to read why.
-        testCase "a page stopped on its way to its session by an error says it stopped" <| fun () ->
-            let html = Support.render (stoppedOnTheWay (SessionLink.Connecting { Effort.fresh with Slow = true }))
-            Expect.isTrue
-                (html.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedStopped))
-                "the strip reports a page that stopped"
-
-        testCase "what stopped the page is there for whoever asks" <| fun () ->
-            let html = Support.render (stoppedOnTheWay (SessionLink.Connecting { Effort.fresh with Slow = true }))
+        testCase "an error heard on the way to the session is behind the connect's disclosure" <| fun () ->
+            let html = Support.render (heardOnTheWay (SessionLink.Connecting { Effort.fresh with Slow = true }))
             Expect.isTrue
                 (html.Contains (Dom.Text.pageFaultWhy "UnknownError" "Connection to Indexed Database server lost"))
-                "the error is behind the disclosure"
+                "the error is there for whoever asks"
 
-        testCase "a stopped page offers a reload" <| fun () ->
-            let html = Support.render (stoppedOnTheWay (SessionLink.Connecting { Effort.fresh with Slow = true }))
+        testCase "an error heard on the way to the session offers a reload" <| fun () ->
+            let html = Support.render (heardOnTheWay (SessionLink.Connecting { Effort.fresh with Slow = true }))
             Expect.isTrue (html.Contains "data-page-reload") "a reload is the way to start again"
 
-        testCase "an error on a page that has its session is not said on the strip" <| fun () ->
-            let html = Support.render (stoppedOnTheWay SessionLink.Current)
-            Expect.isFalse
-                (html.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedStopped))
-                "a working page does not claim it stopped"
+        testCase "an error heard on the way to the session keeps the connect's word" <| fun () ->
+            // Whether the error stopped anything is not knowable: one the page recovered from
+            // looks the same. So the line does not claim it did.
+            let html = Support.render (heardOnTheWay (SessionLink.Connecting { Effort.fresh with Slow = true }))
+            Expect.isTrue
+                (html.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedConnecting))
+                "the strip still reports a connect"
+
+        testCase "an error on a page that has its session is not on the strip" <| fun () ->
+            let html = Support.render (heardOnTheWay SessionLink.Current)
+            Expect.isFalse (html.Contains "data-page-reload") "a working page offers no reload"
 
         testCase "the first error a page hears is the one it keeps" <| fun () ->
             let model = ClientModel.init (peer "ada" "Ada")

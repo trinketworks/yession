@@ -2134,11 +2134,12 @@ let tests =
                         (List.exists (fun seen -> seen.Painted))
             }
 
-        // An error nothing handled, raised while the page is on its way to its session, is
-        // said where a phone reader can see it: the page had said "connecting" for as long as
-        // it was open. The handshake is held as above, so the page is still on its way when
-        // the error comes (`Probes.unhandled`).
-        sessionCase "an error that stops a page on its way to its session is on screen" <|
+        // An error nothing handled, raised while the page is on its way to its session, can
+        // stop it there, and the page had said "connecting" for as long as it was open with
+        // nothing to press. The handshake is held as above, so the page is still on its way
+        // when the error comes (`Probes.unhandled`); the way to start again is on screen where
+        // a phone reader can see it.
+        sessionCase "an error on a page's way to its session puts a reload on screen" <|
             fun page ->
             async {
                 let signal = "**" + Yession.App.RelativeUrl.under "" (Yession.App.SessionRoute.relative Yession.App.SessionRoute.Signal)
@@ -2147,9 +2148,8 @@ let tests =
                 do! awaitU (page.SetViewportSizeAsync (390, 844))
                 let! _ = await (page.ReloadAsync ())
                 do! Probe.unhandled page "stopped on purpose"
-                let report = "[" + Yession.App.Dom.attr Yession.App.Dom.Hooks.degraded Yession.App.Dom.Text.degradedStopped + "]"
-                do! Wait.until "the stop to be reported where a phone reader can see it"
-                        (fun () -> Probe.seen page report)
+                do! Wait.until "a reload on screen where a phone reader can see it"
+                        (fun () -> Probe.seen page "[data-page-reload]")
                         (List.exists (fun seen -> seen.Painted))
             }
 

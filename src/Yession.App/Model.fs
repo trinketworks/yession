@@ -63,11 +63,10 @@ type LocalCopy =
 
 /// An error this page did not expect and nothing handled: thrown, or a promise rejected, with
 /// nobody waiting on it. The browser reports it to the page (`error`, `unhandledrejection`)
-/// and to the console, and to no person. When it is raised while the page is still on its way
-/// to its session, the way there has stopped: the page sits on its last word, "connecting",
-/// for as long as it is open, with nothing to press and no reason given. It is kept so the
-/// page can say it stopped, and so somebody who asks (the status line's disclosure) can read
-/// what stopped it on a phone with no console.
+/// and to the console, and to no person. Raised while the page is still on its way to its
+/// session, it can stop the way there: the page then sits on its last word, "connecting", for
+/// as long as it is open, with nothing to press and no reason given. It is kept so somebody who
+/// asks (the status line's disclosure) can read it on a phone with no console, beside a reload.
 type PageFault =
     { /// The error's kind (`TypeError`, a `DOMException`'s name), or what was rejected.
       Name : string
