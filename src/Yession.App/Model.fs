@@ -562,6 +562,10 @@ module GitHubPanel =
     let landed (expect: ConnectionExpectation) (panel: GitHubPanel) : bool =
         ConnectionExpectation.landed expect panel.SessionCredential panel.MineCredential
 
+    /// Does this session hold a GitHub credential, in either scope?
+    let connected (panel: GitHubPanel) : bool =
+        panel.SessionCredential.IsSome || panel.MineCredential.IsSome
+
 /// Where the device flow's poll is while a code is on screen. The poll is a COMMAND — it is
 /// what makes GitHub hand the grant over — and this tab is the one asking, at the interval
 /// GitHub sets, until the grant lands, the human cancels, or the session says the flow ended.
@@ -5420,7 +5424,7 @@ module ClientModel =
                 { model with Claude = { model.Claude with Pending = pending } }
         | GitHubStatusMsg status ->
             // The same two rules, for the same two reasons (see Claude's above).
-            let connected = status.SessionCredential.IsSome || status.MineCredential.IsSome
+            let connected = GitHubPanel.connected status
             let flow =
                 match model.GitHub.Flow, connected with
                 | GitHubAwaitingApproval _, true -> GitHubIdle
@@ -6107,6 +6111,15 @@ module ClientModel =
             if not model.Launch.Anchored && next.Launch.Anchored then
                 [ ClientEffect.Launch (LaunchEffect.Search next.Launch.Query) ]
             else []
+        // A GitHub credential arriving, from whichever client or scope connected it, answers a
+        // listing that asked for one. Read off the status the fold kept, not off the message
+        // that carried it.
+        let githubConnected (m: ClientModel) = m.GitHub.Status |> Option.exists GitHubPanel.connected
+        let next, connecting =
+            if not (githubConnected model) && githubConnected next then
+                let launch, asked = Launch.credentialArrived next.Launch
+                { next with Launch = launch }, asked |> List.map ClientEffect.Launch
+            else next, []
         let effects =
             match msg with
             | TakeTerminalMsg terminal -> [ ClientEffect.TakeTerminal terminal ]
@@ -6279,7 +6292,7 @@ module ClientModel =
             | Some key when not (Set.contains key next.KeyframesAsked) ->
                 { next with KeyframesAsked = Set.add key next.KeyframesAsked }, [ ClientEffect.FetchKeyframe key ]
             | Some _ | None -> next, []
-        next, effects @ answered @ unnoticed @ swapped @ landing @ leased @ revealed @ resized @ present @ kept @ fetching @ offering @ reading
+        next, effects @ answered @ unnoticed @ swapped @ landing @ leased @ revealed @ resized @ present @ kept @ fetching @ offering @ connecting @ reading
 
     /// A file attached to `author`'s draft: the doc's attachment entry and this browser's upload,
     /// in one update, so nothing can see the one without the other. The entry names the draft's

@@ -373,6 +373,13 @@ module Launch =
     let private branchesFor (repo: RepoRef) (launch: LaunchViewState) : LaunchEffect list =
         if launch.Branches |> Map.containsKey repo then [] else [ LaunchEffect.Branches repo ]
 
+    /// A GitHub credential arrived. A listing refused for want of one is asked for again; any
+    /// other listing already answers the question it was asked.
+    let credentialArrived (launch: LaunchViewState) : LaunchViewState * LaunchEffect list =
+        match launch.Listing with
+        | ListingUnavailable (_, true) -> { launch with Listing = ListingUnknown; More = MoreIdle }, [ LaunchEffect.Search launch.Query ]
+        | _ -> launch, []
+
     /// A message's consequences for the surface: its next state, and what it asks of the
     /// session.
     let update (msg: LaunchMsg) (launch: LaunchViewState) : LaunchViewState * LaunchEffect list =

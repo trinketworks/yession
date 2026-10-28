@@ -28,6 +28,7 @@ module Yession.Tests.LaunchSurface
 open System
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Domain.Access
 open Yession.Domain.Link
 open Yession.Domain.Repos
 open Yession.Domain.Chat
@@ -453,6 +454,20 @@ let private askTests =
 
         testCase "START with nothing held sends nothing" <| fun () ->
             Expect.equal (asks (LaunchMsg LaunchStartPressed) listed) [] "no command over nothing"
+
+        testCase "a GitHub credential arriving asks again for a listing that wanted one" <| fun () ->
+            let panel (credential: CredentialRow option) : GitHubPanel =
+                { SessionCredential = None; MineCredential = credential; Owner = OwnedByUser }
+            let connected = GitHubStatusMsg (panel (Some { Kind = OAuthConnection; SignInRequired = None }))
+            let refused =
+                clientAt 1L fresh
+                |> Support.step (GitHubStatusMsg (panel None))
+                |> launch (LaunchListingArrived ("", ListingUnavailable ("sign in to github", true)))
+            let next, effects = ClientModel.update connected refused
+            Expect.equal effects [ ClientEffect.Launch (LaunchEffect.Search "") ] "the list is asked for again"
+            Expect.equal next.Launch.Listing ListingUnknown "and the sign-in button is gone while it is"
+            Expect.equal (asks connected (Support.step connected refused)) [] "a credential still there is not one arriving"
+            Expect.equal (asks connected (listed |> Support.step (GitHubStatusMsg (panel None)))) [] "a list on screen already answers"
     ]
 
 let tests = testList "Launch surface" [ offeredTests; choosingTests; answerTests; askTests ]
