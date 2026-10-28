@@ -1998,6 +1998,7 @@ let tests =
 
                 // Connect one WITHOUT closing the drawer — the flow a person is actually in
                 // when they sign in, and the one that used to leave the note behind.
+                do! awaitU (pageA.ClickAsync "[data-claude-use-token]")
                 do! awaitU (pageA.FillAsync ("[data-claude-token]", "sk-ant-oat01-browser-case"))
                 do! awaitU (pageA.ClickAsync "[data-claude-save-token]")
                 do! waitVisible "the panel to say the account is connected" pageA "[data-claude-connected='mine']"

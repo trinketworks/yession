@@ -872,6 +872,17 @@ let private uiChecklistTests =
             Expect.stringContains html "data-github-connect>" "session has no credential yet, so it can be connected"
             Expect.isFalse (html.Contains "data-github-already-connected") "and nothing says otherwise"
 
+        // Signing in is the way in; the pasted token is the fallback for where that flow
+        // cannot reach. It sits behind its own disclosure rather than beside the button that
+        // starts the flow, so the panel's default shape offers one way in, not two.
+        testCase "the pasted-token fallback sits behind its own disclosure, below the connect button" <| fun () ->
+            let html = Support.render representativeModel
+            Expect.stringContains html "data-github-token-form" "the token fallback is a disclosure of its own"
+            Expect.stringContains html Dom.Text.useTokenInstead "named for what it opens"
+            let connectAt = html.IndexOf "data-github-connect>"
+            let formAt = html.IndexOf "data-github-token-form"
+            Expect.isTrue (connectAt >= 0 && formAt > connectAt) "the connect button leads, the fallback follows"
+
         // --- the device code, and getting it to github.com --------------------------------
         // The code is useless where it is rendered: it has to reach a form in another tab,
         // and on a phone that is a paste or it is eight characters carried in somebody's
