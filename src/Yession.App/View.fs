@@ -859,7 +859,7 @@ module View =
             | None -> html $""""""
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.settingsLane1 ]}" data-claude-panel>
-              <span class="{Style.label}">claude</span>
+              <span class="{Style.sectionLabel}">claude</span>
               {connectedRow
                  ((sharedScopeLabel (claude.Status |> Option.map (fun panel -> panel.Owner))).ToLowerInvariant ())
                  "mine"
@@ -936,7 +936,7 @@ module View =
             | None -> html $""""""
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.settingsLane1 ]}" data-github-panel>
-              <span class="{Style.label}">github</span>
+              <span class="{Style.sectionLabel}">github</span>
               {connectedRow
                  ((sharedScopeLabel (github.Status |> Option.map (fun panel -> panel.Owner))).ToLowerInvariant ())
                  "mine"
