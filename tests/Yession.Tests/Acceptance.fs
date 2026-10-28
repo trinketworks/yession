@@ -4013,7 +4013,7 @@ let private chromeTests =
               "the page /open answers a refusal with",
               Yession.Host.ManagerUi.problemPage "Cannot open this session" "It is archived."
               "the screen /open shows while a session launches",
-              Yession.Host.ManagerUi.openingPage sessionId "/sessions/demo-session/open" "/sessions/demo-session/ready" (Some "https://example.com/s/demo-session/")
+              Yession.Host.ManagerUi.openingPage sessionId "/sessions/demo-session/open" "/sessions/demo-session/launch" "/sessions/demo-session/ready" (Some "https://example.com/s/demo-session/")
               "the page a provider's redirect lands on",
               snd (Yession.Host.ProcessManager.connectionsCallbackResponse "Connected" "Close this tab and return to your session.") ]
 

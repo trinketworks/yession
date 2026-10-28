@@ -1343,9 +1343,12 @@ module Dom =
         let mcpWithdraw = "data-mcp-withdraw"
         let mcpAudience = "data-mcp-audience"
         /// The opening screen's hooks. Its program is inline and literal
-        /// (`ManagerUi.openingProgram`), so it names these four by VALUE: rename one here and
+        /// (`ManagerUi.openingProgram`), so it names these five by VALUE: rename one here and
         /// rename it there.
         ///
+        /// The launch address (`POST /sessions/{id}/launch`), on the screen that sends it. The
+        /// open route itself changes nothing, so the screen is what asks for the launch.
+        let openingLaunch = "data-opening-launch"
         /// The readiness address (`/sessions/{id}/ready`), on the screen it polls for —
         /// spelled by the server, like every other address its pages carry.
         let openingReady = "data-opening-ready"

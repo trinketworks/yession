@@ -648,6 +648,10 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     hole's context in the template chooses the escaper (`Ssr`'s scanner). A display name, an
     MCP server's name and a refusal's words are all from outside. The Manager page parses the
     fragments it is sent inert, so the escaping is the one door.
+24. A Manager route that changes state accepts only a request whose `Sec-Fetch-Site` or
+    `Origin` names the Manager's own origin (`ManagerUi.requestOrigin`). A request with
+    neither is no browser's, and passes on its identity alone. A `GET` changes no state, so
+    `/sessions/{id}/open` answers a stopped session with a screen that asks for the launch.
 
 Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
 roots, keyed by `BodyKey`, that the app co-manages outside the encoded tree, and the structural

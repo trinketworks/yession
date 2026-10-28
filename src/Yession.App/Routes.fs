@@ -665,7 +665,8 @@ type ManagerRoute =
     | SessionRows
     /// A lifecycle act on one session.
     | Session of SessionId * SessionVerb
-    /// The stable way into a session: launch it if stopped, then hand the browser over.
+    /// The stable way into a session: a redirect when it runs, the opening screen when it does
+    /// not (the screen asks for the launch by POST). It changes nothing itself.
     | OpenSession of SessionId
     /// Whether this deployment's front door reaches the session yet — what `OpenSession`'s
     /// page polls before it goes.

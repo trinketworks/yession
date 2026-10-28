@@ -1699,6 +1699,85 @@ let private readinessTests =
 
     ]
 
+/// What a Manager answers one request carrying `headers`: the request-origin rule
+/// (`ManagerUi.requestOrigin`) over the wire. The POST is a withdrawal of a server nobody
+/// declared, a route that changes state whose acceptance (`200`) changes nothing, so the
+/// only refusal it can meet is the rule's `403`. `own` is told the Manager's own origin.
+let private originAnswer (method: string) (headers: string -> (string * string) list) : Async<int> =
+    async {
+        let! pm = managerWithUi "origin-rule"
+        let origin = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
+        let! answer =
+            if method = "GET" then TestHttp.getNoStore (headers origin) (origin + "/")
+            else
+                TestHttp.post
+                    (headers origin)
+                    "application/x-www-form-urlencoded"
+                    "name=nobody&session="
+                    (origin + ManagerRoute.path ManagerRoute.WithdrawMcpServer)
+        do! pm.StopAll ()
+        return answer.Status
+    }
+
+// A tailnet member's browser carries their identity on a request ANOTHER website causes, so a
+// route that changes state asks where the request came from. One case per branch of the rule.
+let private requestOriginTests =
+    testList "The Manager's request-origin rule" [
+        testCaseAsync "a POST from another site is refused" <|
+            async {
+                let! status = originAnswer "POST" (fun _ -> [ "sec-fetch-site", "cross-site" ])
+                Expect.equal status 403 "cross-site"
+            }
+
+        testCaseAsync "a POST from a sibling origin on the same site is refused" <|
+            async {
+                let! status = originAnswer "POST" (fun _ -> [ "sec-fetch-site", "same-site" ])
+                Expect.equal status 403 "same-site is another origin, on a tailnet another machine's"
+            }
+
+        testCaseAsync "a POST from the Manager's own page is accepted" <|
+            async {
+                let! status = originAnswer "POST" (fun _ -> [ "sec-fetch-site", "same-origin" ])
+                Expect.equal status 200 "same-origin"
+            }
+
+        testCaseAsync "a POST the person started themselves is accepted" <|
+            async {
+                let! status = originAnswer "POST" (fun _ -> [ "sec-fetch-site", "none" ])
+                Expect.equal status 200 "none: typed, or a bookmark"
+            }
+
+        testCaseAsync "a POST that names another origin, and no fetch site, is refused" <|
+            async {
+                let! status = originAnswer "POST" (fun _ -> [ "origin", "https://evil.example" ])
+                Expect.equal status 403 "a foreign Origin"
+            }
+
+        testCaseAsync "a POST that names the Manager's own origin, and no fetch site, is accepted" <|
+            async {
+                let! status = originAnswer "POST" (fun own -> [ "origin", own ])
+                Expect.equal status 200 "Origin's host and port are the request's Host"
+            }
+
+        testCaseAsync "a POST that names neither is accepted" <|
+            async {
+                let! status = originAnswer "POST" (fun _ -> [])
+                Expect.equal status 200 "no browser sends neither; the identity header names the sender"
+            }
+
+        testCaseAsync "a POST from an opaque origin is refused" <|
+            async {
+                let! status = originAnswer "POST" (fun _ -> [ "origin", "null" ])
+                Expect.equal status 403 "Origin: null names nobody"
+            }
+
+        testCaseAsync "a GET from another site passes the rule" <|
+            async {
+                let! status = originAnswer "GET" (fun _ -> [ "sec-fetch-site", "cross-site" ])
+                Expect.equal status 200 "a read changes nothing"
+            }
+    ]
+
 /// The half of archiving that cannot be decided purely: it stops a real child, and the
 /// refusal has to hold over the wire and not just over a value.
 let private archiveFlowTests =
@@ -1726,10 +1805,10 @@ let private archiveFlowTests =
                 pm.CreateSession "arch-refuse" "Archive me" |> expect |> ignore
                 let! archived = pm.Archive id
                 Expect.isTrue (Result.isOk archived) "archived"
-                // Over the wire, because `/open` is the URL a session client's reconnect card
-                // points at: a bookmark landing there must read as a conflict it can resolve,
-                // not as the Manager having broken.
-                let! refused = TestHttp.get (baseUrl + "/sessions/arch-refuse/open")
+                // Over the wire, because the opening screen a session client's reconnect card
+                // leads to sends this launch: a bookmark landing there must read as a conflict
+                // it can resolve, not as the Manager having broken.
+                let! refused = TestHttp.postForm "" (baseUrl + "/sessions/arch-refuse/launch")
                 Expect.equal refused.Status 409 "a durable-state conflict, not a server fault"
                 Expect.stringContains refused.Body "archived" "and it says why"
                 do! pm.StopAll ()
@@ -1987,26 +2066,26 @@ let private stoppedBehindUi (name: string) (launchTimeoutMs: int) (readiness: St
 /// a case needs it to, which is what a slow boot looks like from the Manager.
 let private neverReady = StandIn.NeverReady
 
-// `/open` on a session it has to launch. The screen is answered BEFORE the launch is: a
-// browser held on a navigation for as long as a boot takes has no document to paint, which
-// Chromium hides by keeping the last page up and an installed app on iOS shows as a white
-// screen. So the launch's progress is read afterwards, from the readiness route.
+// `/open` on a session that is not running. It changes nothing: a GET is what an `<img>` on
+// any website can cause, so it answers the opening screen, and the screen's program asks for
+// the launch by POST. The launch's progress is read afterwards, from the readiness route; the
+// cases below start one the way the launch route does, without waiting for it (`pm.Start`).
 let private openStoppedTests =
     testList "Opening a session that is not running yet" [
-        testCaseAsync "/open answers its screen while the launch it started is still in flight" <|
+        testCaseAsync "/open on a stopped session answers its screen and leaves the session stopped" <|
             async {
                 let! pm, ledger, sessionId, at = stoppedBehindUi "open-early" 3000 neverReady
                 let! answer = TestHttp.get (at (ManagerRoute.OpenSession sessionId))
                 let status = (pm.TryFind sessionId).Value.Status
                 do! pm.StopAll ()
                 spawnedChildren ledger |> ignore
-                Expect.equal (answer.Status, status) (200, ProcessManager.Launching) "the screen, with the launch still behind it"
+                Expect.equal (answer.Status, status) (200, ProcessManager.NotRunning) "the screen, and no launch behind it"
             }
 
         testCaseAsync "while the launch is in flight, readiness says to keep waiting without spending the wait" <|
             async {
                 let! pm, ledger, sessionId, at = stoppedBehindUi "ready-launching" 3000 neverReady
-                let! _ = TestHttp.get (at (ManagerRoute.OpenSession sessionId))
+                pm.Start sessionId |> expect
                 let! ready = TestHttp.get (at (ManagerRoute.SessionReady sessionId))
                 do! pm.StopAll ()
                 spawnedChildren ledger |> ignore
@@ -2020,7 +2099,7 @@ let private openStoppedTests =
         testCaseAsync "a launch that fails is the readiness route's answer, with its reason" <|
             async {
                 let! pm, ledger, sessionId, at = stoppedBehindUi "ready-failed" 15_000 exitBeforeReady
-                let! _ = TestHttp.get (at (ManagerRoute.OpenSession sessionId))
+                pm.Start sessionId |> expect
                 do! waitUntil "the launch to have failed" (fun () ->
                         match (pm.TryFind sessionId).Value.Status with
                         | ProcessManager.LaunchFailed _ -> true
@@ -2038,7 +2117,7 @@ let private openStoppedTests =
             async {
                 let! pm, ledger, sessionId, at = stoppedBehindUi "failed-then-again" 15_000 exitBeforeReady
                 let! _ = pm.Launch sessionId
-                let! _ = TestHttp.get (at (ManagerRoute.OpenSession sessionId))
+                pm.Start sessionId |> expect
                 let status = (pm.TryFind sessionId).Value.Status
                 do! pm.StopAll ()
                 spawnedChildren ledger |> ignore
@@ -2185,7 +2264,7 @@ let private uiFlowTests =
         // Plan 11's stable way back in. A session's own address changes on every relaunch,
         // and under idle reaping that is routine — so this route, on the Manager's fixed
         // port, is what a bookmark and the client's reconnect offer point at.
-        testCaseAsync "GET /sessions/{id}/open launches a stopped session and lands on its address" <|
+        testCaseAsync "the launch the opening screen sends starts a stopped session, and readiness names its address" <|
             async {
                 let dataDir =
                     sprintf "tests/Yession.Tests/out/.data/open-%d" (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
@@ -2201,14 +2280,15 @@ let private uiFlowTests =
                 // session, and what this case is about is `/open` finding one stopped.
                 pm.CreateSession "open-1" "Open One" |> expect |> ignore
 
-                // Stopped: /open has to start it before there is any address to give.
+                // Stopped: the screen `/open` answers has to launch it before there is any
+                // address to give, and it launches by POST (`openingProgram`).
                 Expect.equal (pm.TryFind sessionId).Value.Status ProcessManager.NotRunning "created, not launched"
-                let! _ = Interop.getText (baseUrl + "/sessions/open-1/open") |> Interop.awaitPromise
+                let! _ = TestHttp.postForm "" (baseUrl + "/sessions/open-1/launch")
                 let launchedPort () =
                     match (pm.TryFind sessionId).Value.Status with
                     | ProcessManager.Running (port, _, _) -> Some port
                     | _ -> None
-                do! waitUntilWithin 20_000 "/open to have launched it" (fun () -> (launchedPort ()).IsSome)
+                do! waitUntilWithin 20_000 "the launch to have started it" (fun () -> (launchedPort ()).IsSome)
                 // Its sign-in entry, not its shell: entered at the shell, a browser paints
                 // it, is told 401 by `/me`, bounces, and paints it again. The landing page
                 // is sent before the launch has a port, so the address arrives as the
@@ -2325,8 +2405,8 @@ let private reapingTests =
                 // address that survives a reap is what lets a client keep what it wrote.
                 // Under a `{id}` template that holds by construction rather than by
                 // bookkeeping — the address never mentioned the port to begin with.
-                let! _ = Interop.getText (baseUrl + "/sessions/reap-1/open") |> Interop.awaitPromise
-                do! waitUntilWithin 20_000 "/open to have relaunched it" (fun () ->
+                let! _ = TestHttp.postForm "" (baseUrl + "/sessions/reap-1/launch")
+                do! waitUntilWithin 20_000 "the launch to have relaunched it" (fun () ->
                         match (pm.TryFind sessionId).Value.Status with
                         | ProcessManager.Running _ -> true
                         | _ -> false)
@@ -3851,6 +3931,8 @@ let tests =
         Tag.needs "An address the Manager does not claim" [ Tag.Ports ] (fun () -> unroutedTests)
         Tag.needs "Management UI flow (Step 25)" [ Tag.Ports; Tag.Native ] (fun () -> uiFlowTests)
         Tag.needs "Archiving over the process boundary" [ Tag.Ports; Tag.Native ] (fun () -> archiveFlowTests)
+        // `Ports` only: the rule answers before anything is launched.
+        Tag.needs "The Manager's request-origin rule" [ Tag.Ports ] (fun () -> requestOriginTests)
         Tag.needs "Is the session reachable yet (Plan 11)" [ Tag.Ports; Tag.Native ] (fun () -> readinessTests)
         // `Ports` only: a ProcessManager binds its control endpoint on creation, but nothing
         // here launches a child — the invariant is about the moment BEFORE the first launch.
