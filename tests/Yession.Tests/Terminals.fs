@@ -4627,7 +4627,8 @@ let private latch () : (unit -> unit) * Async<unit> =
 /// where a RELATIVE path acquires its meaning.
 let private validatedPath (exec: SandboxExec) : string option =
     match exec.Arguments with
-    | [ "-c"; body; "sh"; path ] when body.Contains "cd \"$1\"" -> Some path
+    // `pwd` prints the directory without the `./` its `PathOperand` put in front.
+    | [ "-c"; body; "sh"; path ] when body.Contains "cd -- \"$1\"" -> Some (if path.StartsWith "./" then path.Substring 2 else path)
     | _ -> None
 
 /// This fixture's sandbox opens in `/ws`, so that is what a relative path resolves against —

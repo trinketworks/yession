@@ -688,6 +688,46 @@ let fileOperands =
                         Expect.isTrue (TestFiles.exists (workspace + "/a.txt")) "a.txt is still there"
                     })
         })
+
+        // `cd -- -` is `cd "$OLDPWD"`. This sandbox has an `OLDPWD`, so a `-` read that way
+        // would land there, and set a profile or fail on what `cd -` prints.
+        testCaseAsync "set_shell_profile to - is refused as a missing directory" (async {
+            let workspace = TestFiles.canonical (TestFiles.tempDir "yession-operands-")
+            let policy = policyIn workspace []
+            let policy = { policy with Env = policy.Env |> Map.add "OLDPWD" workspace }
+            let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ())) policy "operands-cd-dash"
+            let agent = Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))
+            let! set = host.Terminals.SetProfile agent None SandboxRef.defaultRef (Some "-")
+            do! host.Stop ()
+            match set with
+            | Ok directory -> failwithf "a directory that is not there was set as %s" directory
+            | Error reason -> Expect.stringContains reason "there is no directory -" "refused as a directory that is not there"
+        })
+
+        // The copy is `cp -- "$1" "$2"` and the weighing `wc -c < "$1"`, both with the path
+        // as a `PathOperand`: `./-` is the file, wherever a program reads `-` as stdin.
+        testCaseAsync "share_artifact of a file named - shares the file" (async {
+            let workspace = TestFiles.canonical (TestFiles.tempDir "yession-operands-")
+            TestFiles.write (workspace + "/-") "dash\n"
+            let artifactsDir = workspace + "/artifacts"
+            TestFiles.ensureDir artifactsDir
+            let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ())) (policyIn workspace []) "operands-share-dash"
+            let artifacts =
+                Artifacts.create
+                    host.Log
+                    artifactsDir
+                    (workspace + "/staged")
+                    ignore
+                    (fun _ -> host.Environment)
+                    (fun _ -> artifactsDir)
+                    (fun _ -> Some workspace)
+                    TerminalShell.posix
+            let! shared = artifacts.Share ActorRef.Agent SandboxRef.defaultRef "-" (Some "dash.txt")
+            do! host.Stop ()
+            match shared with
+            | Error reason -> failwithf "the share was refused: %s" reason
+            | Ok fact -> Expect.equal fact.Bytes 5L "the five bytes of the file named -"
+        })
     ]
 
 // --- [Srt, Pty]: a terminal under srt, as a person drives one -------------------------------
