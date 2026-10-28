@@ -3069,6 +3069,21 @@ module private Holes =
 
     let sequence (parts: string seq) = html $"""<p>{parts}</p>"""
 
+    // One hole in each context the renderer tells apart (`Ssr`'s scanner).
+    let headOfValue (value: string) = html $"""<p title="{value}">t</p>"""
+
+    let afterTextInValue (value: string) = html $"""<p title="Stop {value}">t</p>"""
+
+    let singleQuotedValue (value: string) = html $"""<p title='Stop {value}'>t</p>"""
+
+    let unquotedValue (value: string) = html $"""<p title={value}>t</p>"""
+
+    let betweenTags (value: string) = html $"""<p>{value}</p>"""
+
+    let afterClosedValue (value: string) = html $"""<p title="a">{value}</p>"""
+
+    let afterQuoteInText (value: string) = html $"""<p>say "{value}</p>"""
+
 // The renderer's sequence arm (`Ssr.renderValue`), which every surface reaches through and no
 // view test can tell apart from the markup around it. A view builds its sequences with
 // `List.map`, so the list shape is the only one the suite was exercising by accident — while
@@ -3109,6 +3124,60 @@ let private templateHoleTests =
                 (Support.renderTemplate (Holes.sequence (seq { yield "<b>" })))
                 "<p>&lt;b&gt;</p>"
                 "an element is rendered, never interpolated raw"
+    ]
+
+// What a hole is escaped for is decided by where it sits (`Ssr`'s scanner). `'` is the one
+// character the two escapers part on, so each case below says which escaper ran; `"` is the
+// character that closed an attribute when the scanner was a test of a part's last characters.
+let private hostile = "a\"'<b>&"
+
+let private asValue = "a&quot;&#39;&lt;b&gt;&amp;"
+
+let private asText = "a&quot;'&lt;b&gt;&amp;"
+
+let private holeContextTests =
+    testList "Hole contexts" [
+        testCase "a hole at the head of a quoted value is escaped as a value" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.headOfValue hostile))
+                (sprintf "<p title=\"%s\">t</p>" asValue)
+                "the value's own quote cannot close it"
+
+        testCase "a hole after text in a quoted value is escaped as a value" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.afterTextInValue hostile))
+                (sprintf "<p title=\"Stop %s\">t</p>" asValue)
+                "a hole in the middle of a value is still in the value"
+
+        testCase "a hole in a single-quoted value is escaped as a value" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.singleQuotedValue hostile))
+                (sprintf "<p title='Stop %s'>t</p>" asValue)
+                "the other quote cannot close it either"
+
+        testCase "a hole in an unquoted value is quoted by the renderer" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.unquotedValue hostile))
+                (sprintf "<p title=\"%s\">t</p>" asValue)
+                "a space cannot end a value the renderer quoted"
+
+        testCase "a hole between tags is escaped as text" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.betweenTags hostile))
+                (sprintf "<p>%s</p>" asText)
+                "text"
+
+        testCase "a hole after a closed value is escaped as text" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.afterClosedValue hostile))
+                (sprintf "<p title=\"a\">%s</p>" asText)
+                "the value's closing quote and the tag's end are both seen"
+
+        testCase "a quote in text before a hole leaves the hole in text" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.afterQuoteInText hostile))
+                (sprintf "<p>say \"%s</p>" asText)
+                "a quote between tags opens nothing"
     ]
 
 // The bootstrap shell itself (`Ssr.page`), which had no Node-tier coverage. What matters
@@ -4409,5 +4478,6 @@ let tests =
         semanticsTests
         reconnectOfferTests
         templateHoleTests
+        holeContextTests
         shellTests
     ]

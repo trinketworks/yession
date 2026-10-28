@@ -644,6 +644,10 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     stands after `--` or as an option's own argument, and a path operand is a `PathOperand`,
     which starts with `/` or `.`. A read-only tool never meets the gate, so this is what keeps
     `find_files` from deleting with `-delete` (`ScriptArg`).
+23. A string from outside the process reaches HTML only through `Ssr`'s escapers, and the
+    hole's context in the template chooses the escaper (`Ssr`'s scanner). A display name, an
+    MCP server's name and a refusal's words are all from outside. The Manager page parses the
+    fragments it is sent inert, so the escaping is the one door.
 
 Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
 roots, keyed by `BodyKey`, that the app co-manages outside the encoded tree, and the structural

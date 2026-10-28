@@ -9,6 +9,18 @@ module Yession.Host.Ssr
 // `<textarea>` child-text bindings that @lit-labs/ssr miscounts, and because it pulls no
 // dependencies it bundles trivially into the shipped single-file executable — no CDN, no
 // parse5. The browser renders the same templates live; this is the first paint.
+//
+// What a hole is escaped FOR is decided by where it sits in the template, and a string from
+// outside the process (a session's display name, an MCP server's name) reaches HTML through
+// no other door. A scanner walks the static parts in order and carries two facts across them:
+// whether it is inside a tag, and whether it is inside a quoted attribute value (and which
+// quote opened it). A hole is an attribute value when the scanner is inside a quoted value at
+// the end of the static part before it: at the head of the value (`="{x}`) and after text in
+// it (`="Stop {x}`) alike, which a test of the part's last characters missed — `"` passed
+// through the text escaper and closed the attribute. A hole after an unquoted `=` is a value
+// too, and the renderer writes the quotes around it. Everything else is text. A `"` between
+// tags is text and moves nothing. The binding checks come first: a `@ . ?` hole is not text
+// or a value, whatever the scanner says.
 
 open System.Text.RegularExpressions
 open Yession.Domain
@@ -29,19 +41,51 @@ let private bindingWithSpace = Regex "\\s*[@.?][A-Za-z0-9_-]+=\"?$"
 /// pane), or the page is wrong until the bundle has run.
 let private booleanBinding = Regex "\\s*\\?([A-Za-z0-9_-]+)=$"
 
-/// A static part ending in an attribute-value hole (`name=` or `name="`).
-let private attributeHole = Regex "=\"?$"
+/// Where the scanner is at the end of a static part. Carried into the next part, because a
+/// hole does not end the tag or the value it sits in.
+type private Context =
+    | InText
+    | InTag
+    | InValue of char
+
+/// Walk one static part from `context`. `<` opens a tag only before what can start one (a
+/// name, `/` or `!`), or at the end of the part, so `a < b` in text stays text. In a tag, a
+/// quote opens a value and `>` ends the tag; in a value, only its own quote ends it.
+let private scan (context: Context) (part: string) : Context =
+    let mutable context = context
+    for i in 0 .. part.Length - 1 do
+        let c = part.[i]
+        context <-
+            match context with
+            | InText when c = '<' ->
+                if i + 1 = part.Length then InTag
+                else
+                    let next = part.[i + 1]
+                    if System.Char.IsLetter next || next = '/' || next = '!' then InTag else InText
+            | InText -> InText
+            | InTag when c = '"' || c = '\'' -> InValue c
+            | InTag when c = '>' -> InText
+            | InTag -> InTag
+            | InValue q when c = q -> InTag
+            | InValue q -> InValue q
+    context
+
+/// A hole after `name=` with no quote: a value the renderer has to quote itself.
+let private unquotedValue = Regex "=\\s*$"
 
 /// Public for the same reason `escapeAttr` is: the Manager's own standalone pages (Plan 11's
 /// `/open` landing page and its refusals) are sprintf'd rather than Lit-rendered, and they put
 /// a session id and a refusal's words into TEXT. One escaper each, shared with the renderer.
+/// `"` too, so that text which lands in a value by a template's mistake still cannot close it.
 let escapeText (s: string) =
-    s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;")
+    s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;")
 
 /// Public because the Manager's own standalone pages need it too (Plan 11's `/open`
-/// landing page): one escaper for every string this process puts in an attribute.
+/// landing page): one escaper for every string this process puts in an attribute. Both
+/// quotes, so it holds in a value either quote opened, and `<` `>`, so it holds in a value
+/// that something later reads as markup.
 let escapeAttr (s: string) =
-    s.Replace("&", "&amp;").Replace("\"", "&quot;")
+    s.Replace("&", "&amp;").Replace("\"", "&quot;").Replace("'", "&#39;").Replace("<", "&lt;").Replace(">", "&gt;")
 
 /// One hole's value, as text. The cases are the renderable types the template-hole rule
 /// admits (`TemplateHoles.fs`) — text, a template, a sequence of them, a number, a bool — and
@@ -54,15 +98,17 @@ let rec private renderValue (inAttr: bool) (value: Value) : string =
     | Hole.Number n -> string n
     | Hole.Flag b -> if b then "true" else "false"
     | Hole.Template parts -> renderParts parts
-    | Hole.Sequence items -> items |> Seq.map (renderValue false) |> String.concat ""
+    | Hole.Sequence items -> items |> Seq.map (renderValue inAttr) |> String.concat ""
     | Hole.Inert -> ""
 
 and private renderParts (parts: Parts) : string =
     let strings = parts.Statics
     let values = parts.Values
     let sb = System.Text.StringBuilder ()
+    let mutable context = InText
     for i in 0 .. values.Length - 1 do
         let s = strings.[i]
+        context <- scan context s
         let flag = booleanBinding.Match s
         if flag.Success then
             sb.Append (booleanBinding.Replace (s, "")) |> ignore
@@ -74,7 +120,12 @@ and private renderParts (parts: Parts) : string =
             sb.Append (bindingWithSpace.Replace (s, "")) |> ignore
         else
             sb.Append s |> ignore
-            sb.Append (renderValue (attributeHole.IsMatch s) values.[i]) |> ignore
+            match context with
+            | InValue _ -> sb.Append (renderValue true values.[i]) |> ignore
+            | InTag when unquotedValue.IsMatch s ->
+                sb.Append('"').Append(renderValue true values.[i]).Append('"') |> ignore
+            | InTag
+            | InText -> sb.Append (renderValue false values.[i]) |> ignore
     sb.Append strings.[strings.Length - 1] |> ignore
     sb.ToString ()
 

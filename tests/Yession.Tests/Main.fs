@@ -221,6 +221,7 @@ let all =
         Tag.needs "The management page's filters (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.filterTests)
         Tag.needs "Opening a session from an installed Manager (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.installedAppTests)
         Tag.needs "Pressing Create (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.pressTests)
+        Tag.needs "A display name on the management page (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.hostileNameTests)
         Tag.needs "The opening page (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.openingTests)
         // LAST, and it has to be: it asks what is still open, which is only a question worth
         // asking once nothing else will open anything.

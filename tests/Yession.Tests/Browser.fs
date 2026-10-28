@@ -9149,6 +9149,81 @@ let filterTests =
             }
     ]
 
+// --- A display name on the management page (browser) -------------------------------------
+//
+// A display name is the session's to choose and every peer's to edit, and the Manager page
+// puts it in the accessible name of each verb on the row. The renderer once read that hole as
+// text, so a `"` in the name closed the attribute and the rest of it was markup, in every
+// operator's browser. The row that carries it here ARRIVES, over the rows stream, because the
+// page's own parse of a fragment is the second place the name could become markup.
+
+let private hostileDataDir = "tests/browser/.data-hostile-name"
+
+let private HOSTILE_ID = "hostile-name"
+
+let private HOSTILE_NAME = "<script>window.pwned=1</script>\" onanimationstart=\"window.pwned=1"
+
+/// A Manager whose registry already holds the session, named by its worst-case peer.
+let private seedHostile () =
+    if Directory.Exists hostileDataDir then Directory.Delete (hostileDataDir, true)
+    Directory.CreateDirectory hostileDataDir |> ignore
+    let id = Yession.Domain.SessionId.create HOSTILE_ID |> Result.defaultWith failwith
+    let record : Yession.Manager.SessionRecord =
+        { SessionId = id
+          DisplayName = HOSTILE_NAME
+          CreatedAt = DateTimeOffset.UtcNow
+          DataDir = sprintf "sessions/%s" HOSTILE_ID
+          ArchivedAt = None }
+    let state =
+        Yession.Manager.ManagerState.addSession record Yession.Manager.ManagerState.empty
+        |> Result.defaultWith failwith
+    File.WriteAllText (Path.Combine (hostileDataDir, "manager.json"), Yession.Manager.ManagerCodec.toString state)
+
+// One case at a time (`BrowserRunner`): a case's Manager starts by emptying `hostileDataDir`.
+let hostileNameTests =
+    testSequenced <| testList "A display name on the management page (browser)" [
+        testCaseAsync "a row that arrives keeps a hostile display name inside its accessible name" <|
+            async {
+                seedHostile ()
+                let manager =
+                    deployProduct
+                        "the Manager"
+                        [ "--auth"; "localhost"; "--secrets"; "ephemeral"
+                          "--port"; "0"; "--data-dir"; hostileDataDir ]
+                        []
+                        (fun line -> line.Contains "management UI at")
+                try
+                    do! withContexts (fun contexts -> async {
+                        let! page = contexts.Page None
+                        page.SetDefaultTimeout 30000.0f
+                        let evidence = watching page
+                        do! reporting "a hostile display name" page evidence <| async {
+                        // Both filters lit, so the row stays on the page once it is archived.
+                        let! _ = await (page.GotoAsync (manager.At "/?show=active&show=archived"))
+                        let archive = Sel.hookIs Yession.App.Dom.Manager.archive HOSTILE_ID
+                        do! Wait.until "the session's row on the first paint" (fun () -> Read.count page archive) (fun n -> n = 1)
+                        // Archived from outside the page, so the row the page then shows is one
+                        // the rows stream carried and the page parsed.
+                        use client = new HttpClient ()
+                        let! archived =
+                            client.PostAsync (manager.At (sprintf "/sessions/%s/archive" HOSTILE_ID), new StringContent "")
+                            |> Async.AwaitTask
+                        Expect.isTrue archived.IsSuccessStatusCode "the session is archived"
+                        let unarchive = Sel.hookIs Yession.App.Dom.Manager.unarchive HOSTILE_ID
+                        do! Wait.until "the archived row, from the stream"
+                                (fun () -> Read.attr page unarchive "aria-label")
+                                (fun label -> label = Some ("Unarchive " + HOSTILE_NAME))
+                        let! handler = Read.attr page unarchive "onanimationstart"
+                        Expect.isNone handler "the name added no attribute to the control"
+                        let! pwned = Yession.Tests.PageScript.PageScript.held<System.Text.Json.JsonElement> page "pwned"
+                        Expect.equal pwned.ValueKind System.Text.Json.JsonValueKind.Null "nothing in the name ran"
+                        }
+                    })
+                finally
+                    manager.Stop ()
+            }
+    ]
+
 // --- Pressing Create (browser) ---------------------------------------------------------------
 //
 let private installedDataDir = "tests/browser/.data-installed"
@@ -9496,6 +9571,7 @@ let keptOpenTests : Fable.Pyxpecto.Model.TestCase = testList "Opening a session 
 let filterTests : Fable.Pyxpecto.Model.TestCase = testList "The management page's filters (browser)" []
 let installedAppTests : Fable.Pyxpecto.Model.TestCase = testList "Opening a session from an installed Manager (browser)" []
 let pressTests : Fable.Pyxpecto.Model.TestCase = testList "Pressing Create (browser)" []
+let hostileNameTests : Fable.Pyxpecto.Model.TestCase = testList "A display name on the management page (browser)" []
 let openingTests : Fable.Pyxpecto.Model.TestCase = testList "The opening page (browser)" []
 
 #endif

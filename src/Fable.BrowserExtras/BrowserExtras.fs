@@ -410,6 +410,17 @@ module Elements =
     [<Emit("queueMicrotask($0)")>]
     let afterInsertion (work: unit -> unit) : unit = jsNative
 
+/// What `Fable.Browser.Dom` leaves off: `<template>`, the one parser whose scripts never run.
+module Templates =
+
+    /// Markup parsed inert, and its first element adopted into this document; `None` when it
+    /// holds no element. A template's content takes any element, so a `<tr>` is parsed as a
+    /// row rather than dropped as a stray cell outside a table. A `<script>` in it is marked
+    /// as already started, so it does not run there or once the node is placed, which a
+    /// `createContextualFragment` does not promise: that one runs it.
+    [<Emit("(function (markup) { const template = document.createElement('template'); template.innerHTML = markup; const first = template.content.firstElementChild; return first ? document.adoptNode(first) : undefined })($0)")>]
+    let firstElement (markup: string) : Element option = jsNative
+
 /// Resolving one address against another: what the `URL` constructor is for, and what string
 /// concatenation cannot be made to do. A reference may be absolute, rooted at the origin, or
 /// relative to the base's DIRECTORY, and which of those it is decides how much of the base
