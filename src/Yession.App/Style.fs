@@ -705,20 +705,24 @@ module Style =
         cls [ "relative flex transition-[translate]"; Motion.pace
               "[[data-expanded]_&]:translate-y-(--spacing-mark-slide)" ]
 
-    /// What the mark leaves behind as it rides: a faint 2px line from its seat to where it
-    /// stops, drawn down with it (scaled from the top, at the same pace). Centred on the
-    /// mark's 12px box: the box sits 12px into the press, so its centre is 18px in and the
+    /// What the mark leaves behind as it rides: a line from its seat to where it stops, drawn
+    /// down with it (scaled from the top, at the same pace). The weight and ink of a causal
+    /// link's rail (`causeRail`): one pixel of `edge`, because it joins two things the way
+    /// those do, and a track that read as heavy as the mark competed with it. Centred on the
+    /// mark's 12px box: the box sits 12px into the press, so its centre is 18px in — the
+    /// pixel straddles 18, which a 2x screen draws as two whole device pixels — and the
     /// press's own middle down.
     let recordMarkTrack =
-        cls [ "absolute left-[17px] top-1/2 w-0.5 h-(--spacing-mark-slide) bg-ink-faint origin-top scale-y-0"
+        cls [ "absolute left-[17.5px] top-1/2 w-px h-(--spacing-mark-slide) bg-edge origin-top scale-y-0"
               "transition-[scale]"; Motion.pace
               "[[data-expanded]_&]:scale-y-100" ]
 
-    /// The track's start: a 4px point on the mark's seat, so the line begins round rather
-    /// than squared. Its own element, not the line's `::before`, so the line's scale does not
-    /// squash it; it fades in where the mark leaves rather than travelling.
+    /// The track's start: a 3px point on the mark's seat, centred on the same 18px, so the
+    /// line begins round rather than squared without the point outweighing the line. Its own
+    /// element, not the line's `::before`, so the line's scale does not squash it; it fades in
+    /// where the mark leaves rather than travelling.
     let recordMarkSeat =
-        cls [ "absolute left-4 top-1/2 -mt-0.5 size-1 rounded-full bg-ink-faint opacity-0"
+        cls [ "absolute left-[16.5px] top-1/2 -mt-[1.5px] size-[3px] rounded-full bg-edge opacity-0"
               "transition-[opacity]"; Motion.pace
               "[[data-expanded]_&]:opacity-100" ]
 
