@@ -270,3 +270,56 @@ type FrameChannel<'State> =
     { Send : SessionFrame<'State> -> Async<unit>
       Receive : unit -> Async<SessionFrame<'State> option>
       Close : unit -> Async<unit> }
+
+/// A frame too big for one data-channel message, cut into pieces and put back together.
+///
+/// A peer refuses a message over the size the other side advertised, and libdatachannel
+/// refuses by throwing from native code: on macOS nothing catches that throw, so it aborts
+/// the session process. A session whose document grew past 256 KiB died this way every
+/// time a browser joined and it sent the document whole. So the carriers never hand the
+/// channel a message that long. A frame that fits goes as it always did; a longer one goes
+/// as pieces, each marked as more to come or as the last, and the channel is ordered and
+/// reliable (the default `createDataChannel` asks for), so the receiver joins them in the
+/// order they arrive.
+module FramePieces =
+
+    /// The longest piece, in UTF-16 code units. A code unit is at most three UTF-8 bytes,
+    /// so a piece and its mark stay under 64 KiB, the size a peer may assume when the other
+    /// side advertises none (RFC 8841 §6). Chrome, Safari and libdatachannel advertise
+    /// 256 KiB; the floor is what every one of them accepts.
+    let length = 16384
+
+    // An encoded frame is JSON, so it never begins with either mark.
+    let private more = "+"
+    let private last = "="
+
+    /// The messages that carry `text`: `text` itself when it fits, otherwise its pieces.
+    /// A cut never falls inside a surrogate pair, which UTF-8 could not encode in halves.
+    let split (text: string) : string list =
+        if text.Length <= length then
+            [ text ]
+        else
+            let rec cut (from: int) (pieces: string list) =
+                let remaining = text.Length - from
+                if remaining <= length then
+                    List.rev ((last + text.Substring from) :: pieces)
+                else
+                    let size = if System.Char.IsHighSurrogate text.[from + length - 1] then length - 1 else length
+                    cut (from + size) ((more + text.Substring (from, size)) :: pieces)
+            cut 0 []
+
+    /// The receiving end: hand it each message as it arrives, and it answers a whole frame
+    /// once one is complete (a message that fit answers at once) and `None` while pieces
+    /// are still coming.
+    let assembler () : string -> string option =
+        let held = System.Text.StringBuilder ()
+        fun (message: string) ->
+            if message.StartsWith more then
+                held.Append (message.Substring 1) |> ignore
+                None
+            elif message.StartsWith last then
+                let whole = held.Append(message.Substring 1).ToString ()
+                held.Clear () |> ignore
+                Some whole
+            else
+                Some message
