@@ -11,6 +11,23 @@ whatever sits in front of it. The integrations are worked examples that satisfy 
 
 ---
 
+## Checking a release
+
+Each GitHub release carries `SHA256SUMS` beside its assets. The tarball and `SHA256SUMS` also
+carry signed build provenance: which workflow, on which commit of this repository, made them.
+Download the assets into one directory, then check them before you install the tarball:
+
+```sh
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify yession-<version>.tgz --repo trinketworks/yession
+gh attestation verify SHA256SUMS --repo trinketworks/yession
+```
+
+`sha256sum -c` proves that the downloads match the list. `gh attestation verify` proves that
+this repository's release workflow made them. If either fails, do not install the tarball.
+
+---
+
 ## Options and variables
 
 The Manager takes what it **decides** as an option. What it **passes down** stays in the
