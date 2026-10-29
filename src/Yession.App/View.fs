@@ -1736,8 +1736,8 @@ module View =
             // blocked, they just have not typed yet. The weight is the signal; the control
             // stays whole. `Resilience.fs` pins the same promise from the other direction.
             //
-            // Same place in FOCUS order always, and now the same place on SCREEN always: on a
-            // phone (`Style.draftBox`) this row leaves the line and sits below it, and it
+            // Same place in FOCUS order always, and now the same place on SCREEN always: this
+            // row leaves the line and sits below it (`Style.draftBox`), and it
             // stands there whether or not there is a draft. The weight is what changes.
             //
             // The row used to come and go with the draft, so the one verb the composer is for
@@ -5666,8 +5666,10 @@ module View =
                   {chat actions dispatch model}
                   {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
                 </div>
-                {queue dispatch model}
-                {drafts actions dispatch model}
+                <div class="{Style.dock}">
+                  {queue dispatch model}
+                  {drafts actions dispatch model}
+                </div>
               </div>
             </div>
             {contentPane actions dispatch model}
