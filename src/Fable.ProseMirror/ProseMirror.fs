@@ -387,6 +387,7 @@ module ProseMirror =
         | Char of char
         | Enter
         | Tab
+        | Backspace
 
     /// The modifiers held with a key. `Mod` is Cmd on macOS and Ctrl everywhere else — the
     /// platform's own "command" modifier, which prosemirror-keymap resolves at keydown.
@@ -423,6 +424,7 @@ module ProseMirror =
                 | Key.Char c -> string c
                 | Key.Enter -> "Enter"
                 | Key.Tab -> "Tab"
+                | Key.Backspace -> "Backspace"
             prefix + key
 
     /// A set of key bindings, as prosemirror-keymap takes them. Opaque: built only by
@@ -502,6 +504,10 @@ module ProseMirror =
     /// A plugin that runs `rules` against text as it is typed.
     let inputRules (rules: InputRule[]) : Plugin =
         inputRulesFn (jsOptions<InputRulesConfig> (fun config -> config.rules <- rules))
+    /// Reverts the input rule that fired on the last keystroke, putting back the text it
+    /// replaced (`> ` after a quote opened); declines when the last change was not a rule.
+    [<Import("undoInputRule", "prosemirror-inputrules")>]
+    let undoInputRule : Command = jsNative
     [<Import("wrappingInputRule", "prosemirror-inputrules")>]
     let wrappingInputRule (regexp: obj) (nodeType: NodeType) : InputRule = jsNative
     /// What ProseMirror hands an input rule's callbacks is the REGEX MATCH that fired it, and

@@ -3255,6 +3255,20 @@ let editorTests =
                 Expect.equal marker (Some "disc") "the list draws a bullet per item"
             }
 
+        // A rule that fires on a `>` nobody meant as a quote is one key to take back, and the
+        // key gives the `>` back rather than deleting it with the quote.
+        fixtureCase "Backspace right after a quote opens gives back the > typed" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "> ")
+                do! waitPresent ".ProseMirror blockquote to be on the page" page "#host .ProseMirror blockquote"
+                do! awaitU (page.Keyboard.PressAsync "Backspace")
+                do! waitAbsent ".ProseMirror blockquote to be gone" page "#host .ProseMirror blockquote"
+                let! text = Read.text page "#host .ProseMirror p"
+                Expect.equal (text |> Option.map (fun t -> t.Trim ())) (Some ">") "the > is back as text"
+            }
+
         // Addressing somebody is reachable from the keyboard alone: an @ greys in the rest of a
         // name, and Tab takes it.
         fixtureCase "Tab completes the hinted address" <| fun page ->
