@@ -9552,6 +9552,27 @@ let private readyAnswers (status: int) (page: IPage) : Async<unit> =
     awaitU (page.RouteAsync ("**/ready", fun route ->
         route.FulfillAsync (RouteFulfillOptions (Status = status, ContentType = "text/plain", Body = "http://127.0.0.1:1/login")) |> ignore))
 
+/// Every console error the page says from now on, but an answered request's status. A 401
+/// from the session's GitHub routes while nobody has connected GitHub is the product's
+/// answer, said in the console by the browser, and no policy refused anything to cause it.
+/// A refused script, style, font or worker is an error of its own, which stays.
+let private consoleErrors (page: IPage) : ResizeArray<string> =
+    let errors = ResizeArray<string> ()
+    page.Console.Add (fun m ->
+        if m.Type = "error" && not (m.Text.StartsWith "Failed to load resource: the server responded with a status of") then
+            errors.Add m.Text)
+    errors
+
+/// The Content-Security-Policy an answer carried, or a failure naming the answer.
+let private policyOf (answer: IResponse) : Async<string> =
+    async {
+        let! policy = await (answer.HeaderValueAsync "content-security-policy")
+        return
+            match Option.ofObj policy with
+            | Some policy -> policy
+            | None -> failwithf "%s carried no Content-Security-Policy" answer.Url
+    }
+
 /// How the intro mark and the still mark are displayed, in that order.
 let private marksShown (page: IPage) : Async<string option * string option> =
     async {
@@ -9661,6 +9682,70 @@ let openingTests =
                 use http = new HttpClient ()
                 let! ready = await (http.GetAsync (opening.Replace ("/open", "/ready")))
                 Expect.equal (int ready.StatusCode) 503 "the session is not running, and nothing is launching it"
+            })
+
+        // Every document the Manager and a session serve runs under a Content-Security-Policy.
+        // Two promises per surface: the page does what it does with nothing refused and nothing
+        // said in error (so the policy admits the inline scripts by their nonce, the modules,
+        // the fonts, the worker), and the document's answer forbids framing it.
+        testCaseAsync "the Manager page runs with nothing refused by its policy" <|
+            withOpening "the Manager page's policy" (fun _ -> async { return () }) (fun manager page _ -> async {
+                let errors = consoleErrors page
+                // The page's module program opens the rows stream: asked for, it ran.
+                let streamed = ResizeArray<string> ()
+                page.Request.Add (fun r -> if r.Url.Contains (Yession.App.ManagerRoute.path Yession.App.ManagerRoute.SessionRows) then streamed.Add r.Url)
+                let! _ = await (page.GotoAsync (manager.At "/"))
+                do! Wait.until "the page's program to have opened the rows stream" (fun () -> async { return streamed.Count }) ((<) 0)
+                let! refused = Probe.violations page
+                Expect.equal (refused, List.ofSeq errors) ([], []) "no refusal, and no error"
+            })
+
+        testCaseAsync "the Manager page cannot be framed" <|
+            withOpening "the Manager page's framing" (fun _ -> async { return () }) (fun manager page _ -> async {
+                let! answer = await (page.GotoAsync (manager.At "/"))
+                let! policy = policyOf answer
+                Expect.stringContains policy "frame-ancestors 'none'" "the Manager page's answer forbids framing it"
+            })
+
+        testCaseAsync "the opening screen runs its inline program with nothing refused" <|
+            withOpening "the opening screen's policy" (readyAnswers 503) (fun _ page opening -> async {
+                let errors = consoleErrors page
+                let launched = ResizeArray<string> ()
+                page.Request.Add (fun r -> if r.Method = "POST" && r.Url.EndsWith "/launch" then launched.Add r.Url)
+                let! _ = await (page.GotoAsync opening)
+                // The program is the screen's only inline script, and the launch is its first act.
+                do! Wait.until "the screen's program to have asked for the launch" (fun () -> async { return launched.Count }) ((<) 0)
+                let! refused = Probe.violations page
+                Expect.equal (refused, List.ofSeq errors) ([], []) "no refusal, and no error"
+            })
+
+        testCaseAsync "the opening screen cannot be framed" <|
+            withOpening "the opening screen's framing" (readyAnswers 503) (fun _ page opening -> async {
+                let! answer = await (page.GotoAsync opening)
+                let! policy = policyOf answer
+                Expect.stringContains policy "frame-ancestors 'none'" "the opening screen's answer forbids framing it"
+            })
+
+        testCaseAsync "a session's page runs with nothing refused by its policy" <|
+            withOpening "the session page's policy" (fun _ -> async { return () }) (fun manager page opening -> async {
+                let errors = consoleErrors page
+                let! _ = await (page.GotoAsync opening)
+                do! Wait.until "the browser to be in the session" (fun () -> Read.url page) (fun at -> at.Port <> manager.Port)
+                // The worker is the last thing the shell sets up, and `worker-src` governs it.
+                do! Wait.until "the service worker to be active" (fun () -> Probe.ask page Yession.App.Probes.workerActive 0) id
+                let! refused = Probe.violations page
+                Expect.equal (refused, List.ofSeq errors) ([], []) "no refusal, and no error"
+            })
+
+        testCaseAsync "a session's page cannot be framed" <|
+            withOpening "the session page's framing" (fun _ -> async { return () }) (fun manager page opening -> async {
+                let shells = ResizeArray<IResponse> ()
+                page.Response.Add (fun r ->
+                    if r.Request.ResourceType = "document" && r.Status = 200 && Uri(r.Url).Port <> manager.Port then shells.Add r)
+                let! _ = await (page.GotoAsync opening)
+                do! Wait.until "the session's shell to have arrived" (fun () -> async { return shells.Count }) ((<) 0)
+                let! policy = policyOf shells.[shells.Count - 1]
+                Expect.stringContains policy "frame-ancestors 'none'" "the session shell's answer forbids framing it"
             })
 
         testCaseAsync "a reader who declined motion is shown the still mark, and only it" <|

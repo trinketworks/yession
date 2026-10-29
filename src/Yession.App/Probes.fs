@@ -707,6 +707,15 @@ module Probes =
     /// where it is, its title, its connection and degraded tokens, the start of its
     /// conversation, where the keyboard is, and what this client KEPT, store by store and
     /// address by address with the start of each body.
+    /// Every refusal this page's Content-Security-Policy has made since the probes were
+    /// installed, before the page's own first script: `<directive> <what was refused>`.
+    let violations : Probe<int, string list> =
+        { Name = "__probeViolations"
+          EncodeAsk = Encode.int
+          DecodeAsk = Decode.int
+          EncodeAnswer = List.map Encode.string >> Encode.list
+          DecodeAnswer = Decode.list Decode.string }
+
     let pageState : Probe<int, string list> =
         { Name = "__probePageState"
           EncodeAsk = Encode.int
