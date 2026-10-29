@@ -48,12 +48,13 @@ module PeerSession =
     /// A `PeerId` can be live on several connections at once (a second tab), so it is
     /// counted: it leaves the set when its last connection ends.
     type LivePeers() =
+        let gate = obj ()
         let mutable live : Map<PeerId, UserId option * int> = Map.empty
 
         /// Record a connection of `peerId` as `user`. False, and nothing recorded, when
         /// `peerId` is live as a different user.
         member _.TryJoin (peerId: PeerId) (user: UserId option) : bool =
-            lock live (fun () ->
+            lock gate (fun () ->
                 match Map.tryFind peerId live with
                 | Some (liveUser, _) when liveUser <> user -> false
                 | Some (_, count) ->
@@ -65,7 +66,7 @@ module PeerSession =
 
         /// Record that a connection of `peerId` has ended.
         member _.Leave (peerId: PeerId) : unit =
-            lock live (fun () ->
+            lock gate (fun () ->
                 match Map.tryFind peerId live with
                 | Some (user, count) when count > 1 -> live <- Map.add peerId (user, count - 1) live
                 | _ -> live <- Map.remove peerId live)
