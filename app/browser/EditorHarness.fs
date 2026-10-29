@@ -2048,6 +2048,9 @@ do
               let doneId = TerminalId.create "term-done" |> expect
               show (paneOn (PaneMode.OnTerminal (TerminalMode.Reading doneId)) { shellModel with Tabs = shellModel.Tabs @ [ doneId ] }))
           "fresh-viewer", (fun () -> show freshViewerModel)
+          // The pane shut over terminals that are still open: the header's way back to them
+          // (`View.contentReopen`) is on screen only in this state.
+          "pane-shut", (fun () -> show { shellModel with TerminalsOpen = false })
           "pane-content",
           (fun () ->
               let file = ContentRef.create "artifacts/release-notes.pdf" |> expect
