@@ -767,6 +767,13 @@ module Dom =
         let connectingStatus = "connecting"
         /// The same, for a page that had its session and lost it.
         let reconnectingStatus = "reconnecting"
+        /// Behind a connect's disclosure, before an error nothing handled (`PageFault`): what it
+        /// may have done, and what undoes it.
+        let pageFaultLead = "An error on this page may have stopped it connecting. Reloading starts it again."
+        /// The error itself, behind the disclosure; its frames follow it.
+        let pageFaultWhy (name: string) (message: string) = if message = "" then name else name + ": " + message
+        /// Load this page again, which is what starts its way to the session again.
+        let reload = "Reload"
         /// Why it is still trying, behind the disclosure: the last attempt's fault and how many
         /// have failed, in the shape the history feed's retries already use.
         let retryingWhy (reason: string) (failures: int) = sprintf "%s · attempt %d" reason failures
@@ -791,6 +798,15 @@ module Dom =
         /// The agent's standing says the same state with the same word, on the Manager's
         /// roster and in this page's header.
         let signInAgainStatus = Yession.Domain.Standings.AgentStatus.signInAgain
+        /// What a sign-in panel says instead of offering to connect, when the scope its own
+        /// selector names already has a credential: connecting it again makes no sense while
+        /// one is there, so the remedy is the disconnect already on the row above, not a
+        /// second control that would try to do the same thing twice.
+        let alreadyConnected = "already connected — disconnect above to connect a different account"
+        /// What opens the pasted-token fallback, behind its own disclosure: signing in is
+        /// the way in, and the token is the exception for where that flow does not reach, so
+        /// it should not sit at the same weight as the button that starts the flow.
+        let useTokenInstead = "use a token instead"
         /// What a dead credential COSTS, on the prompt over the timeline. The button beside
         /// it already says what to do; this says why doing it matters, which is the half a
         /// status word and a button cannot carry between them.

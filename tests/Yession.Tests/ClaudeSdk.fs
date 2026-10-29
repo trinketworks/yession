@@ -105,6 +105,19 @@ let private answerTests =
 
 // --- the options one turn runs under ------------------------------------------------------
 
+/// The options `Agent.optionsFor` assembles for a turn with no tools, whose CLI's scratch HOME
+/// is `home`. Nothing is run: the spawner refuses.
+let private turnOptions (home: string) : Options =
+    Agent.optionsFor
+        [| "be terse" |]
+        None
+        Yession.Domain.Tools.ToolRegistry.empty
+        (Fable.NodeExtras.Aborting.abortController ())
+        ""
+        (Environment.ofMap Map.empty)
+        home
+        (Spawner (fun _ -> failwith "this case spawns nothing"))
+
 let private optionTests =
     testList "the turn's options" [
         testCase "a model nobody chose is absent, not empty" <| fun () ->
@@ -122,6 +135,16 @@ let private optionTests =
             // handing it all of them.
             let options = jsOptions<Options> (fun o -> o.tools <- [||])
             Expect.isTrue (hasKey "tools" options) "the option is present, and empty"
+
+        // The registry's servers are the turn's only servers: a `.mcp.json` in whatever
+        // directory the CLI runs in, a plugin or an agent's frontmatter adds none.
+        testCase "a turn's CLI loads only the registry's MCP servers" <| fun () ->
+            let options = turnOptions "/data/agent-home"
+            Expect.isTrue options.strictMcpConfig "strict MCP config"
+
+        testCase "a turn's CLI starts in its scratch HOME" <| fun () ->
+            let options = turnOptions "/data/agent-home"
+            Expect.equal options.cwd "/data/agent-home" "the CLI's working directory is its HOME"
 
         testCase "adaptive thinking asks for the summary" <| fun () ->
             let thinking = Thinking.adaptive Summarized
@@ -145,6 +168,41 @@ let private queryTests =
             Expect.isFalse
                 (Fable.NodeExtras.Processes.reportsReadTheNetwork ())
                 "a report taken now would not reverse-resolve this process's sockets"
+
+        // The two options are only worth what the SDK makes of them. A field name the SDK does
+        // not read would be dropped without a word, so the spawn request is read here.
+        testCaseAsync "strict MCP config and the working directory reach the CLI's spawn" <|
+            async {
+                let relay = Fable.NodeExtras.EventRelays.createRelay ()
+                let! asked =
+                    Async.FromContinuations (fun (resolve, _, _) ->
+                        let recording =
+                            Spawner (fun options ->
+                                resolve options
+                                SpawnedProcess.standingIn
+                                    (Node.Api.stream.PassThrough.Create<string> ())
+                                    (Node.Api.stream.PassThrough.Create<string> ())
+                                    (Node.Api.stream.PassThrough.Create<string> ())
+                                    (fun () -> false)
+                                    (fun () -> None)
+                                    (fun _ -> true)
+                                    relay)
+                        query
+                            "hello"
+                            (jsOptions<Options> (fun o ->
+                                o.strictMcpConfig <- true
+                                o.cwd <- "/data/agent-home"
+                                o.spawnClaudeCodeProcess <- recording))
+                        |> ignore)
+                    |> Async.StartChild
+                let! options = asked
+                // Ended the way a CLI ends: its process exits.
+                relay.exited (Some 0, None)
+                Expect.equal
+                    (Array.contains "--strict-mcp-config" options.args, options.cwd)
+                    (true, Some "/data/agent-home")
+                    "the flag on the command line, and the directory"
+            }
 
         // The system prompt goes to the CLI in the SDK's `initialize` request. A strategy
         // places a cache boundary between blocks, so the blocks a turn hands over have to be

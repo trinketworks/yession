@@ -216,6 +216,15 @@ module Scrolling =
     [<Emit("(function (el) { el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }) })($0)")>]
     let scrollToBottomSmooth (element: Browser.Types.HTMLElement) : unit = jsNative
 
+    /// `element.focus({ preventScroll: true })`: move focus without the browser's own
+    /// scroll-into-view. Plain `focus()` drags the nearest scrollport to wherever the
+    /// element sits — right for a control the reader needs to SEE, wrong for one that is
+    /// chrome at a fixed corner (a face's own back/forward pivot): bringing a corner
+    /// control on screen by scrolling a whole pane to it undoes whatever scroll position
+    /// the pane opened to, or a reveal just set.
+    [<Emit("$0.focus({ preventScroll: true })")>]
+    let focusPreventScroll (element: Browser.Types.HTMLElement) : unit = jsNative
+
 /// What a key event is, beyond the keystroke: whether an IME was mid-composition when it
 /// arrived.
 ///
@@ -637,6 +646,26 @@ module PersistentStorage =
     [<Emit("(typeof globalThis !== 'undefined' && globalThis.navigator && globalThis.navigator.storage && globalThis.navigator.storage.persist) ? globalThis.navigator.storage : undefined")>]
     let storage () : StorageManager option = jsNative
 
+/// The page's errors that nothing handled, as far as anything here hears them.
+[<RequireQualifiedAccess>]
+module Unhandled =
+    /// Hear every error this page did not handle, as `heard (name, message, stack)`: a throw
+    /// nothing caught (`error`) and a rejection nobody waited on (`unhandledrejection`). Nothing
+    /// is caught by this: the browser still reports each one to the console, and whatever the
+    /// error stopped stays stopped. It is heard so the page can say it. A rejection with no
+    /// error in it is named `Rejected`, with what was rejected as its message.
+    [<Emit("""(function (heard) {
+        const describe = (thrown) => {
+          if (thrown !== null && typeof thrown === 'object' && 'message' in thrown)
+            return [String(thrown.name || 'Error'), String(thrown.message || ''), String(thrown.stack || '')]
+          return ['Rejected', String(thrown), '']
+        }
+        addEventListener('error', (event) =>
+          heard(event.error != null ? describe(event.error) : ['Error', String(event.message || ''), '']))
+        addEventListener('unhandledrejection', (event) => heard(describe(event.reason)))
+      })($0)""")>]
+    let hear (heard: string * string * string -> unit) : unit = jsNative
+
 /// The origin's IndexedDB, as far as anything here reads it.
 [<RequireQualifiedAccess>]
 module IndexedDb =
@@ -744,3 +773,12 @@ module Selection =
     /// What the selection holds, as text; empty when nothing is selected.
     [<Emit("String(globalThis.getSelection ? globalThis.getSelection() : '')")>]
     let text () : string = jsNative
+
+/// The errors the browser's own APIs raise, as far as anything here tells them apart.
+[<RequireQualifiedAccess>]
+module DomException =
+    /// The name of `error` when it is a `DOMException` (`UnknownError`, `QuotaExceededError`,
+    /// …), which is how IndexedDB and the Cache API say what went wrong; `None` for anything
+    /// else, and wherever there is no `DOMException` to ask about.
+    [<Emit("(function (error) { return typeof DOMException !== 'undefined' && error instanceof DOMException ? error.name : undefined })($0)")>]
+    let name (error: exn) : string option = jsNative

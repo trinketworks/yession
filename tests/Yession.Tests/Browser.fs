@@ -1998,6 +1998,7 @@ let tests =
 
                 // Connect one WITHOUT closing the drawer — the flow a person is actually in
                 // when they sign in, and the one that used to leave the note behind.
+                do! awaitU (pageA.ClickAsync "[data-claude-use-token]")
                 do! awaitU (pageA.FillAsync ("[data-claude-token]", "sk-ant-oat01-browser-case"))
                 do! awaitU (pageA.ClickAsync "[data-claude-save-token]")
                 do! waitVisible "the panel to say the account is connected" pageA "[data-claude-connected='mine']"
@@ -2131,6 +2132,25 @@ let tests =
                 let report = "[" + Yession.App.Dom.attr Yession.App.Dom.Hooks.degraded Yession.App.Dom.Text.degradedConnecting + "]"
                 do! Wait.until "the connect to be reported where a phone reader can see it"
                         (fun () -> Probe.seen page report)
+                        (List.exists (fun seen -> seen.Painted))
+            }
+
+        // An error nothing handled, raised while the page is on its way to its session, can
+        // stop it there, and the page had said "connecting" for as long as it was open with
+        // nothing to press. The handshake is held as above, so the page is still on its way
+        // when the error comes (`Probes.unhandled`); the way to start again is on screen where
+        // a phone reader can see it.
+        sessionCase "an error on a page's way to its session puts a reload on screen" <|
+            fun page ->
+            async {
+                let signal = "**" + Yession.App.RelativeUrl.under "" (Yession.App.SessionRoute.relative Yession.App.SessionRoute.Signal)
+                do! awaitU (page.RouteAsync (signal, fun route ->
+                        if route.Request.Method <> "POST" then route.ContinueAsync () |> ignore))
+                do! awaitU (page.SetViewportSizeAsync (390, 844))
+                let! _ = await (page.ReloadAsync ())
+                do! Probe.unhandled page "stopped on purpose"
+                do! Wait.until "a reload on screen where a phone reader can see it"
+                        (fun () -> Probe.seen page "[data-page-reload]")
                         (List.exists (fun seen -> seen.Painted))
             }
 
@@ -9042,6 +9062,22 @@ let frontedTests =
                     request.Headers.Add ("x-yession-user", FRONTED_LOGIN)
                     let! answer = client.SendAsync request |> Async.AwaitTask
                     Expect.equal (int answer.StatusCode) 401 "a header from a peer that is not the proxy names nobody"
+                finally
+                    stopFronted deployed
+            }
+
+        // `/control/*` is the Manager's API for its sessions, which dial its socket and never
+        // the door. Behind the door a launch secret alone gates it, so the proxy answers it
+        // itself. A Manager reached would answer 401 for the missing secret, not 404.
+        testCaseAsync "the door answers the Manager's control routes with 404" <|
+            async {
+                let deployed = deployFronted ()
+                try
+                    use client = new HttpClient ()
+                    use request = new HttpRequestMessage (HttpMethod.Get, deployed.Origin + "/control/status")
+                    request.Headers.Add ("Tailscale-User-Login", FRONTED_LOGIN)
+                    let! answer = client.SendAsync request |> Async.AwaitTask
+                    Expect.equal (int answer.StatusCode) 404 "a tailnet member is not sent to the control API"
                 finally
                     stopFronted deployed
             }

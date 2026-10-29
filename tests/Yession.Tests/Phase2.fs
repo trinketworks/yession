@@ -293,6 +293,23 @@ let private sandboxPolicyTests =
             Expect.equal (Map.tryFind "CLAUDE_CODE_OAUTH_TOKEN" baseline) None "no credential survives"
             Expect.equal (Map.tryFind "YESSION_LAUNCH" baseline) None "the launch envelope, which carries the control secret, does not"
 
+        // The baseline guards a sandboxed command. A child spawned with this process's own
+        // environment, like the srt host helper, has no allowlist: what keeps the launch
+        // secret from it is that the session TAKES the envelope out as it decodes it.
+        testCaseAsync "a variable taken from the environment reaches no child spawned after" <|
+            async {
+                let! seen =
+                    Support.withEnv [ "YESSION_TAKE_PROBE", Some "launch-secret" ] (fun () -> async {
+                        let taken = Interop.takeEnv "YESSION_TAKE_PROBE" ""
+                        let child =
+                            SyncChildProcesses.spawnSync
+                                Node.Api.``process``.execPath
+                                [ "-e"; "process.stdout.write(process.env.YESSION_TAKE_PROBE ?? '(unset)')" ]
+                                SyncOptions.none
+                        return taken, child.stdout })
+                Expect.equal seen ("launch-secret", Some "(unset)") "read once, then absent for the child"
+            }
+
         testCase "the agent CLI's env: one credential, scratch HOME, never the raw process env" <| fun () ->
             let ambient =
                 Map.ofList

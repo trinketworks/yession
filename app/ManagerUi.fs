@@ -177,7 +177,7 @@ let private rowSays (view: ProcessManager.SessionView) : (Attention * string * s
 /// and it is a token rather than an opacity so the mark and the focus ring keep theirs.
 let private nameText (view: ProcessManager.SessionView) : TemplateResult =
     match view.Record.ArchivedAt, view.Status with
-    | Some _, _ -> html $"""<span class="{Style.bodyDim}">{view.Record.DisplayName}</span>"""
+    | Some _, _ -> html $"""<span class="{Style.bodyDim} {Style.recordRowNameText}">{view.Record.DisplayName}</span>"""
     | None, status ->
         let face =
             match status with
@@ -186,8 +186,12 @@ let private nameText (view: ProcessManager.SessionView) : TemplateResult =
             | ProcessManager.Launching
             | ProcessManager.LaunchFailed _
             | ProcessManager.Exited _ -> Style.recordLinkQuiet
+        // Two flex children (`Style.recordRowName`, on the span this renders into), not one
+        // span wrapping both: the name is `recordRowNameText` and truncates, the mark is
+        // `recordLinkMark` and does not, so a row too narrow for both clips the name and
+        // never the mark that says the link leaves.
         html
-            $"""<span class="{face}">{view.Record.DisplayName}<span class="{Style.recordLinkMark}">{Icon.leavesSm}</span></span>"""
+            $"""<span class="{face} {Style.recordRowNameText}">{view.Record.DisplayName}</span><span class="{Style.recordLinkMark}">{Icon.leavesSm}</span>"""
 
 /// The row's verbs, on the line its unfolding ends with: Stop while the session runs, Start
 /// where it can be started without being opened, and — where the session is not already

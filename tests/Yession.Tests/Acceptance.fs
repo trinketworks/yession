@@ -96,6 +96,7 @@ let private representativeModel : ClientModel =
       // A representative client is one that kept what it was given; the case that cannot
       // keep anything is the exception, and says so where it matters.
       LocalCopy = LocalCopy.Kept None
+      PageFault = None
       Synced =
         // Draft/queue bodies are rich-text `Y.XmlFragment`s mounted by the browser editor,
         // not fields on the model — so the SSR fixture carries only the slot's identity; the
@@ -845,6 +846,43 @@ let private uiChecklistTests =
             Expect.isTrue (html.Contains "data-github-connected=\"mine\"") "it is still shown as connected"
             Expect.isFalse (html.Contains Dom.Hooks.githubSignInRequired) "and nothing asks for a sign-in"
             Expect.isFalse (html.Contains Dom.Hooks.signInRequired) "so no prompt over the timeline either"
+
+        // Connecting the scope the selector already names makes no sense while a credential
+        // is sitting there: the only remedy for THAT scope is the disconnect already on its
+        // row, not a second control trying to do the same thing again.
+        testCase "the connect controls hide for a scope that already has a credential" <| fun () ->
+            let connected =
+                representativeModel
+                |> withGitHubPanel (fun panel ->
+                    { panel with MineCredential = Some { Kind = OAuthConnection; SignInRequired = None } })
+            let html = Support.render connected
+            Expect.stringContains html "data-github-already-connected" "the scope chosen (mine, the default) says so"
+            Expect.isFalse (html.Contains "data-github-connect>") "and offers no second way to connect it"
+            Expect.isFalse (html.Contains "data-github-token ") "nor its token fallback"
+
+        // The other scope is untouched, so switching to it must still offer to connect —
+        // this is about the scope the selector names, not about the panel as a whole.
+        testCase "a scope the selector does not name still offers to connect" <| fun () ->
+            let connectedMine =
+                representativeModel
+                |> withGitHubPanel (fun panel ->
+                    { panel with MineCredential = Some { Kind = OAuthConnection; SignInRequired = None } })
+            let choosingSession =
+                { connectedMine with GitHub = { connectedMine.GitHub with Scope = "session" } }
+            let html = Support.render choosingSession
+            Expect.stringContains html "data-github-connect>" "session has no credential yet, so it can be connected"
+            Expect.isFalse (html.Contains "data-github-already-connected") "and nothing says otherwise"
+
+        // Signing in is the way in; the pasted token is the fallback for where that flow
+        // cannot reach. It sits behind its own disclosure rather than beside the button that
+        // starts the flow, so the panel's default shape offers one way in, not two.
+        testCase "the pasted-token fallback sits behind its own disclosure, below the connect button" <| fun () ->
+            let html = Support.render representativeModel
+            Expect.stringContains html "data-github-token-form" "the token fallback is a disclosure of its own"
+            Expect.stringContains html Dom.Text.useTokenInstead "named for what it opens"
+            let connectAt = html.IndexOf "data-github-connect>"
+            let formAt = html.IndexOf "data-github-token-form"
+            Expect.isTrue (connectAt >= 0 && formAt > connectAt) "the connect button leads, the fallback follows"
 
         // --- the device code, and getting it to github.com --------------------------------
         // The code is useless where it is rendered: it has to reach a form in another tab,

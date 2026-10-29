@@ -428,6 +428,22 @@ let private elapsed (_: TimeSpan) : Async<unit> = async.Return ()
 /// A clock that never runs out, so only the steps decide how an open ends.
 let private neverElapses (_: TimeSpan) : Async<unit> = never ()
 
+/// An error a store raises, standing in for the `DOMException` a browser's storage throws.
+type private StoreError (name: string, message: string) =
+    inherit exn (message)
+    member _.Name = name
+
+/// The `DOMException` name of an error, as the browser's binding reads one.
+let private nameOf (error: exn) : string option =
+    match error with
+    | :? StoreError as stored -> Some stored.Name
+    | _ -> None
+
+/// The local open as the browser runs it, on the given clock: only what a store raises is
+/// expected of it.
+let private openLocal sleep steps dispatch =
+    Client.LocalOpen.run sleep (TimeSpan.FromSeconds 5.0) (Client.LocalOpen.expected nameOf) steps dispatch
+
 /// Healthy steps over `store`: a document that loads, the given history, no terminals.
 let private stepsOver (store: Client.HistoryCache) : Client.LocalOpen.Steps =
     { Doc = async.Return ()
@@ -448,7 +464,7 @@ let private localOpenTests =
                 // The phone this was found on: the page drew `Connecting` and never asked for
                 // `/me`, because the open waited on a store that never answered.
                 let seen = ResizeArray ()
-                let! _ = Client.LocalOpen.run elapsed (TimeSpan.FromSeconds 5.0) { stepsOver (storeOf []) with Doc = never () } seen.Add
+                let! _ = openLocal elapsed { stepsOver (storeOf []) with Doc = never () } seen.Add
                 Expect.isTrue
                     (seen |> Seq.exists (function LocalStoreFaultMsg _ -> true | _ -> false))
                     "the open ended, and said what it went without"
@@ -458,10 +474,9 @@ let private localOpenTests =
             async {
                 let seen = ResizeArray ()
                 let! _ =
-                    Client.LocalOpen.run
+                    openLocal
                         neverElapses
-                        (TimeSpan.FromSeconds 5.0)
-                        { stepsOver (storeOf []) with History = async { return failwith "the store is gone" } }
+                        { stepsOver (storeOf []) with History = async { return raise (StoreError ("UnknownError", "the store is gone")) } }
                         seen.Add
                 match (openedModel seen).LocalCopy with
                 | LocalCopy.Unread reason -> Expect.stringContains reason "the store is gone" "the reason is the store's own"
@@ -474,7 +489,7 @@ let private localOpenTests =
                 // once would hang that read too, so the page goes on with one that keeps nothing.
                 let wedged =
                     { storeOf [ answerOf 0L 3 ] with Client.HistoryCache.Read = fun _ -> never () }
-                let! opened = Client.LocalOpen.run elapsed (TimeSpan.FromSeconds 5.0) (stepsOver wedged) ignore
+                let! opened = openLocal elapsed (stepsOver wedged) ignore
                 let! stored = opened.History.Stored ()
                 Expect.isEmpty stored "the page goes on with the store that keeps nothing"
             }
@@ -483,18 +498,38 @@ let private localOpenTests =
             async {
                 let seen = ResizeArray ()
                 let! _ =
-                    Client.LocalOpen.run
+                    openLocal
                         neverElapses
-                        (TimeSpan.FromSeconds 5.0)
-                        { stepsOver (storeOf [ answerOf 0L 3 ]) with Doc = async { return failwith "no document" } }
+                        { stepsOver (storeOf [ answerOf 0L 3 ]) with Doc = async { return raise (StoreError ("InvalidStateError", "no document")) } }
                         seen.Add
                 Expect.equal (openedModel seen).LocalCopy (LocalCopy.Kept None) "the conversation kept is still the reader's picture"
             }
 
+        testCaseAsync "a step that throws what no store raises stops the open with it" <|
+            async {
+                // A defect in the page is not a store that failed: going on without the store
+                // would hide it. It reaches whatever reports errors nothing handled.
+                let! outcome =
+                    openLocal
+                        neverElapses
+                        { stepsOver (storeOf []) with History = async { return failwith "a defect" } }
+                        ignore
+                    |> Async.Catch
+                Expect.isTrue
+                    (match outcome with Choice2Of2 error -> error.Message = "a defect" | Choice1Of2 _ -> false)
+                    "the open raised the defect as itself"
+            }
+
+        testCase "only what a store raises is expected of one" <| fun () ->
+            Expect.equal
+                (Client.LocalOpen.expected nameOf (StoreError ("SyntaxError", "not a store's")))
+                None
+                "an error a store does not raise is not a store's fault"
+
         testCaseAsync "a store that answers says nothing about faults" <|
             async {
                 let seen = ResizeArray ()
-                let! _ = Client.LocalOpen.run neverElapses (TimeSpan.FromSeconds 5.0) (stepsOver (storeOf [ answerOf 0L 3 ])) seen.Add
+                let! _ = openLocal neverElapses (stepsOver (storeOf [ answerOf 0L 3 ])) seen.Add
                 Expect.isFalse
                     (seen |> Seq.exists (function LocalStoreFaultMsg _ -> true | _ -> false))
                     "a healthy open has nothing to explain"

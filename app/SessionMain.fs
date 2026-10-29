@@ -39,7 +39,10 @@ let private expect =
 /// What the Manager minted for this launch, decoded ONCE. Blank means nobody launched us —
 /// `Launch.unlaunched`, a bare `yession-session` — and a malformed envelope fails the boot
 /// rather than booting under a fabricated identity.
-let private launch = Launch.parse (Interop.envOr Launch.Variable "") |> expect
+///
+/// TAKEN, not read: the envelope carries the launch's control secret, and every child this
+/// process spawns with its own environment (the srt host helper among them) would inherit it.
+let private launch = Launch.parse (Interop.takeEnv Launch.Variable "") |> expect
 
 let private sessionId = launch.Session
 let private port = launch.Port
@@ -424,7 +427,7 @@ let private managerOrigin =
 // User authorization: with a Manager, this session is an OIDC client of it; the RP
 // configuration completes after listen (the redirect URI needs the bound port).
 let private auth =
-    controlChannel |> Option.map (fun _ -> SessionAuth.create sessionId sessionMount)
+    controlChannel |> Option.map (fun _ -> SessionAuth.create sessionId sessionMount (Cookies.schemeFor publicAccess))
 
 // Telemetry: this session is a direct OTel emitter — one OTel log record per completed turn.
 // Destination (stdout / a collector / both / off) comes from the standard OTEL_* env the
@@ -578,7 +581,7 @@ let private publishStatus () =
     match reportStatus with
     | Some report ->
         let prs = PrWatches.summaryOf (prWatchers.Rows ()) |> Option.toList
-        Async.StartImmediate (report (Option.toList agentStanding @ prs))
+        Async.StartImmediate (report (Standings.AgentStatus.withWatched prs agentStanding))
     | None -> ()
 
 /// Whether every Claude credential this session knows of wants somebody to sign in again,

@@ -206,6 +206,9 @@ module View =
         /// Sign in again, through the session's own sign-in, which comes back to this page. It
         /// goes somewhere, so it is a link, in blue.
         | SignInAgain
+        /// Load the page again (`PageFault`). It goes somewhere, the page it is on, so it is a
+        /// link, like `SignInAgain`.
+        | Reload
 
     /// What the status line says, when the page's link is worth a word at all.
     type private StatusLine =
@@ -264,51 +267,65 @@ module View =
             | None -> model.Link
         // One state, so one report: a page that cannot reach its session is not reading its
         // history either, and is not said to be.
-        match link with
-        // The one state that waits on a person: the session would not have this page. What
-        // fixes it is signing in again, which is where the line goes.
-        | SessionLink.Refused (reason, _) ->
+        let report =
+            match link with
+            // The one state that waits on a person: the session would not have this page. What
+            // fixes it is signing in again, which is where the line goes.
+            | SessionLink.Refused (reason, _) ->
+                Some
+                    { Token = Dom.Text.degradedSignedOut
+                      Word = Dom.Text.signedOutStatus
+                      Wrong = true
+                      Promise = Some Dom.Text.signedOutPromise
+                      Why = [ reason ]
+                      Verb = Some StatusVerb.SignInAgain }
+            | SessionLink.Connecting { Failed = Some failure } ->
+                Some (waiting Dom.Text.degradedRetrying Dom.Text.connectingStatus (Some failure))
+            | SessionLink.Reconnecting ({ Failed = Some failure }, _) ->
+                Some (waiting Dom.Text.degradedRetrying Dom.Text.reconnectingStatus (Some failure))
+            // An attempt that has run past `ClientModel.connectingQuietMs`. Every client starts
+            // connecting, and one that lands inside the window says nothing, so this is never a
+            // flash on a healthy load — but one that does not land is news, and a page that said
+            // nothing through it looked exactly like a page that had loaded and had nothing in it.
+            // A link lost and found again inside the same window is the same: a phone drops its
+            // link each time it leaves the app, and has it back as it returns.
+            | SessionLink.Connecting { Slow = true } ->
+                Some (waiting Dom.Text.degradedConnecting Dom.Text.connectingStatus None)
+            | SessionLink.Reconnecting ({ Slow = true }, _) ->
+                Some (waiting Dom.Text.degradedReconnecting Dom.Text.reconnectingStatus None)
+            // Reads failing while the policy tries them again: said, with nothing to press, because
+            // the policy is already doing what a press would.
+            | SessionLink.Fetching (_, { Failed = Some failure }, _) ->
+                Some { waiting Dom.Text.feedRetrying Dom.Text.historyRetryingStatus (Some failure) with Verb = None }
+            // History stopped arriving, and nothing will re-arm it until the session has news. It
+            // is wrong rather than a wait, and a press asks again now.
+            | SessionLink.Stalled (_, reason, _) ->
+                Some
+                    { Token = Dom.Text.feedPaused
+                      Word = Dom.Text.historyPausedStatus
+                      Wrong = true
+                      Promise = None
+                      Why = promise :: reason :: why
+                      Verb = Some StatusVerb.TryAgain }
+            // A wait inside its quiet window is not a degradation and says nothing — a strip that
+            // flashed on every load would be chrome, not news.
+            | SessionLink.Connecting _
+            | SessionLink.Reconnecting _
+            | SessionLink.Fetching _
+            | SessionLink.Current -> None
+        // An error nothing handled, heard while the page is on its way to its session, may be
+        // what keeps it there: the way to the session can stop on one, and the page then waits
+        // in `Connecting` for as long as it is open. Whether it did stop is not knowable here,
+        // because an error some part of the page recovered from looks the same, so the line
+        // keeps its word and says the error behind its disclosure, with a reload, which starts
+        // the way again whichever it was. A page that has its session says nothing of one.
+        match report, model.PageFault, link with
+        | Some line, Some fault, (SessionLink.Connecting _ | SessionLink.Reconnecting _) ->
             Some
-                { Token = Dom.Text.degradedSignedOut
-                  Word = Dom.Text.signedOutStatus
-                  Wrong = true
-                  Promise = Some Dom.Text.signedOutPromise
-                  Why = [ reason ]
-                  Verb = Some StatusVerb.SignInAgain }
-        | SessionLink.Connecting { Failed = Some failure } ->
-            Some (waiting Dom.Text.degradedRetrying Dom.Text.connectingStatus (Some failure))
-        | SessionLink.Reconnecting ({ Failed = Some failure }, _) ->
-            Some (waiting Dom.Text.degradedRetrying Dom.Text.reconnectingStatus (Some failure))
-        // An attempt that has run past `ClientModel.connectingQuietMs`. Every client starts
-        // connecting, and one that lands inside the window says nothing, so this is never a
-        // flash on a healthy load — but one that does not land is news, and a page that said
-        // nothing through it looked exactly like a page that had loaded and had nothing in it.
-        // A link lost and found again inside the same window is the same: a phone drops its
-        // link each time it leaves the app, and has it back as it returns.
-        | SessionLink.Connecting { Slow = true } ->
-            Some (waiting Dom.Text.degradedConnecting Dom.Text.connectingStatus None)
-        | SessionLink.Reconnecting ({ Slow = true }, _) ->
-            Some (waiting Dom.Text.degradedReconnecting Dom.Text.reconnectingStatus None)
-        // Reads failing while the policy tries them again: said, with nothing to press, because
-        // the policy is already doing what a press would.
-        | SessionLink.Fetching (_, { Failed = Some failure }, _) ->
-            Some { waiting Dom.Text.feedRetrying Dom.Text.historyRetryingStatus (Some failure) with Verb = None }
-        // History stopped arriving, and nothing will re-arm it until the session has news. It
-        // is wrong rather than a wait, and a press asks again now.
-        | SessionLink.Stalled (_, reason, _) ->
-            Some
-                { Token = Dom.Text.feedPaused
-                  Word = Dom.Text.historyPausedStatus
-                  Wrong = true
-                  Promise = None
-                  Why = promise :: reason :: why
-                  Verb = Some StatusVerb.TryAgain }
-        // A wait inside its quiet window is not a degradation and says nothing — a strip that
-        // flashed on every load would be chrome, not news.
-        | SessionLink.Connecting _
-        | SessionLink.Reconnecting _
-        | SessionLink.Fetching _
-        | SessionLink.Current -> None
+                { line with
+                    Why = line.Why @ Dom.Text.pageFaultLead :: Dom.Text.pageFaultWhy fault.Name fault.Message :: List.truncate 8 fault.Stack
+                    Verb = line.Verb |> Option.orElse (Some StatusVerb.Reload) }
+        | _ -> report
 
     /// A status line's dot, on its own: it stands in the bar's gutter, and hangs to the left of
     /// the word in the nav column, so in neither does it push the word off the rail. A wait's
@@ -333,6 +350,9 @@ module View =
         | Some StatusVerb.SignInAgain ->
             let target = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative SessionRoute.Login)
             html $"""<a class="{Style.statusVerbLink}" href="{target}" data-session-signin>{Dom.Text.signInAgain}</a>"""
+        | Some StatusVerb.Reload ->
+            let target = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative SessionRoute.Shell)
+            html $"""<a class="{Style.statusVerbLink}" href="{target}" data-page-reload>{Dom.Text.reload}</a>"""
 
     /// The line's disclosure: the rest of the answer somebody asks next, and — while an attempt
     /// is failing — the way back through the Manager (`reopenAction`), beside the reason it
@@ -513,8 +533,14 @@ module View =
                 let mark = html $"""<span class="{Style.standingMarkSeat}">{Icon.attention standing.Attention}</span>"""
                 let word = html $"""<span class="{Style.cls [ Style.givesWay; Style.attentionInk standing.Attention ]}">{standing.Word}</span>"""
                 if standing.Facet = PrStatus.facet then
+                    // Taken to the pull-requests panel, and to its one row when the strip
+                    // can name it (`ClientModel.prPanelRow`) — the same jump a chapter
+                    // makes to a message, not the generic `ToggleSettingsMsg` that used to
+                    // sit here and land on the settings face's own pivot instead of on
+                    // what was pressed.
+                    let target = ClientModel.prPanelRow model
                     html $"""
-                        <button type="button" class="{Style.standingRowPress}" data-pr-strip @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>
+                        <button type="button" class="{Style.standingRowPress}" data-pr-strip @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealQueryRow (PrStatus.Columns.query, target))))}>
                           {mark}<span class="{Style.srOnly}">pull requests: </span>{word}<span class="{Style.standingRowGo}">{Icon.right}</span>
                         </button>"""
                 else
@@ -773,6 +799,13 @@ module View =
         | Some OwnedByDeployment
         | None -> "All sessions"
 
+    /// The credential, if any, that a panel's OWN scope choice already names — "mine" reads
+    /// `mine`, anything else (only "session" today) reads `session`. One function because
+    /// both panels read the same two rows under the same choice (`ConnectionExpectation.landed`
+    /// reads them this way already, for the wait that lands on a command).
+    let private chosenCredential (scope: string) (mine: CredentialRow option) (session: CredentialRow option) : CredentialRow option =
+        if scope = "session" then session else mine
+
     /// How a connected credential reads on a panel row: green and its kind, or the fault
     /// style and the words that name the fix. ONE function, because both connection panels
     /// say the same thing about the same shape — a credential that read "sign in again" in
@@ -837,6 +870,29 @@ module View =
                       <button type="button" class="{Style.btn}" data-claude-cancel @click={Ev(fun _ -> dispatch (ClaudeFlowMsg ClaudeIdle))}>Cancel</button>
                     </div>"""
             | ClaudeIdle ->
+                let chosen =
+                    chosenCredential
+                        claude.Scope
+                        (claude.Status |> Option.bind (fun panel -> panel.MineCredential))
+                        (claude.Status |> Option.bind (fun panel -> panel.SessionCredential))
+                // Connecting the scope just chosen makes no sense while a credential is
+                // already sitting under it — the remedy is the disconnect already on that
+                // scope's row above, not a second control trying to do the same thing again.
+                let connectOrHint =
+                    match chosen with
+                    | Some _ ->
+                        html $"""<span class="{Style.label} pt-2" data-claude-already-connected>{Dom.Text.alreadyConnected}</span>"""
+                    | None ->
+                        html $"""
+                            <button type="button" class="{Style.btn}" data-claude-connect @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Connect))}>Connect Claude</button>
+                            <details class="{Style.cls [ Style.detailNote; "pt-2" ]}" data-claude-token-form>
+                              <summary class="{Style.detailSummary}" data-claude-use-token>{Dom.Text.useTokenInstead}</summary>
+                              <label class="{Style.label} pt-2" for="claude-token">setup token / api key</label>
+                              <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…"
+                                     .value={claude.Token}
+                                     @input={EvVal(fun v -> dispatch (ClaudeTokenTyped v))} />
+                              <button type="button" class="{Style.btn}" data-claude-save-token @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.SaveToken))}>Save token</button>
+                            </details>"""
                 html $"""
                     <label class="{Style.label}" for="claude-scope">sign in for</label>
                     <div class="{Style.fieldSelectWrap}">
@@ -847,12 +903,7 @@ module View =
                       </select>
                       <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
                     </div>
-                    <button type="button" class="{Style.btn}" data-claude-connect @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Connect))}>Connect Claude</button>
-                    <label class="{Style.label} pt-2" for="claude-token">setup token / api key</label>
-                    <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…"
-                           .value={claude.Token}
-                           @input={EvVal(fun v -> dispatch (ClaudeTokenTyped v))} />
-                    <button type="button" class="{Style.btn}" data-claude-save-token @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.SaveToken))}>Save token</button>"""
+                    {connectOrHint}"""
         let error =
             match Pending.refusal claude.Pending with
             | Some reason -> html $"""<span class="{Style.statusErr}" data-claude-error>{reason}</span>"""
@@ -914,6 +965,27 @@ module View =
                       <button type="button" class="{Style.btn}" data-github-cancel @click={Ev(fun _ -> dispatch (GitHubFlowMsg GitHubIdle))}>Cancel</button>
                     </div>"""
             | GitHubIdle ->
+                let chosen =
+                    chosenCredential
+                        github.Scope
+                        (github.Status |> Option.bind (fun panel -> panel.MineCredential))
+                        (github.Status |> Option.bind (fun panel -> panel.SessionCredential))
+                // As Claude's, for its reason.
+                let connectOrHint =
+                    match chosen with
+                    | Some _ ->
+                        html $"""<span class="{Style.label} pt-2" data-github-already-connected>{Dom.Text.alreadyConnected}</span>"""
+                    | None ->
+                        html $"""
+                            <button type="button" class="{Style.btn}" data-github-connect @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.Connect))}>Connect GitHub</button>
+                            <details class="{Style.cls [ Style.detailNote; "pt-2" ]}" data-github-token-form>
+                              <summary class="{Style.detailSummary}" data-github-use-token>{Dom.Text.useTokenInstead}</summary>
+                              <label class="{Style.label} pt-2" for="github-token">personal access token</label>
+                              <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…"
+                                     .value={github.Token}
+                                     @input={EvVal(fun v -> dispatch (GitHubTokenTyped v))} />
+                              <button type="button" class="{Style.btn}" data-github-save-token @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.SaveToken))}>Save token</button>
+                            </details>"""
                 html $"""
                     <label class="{Style.label}" for="github-scope">sign in for</label>
                     <div class="{Style.fieldSelectWrap}">
@@ -924,12 +996,7 @@ module View =
                       </select>
                       <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
                     </div>
-                    <button type="button" class="{Style.btn}" data-github-connect @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.Connect))}>Connect GitHub</button>
-                    <label class="{Style.label} pt-2" for="github-token">personal access token</label>
-                    <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…"
-                           .value={github.Token}
-                           @input={EvVal(fun v -> dispatch (GitHubTokenTyped v))} />
-                    <button type="button" class="{Style.btn}" data-github-save-token @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.SaveToken))}>Save token</button>"""
+                    {connectOrHint}"""
         let error =
             match Pending.refusal github.Pending with
             | Some reason -> html $"""<span class="{Style.statusErr}" data-github-error>{reason}</span>"""
@@ -1023,7 +1090,7 @@ module View =
                         | CellAbsent -> false
                         | _ -> true)
                 html $"""
-                    <div class="{shell}" data-query-row="{QueryCell.describe named}">
+                    <div class="{shell}" data-query-row="{QueryCell.describe named}" tabindex="-1">
                       <span class="{Style.queryRecordName}" data-query-cell="{key}" data-query-tone="{toneHook named}">{QueryCell.describe named}</span>
                       <dl class="{Style.queryFields}">{pairs row present}</dl>
                     </div>"""
@@ -1037,7 +1104,7 @@ module View =
         |> List.map (fun def ->
             let name = QueryName.value def.Name
             html $"""
-                <section class="{Style.cls [ Style.sideSection; Style.settingsLane1 ]}" data-query-panel="{name}">
+                <section class="{Style.cls [ Style.sideSection; Style.settingsLane1 ]}" data-query-panel="{name}" tabindex="-1">
                   <span class="{Style.label}">{def.Title}</span>
                   {legendView def.Legend}
                   {queryValueView def.Shape (Map.tryFind name queries.Values)}

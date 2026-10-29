@@ -373,6 +373,13 @@ type [<AllowNullLiteral>] Options =
     abstract model : string with get, set
     /// Which on-disk settings layers to read. `[||]` reads none.
     abstract settingSources : string array with get, set
+    /// Use only the MCP servers in `mcpServers`, and ignore every other MCP configuration:
+    /// a project's `.mcp.json`, user settings, plugins and agent frontmatter. The CLI's
+    /// `--strict-mcp-config`. Unset, the CLI also loads what it finds on disk.
+    abstract strictMcpConfig : bool with get, set
+    /// The CLI's working directory. Unset = this process's own. The SDK hands it to a spawner
+    /// as the request's `cwd`.
+    abstract cwd : string with get, set
     abstract thinking : Thinking with get, set
     /// Ask for `stream_event` messages — without it the deltas a turn is streamed from
     /// never arrive.

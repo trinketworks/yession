@@ -169,4 +169,7 @@ module Probe =
     /// The IndexedDB databases this page's origin holds, by name.
     let databases (page: IPage) : Async<string list> = ask page Probes.databases 0
 
+    /// Raise an error nothing in the page handles, with `message`.
+    let unhandled (page: IPage) (message: string) : Async<unit> = ask page Probes.unhandled message |> Async.Ignore
+
 #endif
