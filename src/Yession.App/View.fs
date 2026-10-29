@@ -847,7 +847,7 @@ module View =
             match credential with
             | Some credential ->
                 html $"""
-                    <div class="{Style.sideRow}" data-claude-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.btnIconBareDanger}" aria-label="Disconnect" data-claude-disconnect="{scopeChoice}" @click={Ev(fun _ -> dispatch (ClaudePressedMsg (ClaudePress.Disconnect scopeChoice)))}>{Icon.close}</button></div>
+                    <div class="{Style.sideRow}" data-claude-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.cls [ Style.btnIconBareDanger; "self-center" ]}" aria-label="Disconnect" data-claude-disconnect="{scopeChoice}" @click={Ev(fun _ -> dispatch (ClaudePressedMsg (ClaudePress.Disconnect scopeChoice)))}>{Icon.close}</button></div>
                     {credentialReason Dom.Hooks.claudeSignInRequired scopeChoice credential}"""
             | None -> html $""""""
         let controls =
@@ -877,33 +877,31 @@ module View =
                         (claude.Status |> Option.bind (fun panel -> panel.SessionCredential))
                 // Connecting the scope just chosen makes no sense while a credential is
                 // already sitting under it — the remedy is the disconnect already on that
-                // scope's row above, not a second control trying to do the same thing again.
-                let connectOrHint =
-                    match chosen with
-                    | Some _ ->
-                        html $"""<span class="{Style.label} pt-2" data-claude-already-connected>{Dom.Text.alreadyConnected}</span>"""
-                    | None ->
-                        html $"""
-                            <button type="button" class="{Style.btn}" data-claude-connect @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Connect))}>Connect Claude</button>
-                            <details class="{Style.cls [ Style.detailNote; "pt-2" ]}" data-claude-token-form>
-                              <summary class="{Style.detailSummary}" data-claude-use-token>{Dom.Text.useTokenInstead}</summary>
-                              <label class="{Style.label} pt-2" for="claude-token">setup token / api key</label>
-                              <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…"
-                                     .value={claude.Token}
-                                     @input={EvVal(fun v -> dispatch (ClaudeTokenTyped v))} />
-                              <button type="button" class="{Style.btn}" data-claude-save-token @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.SaveToken))}>Save token</button>
-                            </details>"""
-                html $"""
-                    <label class="{Style.label}" for="claude-scope">sign in for</label>
-                    <div class="{Style.fieldSelectWrap}">
-                      <select id="claude-scope" class="{Style.fieldSelect}" data-claude-scope aria-label="Sign-in scope"
-                              @change={EvVal(fun v -> dispatch (ClaudeScopeChosen v))}>
-                        <option value="mine" ?selected={claude.Scope = "mine"}>{sharedScopeLabel (claude.Status |> Option.map (fun panel -> panel.Owner))}</option>
-                        <option value="session" ?selected={claude.Scope = "session"}>This session only</option>
-                      </select>
-                      <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
-                    </div>
-                    {connectOrHint}"""
+                // scope's row above, not a second control trying to do the same thing
+                // again. The row above already carries the status and the X, so there is
+                // nothing left for this control to say: it renders nothing at all.
+                match chosen with
+                | Some _ -> html $""""""
+                | None ->
+                    html $"""
+                        <label class="{Style.label}" for="claude-scope">sign in for</label>
+                        <div class="{Style.fieldSelectWrap}">
+                          <select id="claude-scope" class="{Style.fieldSelect}" data-claude-scope aria-label="Sign-in scope"
+                                  @change={EvVal(fun v -> dispatch (ClaudeScopeChosen v))}>
+                            <option value="mine" ?selected={claude.Scope = "mine"}>{sharedScopeLabel (claude.Status |> Option.map (fun panel -> panel.Owner))}</option>
+                            <option value="session" ?selected={claude.Scope = "session"}>This session only</option>
+                          </select>
+                          <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
+                        </div>
+                        <button type="button" class="{Style.btn}" data-claude-connect @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Connect))}>Connect Claude</button>
+                        <details class="{Style.cls [ Style.detailNote; "pt-2" ]}" data-claude-token-form>
+                          <summary class="{Style.detailSummary}" data-claude-use-token>{Dom.Text.useTokenInstead}</summary>
+                          <label class="{Style.label} pt-2" for="claude-token">setup token / api key</label>
+                          <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…"
+                                 .value={claude.Token}
+                                 @input={EvVal(fun v -> dispatch (ClaudeTokenTyped v))} />
+                          <button type="button" class="{Style.btn}" data-claude-save-token @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.SaveToken))}>Save token</button>
+                        </details>"""
         let error =
             match Pending.refusal claude.Pending with
             | Some reason -> html $"""<span class="{Style.statusErr}" data-claude-error>{reason}</span>"""
@@ -933,7 +931,7 @@ module View =
             match credential with
             | Some credential ->
                 html $"""
-                    <div class="{Style.sideRow}" data-github-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.btnIconBareDanger}" aria-label="Disconnect GitHub" data-github-disconnect="{scopeChoice}" @click={Ev(fun _ -> dispatch (GitHubPressedMsg (GitHubPress.Disconnect scopeChoice)))}>{Icon.close}</button></div>
+                    <div class="{Style.sideRow}" data-github-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.cls [ Style.btnIconBareDanger; "self-center" ]}" aria-label="Disconnect GitHub" data-github-disconnect="{scopeChoice}" @click={Ev(fun _ -> dispatch (GitHubPressedMsg (GitHubPress.Disconnect scopeChoice)))}>{Icon.close}</button></div>
                     {credentialReason Dom.Hooks.githubSignInRequired scopeChoice credential}"""
             | None -> html $""""""
         let controls =
@@ -970,33 +968,30 @@ module View =
                         github.Scope
                         (github.Status |> Option.bind (fun panel -> panel.MineCredential))
                         (github.Status |> Option.bind (fun panel -> panel.SessionCredential))
-                // As Claude's, for its reason.
-                let connectOrHint =
-                    match chosen with
-                    | Some _ ->
-                        html $"""<span class="{Style.label} pt-2" data-github-already-connected>{Dom.Text.alreadyConnected}</span>"""
-                    | None ->
-                        html $"""
-                            <button type="button" class="{Style.btn}" data-github-connect @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.Connect))}>Connect GitHub</button>
-                            <details class="{Style.cls [ Style.detailNote; "pt-2" ]}" data-github-token-form>
-                              <summary class="{Style.detailSummary}" data-github-use-token>{Dom.Text.useTokenInstead}</summary>
-                              <label class="{Style.label} pt-2" for="github-token">personal access token</label>
-                              <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…"
-                                     .value={github.Token}
-                                     @input={EvVal(fun v -> dispatch (GitHubTokenTyped v))} />
-                              <button type="button" class="{Style.btn}" data-github-save-token @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.SaveToken))}>Save token</button>
-                            </details>"""
-                html $"""
-                    <label class="{Style.label}" for="github-scope">sign in for</label>
-                    <div class="{Style.fieldSelectWrap}">
-                      <select id="github-scope" class="{Style.fieldSelect}" data-github-scope aria-label="GitHub sign-in scope"
-                              @change={EvVal(fun v -> dispatch (GitHubScopeChosen v))}>
-                        <option value="mine" ?selected={github.Scope = "mine"}>{sharedScopeLabel (github.Status |> Option.map (fun panel -> panel.Owner))}</option>
-                        <option value="session" ?selected={github.Scope = "session"}>This session only</option>
-                      </select>
-                      <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
-                    </div>
-                    {connectOrHint}"""
+                // As Claude's, for its reason: the row above already carries the status
+                // and the X, so there is nothing left for this control to say.
+                match chosen with
+                | Some _ -> html $""""""
+                | None ->
+                    html $"""
+                        <label class="{Style.label}" for="github-scope">sign in for</label>
+                        <div class="{Style.fieldSelectWrap}">
+                          <select id="github-scope" class="{Style.fieldSelect}" data-github-scope aria-label="GitHub sign-in scope"
+                                  @change={EvVal(fun v -> dispatch (GitHubScopeChosen v))}>
+                            <option value="mine" ?selected={github.Scope = "mine"}>{sharedScopeLabel (github.Status |> Option.map (fun panel -> panel.Owner))}</option>
+                            <option value="session" ?selected={github.Scope = "session"}>This session only</option>
+                          </select>
+                          <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
+                        </div>
+                        <button type="button" class="{Style.btn}" data-github-connect @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.Connect))}>Connect GitHub</button>
+                        <details class="{Style.cls [ Style.detailNote; "pt-2" ]}" data-github-token-form>
+                          <summary class="{Style.detailSummary}" data-github-use-token>{Dom.Text.useTokenInstead}</summary>
+                          <label class="{Style.label} pt-2" for="github-token">personal access token</label>
+                          <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…"
+                                 .value={github.Token}
+                                 @input={EvVal(fun v -> dispatch (GitHubTokenTyped v))} />
+                          <button type="button" class="{Style.btn}" data-github-save-token @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.SaveToken))}>Save token</button>
+                        </details>"""
         let error =
             match Pending.refusal github.Pending with
             | Some reason -> html $"""<span class="{Style.statusErr}" data-github-error>{reason}</span>"""
