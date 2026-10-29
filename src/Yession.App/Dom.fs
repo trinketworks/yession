@@ -798,11 +798,6 @@ module Dom =
         /// The agent's standing says the same state with the same word, on the Manager's
         /// roster and in this page's header.
         let signInAgainStatus = Yession.Domain.Standings.AgentStatus.signInAgain
-        /// What a sign-in panel says instead of offering to connect, when the scope its own
-        /// selector names already has a credential: connecting it again makes no sense while
-        /// one is there, so the remedy is the disconnect already on the row above, not a
-        /// second control that would try to do the same thing twice.
-        let alreadyConnected = "already connected — disconnect above to connect a different account"
         /// What opens the pasted-token fallback, behind its own disclosure: signing in is
         /// the way in, and the token is the exception for where that flow does not reach, so
         /// it should not sit at the same weight as the button that starts the flow.

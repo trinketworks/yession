@@ -849,14 +849,15 @@ let private uiChecklistTests =
 
         // Connecting the scope the selector already names makes no sense while a credential
         // is sitting there: the only remedy for THAT scope is the disconnect already on its
-        // row, not a second control trying to do the same thing again.
+        // row, and that row already carries the status and the X, so the control under the
+        // selector says nothing at all rather than repeating it in prose.
         testCase "the connect controls hide for a scope that already has a credential" <| fun () ->
             let connected =
                 representativeModel
                 |> withGitHubPanel (fun panel ->
                     { panel with MineCredential = Some { Kind = OAuthConnection; SignInRequired = None } })
             let html = Support.render connected
-            Expect.stringContains html "data-github-already-connected" "the scope chosen (mine, the default) says so"
+            Expect.isFalse (html.Contains "data-github-scope") "the selector itself is gone (mine, the default, already has a credential)"
             Expect.isFalse (html.Contains "data-github-connect>") "and offers no second way to connect it"
             Expect.isFalse (html.Contains "data-github-token ") "nor its token fallback"
 
