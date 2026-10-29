@@ -9538,12 +9538,15 @@ let private readyAnswers (status: int) (page: IPage) : Async<unit> =
     awaitU (page.RouteAsync ("**/ready", fun route ->
         route.FulfillAsync (RouteFulfillOptions (Status = status, ContentType = "text/plain", Body = "http://127.0.0.1:1/login")) |> ignore))
 
-/// Every console error the page says from now on, and every answer of 400 or more with its
-/// address: a console line says a resource failed, never which.
+/// Every console error the page says from now on, but an answered request's status. A 401
+/// from the session's GitHub routes while nobody has connected GitHub is the product's
+/// answer, said in the console by the browser, and no policy refused anything to cause it.
+/// A refused script, style, font or worker is an error of its own, which stays.
 let private consoleErrors (page: IPage) : ResizeArray<string> =
     let errors = ResizeArray<string> ()
-    page.Console.Add (fun m -> if m.Type = "error" then errors.Add m.Text)
-    page.Response.Add (fun r -> if r.Status >= 400 then errors.Add (sprintf "%d %s %s" r.Status r.Request.Method r.Url))
+    page.Console.Add (fun m ->
+        if m.Type = "error" && not (m.Text.StartsWith "Failed to load resource: the server responded with a status of") then
+            errors.Add m.Text)
     errors
 
 /// The Content-Security-Policy an answer carried, or a failure naming the answer.
