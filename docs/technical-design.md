@@ -640,6 +640,10 @@ Update this list before a change that breaks a rule, in the same PR, and say why
 21. No git process holds a GitHub credential. git reaches github.com only through the git
     gateway (`GitGateway`), which adds the credential of a loan on the way. A work sandbox's
     git and the session's own clone and fetch take the same route.
+22. A string the agent supplied reaches a program only as an operand, never as an option. It
+    stands after `--` or as an option's own argument, and a path operand is a `PathOperand`,
+    which starts with `/` or `.`. A read-only tool never meets the gate, so this is what keeps
+    `find_files` from deleting with `-delete` (`ScriptArg`).
 
 Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
 roots, keyed by `BodyKey`, that the app co-manages outside the encoded tree, and the structural

@@ -343,6 +343,54 @@ module SandboxPath =
         // only thing left, which is what an unconfined spawn has always used.
         | Some path, None -> Some path
 
+/// A path the agent gave, resolved (`SandboxPath.leadingVariable`), as it may stand in a
+/// program's argv: it starts with `/` or `.`, so no program reads it as anything but a path.
+///
+/// The rule reads the FIRST character only, because that is all a program reads. `find`
+/// takes a first argument that starts with `-`, `!` or `(` as the start of its expression,
+/// so `find "-delete" …` deletes where it stands, and `--` is no cure there: BSD `find`
+/// reads the argument after it as an expression still. `cd` takes `-` for `$OLDPWD`, and
+/// `cat` takes `-` for stdin. A path that starts with `/` or `.` is a path to all three,
+/// on GNU and on BSD alike, wherever it stands in the argv. A denylist of the characters
+/// each program reads would have to know every program; `./` in front is true of all.
+type PathOperand = private PathOperand of operand: string * given: string
+
+module PathOperand =
+
+    /// The one way to make one, and total. A path that already starts with `/` or `.`
+    /// (`.`, `..`, `.git`, `/tmp/x`) stands as given, and any other gets `./` in front —
+    /// `src` is `./src` and `-delete` is `./-delete`, the same file to every program.
+    let ofPath (path: string) : PathOperand =
+        if path.StartsWith "/" || path.StartsWith "." then PathOperand (path, path) else PathOperand ("./" + path, path)
+
+    /// The path as it goes into an argv.
+    let value (PathOperand (operand, _)) : string = operand
+
+    /// The path as the agent gave it: what an answer that echoes a path names, so that
+    /// `find` under `src` answers `src/x`, not a `./src/x` nobody wrote.
+    let given (PathOperand (_, given)) : string = given
+
+/// One positional parameter of a script the session runs in a sandbox (`sh -c script sh
+/// args…`). The agent's strings reach a program only through here, and only as operands
+/// (docs/technical-design.md §5).
+[<RequireQualifiedAccess>]
+type ScriptArg =
+    /// A path, as a `PathOperand`: it starts with `/` or `.`, so it stands anywhere.
+    | Path of PathOperand
+    /// A pattern, a glob, a variable name, or the script's own literal. It must stand after
+    /// `--` or as an option's own argument in the script (`-e "$1"`, `--include=…`,
+    /// `-name "$1"`), where a leading `-` is data. Nothing here can check that; the review
+    /// of each script that takes one does.
+    | Word of string
+
+module ScriptArg =
+
+    /// The argv element.
+    let render (arg: ScriptArg) : string =
+        match arg with
+        | ScriptArg.Path path -> PathOperand.value path
+        | ScriptArg.Word word -> word
+
 /// How a sandboxed process ended.
 type SandboxRun =
     /// The process ran and exited with this code (-1 when the OS reported none).

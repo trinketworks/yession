@@ -1190,6 +1190,21 @@ let private fileTests =
                 "a lookup to make, or none — never an expression to run"
         }
 
+        // `find "-delete"` deletes; `find "./-delete"` looks in a directory of that name.
+        test "a path that starts with neither / nor . is an operand with ./ in front" {
+            Expect.equal
+                ([ "-delete"; "!"; "("; "src" ] |> List.map (Yession.Domain.Sandboxes.PathOperand.ofPath >> Yession.Domain.Sandboxes.PathOperand.value))
+                [ "./-delete"; "./!"; "./("; "./src" ]
+                "no program reads the first character as an option or an expression"
+        }
+
+        test "a path that starts with / or . is an operand as given" {
+            Expect.equal
+                ([ "."; ".."; ".git"; "/tmp/x" ] |> List.map (Yession.Domain.Sandboxes.PathOperand.ofPath >> Yession.Domain.Sandboxes.PathOperand.value))
+                [ "."; ".."; ".git"; "/tmp/x" ]
+                "already a path to every program"
+        }
+
         // The window's shape: what the agent CLI's own read tool answers, so a model's habits
         // carry over — numbered lines, 1-based, and a page that says where the next one is.
         test "a window is numbered from its own first line" {
