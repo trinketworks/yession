@@ -3636,9 +3636,11 @@ module Style =
     /// (docs/visual-design.md, Phone and wide) — and it is not one inset but a family, every
     /// full-bleed `-mx-4` in the conversation measured against it. The two answers have to
     /// agree, so this one follows the column rather than asking the shell's question beside
-    /// it.
+    /// it. On a wide screen the strip stands in the dock (`dock`), whose edge is already the
+    /// ground's edge a message stands on, so the gutter there is no padding at all: the mark
+    /// takes the avatars' column at the edge and the word lands on the rail after it.
     let composerTray =
-        cls [ "shrink-0 flex items-center h-8 phone:h-touch pl-8 pr-4 max-md:pl-4 bg-panel"
+        cls [ "shrink-0 flex items-center h-8 phone:h-touch pl-8 pr-4 max-md:pl-4 wide:pl-0 wide:pr-rail bg-panel"
               "transition-[translate,opacity] starting:translate-y-1 starting:opacity-0"; Motion.pace ]
 
     /// The label voice (`caps`), not Send's step up: these are controls for the timeline
@@ -3689,6 +3691,18 @@ module Style =
     // from the ground by their tone. They used to be lead-edged cards inside a padded strip —
     // a third rectangle vocabulary two centimetres from the band that already had the answer.
 
+    /// The dock itself: the queue, the tray and the composer, held as one block so one rule
+    /// sets all three edges.
+    ///
+    /// On a phone it runs edge to edge, as every ground in the conversation above it does.
+    /// On a wide screen it stands where a message's ground does: one rail in from the column
+    /// on each side (`timeline`'s `2rem`) and no wider than the measure (`readingColumn`), so
+    /// the composer is the transcript column's width on the transcript's rail, not a band
+    /// wider than what it writes into. And it stands off the screen's bottom edge by the
+    /// timeline's own foot (`pb-6`), so it reads as the column's last object, not as chrome
+    /// fixed to the window.
+    let dock = "shrink-0 flex flex-col wide:mx-rail wide:mb-6 wide:max-w-measure"
+
     let queue = "shrink-0 flex flex-col gap-0.5 pt-4"
 
     /// The same band holding nothing. Padding is what a band spends on the rows inside it, and
@@ -3698,7 +3712,7 @@ module Style =
     let queueEmpty = "shrink-0"
     /// On the composer's own gutter (`draftInput` spends px-4), because the head belongs to
     /// the dock it heads, not to the timeline above it.
-    let queueHead = "flex items-baseline gap-3 pb-2 px-4"
+    let queueHead = "flex items-baseline gap-3 pb-2 px-4 wide:px-rail"
     /// Green, AT REST: "still editable" is a fact about the whole queue, said once at its
     /// head — the rows beneath no longer repeat it per entry.
     let queueCount = caps + " text-green"
@@ -3717,7 +3731,7 @@ module Style =
     /// new cost: the queued message is set at `touchType`'s 16px there, so it was already
     /// two lines tall inside a host held to one.
     let queueItem =
-        cls [ "group flex items-center gap-3 min-h-10 py-2 px-4 bg-surface transition-colors"; rowLift ]
+        cls [ "group flex items-center gap-3 min-h-10 py-2 px-4 wide:px-rail bg-surface transition-colors"; rowLift ]
 
     /// `focus-within`, not `focus`: the caret lands in the editor MOUNTED INSIDE this host,
     /// so `focus:` on the host never fires and the brightening never happened.
@@ -3822,24 +3836,15 @@ module Style =
               "motion-reduce:transition-none"
               if active then "scale-x-100" else "scale-x-0" ]
 
-    /// A ROW, since the actions moved into it: the box was 56px of which 40 was a strip under
-    /// the text holding a 93px bordered rectangle that said Send and then drew an arrow saying
-    /// it again. The verb belongs at the trailing edge of the line you just wrote, which is
-    /// where it now is — the same shape the terminal's command line takes, so a person moving
-    /// between the two columns meets one object twice instead of two conventions.
+    /// A COLUMN, on every screen: the line you write, then the verbs under it
+    /// (`draftActionsRow`). It was a row on a wide screen — the picker, the line and Send
+    /// abreast — and a column only on a phone. One arrangement now, the phone's, because the
+    /// two said the same thing two ways (docs/visual-design.md, principle 5), and the row left
+    /// the line whatever width the picker and the attach did not take: the words started a
+    /// third of the way across the box, off the rail every message above them starts on.
     ///
-    /// Carries no fill and no edge of its own any more: the band it sits in is the surface.
-    ///
-    /// `phone:flex-col`, added since: on a phone the row becomes a column, the verbs
-    /// (`draftActionsRow`, below) drop under the text instead of squeezing it, and the text
-    /// gets the width back. On a wide screen the row shape stands as written above.
-    ///
-    /// The question is `phone:`, not `max-md:`, and the comment above this one used to say
-    /// "on a phone" while asking about width. A phone turned sideways is 844 wide, so it was
-    /// given the wide screen's row while `draftInput` inside it was already drawing a phone's
-    /// paddings — one composer answering two different questions about the same screen
-    /// (docs/visual-design.md, Phone and wide).
-    let draftBox = "relative flex items-end phone:flex-col phone:items-stretch"
+    /// Carries no fill and no edge of its own: the band it sits in is the surface.
+    let draftBox = "relative flex flex-col items-stretch"
 
     /// Chrome-less by construction (`fieldBare`): the band carries the tone and the rule, and
     /// the focus signal is the gradient growing across it.
@@ -3888,7 +3893,7 @@ module Style =
               // gradient, and 44px is the thumb's height. The extra 4px is spent above, so the
               // line still ends where Send's box does. A desktop keeps `py-2`, the 40px the
               // terminal's command band beside it agrees with (`terminalCommand`).
-              "text-body text-ink px-4 py-2 phone:pt-3"; touchType ]
+              "text-body text-ink px-4 wide:px-rail py-2 phone:pt-3"; touchType ]
 
     /// The writing side of the box: whose message it is, then the message. A column only
     /// because someone else's draft says so above the words; your own — the case that is
@@ -3912,14 +3917,13 @@ module Style =
     /// were 32px squares and needed 4px under them to reach that centre — the correction went
     /// out with the glyphs (`btnComposerBox`, above, is the line's own height).
     ///
-    /// On a phone this row leaves the line entirely, but no longer owns a full line of its
-    /// own: it shares one with the model picker (`draftActionsRow`, below) rather than
+    /// This row leaves the line entirely, but does not own a full line of its own: it shares one with the model picker (`draftActionsRow`, below) rather than
     /// stacking under it as a second line — `phone:w-full phone:justify-end` used to push its
     /// buttons to the far edge of a line THIS row had entirely to itself; now the picker is
     /// the other half of that line, so sizing to its own content and letting the row's
     /// `justify-between` do the push is what keeps it at the trailing edge without claiming
-    /// width the picker needs. It sits BELOW the text (`draftBox`'s `phone:flex-col` puts it
-    /// there in document order).
+    /// width the picker needs. It sits BELOW the text (`draftBox`'s column puts it there in
+    /// document order).
     ///
     /// And it STANDS. It used to come and go with the draft — clear and deaf to presses while
     /// there was nothing to send — so on a phone at rest the composer offered a model, an
@@ -3962,7 +3966,7 @@ module Style =
     /// span beside Send — usually empty, and an empty box's synthesized baseline is its
     /// bottom edge, so Send's word sat five pixels under the picker's. Aligning this box's
     /// own items puts Send's word in the group, which is the baseline the row then reads.
-    let draftCommit = "shrink-0 flex items-center phone:items-baseline gap-1 pr-1"
+    let draftCommit = "shrink-0 flex items-baseline gap-1 pr-1 wide:pr-5"
 
     /// The model picker's own row-mate, standing beside `draftCommit` rather than inside it:
     /// choosing a model has nothing to do with whether there is a draft to send or a turn to
@@ -3976,26 +3980,16 @@ module Style =
     /// reach, because the bug was never the popup's. Both halves are moot now that nothing
     /// about this row comes or goes, and the separation is kept because the two controls are
     /// still two different claims on the line.
-    /// `shrink-0` matches `draftCommit`'s own, so the two sit side by side on a wide screen
-    /// without either claiming space the other needs.
+    /// `shrink-0` matches `draftCommit`'s own, so the two sit side by side without either
+    /// claiming space the other needs.
     ///
-    /// `wide:order-first`: on a wide screen, `draftBox`'s row (`draftBody`, this, the commit
-    /// row, in that document order) otherwise lands the picker pressed up against Send at the
-    /// row's trailing edge — the two controls that most need telling apart end up the two
-    /// closest together. Reordering it to the LEAD edge (the original proposal's own layout:
-    /// model beside the future `+`, Send alone at the trailing edge) puts a sentence's worth
-    /// of text between them instead. `wide:` only: on a phone `draftBox` is already a column
-    /// (`phone:flex-col`), where `order` would lift the picker above the text entirely rather
-    /// than sideways past it — a bigger move than asked for, and the one place this row
-    /// already read correctly (the picker stands flush to ITS row's own leading edge, the
-    /// shared row's `justify-between` pushing Send to the opposite one).
-    /// `pl-4` matches `draftInput`'s own left gutter, on EVERY screen, not just a wide one —
-    /// on a phone `draftBox`'s `phone:items-stretch` stretches this row to the full width same
+    /// `pl-4` matches `draftInput`'s own left gutter: `draftBox`'s `items-stretch` stretches this row to the full width same
     /// as `draftInput` above it, and nothing else gives it a left inset: unlike `draftCommit`,
     /// whose gutter comes free from its buttons' own `px-3`, this row is the model control
     /// alone, so the row itself has to carry it. Without it the picker sits flush against the
-    /// viewport edge, outside the gutter every other line in the composer keeps.
-    let draftLead = "shrink-0 flex items-center gap-4 pl-4 wide:order-first"
+    /// viewport edge, outside the gutter every other line in the composer keeps. A wide screen
+    /// puts every line in the composer on the column's rail (`wide:pl-rail`), as `draftInput`.
+    let draftLead = "shrink-0 flex items-center gap-4 pl-4 wide:pl-rail"
     /// The composer's way to attach a file, beside the model picker on `draftLead`: the
     /// picker's own voice (`modelSelectFace`) and height (`modelSelectWrap`), so the row reads
     /// as one set of controls rather than a label beside a word of the message. It is the
@@ -4006,45 +4000,24 @@ module Style =
 
     /// The files on the open draft, under its words: one line of them that wraps, in the
     /// input's own gutter.
-    let draftFiles = "flex flex-wrap gap-x-4 gap-y-1 px-4 pb-2"
+    let draftFiles = "flex flex-wrap gap-x-4 gap-y-1 px-4 wide:px-rail pb-2"
     /// One file: its name, then what it weighs or where it has got to, then its verbs.
     let draftFile = "min-w-0 inline-flex items-center gap-2"
     let draftFileName = "min-w-0 max-w-[16rem] truncate font-ui font-light text-small text-ink"
     let draftFileSize = "shrink-0 font-ui font-light text-small text-ink-faint tabular-nums"
 
-    /// The picker (`draftLead`) and Send's row (`draftCommit`) ride together as ONE line on a
-    /// phone, not two: `draftBox`'s `phone:flex-col` makes every direct child its own row, and
-    /// the two used to be siblings there, so "Provider's default" sat on a line by itself with
-    /// SEND stacked on a second line under it — readable, but not the "dock at the bottom" the
-    /// picker and Send were both asked for. Wrapping them in one element makes them ONE child
-    /// of that column, hence one row.
+    /// The picker (`draftLead`) and Send's row (`draftCommit`) ride together as ONE line under
+    /// the text, on every screen: the picker at the leading edge, Send pushed to the trailing
+    /// one (`justify-between`), a sentence's width between the two controls that most need
+    /// telling apart. One wrapper, so `draftBox`'s column takes the pair as one row rather
+    /// than stacking "Provider's default" over SEND.
     ///
-    /// `wide:contents`: on a wide screen this wrapper must get entirely out of the way rather
-    /// than become a fourth flex item — `draftBox` there is a plain row of `draftBody`,
-    /// `draftLead` (reordered to the front by its own `wide:order-first`) and the commit row
-    /// as three direct siblings, and `draftLead`'s reordering only makes sense among THOSE
-    /// three. A wrapper that stayed a real box would turn that into `draftBody` beside a
-    /// two-item box, and reordering inside the box could no longer put the picker ahead of
-    /// `draftBody` — exactly what `draftLead`'s own `wide:order-first` is for. `display:
-    /// contents` removes the wrapper's own box without touching its children: they rejoin
-    /// `draftBox`'s flex context directly, so a wide screen is unchanged by this wrapper
-    /// existing.
-    ///
-    /// `phone:justify-between` is what used to be the commit row's own `justify-end` on a line
-    /// it had to itself: with the picker as the row's other half now, pushing Send to the
-    /// trailing edge is this shared row's job, not the commit box's.
-    ///
-    /// `phone:items-baseline`: the picker speaks the 11px caps label and Send the 13px one,
-    /// so centring the two boxes put their words on two lines, a pixel and a half apart.
-    /// The doctrine aligns a row on its text baseline (Space), and so does this one.
-    ///
-    /// The pair is the shell's own breakpoint and not a width. It was `max-md:`/`md:`, and a
-    /// phone turned sideways is 844 wide: it took the wide screen's single row while the
-    /// composer's line above it was already wearing `phone:` paddings, which is the exact
-    /// mismatch the pair exists to stop (docs/visual-design.md, Phone and wide).
-    let draftActionsRow = "phone:flex phone:items-baseline phone:w-full phone:justify-between wide:contents"
+    /// `items-baseline`: the picker speaks the 11px caps label and Send the 13px one, so
+    /// centring the two boxes put their words on two lines, a pixel and a half apart. The
+    /// doctrine aligns a row on its text baseline (Space), and so does this one.
+    let draftActionsRow = "flex items-baseline w-full justify-between"
 
-    let draftAuthor = "pl-4 pt-2 " + caps + " text-ink-faint truncate"
+    let draftAuthor = "pl-4 wide:pl-rail pt-2 " + caps + " text-ink-faint truncate"
 
     // A draft nobody has open here: one line of it, so the composer reads as "what is being
     // written" rather than a stack of boxes. Clicking it opens it (and closes whatever was).
@@ -4054,7 +4027,7 @@ module Style =
     // subject is whose words these are, so the edge should say it rather than repeat a
     // generic hover tint.
     let draftSummary =
-        cls [ "group w-full items-center gap-3 h-8 pl-4 pr-2 text-left cursor-pointer"
+        cls [ "group w-full items-center gap-3 h-8 pl-4 wide:pl-rail pr-2 text-left cursor-pointer"
               rowBase; rowLift; focusRing ]
 
     let draftSummaryName = "shrink-0 " + caps + " text-ink-faint"
@@ -4938,9 +4911,9 @@ module Style =
     /// terminal beside a chat column, both idle, read as two different-sized objects. The
     /// padding spends what the row would have, on a phone only, so the two bars land at one
     /// height — `h-11` command line (44) + `pb-[3.8125rem]` (61 = the row's 45 + the shared
-    /// `pb-4`'s 16) = 105, `composer`'s own total there. Desktop needs nothing extra:
-    /// `draftActionsRow` is `wide:contents` there, adding no row and no height, so the shared
-    /// `pb-4` alone already matches (`h-10` + 16 = 56, both bands).
+    /// `pb-4`'s 16) = 105, `composer`'s own total there. A wide screen spends nothing extra:
+    /// there the message composer stands off the bottom edge in its dock (`dock`), so the two
+    /// bands share no bottom edge to agree on.
     let terminalComposer = composerBand + " pb-4 phone:pb-[3.8125rem]"
 
     /// A row in the band that is not the command line — the lease bar, the cannot-run
