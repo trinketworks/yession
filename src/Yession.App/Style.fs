@@ -1520,7 +1520,21 @@ module Style =
     /// A standing's mark in the column's status block (`standingsSection`): centred in the
     /// AVATAR's 20px column, so the marks stack on the axis the roster's avatars do and every
     /// word in the block starts on the rail the names below it start on.
-    let standingMarkSeat = "w-5 shrink-0 self-center grid place-items-center"
+    ///
+    /// Vertically, placed by the font rather than by eye (the Space rule `agentMark` already
+    /// answers to): the attention mark stays a fixed 12px, because its shape needs the room
+    /// (`attentionMark`'s comment), but the small circle inside that box has to read as
+    /// CENTRED on the word beside it, which means the x-height band, not the row's own
+    /// line-box. `self-center` centred it on the latter — the row's full `leading-5`, which a
+    /// font typically carries more of above the x-height than below it — and so the mark read
+    /// high of the word every time, a pixel further off wherever a surface set the row's
+    /// type at another size. Left on `items-baseline` (the row's default: no `self-*` here),
+    /// the mark's own box starts flush on the baseline like a word does, and is carried up by
+    /// half of what is left once the x-height is subtracted from the box's fixed height — so
+    /// the shift is a formula in the two things that decide it (the box and the font), never a
+    /// constant, and reads true at a size this file has not tried yet.
+    let standingMarkSeat =
+        "w-5 shrink-0 grid place-items-center translate-y-[calc((0.75rem_-_1ex)/2)]"
     /// A standing that GOES somewhere (the pull requests' line opens their rows in settings):
     /// the roster row's own shape, pressable. A thumb's height on a phone, centred there
     /// because a baseline row in a 44px box parks its words at the top of it.
