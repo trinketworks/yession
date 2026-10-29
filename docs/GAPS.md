@@ -195,8 +195,8 @@ The last section holds trust boundaries as sharp as the first section's.
   allowlist, which the credential-leak regression test pins. An operator must choose it
   deliberately. `=docker` is the full-userland option for the WorkSandbox.
   - **A Linux host without the confinement tools cannot start a session.** srt needs bubblewrap,
-    socat and ripgrep. The Nix installable names all three. An `npm i -g yession` on a bare box
-    does not have them. The session then fails when it creates its sandbox, and does not start
+    socat and ripgrep. The Nix installable names all three. An npm install of a release on a bare
+    box does not have them. The session then fails when it creates its sandbox, and does not start
     unconfined. That is the intended trade: install the tools or choose `host` deliberately.
   - **srt reports a probe it could not RUN as a tool that is not there**, so a bad minute makes
     srt refuse every sandbox in a run. Yession checks the refusal against this process's own
@@ -1177,8 +1177,9 @@ After the fixes land, one pass rewrites it to what still reproduces.
 ## Delivery & operations
 
 - **Node is a required runtime.** Yession ships as one npm package with two bins
-  (`yession-manager`, `yession-session`). `npm i -g yession-*.tgz` pulls the platform-native deps
-  through npm's optional dependencies (`node-datachannel`'s addon AND the SDK's native `claude`),
+  (`yession-manager`, `yession-session`). `npm ci --omit=dev` in the extracted tarball
+  (docs/deployment.md, "Installing a release") pulls the platform-native deps through npm's
+  optional dependencies (`node-datachannel`'s addon AND the SDK's native `claude`),
   so after install the agent works offline. No self-contained binary exists anymore: a machine
   without Node ≥24 cannot run Yession from npm. (The Nix installable wraps `nodejs_24`, at the
   cost of needing Nix.)
