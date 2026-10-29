@@ -2048,6 +2048,30 @@ let private prWatchTests =
                 ("working", Standings.Moving)
                 "a running turn proves an agent is there"
 
+        testCase "an idle agent is nobody's turn while what it watches is under way" <| fun () ->
+            let at facet word attention : Standings.Standing = { Facet = facet; Word = word; Attention = attention }
+            let waiting = at Standings.AgentStatus.facet "waiting" Standings.Wanted
+            let working = at Standings.AgentStatus.facet "working" Standings.Moving
+            let armed = at "prs" "2 PRs · 1 armed" Standings.Moving
+            let fine = at "prs" "#42 open" Standings.Rest
+            let conflicted = at "prs" "#42 conflicted" Standings.Wrong
+            let settled = Standings.AgentStatus.withWatched [ armed ] (Some waiting)
+            Expect.equal settled [ { waiting with Attention = Standings.Rest }; armed ] "waiting on the checks, at rest, agent first"
+            Expect.equal (Standings.Standing.worst settled) (Some armed) "the one shown alone is the work under way"
+            Expect.equal
+                (Standings.AgentStatus.withWatched [ fine ] (Some waiting))
+                [ waiting; fine ]
+                "with nothing under way, idle is still their turn"
+            Expect.equal
+                (Standings.AgentStatus.withWatched [ conflicted ] (Some waiting))
+                [ waiting; conflicted ]
+                "a wrong thing settles nothing"
+            Expect.equal
+                (Standings.AgentStatus.withWatched [ armed ] (Some working))
+                [ working; armed ]
+                "an agent at work is left as it is"
+            Expect.equal (Standings.AgentStatus.withWatched [ armed ] None) [ armed ] "no agent standing yet, none invented"
+
         testCase "a watch cannot be built on the deployment's own credential" <| fun () ->
             // The rule lives on the event, where every construction goes through it: the
             // verb refuses before it looks, and the decoder refuses a stored line that says

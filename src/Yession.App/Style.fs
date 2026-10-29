@@ -653,19 +653,37 @@ module Style =
     /// names reads as a list of names; blue and underlined under the pointer, because
     /// blue is what interactive means here. Underline (not colour) at rest would say the
     /// same thing, but on every row at once — the same noise in a quieter register.
+    ///
+    /// The SAME look while the tap that opened it is still landing — `group-aria-busy/open:`,
+    /// reading the hold the outer link carries (`recordRowLink`, `ManagerPage.fs`'s click
+    /// handler), because a touch has no hover and this is the only pointer this control can
+    /// give one. Not a second look: held wears exactly the hover one, same as Create's own
+    /// press wears its own hover-equivalent fill.
     let recordLink =
-        cls [ body; "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"; focusRing ]
+        cls [ body
+              "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"
+              "group-aria-busy/open:text-blue group-aria-busy/open:underline"
+              focusRing ]
 
     /// The same link on a record that is not live (`bodyDim`): still the way in — opening a
     /// stopped session is what starts it — but a step back from the ones already running.
     let recordLinkQuiet =
-        cls [ bodyDim; "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"; focusRing ]
+        cls [ bodyDim
+              "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"
+              "group-aria-busy/open:text-blue group-aria-busy/open:underline"
+              focusRing ]
 
-    /// The mark that says a record link LEAVES (the session serves its own origin). Faint:
-    /// it is a signpost, not a second status. The gap and the ink are all this carries —
-    /// `Icon.leavesSm` is the mark, and a drawn mark brings its own box and its own place on
-    /// the line, so the `text-code` that used to size a text glyph here sized nothing.
-    let recordLinkMark = "text-ink-faint ml-1"
+    /// The mark that says a record link LEAVES (the session serves its own origin). Fainter
+    /// than the faintest ink (`opacity-70` over `ink-faint`, safe because this is decorative
+    /// — `aria-hidden`, and never the only way a reader learns the link leaves): it is a
+    /// signpost, not a second status. `inline-flex` so the idle nudge below has a box a
+    /// transform actually applies to (a bare inline element ignores `transform`). The nudge
+    /// itself — a 1px lift toward the corner the mark points at, and a rest, slow and mostly
+    /// still — is `animate-leave-nudge` (app/tokens.css; the keyframe and why it moves this
+    /// little are in app/tailwind.css). `Icon.leavesSm` is the mark; the gap and the ink are
+    /// all this carries otherwise.
+    let recordLinkMark =
+        cls [ "inline-flex ml-1 text-ink-faint opacity-70"; "animate-leave-nudge motion-reduce:animate-none" ]
 
     /// The hit area for a listed record's whole cell — the state word beside the name
     /// included, not just the name's own glyphs. `block` so the link's box is the cell's full
@@ -673,11 +691,29 @@ module Style =
     /// (`recordLink` / `recordLinkQuiet`, worn by a span inside), so hovering the state word
     /// does not blue it — only the name was ever styled to look like a link, this just widens what you
     /// can press to get it.
-    let recordRowLink = cls [ "block no-underline"; focusRing ]
+    ///
+    /// `group/open`, named for the hold a tap puts on it (`ManagerPage.fs`'s click handler
+    /// sets `aria-busy` on exactly this element) rather than `data-press`'s tilt: that tilt is
+    /// sized for an 80px-wide button (app/tailwind.css), and this hit area is a whole row
+    /// wide, so the same geometry here would read as the row keeling over rather than a
+    /// button going in. The name span inside reads the hold instead (`recordLink`'s
+    /// `group-aria-busy/open:`), and `aria-busy:cursor-progress` says the same thing the
+    /// pointer does on every other held control.
+    let recordRowLink = cls [ "group/open block no-underline aria-busy:cursor-progress"; focusRing ]
 
-    /// A listed record's name, clipped rather than wrapped: a row that changes height when a
-    /// session is renamed is a list you cannot keep your place in.
-    let recordRowName = "block truncate"
+    /// A listed record's name and its leaves mark (`recordLinkMark`), as two flex children
+    /// rather than one truncating block: on a narrow row (a phone) something has to give, and
+    /// it must be the NAME, never the mark that says the link leaves — that is exactly the
+    /// fact a reader on a thumb's-width row most needs, and a single truncating block let the
+    /// browser clip it away first since it sat last. `min-w-0` so this box can itself shrink
+    /// inside whatever fixed-width cell holds it.
+    let recordRowName = "flex items-baseline min-w-0"
+
+    /// The name's own box inside `recordRowName`: `flex-1` takes what the mark beside it
+    /// leaves, `min-w-0` lets that shrink below its content's width, and `truncate` is what
+    /// clips there — a row that changes height when a session is renamed is a list you
+    /// cannot keep your place in, so this still clips rather than wraps.
+    let recordRowNameText = "flex-1 min-w-0 truncate"
 
     /// The roster's mark column (`ManagerUi.Col.mark`): the row's attention mark, at every
     /// width, as the session page wears its worst standing under the chevron. The column is
@@ -705,20 +741,24 @@ module Style =
         cls [ "relative flex transition-[translate]"; Motion.pace
               "[[data-expanded]_&]:translate-y-(--spacing-mark-slide)" ]
 
-    /// What the mark leaves behind as it rides: a faint 2px line from its seat to where it
-    /// stops, drawn down with it (scaled from the top, at the same pace). Centred on the
-    /// mark's 12px box: the box sits 12px into the press, so its centre is 18px in and the
+    /// What the mark leaves behind as it rides: a line from its seat to where it stops, drawn
+    /// down with it (scaled from the top, at the same pace). The weight and ink of a causal
+    /// link's rail (`causeRail`): one pixel of `edge`, because it joins two things the way
+    /// those do, and a track that read as heavy as the mark competed with it. Centred on the
+    /// mark's 12px box: the box sits 12px into the press, so its centre is 18px in — the
+    /// pixel straddles 18, which a 2x screen draws as two whole device pixels — and the
     /// press's own middle down.
     let recordMarkTrack =
-        cls [ "absolute left-[17px] top-1/2 w-0.5 h-(--spacing-mark-slide) bg-ink-faint origin-top scale-y-0"
+        cls [ "absolute left-[17.5px] top-1/2 w-px h-(--spacing-mark-slide) bg-edge origin-top scale-y-0"
               "transition-[scale]"; Motion.pace
               "[[data-expanded]_&]:scale-y-100" ]
 
-    /// The track's start: a 4px point on the mark's seat, so the line begins round rather
-    /// than squared. Its own element, not the line's `::before`, so the line's scale does not
-    /// squash it; it fades in where the mark leaves rather than travelling.
+    /// The track's start: a 3px point on the mark's seat, centred on the same 18px, so the
+    /// line begins round rather than squared without the point outweighing the line. Its own
+    /// element, not the line's `::before`, so the line's scale does not squash it; it fades in
+    /// where the mark leaves rather than travelling.
     let recordMarkSeat =
-        cls [ "absolute left-4 top-1/2 -mt-0.5 size-1 rounded-full bg-ink-faint opacity-0"
+        cls [ "absolute left-[16.5px] top-1/2 -mt-[1.5px] size-[3px] rounded-full bg-edge opacity-0"
               "transition-[opacity]"; Motion.pace
               "[[data-expanded]_&]:opacity-100" ]
 
@@ -3521,7 +3561,11 @@ module Style =
     /// column already answers: with the timeline's `break-words` reaching in here, no line can
     /// exceed the block, so the scroll container never had anything to scroll and only hid
     /// which rule was doing the work.
-    let prosePre = "font-terminal text-code leading-5 bg-surface-2 text-ink p-3 [&:not(:first-child)]:mt-2 whitespace-pre-wrap"
+    ///
+    /// Outlined, not filled: the composer goes `bg-surface-2` while focused, the top step of
+    /// the ramp, so a filled block had no lighter step to stand on there and vanished. The
+    /// timeline wears the same outline so the two draw one code block.
+    let prosePre = Stroke.ring + " " + Stroke.hair + " font-terminal text-code leading-5 text-ink p-3 [&:not(:first-child)]:mt-2 whitespace-pre-wrap"
     let proseQuote = Stroke.lead + " " + Stroke.hair + " pl-3 text-ink-dim [&:not(:first-child)]:mt-2"
     /// The one hyperlink face: prose links and the references that lead somewhere
     /// (`entityLink`) compose the same words, so a link is a link wherever it stands.

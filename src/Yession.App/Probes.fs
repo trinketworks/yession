@@ -157,6 +157,15 @@ module Probes =
           EncodeAnswer = List.map Encode.string >> Encode.list
           DecodeAnswer = Decode.list Decode.string }
 
+    /// Raise an error nothing handles, with this message, from a timer: the way an error in
+    /// the page's own code reaches the page. Answers once it is set to go.
+    let unhandled : Probe<string, bool> =
+        { Name = "__probeUnhandled"
+          EncodeAsk = Encode.string
+          DecodeAsk = Decode.string
+          EncodeAnswer = Encode.bool
+          DecodeAnswer = Decode.bool }
+
     /// Where an element is scrolled to and how far it could be — its own scroll box, as
     /// `scrollTop`/`scrollLeft` and the scroll and client extents report them.
     [<RequireQualifiedAccess>]

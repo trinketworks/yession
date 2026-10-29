@@ -61,6 +61,19 @@ type LocalCopy =
     /// served. It is this page load, and the next one may read the store again.
     | Unread of reason: string
 
+/// An error this page did not expect and nothing handled: thrown, or a promise rejected, with
+/// nobody waiting on it. The browser reports it to the page (`error`, `unhandledrejection`)
+/// and to the console, and to no person. Raised while the page is still on its way to its
+/// session, it can stop the way there: the page then sits on its last word, "connecting", for
+/// as long as it is open, with nothing to press and no reason given. It is kept so somebody who
+/// asks (the status line's disclosure) can read it on a phone with no console, beside a reload.
+type PageFault =
+    { /// The error's kind (`TypeError`, a `DOMException`'s name), or what was rejected.
+      Name : string
+      Message : string
+      /// The frames the browser reported, innermost first. Empty where it reported none.
+      Stack : string list }
+
 module LocalCopy =
 
     /// Whether what is folded is the reader's own picture, drawn at once.
@@ -1677,6 +1690,9 @@ type ClientModel =
       /// What this device holds of the session's history, and whether it can hold any
       /// (`LocalCopy`).
       LocalCopy : LocalCopy
+      /// The first unexpected error on this page (`PageFault`). The first, because what
+      /// follows one is usually its consequence.
+      PageFault : PageFault option
       Synced        : SyncedSessionState<Ylmish.Text>
       Conversation  : ConversationProjection
       /// The terminal half of the chat (Plan 14, stage 1): block chips and lease-stretch
@@ -2181,6 +2197,18 @@ type DomMove =
     /// Scroll the conversation to one command's chip and mark it — the tray's `running`
     /// press, which takes a reader to the command the way a chapter takes them to a message.
     | RevealCommand of TerminalId * BlockId
+    /// Scroll the settings pane to one query's panel, and mark one of its rows when the
+    /// press can name exactly one — the status strip's pull-requests line, taken to the
+    /// row it is about the way a chapter is taken to a message. `None` when the press
+    /// cannot name a single row (more than one pull request, or none), where the panel
+    /// itself is still a landing worth having.
+    ///
+    /// Carries its own focus, unlike `ToggleSettingsMsg`'s `FocusSettingsToggle`: that one
+    /// lands on the face's own pivot, at the pane's foot, which is the right place to land
+    /// a reader who only asked to GO to settings, and the wrong one for a reader who asked
+    /// to be shown something in it — landing there would drag the scrollport down past
+    /// what this move just scrolled to.
+    | RevealQueryRow of query: string * row: string option
     /// Scroll the pane's strip the least distance that shows its selected tab whole
     /// (`ClientModel.pivotReveal`).
     | RevealPivot
@@ -2245,6 +2273,8 @@ type ClientMsg =
     /// Part of this client's own store did not answer in time, or failed, at boot
     /// (`Client.LocalOpen.run`): the page goes on without it (`LocalCopy.Unread`).
     | LocalStoreFaultMsg of reason: string
+    /// An error nothing handled (`PageFault`).
+    | PageFaultMsg of PageFault
     /// A read of the log failed and is being tried again: reported by the resilience policy
     /// composed with the transport, which is the one place that knows a retry is under way.
     /// A read that fails for good is its answer's to say (`EventsReadMsg`), and a page that
@@ -2897,6 +2927,7 @@ module ClientModel =
           // The browser says otherwise when it has nowhere to keep history; the server
           // renders this shell too, and has no store to read.
           LocalCopy = LocalCopy.Reading
+          PageFault = None
           Synced = (SyncedSessionState.empty CollabText.ylmish)
           Conversation = ConversationProjection.empty
           Approvals = RepoApprovals.empty
@@ -4554,16 +4585,23 @@ module ClientModel =
         | said -> said
 
     /// What a chapter's DIVIDER in the timeline says: the name somebody chose, and nothing
-    /// for a chapter still wearing the guess.
+    /// for a chapter still wearing a guess that would repeat the item under it.
     ///
-    /// The guess is the opening message's own words (`Chapters.defaultName`), and the divider
-    /// stands directly above that message — so printing it there says the same sentence twice,
-    /// one line apart. A name only earns the divider once it says something the message under
-    /// it does not: a person's, or the model's. The list of chapters keeps `chapterName`,
-    /// guess and all, because there a name is how one entry is told from the next and no
-    /// message is beside it.
+    /// "Repeat" is the test, not "unwritten": the ordinary guess is the opening message's own
+    /// words (`Chapters.defaultName` with nothing from the policy), and the divider stands
+    /// directly above that message — so printing it there says the same sentence twice, one
+    /// line apart. But a chapter the POLICY opened (`AutoChapters`, a pull request's own
+    /// milestone) never gets touched, so it wears that guess for good (`AutoChapters.fs`) —
+    /// and the policy's words ("Merged PR #12 …") are never what the item itself renders (a
+    /// card, not that sentence), so hiding them loses the only name that chapter will ever
+    /// have. A name earns the divider once it says something the message under it does not —
+    /// a person's, the model's, or the policy's own, which the message never repeats either.
+    /// The list of chapters keeps `chapterName`, guess and all, because there a name is how
+    /// one entry is told from the next and no message is beside it.
     let chapterRuleName (model: ClientModel) (item: ConversationItem) : string =
-        if Chapters.unwritten CollabText.ylmish AutoChapters.policy model.Synced.Chapters item then ""
+        let stillGuessing = Chapters.unwritten CollabText.ylmish AutoChapters.policy model.Synced.Chapters item
+        let guessIsThePolicysOwn = AutoChapters.policy.Guess item |> Option.isSome
+        if stillGuessing && not guessIsThePolicysOwn then ""
         else chapterName model item
 
     /// What the chapter at this message is called, for a surface that has an id and not the
@@ -4631,6 +4669,19 @@ module ClientModel =
                 | None -> None)
         | _ -> []
 
+    /// The one row the status strip's pull-requests line can point a press at: the
+    /// `pull_requests` query's row, when it has exactly one — read off the SAME values
+    /// `prStandings` reads, for `prStandings`' own reason (one parse, so the strip's word
+    /// and the panel's row never disagree about which pull request is which). `None` with
+    /// more than one row, or none, where naming one would be a guess.
+    let prPanelRow (model: ClientModel) : string option =
+        match model.Queries.Values |> Map.tryFind PrStatus.Columns.query with
+        | Some (RowsOf [ row ]) ->
+            row
+            |> List.tryFind (fun (key, _) -> key = PrStatus.Columns.pr)
+            |> Option.map (snd >> QueryCell.describe)
+        | _ -> None
+
     /// Whether a Claude credential this person can see wants signing in again. The sidebar's
     /// agent row and the header's agent standing both ask it, so it is asked here once.
     let claudeNeedsSignIn (model: ClientModel) : bool =
@@ -4671,7 +4722,7 @@ module ClientModel =
     /// reports them to the Manager in. The sidebar's status block says each of them, and the
     /// reopen chevron wears the worst while the sidebar is shut.
     let standings (model: ClientModel) : Standings.Standing list =
-        Option.toList (agentStanding model) @ Option.toList (PrStatus.summary (prStandings model))
+        Standings.AgentStatus.withWatched (Option.toList (PrStatus.summary (prStandings model))) (agentStanding model)
 
     /// What a pull-request watch puts in front of the tab name, for somebody who is not
     /// looking at this tab at all — the only surface that reaches them there.
@@ -4946,6 +4997,7 @@ module ClientModel =
         match msg with
         | ConnectingMsg -> { model with Link = SessionLink.connecting model.Link }
         | LocalStoreFaultMsg reason -> { model with LocalCopy = LocalCopy.unread reason model.LocalCopy }
+        | PageFaultMsg fault -> { model with PageFault = model.PageFault |> Option.orElse (Some fault) }
         // Late: the wait it timed has already ended, and slow describes only a running one.
         | EffortSlowMsg -> { model with Link = SessionLink.slowed model.Link }
         | PageWaitedMsg -> { model with Waited = true; Link = SessionLink.waited model.Link }
@@ -5622,6 +5674,12 @@ module ClientModel =
             match TimelineProjection.blockTurn block model.Timeline with
             | Some turn -> { model with OpenFolds = Set.add (FoldKey.Task turn) model.OpenFolds }
             | None -> model
+        // The settings face has to be the one on screen before anything in it can be
+        // scrolled to — `columnOn` for the reason every other way into the column goes
+        // through it: the next press into settings must not find a drawer open and a
+        // pane forgotten.
+        | MoveMsg (DomMove.RevealQueryRow _) ->
+            columnOn { model with Column = { model.Column with Face = ColumnFace.Settings } }
         // The way back pressed: the reader follows the surface's end from here, which is
         // what takes them to it (`Tail` puts a follower at the end after the render).
         | MoveMsg (DomMove.JumpToLatest surface) -> reading surface None model

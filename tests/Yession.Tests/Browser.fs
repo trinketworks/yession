@@ -1998,6 +1998,7 @@ let tests =
 
                 // Connect one WITHOUT closing the drawer — the flow a person is actually in
                 // when they sign in, and the one that used to leave the note behind.
+                do! awaitU (pageA.ClickAsync "[data-claude-use-token]")
                 do! awaitU (pageA.FillAsync ("[data-claude-token]", "sk-ant-oat01-browser-case"))
                 do! awaitU (pageA.ClickAsync "[data-claude-save-token]")
                 do! waitVisible "the panel to say the account is connected" pageA "[data-claude-connected='mine']"
@@ -2131,6 +2132,25 @@ let tests =
                 let report = "[" + Yession.App.Dom.attr Yession.App.Dom.Hooks.degraded Yession.App.Dom.Text.degradedConnecting + "]"
                 do! Wait.until "the connect to be reported where a phone reader can see it"
                         (fun () -> Probe.seen page report)
+                        (List.exists (fun seen -> seen.Painted))
+            }
+
+        // An error nothing handled, raised while the page is on its way to its session, can
+        // stop it there, and the page had said "connecting" for as long as it was open with
+        // nothing to press. The handshake is held as above, so the page is still on its way
+        // when the error comes (`Probes.unhandled`); the way to start again is on screen where
+        // a phone reader can see it.
+        sessionCase "an error on a page's way to its session puts a reload on screen" <|
+            fun page ->
+            async {
+                let signal = "**" + Yession.App.RelativeUrl.under "" (Yession.App.SessionRoute.relative Yession.App.SessionRoute.Signal)
+                do! awaitU (page.RouteAsync (signal, fun route ->
+                        if route.Request.Method <> "POST" then route.ContinueAsync () |> ignore))
+                do! awaitU (page.SetViewportSizeAsync (390, 844))
+                let! _ = await (page.ReloadAsync ())
+                do! Probe.unhandled page "stopped on purpose"
+                do! Wait.until "a reload on screen where a phone reader can see it"
+                        (fun () -> Probe.seen page "[data-page-reload]")
                         (List.exists (fun seen -> seen.Painted))
             }
 
@@ -3198,6 +3218,41 @@ let editorTests =
                 Expect.stringContains md "# Heading one" "heading serialized to markdown"
                 Expect.stringContains md "**bold**" "bold serialized to markdown"
                 Expect.stringContains md "* item one" "bullet serialized to markdown"
+            }
+
+        // A block an input rule makes has to LOOK like that block while it is typed. The reset
+        // strips every default a bare `<blockquote>`, `<pre>` or `<ul>` had, so a composer that
+        // drew them bare turned `> ` into a quote nobody could see.
+        fixtureCase "a quote typed in the composer draws its rule" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "> quoted")
+                do! waitPresent ".ProseMirror blockquote to be on the page" page "#host .ProseMirror blockquote"
+                let! rule = Probe.computed page "#host .ProseMirror blockquote" "border-left-width"
+                Expect.notEqual rule (Some "0px") "the quote draws a rule beside it"
+            }
+
+        // An outline and not a fill: the focused composer is already on the top grey, so a
+        // filled block drew on its own colour and could not be seen.
+        fixtureCase "a code block typed in the composer draws its outline" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "```")
+                do! waitPresent ".ProseMirror pre to be on the page" page "#host .ProseMirror pre"
+                let! outline = Probe.computed page "#host .ProseMirror pre" "border-top-width"
+                Expect.equal outline (Some "1px") "the code block draws a hairline round it"
+            }
+
+        fixtureCase "a bullet list typed in the composer draws its bullets" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "- item")
+                do! waitPresent ".ProseMirror ul to be on the page" page "#host .ProseMirror ul"
+                let! marker = Probe.computed page "#host .ProseMirror ul" "list-style-type"
+                Expect.equal marker (Some "disc") "the list draws a bullet per item"
             }
 
         // Addressing somebody is reachable from the keyboard alone: an @ greys in the rest of a
@@ -9045,6 +9100,22 @@ let frontedTests =
                 finally
                     stopFronted deployed
             }
+
+        // `/control/*` is the Manager's API for its sessions, which dial its socket and never
+        // the door. Behind the door a launch secret alone gates it, so the proxy answers it
+        // itself. A Manager reached would answer 401 for the missing secret, not 404.
+        testCaseAsync "the door answers the Manager's control routes with 404" <|
+            async {
+                let deployed = deployFronted ()
+                try
+                    use client = new HttpClient ()
+                    use request = new HttpRequestMessage (HttpMethod.Get, deployed.Origin + "/control/status")
+                    request.Headers.Add ("Tailscale-User-Login", FRONTED_LOGIN)
+                    let! answer = client.SendAsync request |> Async.AwaitTask
+                    Expect.equal (int answer.StatusCode) 404 "a tailnet member is not sent to the control API"
+                finally
+                    stopFronted deployed
+            }
     ]
 
 // --- The management page's filters (browser) ----------------------------------------------
@@ -9106,6 +9177,81 @@ let filterTests =
                                 addressAndChip
                                 (fun (at, href) -> at.AbsolutePath = "/" && not (at.Query.Contains "show=archived") && offers href)
                         ()
+                        }
+                    })
+                finally
+                    manager.Stop ()
+            }
+    ]
+
+// --- A display name on the management page (browser) -------------------------------------
+//
+// A display name is the session's to choose and every peer's to edit, and the Manager page
+// puts it in the accessible name of each verb on the row. The renderer once read that hole as
+// text, so a `"` in the name closed the attribute and the rest of it was markup, in every
+// operator's browser. The row that carries it here ARRIVES, over the rows stream, because the
+// page's own parse of a fragment is the second place the name could become markup.
+
+let private hostileDataDir = "tests/browser/.data-hostile-name"
+
+let private HOSTILE_ID = "hostile-name"
+
+let private HOSTILE_NAME = "<script>window.pwned=1</script>\" onanimationstart=\"window.pwned=1"
+
+/// A Manager whose registry already holds the session, named by its worst-case peer.
+let private seedHostile () =
+    if Directory.Exists hostileDataDir then Directory.Delete (hostileDataDir, true)
+    Directory.CreateDirectory hostileDataDir |> ignore
+    let id = Yession.Domain.SessionId.create HOSTILE_ID |> Result.defaultWith failwith
+    let record : Yession.Manager.SessionRecord =
+        { SessionId = id
+          DisplayName = HOSTILE_NAME
+          CreatedAt = DateTimeOffset.UtcNow
+          DataDir = sprintf "sessions/%s" HOSTILE_ID
+          ArchivedAt = None }
+    let state =
+        Yession.Manager.ManagerState.addSession record Yession.Manager.ManagerState.empty
+        |> Result.defaultWith failwith
+    File.WriteAllText (Path.Combine (hostileDataDir, "manager.json"), Yession.Manager.ManagerCodec.toString state)
+
+// One case at a time (`BrowserRunner`): a case's Manager starts by emptying `hostileDataDir`.
+let hostileNameTests =
+    testSequenced <| testList "A display name on the management page (browser)" [
+        testCaseAsync "a row that arrives keeps a hostile display name inside its accessible name" <|
+            async {
+                seedHostile ()
+                let manager =
+                    deployProduct
+                        "the Manager"
+                        [ "--auth"; "localhost"; "--secrets"; "ephemeral"
+                          "--port"; "0"; "--data-dir"; hostileDataDir ]
+                        []
+                        (fun line -> line.Contains "management UI at")
+                try
+                    do! withContexts (fun contexts -> async {
+                        let! page = contexts.Page None
+                        page.SetDefaultTimeout 30000.0f
+                        let evidence = watching page
+                        do! reporting "a hostile display name" page evidence <| async {
+                        // Both filters lit, so the row stays on the page once it is archived.
+                        let! _ = await (page.GotoAsync (manager.At "/?show=active&show=archived"))
+                        let archive = Sel.hookIs Yession.App.Dom.Manager.archive HOSTILE_ID
+                        do! Wait.until "the session's row on the first paint" (fun () -> Read.count page archive) (fun n -> n = 1)
+                        // Archived from outside the page, so the row the page then shows is one
+                        // the rows stream carried and the page parsed.
+                        use client = new HttpClient ()
+                        let! archived =
+                            client.PostAsync (manager.At (sprintf "/sessions/%s/archive" HOSTILE_ID), new StringContent "")
+                            |> Async.AwaitTask
+                        Expect.isTrue archived.IsSuccessStatusCode "the session is archived"
+                        let unarchive = Sel.hookIs Yession.App.Dom.Manager.unarchive HOSTILE_ID
+                        do! Wait.until "the archived row, from the stream"
+                                (fun () -> Read.attr page unarchive "aria-label")
+                                (fun label -> label = Some ("Unarchive " + HOSTILE_NAME))
+                        let! handler = Read.attr page unarchive "onanimationstart"
+                        Expect.isNone handler "the name added no attribute to the control"
+                        let! pwned = Yession.Tests.PageScript.PageScript.held<System.Text.Json.JsonElement> page "pwned"
+                        Expect.equal pwned.ValueKind System.Text.Json.JsonValueKind.Null "nothing in the name ran"
                         }
                     })
                 finally
@@ -9460,6 +9606,7 @@ let keptOpenTests : Fable.Pyxpecto.Model.TestCase = testList "Opening a session 
 let filterTests : Fable.Pyxpecto.Model.TestCase = testList "The management page's filters (browser)" []
 let installedAppTests : Fable.Pyxpecto.Model.TestCase = testList "Opening a session from an installed Manager (browser)" []
 let pressTests : Fable.Pyxpecto.Model.TestCase = testList "Pressing Create (browser)" []
+let hostileNameTests : Fable.Pyxpecto.Model.TestCase = testList "A display name on the management page (browser)" []
 let openingTests : Fable.Pyxpecto.Model.TestCase = testList "The opening page (browser)" []
 
 #endif

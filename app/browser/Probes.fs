@@ -83,6 +83,10 @@ let private ownTexts (selector: string) : string list =
 let private databases (_: int) : JS.Promise<string list> =
     IndexedDb.names () |> Promise.map List.ofArray
 
+let private unhandled (message: string) : bool =
+    Browser.Dom.window.setTimeout ((fun () -> raise (exn message)), 0) |> ignore
+    true
+
 let private scrollOf (element: Element) : Probes.Scroll =
     Probes.Scroll.create
         element.scrollTop element.scrollLeft element.scrollHeight element.scrollWidth
@@ -458,6 +462,7 @@ awaiting Probes.framing framing
 awaiting Probes.frames frames
 answering Probes.ownTexts ownTexts
 awaiting Probes.databases databases
+answering Probes.unhandled unhandled
 answering Probes.scroll scroll
 answering Probes.scrollTo scrollTo
 answering Probes.reveal reveal

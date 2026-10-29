@@ -2851,7 +2851,11 @@ module SessionTerminals =
                             let! spawned =
                                 (environmentFor sandbox).Spawn
                                     { Executable = shell.Executable
-                                      Arguments = shell.Arguments @ [ "pwd && cd \"$1\" && pwd"; "sh"; path ]
+                                      // `cd -- -` is `cd "$OLDPWD"`, so the path goes as a
+                                      // `PathOperand`: `./-` is a directory named `-`.
+                                      Arguments =
+                                        shell.Arguments
+                                        @ [ "pwd && cd -- \"$1\" && pwd"; "sh"; PathOperand.value (PathOperand.ofPath path) ]
                                       Env = Map.empty
                                       WorkingDirectory = None
                                       // A `cd` and two `pwd`s: housekeeping, not work.

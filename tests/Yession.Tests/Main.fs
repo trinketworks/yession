@@ -129,6 +129,7 @@ let all =
         Tag.needs "Srt integration" [ Tag.Srt ] (fun () -> SrtIntegration.tests)
         Tag.needs "Srt sandboxes side by side" [ Tag.Srt; Tag.Ports ] (fun () -> SrtIntegration.siblings)
         Tag.needs "Srt terminals" [ Tag.Srt; Tag.Pty ] (fun () -> SrtIntegration.terminals)
+        Tag.needs "The file tools' operands" [ Tag.Sandbox ] (fun () -> SrtIntegration.fileOperands)
         Tag.needs "Git integration" [] (fun () -> GitIntegration.tests)
         // The route a sandbox's git takes to github.com without holding a credential. Its
         // git-driven half asks for `Ports` inside.
@@ -220,6 +221,7 @@ let all =
         Tag.needs "The management page's filters (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.filterTests)
         Tag.needs "Opening a session from an installed Manager (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.installedAppTests)
         Tag.needs "Pressing Create (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.pressTests)
+        Tag.needs "A display name on the management page (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.hostileNameTests)
         Tag.needs "The opening page (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.openingTests)
         // LAST, and it has to be: it asks what is still open, which is only a question worth
         // asking once nothing else will open anything.

@@ -47,8 +47,8 @@ http:// {
 	# time, level and logger every Caddy line carries. Enough to see which step of a slow open hung (the `/open` screen, its readiness
 	# poll, the sign-in bounce, the shell), and nothing about who asked. On stdout, apart
 	# from Caddy's own errors on stderr, so whatever keeps this process's output keeps it.
-	# The sign-in bounce carries a one-time code and its state in the query, so those two
-	# are dropped from the URI.
+	# The sign-in bounce carries a one-time code and its state in the query, and a headless
+	# client's peer token rides the query as `token`, so those three are dropped from the URI.
 	log {
 		output stdout
 		format filter {
@@ -57,6 +57,7 @@ http:// {
 				request>uri query {
 					delete code
 					delete state
+					delete token
 				}
 				request>remote_ip delete
 				request>remote_port delete
@@ -80,6 +81,14 @@ http:// {
 	# `--watch` that adapt runs every second, so give main.mjs `--empty '# no sessions'`:
 	# an EMPTY import is a warning too, and one a line a second for as long as nothing runs.
 	import {$YESSION_PROXY_SESSIONS}
+
+	# `/control/*` is the Manager's API for its own sessions, which dial it on the Manager's
+	# socket and never through this door. Behind the door it is gated by a launch secret
+	# alone, so nobody on the tailnet is sent to it. Sessions serve no `/control` family under
+	# their mounts, so the session map needs no such refusal.
+	handle /control/* {
+		respond 404
+	}
 
 	# Everything else is the Manager's. The identity translation happens here and ONLY here:
 	# a session authenticates its visitors through the Manager as OIDC issuer, never by

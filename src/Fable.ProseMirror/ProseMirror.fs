@@ -281,6 +281,77 @@ module ProseMirror =
     /// tables.
     let tableMdParser : MarkdownParser = newMarkdownParser markdownParserClass tableSchema (newTableTokenizer markdownItClass) tableTokens
 
+    // --- A schema whose nodes and marks draw with classes ----------------------------------
+    // The markdown schema's `toDOM` draws bare tags (`<blockquote>`, `<pre>`, `<ul>`), and the
+    // CSS reset strips every default they had, so a block typed in an editor over that schema
+    // is the right node drawn as plain text. A caller that styles with classes gets a copy of a
+    // schema whose `toDOM` puts its classes on the outermost element — the same nodes and marks
+    // by name, so a fragment, the serializer and y-prosemirror read it exactly as the original.
+
+    [<Emit("Array.isArray($0)")>]
+    let private isJsArray (value: obj) : bool = jsNative
+    /// Whether a `toDOM` output's second slot is its attributes, rather than a child (an array,
+    /// a DOM node) or the content hole (`0`).
+    [<Emit("(function (v) { return typeof v === 'object' && v !== null && !Array.isArray(v) && !('nodeType' in v); })($0)")>]
+    let private isDomAttrs (value: obj) : bool = jsNative
+    [<Emit("Object.assign({}, $0, { class: $1 })")>]
+    let private withClassAttr (attrs: obj) (cls: string) : obj = jsNative
+
+    /// A `toDOM` output (`[tag, attrs?, ...children]`) with `cls` on its outermost element.
+    let private classed (cls: string option) (out: obj) : obj =
+        match cls with
+        | Some cls when isJsArray out ->
+            let parts : obj[] = unbox out
+            if parts.Length > 1 && isDomAttrs parts.[1] then
+                Array.append [| parts.[0]; withClassAttr parts.[1] cls |] parts.[2..]
+            else
+                Array.append [| parts.[0]; withClassAttr null cls |] parts.[1..]
+        | _ -> out
+
+    [<Emit("$0.spec.nodes")>]
+    let private specNodes (s: Schema) : obj = jsNative
+    [<Emit("$0.spec.marks")>]
+    let private specMarks (s: Schema) : obj = jsNative
+    /// `OrderedMap.forEach`, which hands over each name and its spec.
+    [<Emit("$0.forEach($1)")>]
+    let private specsForEach (specs: obj) (visit: System.Func<string, obj, unit>) : unit = jsNative
+    [<Emit("$0.update($1, $2)")>]
+    let private specsUpdate (specs: obj) (name: string) (spec: obj) : obj = jsNative
+    /// A spec's `toDOM`: a node's is called with the node, a mark's with the mark and whether
+    /// it is inline. Nodes that never draw (`doc`, `text`) have none.
+    [<Emit("$0.toDOM")>]
+    let private specToDom (spec: obj) : System.Func<obj, obj, obj> option = jsNative
+    [<Emit("Object.assign({}, $0, { toDOM: $1 })")>]
+    let private specWithToDom (spec: obj) (toDom: System.Func<obj, obj, obj>) : obj = jsNative
+    [<Emit("new ($0)({ nodes: $1, marks: $2 })")>]
+    let private newSchema (cls: obj) (nodes: obj) (marks: obj) : Schema = jsNative
+
+    let private classedSpecs (specs: obj) (classOf: obj -> string option) : obj =
+        let out = ref specs
+        specsForEach specs (System.Func<string, obj, unit>(fun name spec ->
+            specToDom spec
+            |> Option.iter (fun draw ->
+                let drawClassed = System.Func<obj, obj, obj>(fun value inline' -> classed (classOf value) (draw.Invoke (value, inline')))
+                out.Value <- specsUpdate out.Value name (specWithToDom spec drawClassed))))
+        out.Value
+
+    /// `baseSchema` again, with each node drawn wearing `nodeClass node` and each mark
+    /// `markClass mark`, where they answer one.
+    let classedSchema (baseSchema: Schema) (nodeClass: Node -> string option) (markClass: Mark -> string option) : Schema =
+        newSchema
+            schemaClass
+            (classedSpecs (specNodes baseSchema) (unbox >> nodeClass))
+            (classedSpecs (specMarks baseSchema) (unbox >> markClass))
+
+    [<Emit("$0.tokenizer")>]
+    let private parserTokenizer (p: MarkdownParser) : obj = jsNative
+
+    /// `mdParser`'s dialect — its tokenizer, `file:///` admission and all — building nodes of
+    /// `s`. A document is only ever inserted into a state over its own schema, so an editor
+    /// over a `classedSchema` parses its pastes with this.
+    let mdParserFor (s: Schema) : MarkdownParser =
+        newMarkdownParser markdownParserClass s (parserTokenizer mdParser) (parserTokens mdParser)
+
     // --- prosemirror-state / -view ---------------------------------------------------------
 
     /// What `EditorState.create` is handed — the fields this repository sets. Built by

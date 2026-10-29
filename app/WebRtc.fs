@@ -194,7 +194,7 @@ module Answering =
         : Async<Result<string, string>> =
         async {
             let complete () = async { let! answer = gathered in return Ok answer }
-            match! Resilience.Policy.deadline sleep limit () ignore complete () with
+            match! Resilience.Policy.deadline sleep limit () (fun _ -> Some ()) complete () with
             | Ok answer -> return Ok answer
             | Error () ->
                 match soFar () with

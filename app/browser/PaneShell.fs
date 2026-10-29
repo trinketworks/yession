@@ -316,8 +316,16 @@ let onDesktop () : bool = mediaMatches Yession.App.Style.wideMedia
 /// Two, because the face that is arriving is `visibility: hidden` until the transition it just
 /// started reaches its first style flush, and `focus()` on a hidden element is a no-op — which
 /// was measured: one frame left focus on `<body>`.
+///
+/// `focusPreventScroll`, not `focusFirst`: the control this lands on is the face's own
+/// pivot, at a fixed corner (the head's collapse chevron, the foot's back/forward button)
+/// — chrome that is reachable by Tab regardless, never the reason a reader opened the
+/// face. A face taller than the screen opened to its TOP; a plain `focus()` on its foot
+/// control then dragged the newly-opened pane straight back down to the bottom to show a
+/// button nobody asked to see, which is what a reader who opened settings to read it met
+/// instead of settings.
 let private focusSettingsFace (selector: string) : unit =
-    nextFrame (fun () -> focusFirst selector)
+    nextFrame (fun () -> find selector |> Option.iter focusPreventScroll)
 
 /// The sidebar column (`Yession.App.Column`), as classes on the root element: outside `#app`,
 /// so a Lit re-render never fights the column's transition — the same mechanism as `setOpen`
@@ -408,6 +416,43 @@ let revealCommand (terminalId: string) (blockId: string) : unit =
             reflow chip
             chip.classList.add [| "animate-reveal-line" |]
             chip.focus ()))
+
+/// Scroll the settings pane to one query's panel, and flash it — `revealMessage`'s two
+/// moves, aimed at the settings face. Flashes the one row named, when there is one
+/// (`data-query-row`, `tabindex="-1"` like a message's own article); otherwise the panel
+/// itself (`data-query-panel`, `tabindex="-1"` for the same reason) — a landing even when
+/// the press could not name a single row.
+///
+/// Focus lands on whichever was flashed, and nowhere else: `FocusSettingsToggle`'s own
+/// landing is the face's pivot at the pane's foot, and focusing that AFTER this would pull
+/// the scrollport back down past what was just scrolled to. This move carries its own
+/// focus instead, for the reason `revealMessage`'s comment gives — a keyboard reader taken
+/// somewhere and left stranded elsewhere has not really been taken there.
+///
+/// TWO frames on, not one: the target lives on the settings face, which this move's own
+/// model change (`ClientModel.update`, `RevealQueryRow`) may just have turned to for the
+/// first time, and the face is `visibility: hidden` until the transition it started reaches
+/// its first style flush — `focusSettingsFace`'s measurement, which applies here for the
+/// same reason.
+let revealQueryRow (query: string) (row: string option) : unit =
+    nextFrame (fun () -> nextFrame (fun () ->
+        let panel = find (sprintf "[data-settings-panel] [data-query-panel=\"%s\"]" query)
+        let named =
+            row
+            |> Option.bind (fun row ->
+                panel
+                |> Option.bind (fun panel ->
+                    match panel.querySelector (sprintf "[data-query-row=\"%s\"]" row) with
+                    | null -> None
+                    | element -> Some (element :?> HTMLElement)))
+        match named |> Option.orElse panel with
+        | None -> ()
+        | Some target ->
+            scrollIntoMiddle target
+            target.classList.remove [| "animate-reveal-line" |]
+            reflow target
+            target.classList.add [| "animate-reveal-line" |]
+            target.focus ()))
 
 /// The "jump to latest" press: the keyboard put where the reader now is. Taking them there
 /// is the model's (the press makes them follow the surface's end, and `Tail` puts a follower
@@ -524,6 +569,7 @@ let rec move (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.RevealMessage messageId -> revealMessage (Yession.Domain.MessageId.value messageId)
     | Yession.App.DomMove.RevealCommand (terminalId, blockId) ->
         revealCommand (Yession.Domain.TerminalId.value terminalId) (Yession.Domain.BlockId.value blockId)
+    | Yession.App.DomMove.RevealQueryRow (query, row) -> revealQueryRow query row
     | Yession.App.DomMove.JumpToLatest surface -> jumpToLatest surface
     // A frame on, for the render that drew the selection; not a placement, so not guarded.
     | Yession.App.DomMove.RevealPivot -> nextFrame Strip.revealSelected
@@ -566,6 +612,7 @@ and private place (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.RevealBlock _
     | Yession.App.DomMove.RevealMessage _
     | Yession.App.DomMove.RevealCommand _
+    | Yession.App.DomMove.RevealQueryRow _
     | Yession.App.DomMove.JumpToLatest _ -> move asked
     | Yession.App.DomMove.RevealPivot -> Strip.revealSelected ()
     | Yession.App.DomMove.FocusTerminalScreen terminal -> toTerminalScreen terminal

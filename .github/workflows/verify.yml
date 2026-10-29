@@ -91,7 +91,7 @@ jobs:
     outputs:
       matrix: ${{ steps.tiers.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - id: tiers
         env:
           # Read as data rather than interpolated into the script, for the reason the gate step
@@ -145,8 +145,8 @@ jobs:
     # it took three cases at a time. So 40, which `node` sets.
     timeout-minutes: ${{ matrix.tier == 'dispatch' && 150 || 40 }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v30
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
@@ -163,7 +163,7 @@ jobs:
       # drain runs, because the runner's post step reads the same step's setting; it covers
       # this step's own failure too, which is the same trade — a bad token stops the cache
       # filling rather than stopping delivery.
-      - uses: cachix/cachix-action@v17
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         continue-on-error: true
         with:
           name: yession

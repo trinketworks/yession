@@ -247,7 +247,7 @@ let private deadlineTests =
             async {
                 let bounded : unit -> Async<Result<string, Flaky>> =
                     (fun (_: unit) -> async { return Ok "served" })
-                    |> Resilience.Policy.deadline (fun _ -> never ()) (ms 10.0) Congested (fun _ -> Refused)
+                    |> Resilience.Policy.deadline (fun _ -> never ()) (ms 10.0) Congested (fun _ -> Some Refused)
                 let! result = bounded ()
                 Expect.equal result (Ok "served") "the limit never came due, so it never spoke"
             }
@@ -256,7 +256,7 @@ let private deadlineTests =
             async {
                 let bounded : unit -> Async<Result<string, Flaky>> =
                     (fun (_: unit) -> never ())
-                    |> Resilience.Policy.deadline instant (ms 10.0) Congested (fun _ -> Refused)
+                    |> Resilience.Policy.deadline instant (ms 10.0) Congested (fun _ -> Some Refused)
                 let! result = bounded ()
                 Expect.equal result (Error Congested) "a hang is a fault a policy can act on, not a wait forever"
             }
@@ -267,7 +267,7 @@ let private deadlineTests =
             let mutable late : (Result<string, Flaky> -> unit) option = None
             let bounded : unit -> Async<Result<string, Flaky>> =
                 (fun (_: unit) -> Async.FromContinuations (fun (ok, _, _) -> late <- Some ok))
-                |> Resilience.Policy.deadline instant (ms 10.0) Congested (fun _ -> Refused)
+                |> Resilience.Policy.deadline instant (ms 10.0) Congested (fun _ -> Some Refused)
             let settled = ResizeArray<Result<string, Flaky>> ()
             Async.StartWithContinuations (bounded (), settled.Add, ignore, ignore)
             Expect.equal (List.ofSeq settled) [ Error Congested ] "the deadline answered first"
@@ -278,9 +278,22 @@ let private deadlineTests =
             async {
                 let bounded : unit -> Async<Result<string, Flaky>> =
                     (fun (_: unit) -> async { return failwith "the store is gone" })
-                    |> Resilience.Policy.deadline (fun _ -> never ()) (ms 10.0) Congested (fun _ -> Refused)
+                    |> Resilience.Policy.deadline (fun _ -> never ()) (ms 10.0) Congested (fun _ -> Some Refused)
                 let! result = bounded ()
                 Expect.equal result (Error Refused) "a throw is a fault on the railway, not an exception past it"
+            }
+
+        testCaseAsync "an operation that throws what nobody expected raises it" <|
+            async {
+                // A throw nobody foresaw is a defect: settled as a fault, it would be retried
+                // or gone without, and never seen.
+                let bounded : unit -> Async<Result<string, Flaky>> =
+                    (fun (_: unit) -> async { return failwith "a defect" })
+                    |> Resilience.Policy.deadline (fun _ -> never ()) (ms 10.0) Congested (fun _ -> None)
+                let! result = bounded () |> Async.Catch
+                Expect.isTrue
+                    (match result with Choice2Of2 error -> error.Message = "a defect" | Choice1Of2 _ -> false)
+                    "the throw reached the caller as itself"
             }
 
         testCaseAsync "under a guard, a throw is ruled on like any other fault" <|
@@ -297,7 +310,7 @@ let private deadlineTests =
                     }
                 let guarded =
                     throwingOnce
-                    |> Resilience.Policy.deadline instant (ms 10.0) Congested (fun _ -> Congested)
+                    |> Resilience.Policy.deadline instant (ms 10.0) Congested (fun _ -> Some Congested)
                     |> Resilience.Policy.guard (held delays 3)
                 let! result = guarded ()
                 Expect.equal result (Ok "served") "the throw was retried"
@@ -316,7 +329,7 @@ let private deadlineTests =
                     }
                 let guarded =
                     hangingTwice
-                    |> Resilience.Policy.deadline instant (ms 10.0) Congested (fun _ -> Refused)
+                    |> Resilience.Policy.deadline instant (ms 10.0) Congested (fun _ -> Some Refused)
                     |> Resilience.Policy.guard (held delays 3)
                 let! result = guarded ()
                 Expect.equal result (Ok "served") "the attempt that answered is the one that counted"
@@ -1494,6 +1507,17 @@ let private releaseTests =
 
 // --- What the failure looks like ----------------------------------------------------------
 
+/// The error iOS Safari raises when it loses the page's IndexedDB connection: one a page
+/// could plausibly stop on.
+let private indexedDbLost : PageFault =
+    { Name = "UnknownError"
+      Message = "Connection to Indexed Database server lost"
+      Stack = [ "openDB@https://example.test/assets/client.js:1:2" ] }
+
+/// A page on `link` that has heard `indexedDbLost`.
+let private heardOnTheWay (link: SessionLink) : ClientModel =
+    { ClientModel.init (peer "ada" "Ada") with Link = link; PageFault = Some indexedDbLost }
+
 let private surfaceTests =
     testList "Degradation is visible and never blocking" [
         testCase "a refused client is offered a way back in; a connected one is not" <| fun () ->
@@ -1553,6 +1577,39 @@ let private surfaceTests =
             let model = ClientModel.init (peer "ada" "Ada")
             let html = Support.render { model with Link = SessionLink.Connecting { Effort.fresh with Slow = true } }
             Expect.isFalse (html.Contains "data-retry-now") "an attempt that is still running is not offered again"
+
+        // An error nothing handled can stop the page on its way to its session, and the page
+        // then said "connecting" for as long as it was open: no reason, nothing to press, and
+        // on a phone no console to read why.
+        testCase "an error heard on the way to the session is behind the connect's disclosure" <| fun () ->
+            let html = Support.render (heardOnTheWay (SessionLink.Connecting { Effort.fresh with Slow = true }))
+            Expect.isTrue
+                (html.Contains (Dom.Text.pageFaultWhy "UnknownError" "Connection to Indexed Database server lost"))
+                "the error is there for whoever asks"
+
+        testCase "an error heard on the way to the session offers a reload" <| fun () ->
+            let html = Support.render (heardOnTheWay (SessionLink.Connecting { Effort.fresh with Slow = true }))
+            Expect.isTrue (html.Contains "data-page-reload") "a reload is the way to start again"
+
+        testCase "an error heard on the way to the session keeps the connect's word" <| fun () ->
+            // Whether the error stopped anything is not knowable: one the page recovered from
+            // looks the same. So the line does not claim it did.
+            let html = Support.render (heardOnTheWay (SessionLink.Connecting { Effort.fresh with Slow = true }))
+            Expect.isTrue
+                (html.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedConnecting))
+                "the strip still reports a connect"
+
+        testCase "an error on a page that has its session is not on the strip" <| fun () ->
+            let html = Support.render (heardOnTheWay SessionLink.Current)
+            Expect.isFalse (html.Contains "data-page-reload") "a working page offers no reload"
+
+        testCase "the first error a page hears is the one it keeps" <| fun () ->
+            let model = ClientModel.init (peer "ada" "Ada")
+            let later = { Name = "TypeError"; Message = "a consequence"; Stack = [] }
+            let kept =
+                [ PageFaultMsg indexedDbLost; PageFaultMsg later ]
+                |> List.fold (fun m msg -> fst (ClientModel.update msg m)) model
+            Expect.equal kept.PageFault (Some indexedDbLost) "the cause, not what followed it"
 
         // A state has one name (docs/visual-design.md, Colour): a failing attempt to connect is
         // still connecting, and the failure is its reason. It used to change its word to
