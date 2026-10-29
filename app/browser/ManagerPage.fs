@@ -73,15 +73,12 @@ let private applyExpansion (root: Element) =
     for i in 0 .. rows.length - 1 do
         mark rows.[i]
 
-/// Markup the server rendered, parsed where it is going: in the context of the element it
-/// replaces, so a `<tr>` is parsed as a row of the table it lands in rather than dropped as a
-/// stray cell outside one.
-let private parseBeside (element: Element) (markup: string) : Element option =
-    let range = document.createRange ()
-    range.selectNode element
-    match (range.createContextualFragment (markup.Trim ())).querySelector "*" with
-    | null -> None
-    | parsed -> Some parsed
+/// Markup the server rendered, parsed inert: through a `<template>`, whose content takes any
+/// element (a `<tr>` is parsed as a row rather than dropped as a stray cell outside a table),
+/// and whose scripts never run, there or once the node is placed. A contextual fragment ran
+/// them, so markup that smuggled a `<script>` past the server's escaping ran as this page.
+/// The server's escaping is the fix (`Ssr`); this is the guard at the place the damage shows.
+let private parseBeside (markup: string) : Element option = Templates.firstElement (markup.Trim ())
 
 let private replace (current: Node) (replacement: Node) =
     current.parentNode.replaceChild (replacement, current) |> ignore
@@ -125,7 +122,7 @@ let private swap (element: Element option) (markup: string) =
         // The open row is put back on the fresh markup BEFORE it is compared or placed, so a
         // frame that says nothing new is still nothing new, and an open row arrives open
         // rather than folding and unfolding again under the reader.
-        match parseBeside element markup |> Option.map (fun fresh -> applyExpansion fresh; fresh) with
+        match parseBeside markup |> Option.map (fun fresh -> applyExpansion fresh; fresh) with
         | None -> ()
         | Some fresh when (fresh :?> HTMLElement).outerHTML = (element :?> HTMLElement).outerHTML -> ()
         | Some fresh ->

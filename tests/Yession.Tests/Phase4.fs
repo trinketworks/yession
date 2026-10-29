@@ -614,6 +614,38 @@ let private oneOfEach =
         ProcessManager.Status = ProcessManager.NotRunning
         ProcessManager.Standings = [] } ]
 
+/// A display name is the session's to choose and its peers' to edit, so it is hostile input to
+/// the Manager page. Every verb names the session in its accessible name, after text in the
+/// value (`aria-label="Stop {name}"`), which is the hole the renderer once read as text: a `"`
+/// closed the attribute and the rest of the name was markup. One case per verb that names it.
+/// (Withdraw names an MCP server, whose name cannot hold a quote: `McpServerName.create`.)
+let private hostileName = "x\" onanimationstart=\"a<b>&c"
+
+let private hostileNameEscaped = "x&quot; onanimationstart=&quot;a&lt;b&gt;&amp;c"
+
+let private hostileRow (archived: bool) (status: ProcessManager.SessionStatus) =
+    ManagerUi.sessionRow
+        { Record =
+            { uiRecord with
+                DisplayName = hostileName
+                ArchivedAt = (if archived then Some archivedAt else None) }
+          Status = status
+          Standings = [] }
+
+let private displayNameValueTests =
+    testList "A display name in an attribute value" [
+        for verb, archived, status in
+            [ "Unarchive", true, ProcessManager.NotRunning
+              "Stop", false, ProcessManager.Running (8199, 42, None)
+              "Start", false, ProcessManager.NotRunning
+              "Archive", false, ProcessManager.NotRunning ] ->
+            testCase (sprintf "the %s control's name is the display name, escaped as a value" verb) <| fun () ->
+                Expect.stringContains
+                    (hostileRow archived status)
+                    (sprintf "aria-label=\"%s %s\"" verb hostileNameEscaped)
+                    "the name stays inside the value it was put in"
+    ]
+
 let private uiRenderTests =
     testList "Management UI rendering (Step 25)" [
         // Opening is launching: the name is the way in from every state a session can be
@@ -694,7 +726,7 @@ let private uiRenderTests =
                     ((markOf shown).Contains (sprintf "data-attention=\"%s\"" (Yession.Domain.Standings.Attention.name attention)))
                     (sprintf "a %s row is marked %A" name attention)
             let stalledMark = markOf (row (ProcessManager.Running (8199, 42, None)) [ working; stalled ])
-            Expect.isTrue (stalledMark.Contains "aria-label=\"UI <Render>: 3 PRs · 1 stalled\"") "the mark says the session and the worst thing it said"
+            Expect.isTrue (stalledMark.Contains "aria-label=\"UI &lt;Render&gt;: 3 PRs · 1 stalled\"") "the mark says the session and the worst thing it said"
             Expect.isFalse (stalledMark.Contains "working") "and only the worst"
 
         // What the row unfolds to is in the markup, folded, and the mark is the control that
@@ -978,11 +1010,13 @@ let private uiRenderTests =
             Expect.isFalse (both.Contains Dom.Manager.openLink) "and nothing marked as the way in"
 
         testCase "an active session can be archived, by a control with a name" <| fun () ->
-            let active = ManagerUi.sessionRow { Record = uiRecord; Status = ProcessManager.NotRunning; Standings = [] }
+            let active =
+                ManagerUi.sessionRow
+                    { Record = { uiRecord with DisplayName = "UI \"<Render>\"" }; Status = ProcessManager.NotRunning; Standings = [] }
             Expect.isTrue (active.Contains (Dom.attr Dom.Manager.archive "ui-render")) "the row can be archived"
             // WCAG: the control's accessible name names WHICH session — a column of
             // "Archive" says nothing about which row you are on.
-            Expect.isTrue (active.Contains "aria-label=\"Archive UI &lt;Render&gt;\"") "named, and escaped"
+            Expect.isTrue (active.Contains "aria-label=\"Archive UI &quot;&lt;Render&gt;&quot;\"") "named, and escaped"
 
         testCase "the unlit filter links to the query that adds it, computed server-side" <| fun () ->
             let table = ManagerUi.sessionsTable SessionQuery.defaults oneOfEach
@@ -3783,6 +3817,7 @@ let tests =
         archiveTests
         queryTests
         uiRenderTests
+        displayNameValueTests
         publicAccessTests
         themeContrastTests
         peopleMarkTests
