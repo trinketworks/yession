@@ -9065,6 +9065,22 @@ let frontedTests =
                 finally
                     stopFronted deployed
             }
+
+        // `/control/*` is the Manager's API for its sessions, which dial its socket and never
+        // the door. Behind the door a launch secret alone gates it, so the proxy answers it
+        // itself. A Manager reached would answer 401 for the missing secret, not 404.
+        testCaseAsync "the door answers the Manager's control routes with 404" <|
+            async {
+                let deployed = deployFronted ()
+                try
+                    use client = new HttpClient ()
+                    use request = new HttpRequestMessage (HttpMethod.Get, deployed.Origin + "/control/status")
+                    request.Headers.Add ("Tailscale-User-Login", FRONTED_LOGIN)
+                    let! answer = client.SendAsync request |> Async.AwaitTask
+                    Expect.equal (int answer.StatusCode) 404 "a tailnet member is not sent to the control API"
+                finally
+                    stopFronted deployed
+            }
     ]
 
 // --- The management page's filters (browser) ----------------------------------------------
