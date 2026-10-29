@@ -3117,7 +3117,7 @@ module AgentSandbox =
 
     /// The agent's own sandbox policy: it reads and writes its scratch HOME and nothing
     /// else of the operator's, and reaches only the API hosts above. `WorkingDirectory`
-    /// is left to the SDK — the CLI is spawned wherever the session runs.
+    /// is left to the SDK, which asks for the scratch HOME (`Agent.optionsFor`).
     let policyFor (ambient: Map<string, string>) (home: string) (env: Map<string, string>) : SandboxPolicy =
         { ReadPaths = [ home ]
           WritePaths = [ home ]
@@ -3313,8 +3313,8 @@ module AgentSandbox =
         | HostBackend
         | DockerBackend -> hostClaudeSpawner ()
 
-    /// Everything the SDK needs to run one turn's CLI: the environment to give it, and the
-    /// spawner that puts it behind the seam.
+    /// Everything the SDK needs to run one turn's CLI: the environment to give it, the
+    /// scratch HOME it starts in, and the spawner that puts it behind the seam.
     ///
     /// One verb, because those two are one decision seen twice. The map the SDK is handed
     /// and the map the sandbox POLICY confines have to be the SAME map — a caller that
@@ -3332,12 +3332,12 @@ module AgentSandbox =
         (backend: SandboxBackend)
         (dataDir: string)
         (credential: (string * string) option)
-        : {| Env : Map<string, string>; Spawner : Sdk.Spawner |} =
+        : {| Env : Map<string, string>; Home : string; Spawner : Sdk.Spawner |} =
         let home = SessionLayout.agentHome dataDir
         Fs.ensureDir home
         let ambient = ambientEnv ()
         let env = envFor ambient home credential
-        {| Env = env; Spawner = claudeSpawnerFor backend ambient home env |}
+        {| Env = env; Home = home; Spawner = claudeSpawnerFor backend ambient home env |}
 
 // --- Backend selection --------------------------------------------------------------------
 
