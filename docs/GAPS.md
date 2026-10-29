@@ -131,9 +131,15 @@ The last section holds trust boundaries as sharp as the first section's.
   every session, so the boundary is the same. Authors stay `PeerRef`, so event ATTRIBUTION does
   not change. [deployment.md](deployment.md#what---auth-localhost-costs-here) gives both exits
   (`--secrets ephemeral`, `--auth trusted-headers`).
-- **No transport encryption guarantees beyond WebRTC/DTLS.** Everything binds 127.0.0.1, or a
-  unix socket under `trusted-headers`. Loopback HTTP is the RFC 8252 pattern. Nothing here is
-  LAN-safe without the operator's proxy in front.
+- **No transport encryption guarantees beyond WebRTC/DTLS.** The Manager and every session bind
+  127.0.0.1, or a unix socket under `trusted-headers`. Loopback HTTP is the RFC 8252 pattern.
+  Two listeners bind wider, because a sandbox has to reach them: the git gateway and the
+  credential proxy. Each binds where a sandbox reaches this host (`Interop.Doors`). On Linux
+  that is 127.0.0.1, 127.0.0.2, and a native Docker daemon's session network gateway. On macOS
+  it is 127.0.0.1 and every other address this host has, link-local aside, so a LAN or a
+  tailnet reaches them there. A capability minted per sandbox admits a request. The headers of
+  `app/GitGateway.fs` and `app/CredentialProxy.fs` say why. Nothing here is LAN-safe without
+  the operator's proxy in front.
 - **The Manager and Process read plaintext**, per the stated Phase 1–2 threat model. The design
   allows command-to-container encryption, but no code does it yet.
 - **The authentication strategy gates the management UI** (Plan 07). A `Denied` outcome is a 401
