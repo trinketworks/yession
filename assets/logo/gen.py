@@ -297,9 +297,9 @@ class Intro:
     def intro(self, key="intro"):
         body, defs = self.build([k/self.N for k in range(self.N + 1)], key)
         return svg(body, defs, "yession", extra=f' id="{key}"')
-    def mark(self, key="mark", label="yession"):
+    def mark(self, key="mark", label="yession", box="0 0 64 64"):
         body, defs = self.build([1.0], key, static=True)
-        return svg(body, defs, label)
+        return svg(body, defs, label, box=box)
 
 # ---- derived assets --------------------------------------------------------------------------
 def inner(s):
@@ -407,7 +407,13 @@ if __name__ == "__main__":
     I = Intro()
     out = {}
     out["intro.svg"] = I.intro()
-    out["logo.svg"] = I.mark()
+    # `box` crops the 7 units of air the object's own geometry leaves on every side of the
+    # default 64-wide box (see `icon()`'s docstring) down to zero on the left only: this is
+    # the one output the product sets beside flush-left things that are not it — the
+    # wordmark, and elsewhere on the page a status dot, a radio — and against those the air
+    # read as the mark sitting a few px right of the rail. `lockup()` and `icon()` take the
+    # body and defs only (`inner`), never this outer box, so neither moves.
+    out["logo.svg"] = I.mark(box="7 0 64 64")
     # on paper the black no longer darkens the body's middle, so the light variant is denser; a
     # bloom that is light on black is a smudge on white, so it is all but gone; and the agent's
     # sides already read against the ground, so they are not taken down
