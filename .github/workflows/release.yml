@@ -2,7 +2,8 @@ name: release
 
 # Trunk-based delivery: master is always production. Every push to master runs the full
 # verification gate and, when green, publishes a GitHub release with the npm package
-# tarball (`npm i -g` it; npm pulls the platform-native deps on install). Versions are
+# tarball (extract it, `npm ci --omit=dev`, `npm i -g` the directory: docs/deployment.md; npm
+# pulls the platform-native deps on install). Versions are
 # continuous delivery — 1.0.0-beta.<n>, auto-incrementing — with the major/minor/patch
 # triple moved by a `+semver:` marker in a commit message. The policy lives in tasks.fsx.
 

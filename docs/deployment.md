@@ -11,6 +11,31 @@ whatever sits in front of it. The integrations are worked examples that satisfy 
 
 ---
 
+## Installing a release
+
+The npm package is a release asset, `yession-<version>.tgz`. It carries `npm-shrinkwrap.json`,
+which pins every production dependency to the version the release was tested with. Install it
+like this:
+
+```sh
+mkdir -p ~/.local/share/yession
+tar -xzf yession-<version>.tgz --strip-components=1 -C ~/.local/share/yession
+(cd ~/.local/share/yession && npm ci --omit=dev)
+npm i -g ~/.local/share/yession
+```
+
+The directory is the install. `npm i -g` links the two commands to it, so do not delete the
+directory. To upgrade, extract the new tarball into a fresh directory and run the same steps.
+
+Do not run `npm i -g yession-<version>.tgz`. npm honours a dependency's shrinkwrap only when
+the package came from a registry, so an install by path or URL resolves the version ranges
+again and gets dependency versions no release was tested with. `npm ci` in the extracted
+directory reads the shrinkwrap as its own lockfile.
+
+A fix in a dependency therefore reaches you in a Yession release, not by reinstalling.
+
+---
+
 ## Options and variables
 
 The Manager takes what it **decides** as an option. What it **passes down** stays in the

@@ -1200,12 +1200,19 @@ let private shrinkwrapOf (dir: string) = Path.Combine (dir, "npm-shrinkwrap.json
 
 /// Pin the production tree the tarball installs to the one `check` ran: `dist/npm`'s manifest
 /// over the repository's own package-lock.json, pruned to what that manifest needs, as
-/// `npm-shrinkwrap.json`. npm honours a dependency's shrinkwrap, so `npm i -g` of the tarball
-/// installs these versions instead of resolving the manifest's `^` ranges afresh (which picked
-/// versions CI never ran, with install scripts on).
+/// `npm-shrinkwrap.json`. Without it, an install resolves the manifest's `^` ranges afresh and
+/// picks versions CI never ran, with install scripts on.
+///
+/// Which is why the documented install is `npm ci --omit=dev` in the EXTRACTED tarball, then
+/// `npm i -g` of that directory (docs/deployment.md, "Installing a release"), and never
+/// `npm i -g <tarball>`. npm honours a dependency's shrinkwrap only when its manifest carries
+/// `_hasShrinkwrap`, which only a registry packument sets: pacote strips `_` fields from a
+/// tarball's own package.json, so a tarball installed by path or URL floats, shrinkwrap or not.
+/// `npm ci` in the extracted directory reads the shrinkwrap as the ROOT lockfile, which it
+/// honours. `install-smoke` installs the same way and holds the result to the shrinkwrap.
 ///
 /// The cost is the point: a fix in a transitive dependency reaches an operator through a Yession
-/// release, never through `npm i -g` alone.
+/// release, never through reinstalling alone.
 ///
 /// `--package-lock-only --offline`: npm reconciles the lock against the manifest and fetches
 /// nothing, so a manifest the lock cannot satisfy fails here rather than resolving a new version.
@@ -1244,7 +1251,9 @@ let package (version: string) =
 
 // --- install-smoke: prove a clean npm install pulls the native deps and boots ----------------
 
-/// The install itself, into a directory of its own, retried.
+/// The install itself, as docs/deployment.md tells an operator to do it, retried: the tarball
+/// extracted into a directory of its own, `npm ci --omit=dev` there, and `npm i -g` of that
+/// directory into a scratch global prefix. Answers the install directory and the global `bin`.
 ///
 /// A clean install reaches two hosts this repository does not own: the registry, and the
 /// release assets a native addon's install script fetches its prebuilt binary from. The
@@ -1254,14 +1263,15 @@ let package (version: string) =
 /// arrive here as "the published package does not install". That took master red on two
 /// releases seven minutes apart, on a tarball that installed cleanly either side of them.
 ///
-/// So the FETCH is retried, which is what a person installing the package does, and each
-/// attempt gets a fresh prefix so a half-populated tree is never what the next one reads.
+/// So the FETCH (`npm ci`) is retried, which is what a person installing the package does, and
+/// each attempt gets a fresh directory so a half-populated tree is never what the next one reads.
+/// The global link fetches nothing, so it runs once, after.
 /// What the install was worth is still decided by the assertions below it rather than by
 /// this exit code: a package that resolves but carries no addon fails there, retries or no.
 ///
 /// A fetch can also STALL rather than fail, and a retry never sees that: the attempt simply does
 /// not end. So the attempts share one deadline, which a stalled one spends.
-let private installed (tgz: string) : string =
+let private installed (tgz: string) : string * string =
     let attempts = 3
     let pause (n: int) = TimeSpan.FromSeconds (10.0 * float n)
     // THE ATTEMPTS' BUDGET, made of the retry policy above so that it moves when that does.
@@ -1274,7 +1284,7 @@ let private installed (tgz: string) : string =
     // fit, which a budget sized for one would not let them. It sits far under `package:npm`'s
     // 25 minutes, whose steps before this one took at most 247s.
     let budget : Bound =
-        { Step = "install-smoke: npm install"
+        { Step = "install-smoke: npm ci"
           BudgetMs = attempts * 65_000 + ([ 1 .. attempts - 1 ] |> List.sumBy (fun n -> int (pause n).TotalMilliseconds))
           Basis =
             sprintf
@@ -1282,88 +1292,84 @@ let private installed (tgz: string) : string =
                 attempts
           Next =
             "A stalled install is a fetch that never answered: the registry, or the release assets a native addon's\n\
-             install script downloads. Run `install-smoke` again; each attempt starts on a fresh prefix. If it stalls\n\
-             again, watch which fetch hangs: `npm install --prefix \"$(mktemp -d)\" <the tgz> --loglevel http`." }
+             install script downloads. Run `install-smoke` again; each attempt starts on a fresh directory. If it\n\
+             stalls again, extract the tgz and watch which fetch hangs: `npm ci --omit=dev --loglevel http` in it." }
     let rec attempt (n: int) : string =
-        let prefix = Path.Combine (Path.GetTempPath (), "yession-install-" + Guid.NewGuid().ToString "N")
-        Directory.CreateDirectory prefix |> ignore
-        match runInherit repoRoot "npm" [ "install"; "--prefix"; prefix; tgz ] with
-        | 0 -> prefix
+        let root = Path.Combine (Path.GetTempPath (), "yession-install-" + Guid.NewGuid().ToString "N")
+        let dir = Path.Combine (root, "yession")
+        Directory.CreateDirectory dir |> ignore
+        runIn dir "tar" [ "-xzf"; tgz; "--strip-components=1" ] |> ignore
+        match runInherit dir "npm" [ "ci"; "--omit=dev" ] with
+        | 0 -> root
         | code ->
-            try Directory.Delete (prefix, true) with _ -> ()
+            try Directory.Delete (root, true) with _ -> ()
             if n = attempts then
-                failwithf "install-smoke: npm install failed on all %d attempts (last exit %d)" attempts code
+                failwithf "install-smoke: npm ci failed on all %d attempts (last exit %d)" attempts code
             let pause = pause n
             printfn
-                "install-smoke: npm install failed (exit %d) on attempt %d of %d; again in %.0fs, on a fresh prefix"
+                "install-smoke: npm ci failed (exit %d) on attempt %d of %d; again in %.0fs, in a fresh directory"
                 code n attempts pause.TotalSeconds
             Threading.Thread.Sleep pause
             attempt (n + 1)
-    bounded budget (fun () -> attempt 1)
+    let root = bounded budget (fun () -> attempt 1)
+    let dir = Path.Combine (root, "yession")
+    let globalPrefix = Path.Combine (root, "global")
+    run "npm" [ "install"; "--global"; "--prefix"; globalPrefix; dir ] |> ignore
+    dir, Path.Combine (globalPrefix, "bin")
 
-/// Every package the tarball's shrinkwrap pins is installed at that version. npm hoists the
-/// tarball's tree into the prefix's `node_modules`, so a pinned `node_modules/<path>` sits there
-/// or, where it could not hoist, under `node_modules/yession`. An optional package for another
-/// platform (the SDK's other `claude` binaries) is pinned and rightly absent; a required one that
-/// is absent is a failure.
-let private installedAsShrinkwrapped (tgz: string) (prefix: string) =
-    let unpacked = Path.Combine (Path.GetTempPath (), "yession-tgz-" + Guid.NewGuid().ToString "N")
-    Directory.CreateDirectory unpacked |> ignore
-    try
-        runIn unpacked "tar" [ "-xzf"; tgz ] |> ignore
-        let shrinkwrap = shrinkwrapOf (Path.Combine (unpacked, "package"))
-        if not (File.Exists shrinkwrap) then
-            failwith "install-smoke: the tarball carries no npm-shrinkwrap.json, so `npm i -g` resolves a tree CI never ran"
-        use doc = Text.Json.JsonDocument.Parse (File.ReadAllText shrinkwrap)
-        let wrong =
-            [ for entry in doc.RootElement.GetProperty("packages").EnumerateObject () do
-                match entry.Name, entry.Value.TryGetProperty "version" with
-                | "", _ | _, (false, _) -> ()
-                | path, (true, pinned) ->
-                    let optional =
-                        match entry.Value.TryGetProperty "optional" with
-                        | true, flag -> flag.ValueKind = Text.Json.JsonValueKind.True
-                        | _ -> false
-                    let found =
-                        [ Path.Combine (prefix, path); Path.Combine (prefix, "node_modules/yession", path) ]
-                        |> List.map (fun dir -> Path.Combine (dir, "package.json"))
-                        |> List.tryFind File.Exists
-                    match found with
-                    | None when optional -> ()
-                    | None -> yield sprintf "%s: pinned at %s, not installed" path (pinned.GetString ())
-                    | Some manifest ->
-                        use installed = Text.Json.JsonDocument.Parse (File.ReadAllText manifest)
-                        let version = installed.RootElement.GetProperty("version").GetString ()
-                        if version <> pinned.GetString () then
-                            yield sprintf "%s: pinned at %s, installed at %s" path (pinned.GetString ()) version ]
-        if not wrong.IsEmpty then
-            failwithf "install-smoke: the installed tree is not the one the tarball's shrinkwrap pins:\n  %s" (String.concat "\n  " wrong)
-        printfn "install-smoke: the installed tree is the shrinkwrapped one"
-    finally
-        try Directory.Delete (unpacked, true) with _ -> ()
+/// Every package the tarball's shrinkwrap pins is installed at that version, at the path it pins
+/// it under: `npm ci` lays the tree out exactly as the lockfile says. An optional package for
+/// another platform (the SDK's other `claude` binaries) is pinned and rightly absent; a required
+/// one that is absent is a failure.
+let private installedAsShrinkwrapped (dir: string) =
+    let shrinkwrap = shrinkwrapOf dir
+    if not (File.Exists shrinkwrap) then
+        failwith "install-smoke: the tarball carries no npm-shrinkwrap.json, so an install resolves a tree CI never ran"
+    use doc = Text.Json.JsonDocument.Parse (File.ReadAllText shrinkwrap)
+    let wrong =
+        [ for entry in doc.RootElement.GetProperty("packages").EnumerateObject () do
+            match entry.Name, entry.Value.TryGetProperty "version" with
+            | "", _ | _, (false, _) -> ()
+            | path, (true, pinned) ->
+                let optional =
+                    match entry.Value.TryGetProperty "optional" with
+                    | true, flag -> flag.ValueKind = Text.Json.JsonValueKind.True
+                    | _ -> false
+                let manifest = Path.Combine (dir, path, "package.json")
+                match File.Exists manifest with
+                | false when optional -> ()
+                | false -> yield sprintf "%s: pinned at %s, not installed" path (pinned.GetString ())
+                | true ->
+                    use installed = Text.Json.JsonDocument.Parse (File.ReadAllText manifest)
+                    let version = installed.RootElement.GetProperty("version").GetString ()
+                    if version <> pinned.GetString () then
+                        yield sprintf "%s: pinned at %s, installed at %s" path (pinned.GetString ()) version ]
+    if not wrong.IsEmpty then
+        failwithf "install-smoke: the installed tree is not the one the tarball's shrinkwrap pins:\n  %s" (String.concat "\n  " wrong)
+    printfn "install-smoke: the installed tree is the shrinkwrapped one"
 
 let installSmoke (tgz: string) =
     let tgz = Path.GetFullPath tgz // a bare dist/x.tgz looks like a GitHub owner/repo to npm.
-    let prefix = installed tgz
-    installedAsShrinkwrapped tgz prefix
+    let dir, bin = installed tgz
+    installedAsShrinkwrapped dir
 
     // The SDK's native `claude` binary is an optional dep keyed by platform (…-linux-x64 etc.);
     // assert one such package resolved, without hard-coding the arch suffix.
-    let scope = Path.Combine (prefix, "node_modules/@anthropic-ai")
+    let scope = Path.Combine (dir, "node_modules/@anthropic-ai")
     let claudePulled =
         Directory.Exists scope
         && Directory.GetDirectories (scope, "claude-agent-sdk-*")
            |> Array.exists (fun d -> File.Exists (Path.Combine (d, "claude")))
     if not claudePulled then failwith "install-smoke: native claude binary was not pulled by npm"
 
-    let ndcRelease = Path.Combine (prefix, "node_modules/node-datachannel/build/Release")
+    let ndcRelease = Path.Combine (dir, "node_modules/node-datachannel/build/Release")
     if not (Directory.Exists ndcRelease && (Directory.GetFiles (ndcRelease, "*.node")).Length > 0) then
         failwith "install-smoke: node-datachannel addon was not built"
 
-    // Over what npm ACTUALLY linked into .bin, so a manifest that offers a command npm did not
-    // install is a failure here rather than a missing command on somebody's PATH.
-    versionSmoke "installed" (fun name -> Path.Combine (prefix, "node_modules/.bin/" + name), [])
-    bootSmoke managerReady "node" (fun dataDir -> [ Path.Combine (prefix, "node_modules/.bin/yession-manager") ] @ managerSmokeArgs dataDir)
+    // Over what npm ACTUALLY linked into the global bin, so a manifest that offers a command npm
+    // did not install is a failure here rather than a missing command on somebody's PATH.
+    versionSmoke "installed" (fun name -> Path.Combine (bin, name), [])
+    bootSmoke managerReady "node" (fun dataDir -> [ Path.Combine (bin, "yession-manager") ] @ managerSmokeArgs dataDir)
     printfn "install-smoke: native deps resolved and the installed package booted"
 
 // --- example: build a standalone example integration -----------------------------------------

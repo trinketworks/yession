@@ -1158,8 +1158,9 @@ After the fixes land, one pass rewrites it to what still reproduces.
 ## Delivery & operations
 
 - **Node is a required runtime.** Yession ships as one npm package with two bins
-  (`yession-manager`, `yession-session`). `npm i -g yession-*.tgz` pulls the platform-native deps
-  through npm's optional dependencies (`node-datachannel`'s addon AND the SDK's native `claude`),
+  (`yession-manager`, `yession-session`). `npm ci --omit=dev` in the extracted tarball
+  (docs/deployment.md, "Installing a release") pulls the platform-native deps through npm's
+  optional dependencies (`node-datachannel`'s addon AND the SDK's native `claude`),
   so after install the agent works offline. No self-contained binary exists anymore: a machine
   without Node ≥24 cannot run Yession from npm. (The Nix installable wraps `nodejs_24`, at the
   cost of needing Nix.)
