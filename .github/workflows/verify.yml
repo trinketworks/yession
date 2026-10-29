@@ -124,6 +124,11 @@ jobs:
       # whole point of splitting was to learn three things per run instead of the first one.
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    # The cache's push token is a secret of the `cache-push` environment, which only master may
+    # deploy to (pr.yaml's `test` job says why). Only release.yml's master push enters it: a pull
+    # request or a dispatch on a branch would be refused by the environment's branch rule, so it
+    # runs outside it, with no token, and reads the cache.
+    environment: ${{ github.event_name == 'push' && 'cache-push' || '' }}
     runs-on: ubuntu-latest
     # The job's own bound, and it sits ABOVE its steps' own. `check` kills a suite that outruns its
     # budget and says which one hung (`nodeBudgetMs` and `clrBudgetMs` in tasks.fsx), and `lint`,

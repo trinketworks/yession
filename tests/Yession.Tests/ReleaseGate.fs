@@ -57,6 +57,7 @@ let private repoRoot () : string option =
 /// `Bound` is its `timeout-minutes`. `None` is a job GitHub stops at six hours.
 /// `Name` is its `name`, which is what its check is called when it sets one.
 /// `Steps` are its steps, as far as the binary cache rules below read them.
+/// `Environment` is the name of the environment it deploys to, as written: a name or an expression.
 [<RequireQualifiedAccess>]
 type private Job =
     { Needs : string list
@@ -65,7 +66,8 @@ type private Job =
       Calls : string option
       Bound : Bound option
       Name : string option
-      Steps : Step list }
+      Steps : Step list
+      Environment : string option }
 
 /// A job's `concurrency`. The shorthand form is a bare group name, which means the default
 /// `cancel-in-progress: false` — so both spellings decode to the same answer and a reader here
@@ -126,7 +128,11 @@ let private job : Decoder<Job> =
                     [ Decode.float |> Decode.map Bound.Minutes
                       Decode.string |> Decode.map Bound.Evaluated ])
           Name = get.Optional.Field "name" Decode.string
-          Steps = get.Optional.Field "steps" (Decode.list step) |> Option.defaultValue [] })
+          Steps = get.Optional.Field "steps" (Decode.list step) |> Option.defaultValue []
+          Environment =
+            get.Optional.Field
+                "environment"
+                (Decode.oneOf [ Decode.string; Decode.field "name" Decode.string ]) })
 
 /// A workflow's own top-level `concurrency`, which is the one that decides whether a run of it can
 /// be cancelled by the next one.
@@ -255,6 +261,25 @@ let private branchPushes (file: string) (jobs: (string * Job) list) : string lis
                             id
                             (shown (inputOf "skipPush" step))
                             pushOnlyOnPush ]
+
+/// The environment that holds the cache's push token. Its deployment branches are master alone, so
+/// a branch cannot read the token, even from a workflow it edited.
+let private cachePush = "cache-push"
+
+/// Each job in `file` whose cachix step carries the token while it does not deploy to
+/// `cache-push`, as the message that says so. Outside that environment the token is a repository
+/// secret, which a same-repository pull request can read.
+let private tokenOutsideEnvironment (file: string) (jobs: (string * Job) list) : string list =
+    [ for id, job in jobs do
+        let holdsToken = job.Steps |> List.exists (fun step -> cachix step && (inputOf "authToken" step).IsSome)
+        let inEnvironment = job.Environment |> Option.exists (fun written -> written.Contains (sprintf "'%s'" cachePush) || written = cachePush)
+        if holdsToken && not inEnvironment then
+            yield
+                sprintf
+                    "%s's `%s` job pushes to the binary cache and declares no `environment: %s`, so the token it reads is a repository secret that any same-repository pull request can read too"
+                    file
+                    id
+                    cachePush ]
 
 // --- the merge queue ----------------------------------------------------------------------
 // The queue in front of master gives an entry's required checks a fixed time to report
@@ -521,6 +546,15 @@ let tests =
         testCase "only code master has merged pushes to the binary cache" <| fun () ->
             let pushes = [ for file, jobs in workflowJobs () do yield! branchPushes file jobs ]
             Expect.isEmpty pushes (String.concat ".\n" pushes)
+
+        testCase "a job that pushes to the binary cache takes the token from the master-only environment" <| fun () ->
+            let outside = [ for file, jobs in workflowJobs () do yield! tokenOutsideEnvironment file jobs ]
+            Expect.isEmpty outside (String.concat ".\n" outside)
+            let red =
+                jobsIn
+                    "a release.yml"
+                    "jobs:\n  package:\n    steps:\n      - uses: cachix/cachix-action@0\n        with:\n          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}\n"
+            Expect.isNonEmpty (tokenOutsideEnvironment "a release.yml" red) "a pushing job with no environment reads a repository secret"
 
         // The rule's red, over a pr.yaml written here: the step this file had until master
         // alone could push.
