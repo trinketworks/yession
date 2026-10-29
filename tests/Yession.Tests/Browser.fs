@@ -2929,9 +2929,9 @@ let private columnTooShort (page: IPage) : Async<float> =
             | Some s -> s.Top
             | None -> failwith "the conversation went as it was read"
         // On a phone the header, the composer and the tray leave the column under one item
-        // (72px) at this height.
+        // (76px) at this height.
         do! awaitU (page.SetViewportSizeAsync (390, 240))
-        do! Wait.until "the column to have less room than one item" (fun () -> Probe.scroll page chat) (Option.exists (fun s -> s.ClientHeight < 72.0))
+        do! Wait.until "the column to have less room than one item" (fun () -> Probe.scroll page chat) (Option.exists (fun s -> s.ClientHeight < 76.0))
         do! twoFrames page
         return was
     }

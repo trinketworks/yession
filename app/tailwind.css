@@ -309,6 +309,14 @@
 /* A reader who has asked for less transparency gets the opaque panel instead of the acrylic:
    the effect is decoration over a surface that works without it. */
 @custom-variant reduced-transparency (@media (prefers-reduced-transparency: reduce));
+/* STUCK: a sticky box that is pinned right now, asked of the box itself
+   (`container-type: scroll-state`). It styles what is inside that box, its `::before`
+   included, never the box: a container query cannot. `Style.messageGroupHead` is the wearer. */
+@custom-variant stuck {
+  @container scroll-state(stuck: top) {
+    @slot;
+  }
+}
 
 /* PHONE and WIDE: the shell's one layout breakpoint, stated as the two halves of one question
    — is this screen a phone? Width alone used to answer it (`md:` / `max-md:`), and a phone
@@ -346,7 +354,7 @@
    itself a size container (`room-for-items`) and the rule reads the height it was actually
    given.
 
-   72px is one item: the author line the column pins over its items (28px as drawn) plus the
+   76px is one item: the author line the column pins over its items (36px as drawn) plus the
    shortest item under it (40px), on the 4px rhythm. It is written here rather than held as a
    token because a container query resolves no `var()` — the same reason the pair above spells
    `500px`. The shortest item is what the number is, because a column that cannot show the
@@ -355,7 +363,7 @@
   container: column / size;
 }
 @custom-variant too-short {
-  @container column (height < 72px) {
+  @container column (height < 76px) {
     @slot;
   }
 }
