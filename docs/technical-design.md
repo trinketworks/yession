@@ -393,7 +393,9 @@ default), `localhost` or `trusted-headers`. [deployment.md](deployment.md#author
 what each one does. `localhost` matches this threat model. Under `trusted-headers`, the
 operator's authenticating proxy must be the only non-local path in, and it must strip the
 `x-yession-*` headers from client requests. Further schemes are strategy swaps, not
-redesigns.
+redesigns. Under `trusted-headers` the Manager authorizes every attributed user to every
+session: identity is per human, but a session has no owner
+([GAPS.md](GAPS.md#security--trust)).
 
 Secrets are Manager-owned authority:
 
