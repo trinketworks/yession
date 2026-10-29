@@ -3240,9 +3240,40 @@ let editorTests =
                 do! waitVisible "the editor" page ".ProseMirror"
                 do! awaitU (page.ClickAsync ".ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "```")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! waitPresent ".ProseMirror pre to be on the page" page "#host .ProseMirror pre"
                 let! outline = Probe.computed page "#host .ProseMirror pre" "border-top-width"
                 Expect.equal outline (Some "1px") "the code block draws a hairline round it"
+            }
+
+        // A fence opens on Enter, as Markdown reads one, so the language after the backticks
+        // can be typed and is kept.
+        fixtureCase "a fence naming a language opens a code block in that language" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "```fsharp")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! waitPresent ".ProseMirror pre to be on the page" page "#host .ProseMirror pre"
+                do! awaitU (page.Keyboard.TypeAsync "let x = 1")
+                let! md = Harness.ask page HarnessPage.md
+                Expect.equal (md.TrimEnd ()) "```fsharp\nlet x = 1\n```" "the block keeps its language"
+            }
+
+        // A code block at the end of a draft is not a place the caret can be stuck in.
+        fixtureCase "Enter on the empty last line of a code block leaves it" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "```")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! waitPresent ".ProseMirror pre to be on the page" page "#host .ProseMirror pre"
+                do! awaitU (page.Keyboard.TypeAsync "let x = 1")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! awaitU (page.Keyboard.TypeAsync "after")
+                let! md = Harness.ask page HarnessPage.md
+                Expect.equal (md.TrimEnd ()) "```\nlet x = 1\n```\n\nafter" "the line after is a paragraph, and the block lost the empty line"
             }
 
         fixtureCase "a bullet list typed in the composer draws its bullets" <| fun page ->

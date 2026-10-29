@@ -142,7 +142,6 @@ module Editor =
         n "ordered_list"
         |> Option.iter (fun t -> rules.Add (wrappingInputRuleAttrs (regex "^(\\d+)\\.\\s$") t orderedListAttrs orderedListJoin))
         n "bullet_list" |> Option.iter (fun t -> rules.Add (wrappingInputRule (regex "^\\s*([-+*])\\s$") t))
-        n "code_block" |> Option.iter (fun t -> rules.Add (textblockTypeInputRule (regex "^```$") t))
         n "heading" |> Option.iter (fun t -> rules.Add (textblockTypeInputRuleAttrs (regex "^(#{1,6})\\s$") t headingAttrs))
         m "strong" |> Option.iter (fun t -> rules.Add (markRule "(?:\\*\\*|__)([^*_]+)(?:\\*\\*|__)$" t))
         m "em" |> Option.iter (fun t -> rules.Add (markRule "(?:^|[^*_])(?:\\*|_)([^*_]+)(?:\\*|_)$" t))
@@ -165,6 +164,38 @@ module Editor =
                 (editCommand (fun state ->
                     trScrollIntoView ((state.tr).replaceSelectionWith (nodeCreate br, false)))))
 
+    /// The language a fence line names — `fsharp` for ```` ```fsharp ````, `""` for a bare
+    /// ```` ``` ```` — and nothing for a line that is not a fence.
+    let private fenceLanguage (line: string) : string option =
+        let fence = System.Text.RegularExpressions.Regex.Match (line, "^```([^`\\s]*)$")
+        if fence.Success then Some fence.Groups.[1].Value else None
+
+    /// Enter at the end of a fence line opens a code block in the language it names, as
+    /// Markdown reads a fence. A rule on the third backtick could not: it fired before a
+    /// language could be typed.
+    let private openFence (codeBlock: NodeType) : Command =
+        tryEditCommand (fun state ->
+            let at = caretBlock state
+            if at.blockType <> "paragraph" || not at.atEnd then None
+            else
+                fenceLanguage at.text
+                |> Option.map (fun language ->
+                    let tr = (state.tr).delete (at.contentStart, at.contentEnd)
+                    trSetBlockType tr at.contentStart at.contentStart codeBlock (NodeAttrs.codeBlock language)))
+
+    /// Enter on an empty last line of a code block leaves it for a paragraph below, taking the
+    /// empty line with it. Otherwise a code block at the end of a draft held the caret, with
+    /// only Shift-Enter to get out.
+    let private leaveCodeBlock (paragraph: NodeType) : Command =
+        tryEditCommand (fun state ->
+            let at = caretBlock state
+            if at.blockType <> "code_block" || not at.atEnd || not (at.text.EndsWith "\n") then None
+            else
+                // One character shorter once the newline is gone.
+                let below = at.after - 1
+                let tr = ((state.tr).delete (at.contentEnd - 1, at.contentEnd)).insert (below, nodeCreate paragraph)
+                Some (trScrollIntoView (tr.setSelection (caretAt (trDoc tr) (below + 1)))))
+
     /// Base editing keys + list handling + Yjs-aware undo/redo, and Enter's jobs.
     ///
     /// Enter is a PROSE key here, not a send: it does what Enter always did in text, splitting
@@ -172,7 +203,9 @@ module Editor =
     /// no modifier to reach for, and a person who presses it is writing, not asking to send
     /// half a thought. Sending is a deliberate second key or the visible Send control:
     ///
-    ///   Enter        — a new PARAGRAPH. Plain prose, the same as a plain textarea.
+    ///   Enter        — a new PARAGRAPH. Plain prose, the same as a plain textarea. After a
+    ///                  fence line (```` ```lang ````) it opens a code block; on the empty
+    ///                  last line of one it leaves it.
     ///   Mod-Enter    — SEND, in a COMPOSER: Ctrl-Enter or Cmd-Enter, reachable without
     ///                  letting go of the line just written, and never fired by a return key
     ///                  alone.
@@ -188,10 +221,16 @@ module Editor =
         // What a plain Enter always meant in prose: split the list item when in one, else
         // whatever ProseMirror's own Enter does.
         let listItem = nodeType schema "list_item"
-        let newParagraph =
+        let prose =
             match listItem with
             | Some li -> chain (splitListItem li) baseKeymap.Enter
             | None -> baseKeymap.Enter
+        // Ahead of that, the two places Enter means Markdown: a fence line, and the empty line
+        // that closes a code block.
+        let newParagraph =
+            match nodeType schema "code_block", nodeType schema "paragraph" with
+            | Some code, Some paragraph -> chain (openFence code) (chain (leaveCodeBlock paragraph) prose)
+            | _ -> prose
         KeyBindings.ofList [
             Chord.withMod (Key.Char 'z'), yUndo
             Chord.withMod (Key.Char 'y'), yRedo
