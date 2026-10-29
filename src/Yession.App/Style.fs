@@ -2515,8 +2515,18 @@ module Style =
     /// stands on the column the speakers' avatars do — centred in the whole 2rem gutter it
     /// sat six pixels right of them, a second rail beside the one the eye already had. Named
     /// into the gutter, so a row drawn above the title (an act's cause) cannot push it over.
+    ///
+    /// `items-center` centres the chevron on `1lh` — the row's own `leading-5`, 20px — but
+    /// the title beside it sets its OWN line box (`text-small`, 16px) and sits at the TOP of
+    /// that taller cell, not its middle, so the two centres are not the same point. Measured
+    /// against the real title (the compiled title's crossbar on "used") rather than guessed:
+    /// the chevron's point sat 0.7px below where the title's own ink sits, at every size this
+    /// mark is drawn at (`box14`, the one size `fold` ever uses) — a constant nudge, not a
+    /// font-metric formula, because the gap is between a GLYPH'S drawn crossbar and the box
+    /// it rides in, which CSS has no unit for (the pattern `Icon.checkSm` and kin already use
+    /// for the same reason).
     let fold =
-        cls [ "col-start-1 justify-self-start w-5 h-[1lh] flex items-center justify-center cursor-pointer bg-transparent border-0 p-0"
+        cls [ "col-start-1 justify-self-start w-5 h-[1lh] flex items-center justify-center -translate-y-[0.7px] cursor-pointer bg-transparent border-0 p-0"
               "text-ink-faint hover:text-ink transition-colors"; focusRing ]
     let foldMark = cls [ "block"; Motion.turn ]
     let foldMarkOpen = cls [ foldMark; Motion.turned ]
