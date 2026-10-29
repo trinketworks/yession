@@ -564,6 +564,32 @@ Two bounds answer different questions:
   this Manager process.
 - **`--auth trusted-headers`** — lose the sharing: each human owns their own credential.
 
+##### What a tailnet member can do
+
+Under `trusted-headers`, identity is per human and sessions are shared by every member. The
+rule establishes who is calling. Nothing then decides what that person may do, so every
+authenticated member is an operator of every session. A member can:
+
+- create, launch, stop and archive any session,
+- join any session, read its whole event log and its terminals, drive its agent, and type
+  into its sandboxes,
+- declare MCP servers, which every session they name connects to.
+
+What stays the member's own is their credential. A turn and a lent token run on the credential
+of the person who acted, so no member's turn spends another's Claude or GitHub account.
+
+Two places cross that boundary:
+
+- **A repository's `setup:` block** runs under the authority of whoever triggered the fold
+  that started its sandbox: the person who added the repository, approved what its
+  `yession.yaml` asks for, or otherwise ran a repo verb (`Authority.configuredBy` in
+  `RepoSandboxes.foldOnce`, built by `Commands.startWorkSandboxCall`).
+- **A webhook delivery** reaches every session whose filter matches, so one member's session
+  reads another member's pull-request traffic.
+
+So the deployment is for one team that shares its work. A per-session owner is not
+implemented ([GAPS.md](GAPS.md#security--trust)).
+
 #### Addressing
 
 Make one `serve` mapping, once, to your proxy, and set both URLs to the tailnet origin
