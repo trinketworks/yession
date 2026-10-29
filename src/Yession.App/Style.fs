@@ -235,7 +235,7 @@ module Style =
     /// full stop that was its one colour is the mark's job now (assets/logo/lockup.svg).
     let wordmark = "font-normal text-wordmark tracking-wordmark text-ink"
     /// The mark and the wordmark on one line, the lockup's own proportions scaled to the
-    /// band: the mark 56px to the word's 32 (the lockup file draws 64 to 32, which the 88px
+    /// band: the mark 56px to the word's 32 (the lockup file draws 64 to 32, which the
     /// band has no room for), its foot 15px below the word's line box so the x-height band
     /// sits where the lockup puts it — on the mark's optical middle, a little above its own.
     let lockup = "flex items-end gap-2"
@@ -1500,7 +1500,7 @@ module Style =
     /// 15px below the wordmark's line box, and no bottom padding seats 71px of object inside
     /// 60px of band. The fix is a phone step on `lockup`/`lockupMark`/`wordmark` (Typography),
     /// after which this is one `phone:h-band-phone` and a smaller `pb`.
-    let sideHead = "h-band shrink-0 flex items-end justify-between pb-5 " + Stroke.dividerBottom
+    let sideHead = "h-band shrink-0 flex items-end justify-between pb-band-foot " + Stroke.dividerBottom
     /// A group in the column: its head, then its rows. There is one of these and not two —
     /// a `sideSectionFirst` stood beside it, byte for byte the same value, left over from when
     /// the first group carried the rule the head now owns. A second name for one way of
@@ -1812,8 +1812,8 @@ module Style =
     /// (docs/visual-design.md, Space: the band is `spacing-band`, and on a phone it is
     /// `spacing-band-phone`). The phone one was the literal `h-14`, which is the same 56px
     /// said in a second place, and a second place is where two heads come to disagree: the
-    /// column's own head is still 88px under a thumb, so the two hairlines a drawer shows at
-    /// once sit 28px apart (see `sideHead`).
+    /// column's own head is still the full `spacing-band` under a thumb, so the two hairlines a
+    /// drawer shows at once sit 32px apart (see `sideHead`).
     ///
     /// The left padding is the timeline's own plus `--column-gutter` (`mainColumn`), so the
     /// title stands in exactly as far as the conversation does: with the pane shut and the
@@ -1822,7 +1822,7 @@ module Style =
     /// the band's right-hand group is the way to the pane, and it stays at the edge the pane
     /// opens from.
     let header =
-        "relative h-band shrink-0 flex items-end gap-4 pl-[calc(var(--column-gutter)+2rem)] pr-8 pb-5 "
+        "relative h-band shrink-0 flex items-end gap-4 pl-[calc(var(--column-gutter)+2rem)] pr-8 pb-band-foot "
         + "phone:h-band-phone phone:items-center phone:gap-2 phone:px-4 phone:pb-[15px] "
         + Stroke.dividerBottom
 
@@ -2154,9 +2154,10 @@ module Style =
     /// with the conversation centred it stays beside the title rather than at the window's
     /// edge, which is where #1521 left it (measured at 1280: chevron at x=15, title at 306).
     /// And it stands on the title's LINE, as it does on a phone: the title's middle is 35px
-    /// over the band's padding foot (`pb-5`, the field's 1px rule, half its 32px line, less
-    /// the field's 2px `top` nudge), and 30px, with the 6px `-m-1.5` takes back, puts the
-    /// glyph's middle on it (measured live at 1280 and 1600: glyph and title both at y=86).
+    /// over the band's floor (`pb-band-foot`, the field's 1px rule, half its 32px line, less
+    /// the field's 2px `top` nudge), and the foot and 10px, with the 6px `-m-1.5` takes back,
+    /// puts the glyph's middle on it (measured live at 1280 and 1600: glyph and title both at
+    /// y=86). It is placed from the foot's token so the two cannot part when the band grows.
     /// It sat on `bottom-4.5` once, 12px under the title's middle.
     ///
     /// Across, it stands on the AVATAR's column: the glyph and the mark under it centred on the
@@ -2180,7 +2181,7 @@ module Style =
     /// because the mark is an svg too), so the box, and the mark placed from it (`navReopenMark`), stay on the
     /// id's line. The terminals' mark across the band drops the same way (`terminalReopen`).
     let navReopen =
-        "absolute left-[calc(var(--column-gutter)+var(--spacing-rail)+0.625rem-7px)] bottom-[30px] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
+        "absolute left-[calc(var(--column-gutter)+var(--spacing-rail)+0.625rem-7px)] bottom-[calc(var(--spacing-band-foot)+10px)] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
         + "*:first:translate-y-[3px] phone:*:first:translate-y-[1.5px] "
         + "phone:relative phone:inset-auto phone:grid phone:[.nav-alt_&]:hidden phone:-ml-3 phone:-mr-5"
 
@@ -2197,7 +2198,7 @@ module Style =
     /// - A phone centres both on one line, so the title line's middle is the 44px target's
     ///   middle, and the id's is 12px (half the 24px `text-pivot` line) and the drop under it.
     ///   The glyph is centred in the target, so the target's middle is the glyph's.
-    /// - A wide screen bottoms the title on the band's `pb-5` (20px) and lifts the box with
+    /// - A wide screen bottoms the title on the band's `pb-band-foot` and lifts the box with
     ///   its glyph onto the title's middle (`navReopen`), which leaves the id's middle, the
     ///   drop under the title's foot, the drop and 4px under the box's. The 14px glyph
     ///   overflows the 24px box's 12px of content to the right, so its middle is 13px in (the
@@ -4112,7 +4113,7 @@ module Style =
     // come back, and the thing you were reading never moves. Its open state is one bit on the
     // root <html> element (`settings-open`, drawn from the model's `Column.Face`).
 
-    /// The settings face's header band: the same 88px rhythm as the nav and the main header, so
+    /// The settings face's header band: the same band rhythm as the nav and the main header, so
     /// the three baselines still align when the column changes face — the nav's head, hairline
     /// and all, so the band's rule does not come and go as the faces turn.
     let settingsHead = sideHead
@@ -5265,7 +5266,7 @@ module Style =
     /// layout question rather than a reading column's (docs/visual-design.md, Phone and wide).
     let pageBand =
         cls [ "h-band phone:h-band-phone shrink-0 sticky top-0 z-ground bg-bg"
-              "flex items-end pb-5 phone:items-center phone:pb-0"
+              "flex items-end pb-band-foot phone:items-center phone:pb-0"
               Stroke.dividerBottom ]
 
     /// The lockup in that band. On a phone the band is one thumb-sized row, which cannot hold
