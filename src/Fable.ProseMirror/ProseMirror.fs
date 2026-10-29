@@ -292,7 +292,7 @@ module ProseMirror =
     let private isJsArray (value: obj) : bool = jsNative
     /// Whether a `toDOM` output's second slot is its attributes, rather than a child (an array,
     /// a DOM node) or the content hole (`0`).
-    [<Emit("typeof $0 === 'object' && $0 !== null && !Array.isArray($0) && !('nodeType' in $0)")>]
+    [<Emit("(function (v) { return typeof v === 'object' && v !== null && !Array.isArray(v) && !('nodeType' in v); })($0)")>]
     let private isDomAttrs (value: obj) : bool = jsNative
     [<Emit("Object.assign({}, $0, { class: $1 })")>]
     let private withClassAttr (attrs: obj) (cls: string) : obj = jsNative
