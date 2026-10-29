@@ -3240,7 +3240,7 @@ let private shellTests =
         let assets = AssetBuild "testbuild001"
 
         let pageWith (managerOrigin: string option) (ephemeralStorage: bool) =
-            Yession.Host.Ssr.page sessionId "" managerOrigin ephemeralStorage assets representativeModel
+            Yession.Host.Ssr.page "test-nonce" sessionId "" managerOrigin ephemeralStorage assets representativeModel
 
         let page (managerOrigin: string option) = pageWith managerOrigin false
 
@@ -3290,7 +3290,7 @@ let private shellTests =
                 "and the first paint shows it"
 
         testCase "a model with no build says nothing about one" <| fun () ->
-            let html = Yession.Host.Ssr.page sessionId "" None false assets { representativeModel with Build = None }
+            let html = Yession.Host.Ssr.page "test-nonce" sessionId "" None false assets { representativeModel with Build = None }
             Expect.isFalse (html.Contains Dom.buildMetaName) "no tag, not an empty one"
             Expect.isFalse (html.Contains Dom.Hooks.build) "and no footer guessing at one"
 
@@ -3299,7 +3299,7 @@ let private shellTests =
         // the first render shuts a column the first paint showed open. What is pinned is
         // agreement: the shell root says what the model says, in both directions.
         let shellWith (terminalsOpen: bool) =
-            Yession.Host.Ssr.page sessionId "" None false assets { representativeModel with TerminalsOpen = terminalsOpen }
+            Yession.Host.Ssr.page "test-nonce" sessionId "" None false assets { representativeModel with TerminalsOpen = terminalsOpen }
 
         let rootOf (html: string) =
             let start = html.IndexOf "<html"
@@ -4008,12 +4008,12 @@ let private chromeTests =
         /// with, and the page a provider's redirect lands on.
         let pages =
             [ "the session's shell",
-              Yession.Host.Ssr.page sessionId "" None false (AssetBuild "chrome-floor") representativeModel
+              Yession.Host.Ssr.page "test-nonce" sessionId "" None false (AssetBuild "chrome-floor") representativeModel
               "the Manager's page", managerPage
               "the page /open answers a refusal with",
               Yession.Host.ManagerUi.problemPage "Cannot open this session" "It is archived."
               "the screen /open shows while a session launches",
-              Yession.Host.ManagerUi.openingPage sessionId "/sessions/demo-session/open" "/sessions/demo-session/launch" "/sessions/demo-session/ready" (Some "https://example.com/s/demo-session/")
+              Yession.Host.ManagerUi.openingPage "test-nonce" sessionId "/sessions/demo-session/open" "/sessions/demo-session/launch" "/sessions/demo-session/ready" (Some "https://example.com/s/demo-session/")
               "the page a provider's redirect lands on",
               snd (Yession.Host.ProcessManager.connectionsCallbackResponse "Connected" "Close this tab and return to your session.") ]
 

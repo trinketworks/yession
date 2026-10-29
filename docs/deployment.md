@@ -414,8 +414,11 @@ them. A session declares a filter over paths, and the Manager matches it
 ([ADR](decisions/2026-08-29-the-manager-relays-hooks-it-cannot-read.md)).
 
 ```sh
-yession-manager --webhook github --webhook linear
+yession-manager --webhook github --webhook 'linear=linear-signature:hex'
 ```
+
+Linear signs in its own `linear-signature` header, in hex, with no prefix. Its endpoint
+therefore carries a signature override (see below). GitHub uses the default.
 
 The Manager serves each endpoint at `<YESSION_MANAGER_URL>/hooks/<name>`, so this needs a
 fronted deployment. The manager page shows each endpoint's address and signing secret. The
@@ -642,8 +645,12 @@ let
   resources = pkgs.writeText "yession-resources.yaml" ''
     version: 1
     resources:
+      # `maintain:` keeps the shared store bounded (§Keeping the warm store bounded).
       nix-container-store:
-        volume: { name: yession-nix, at: /nix }
+        volume:
+          name: yession-nix
+          at: /nix
+          maintain: { pin: /nix/var/yession/pin, every: 10m }
       # For a repo's CONTAINER sandboxes: the gateway, and the credential proxy's URL,
       # trust bundle (every root, so replacing the image's loses nothing) and a token
       # lent per command.

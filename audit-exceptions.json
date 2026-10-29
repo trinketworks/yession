@@ -1,0 +1,8 @@
+[
+  {
+    "package": "node_modules/@anthropic-ai/sandbox-runtime/node_modules/zod",
+    "advisory": "https://github.com/advisories/GHSA-mrhx-c7xc-m3w5",
+    "reason": "@anthropic-ai/sandbox-runtime (0.0.81, the latest) requires zod ^3.25.0, and the advisory covers every release below 4.6.6: no 3.x release is fixed. Overriding it to zod 4 would hand the runtime a major it does not declare. Remove when a sandbox-runtime release moves to zod 4.",
+    "date": "2026-10-28"
+  }
+]

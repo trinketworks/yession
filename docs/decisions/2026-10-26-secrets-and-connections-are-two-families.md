@@ -1,7 +1,7 @@
 # Generic secrets and connection credentials are two families of the store
 
 > Decided 2026-10-26 · Related: [2026-08-10-local-scope.md](2026-08-10-local-scope.md),
-> [technical-design.md §3](../technical-design.md#3-authority-model-phase-2) and rule 19 of §5
+> [technical-design.md §3](../technical-design.md#3-authority-model) and rule 19 of §5
 
 ## Context
 

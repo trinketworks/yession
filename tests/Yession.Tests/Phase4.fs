@@ -1691,9 +1691,9 @@ let private readinessTests =
                 let! page = TestHttp.get (sprintf "http://127.0.0.1:%d/sessions/opening-program/open" pm.EndpointPort.Value)
                 let scripts =
                     System.Text.RegularExpressions.Regex.Matches (page.Body, "<script[^>]*>")
-                    |> Seq.map (fun m -> m.Value)
+                    |> Seq.map (fun m -> System.Text.RegularExpressions.Regex.Replace (m.Value, " nonce=\"[^\"]+\"", " nonce"))
                     |> List.ofSeq
-                Expect.equal scripts [ "<script>" ] "one script, a classic inline one: no src, no module, no defer"
+                Expect.equal scripts [ "<script nonce>" ] "one script, a classic inline one: no src, no module, no defer"
                 do! pm.StopAll ()
             }
 

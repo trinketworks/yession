@@ -52,6 +52,8 @@ module ProseMirror =
         abstract replaceSelectionWith : Node * bool -> Transaction
         /// Replace `from..to` with plain text, keeping the marks there.
         abstract insertText : string * int * int -> Transaction
+        abstract insert : int * Node -> Transaction
+        abstract setSelection : obj -> Transaction
 
     type [<AllowNullLiteral>] EditorState =
         abstract tr : Transaction
@@ -186,6 +188,8 @@ module ProseMirror =
 
         let heading (level: int) : NodeAttrs = unbox (createObj [ "level" ==> level ])
         let orderedList (order: int) : NodeAttrs = unbox (createObj [ "order" ==> order ])
+        /// A code block's info string — the language a fence names, `""` for none.
+        let codeBlock (language: string) : NodeAttrs = unbox (createObj [ "params" ==> language ])
         let tableCell (align: string option) : NodeAttrs =
             unbox (createObj [ "align" ==> (align |> Option.map box |> Option.defaultValue null) ])
 
@@ -387,6 +391,7 @@ module ProseMirror =
         | Char of char
         | Enter
         | Tab
+        | Backspace
 
     /// The modifiers held with a key. `Mod` is Cmd on macOS and Ctrl everywhere else — the
     /// platform's own "command" modifier, which prosemirror-keymap resolves at keydown.
@@ -423,6 +428,7 @@ module ProseMirror =
                 | Key.Char c -> string c
                 | Key.Enter -> "Enter"
                 | Key.Tab -> "Tab"
+                | Key.Backspace -> "Backspace"
             prefix + key
 
     /// A set of key bindings, as prosemirror-keymap takes them. Opaque: built only by
@@ -491,6 +497,43 @@ module ProseMirror =
             dispatch |> Option.iter (fun dispatch -> dispatch (edit state))
             true))
 
+    /// `editCommand` for a key that only means something in some places: `None` declines, so
+    /// a `chain` falls through to the next command.
+    let tryEditCommand (edit: EditorState -> Transaction option) : Command =
+        box (System.Func<EditorState, (Transaction -> unit) option, obj, bool>(fun state dispatch _ ->
+            match edit state with
+            | Some tr ->
+                dispatch |> Option.iter (fun dispatch -> dispatch tr)
+                true
+            | None -> false))
+
+    /// `tr.setBlockType(from, to, nodeType, attrs)`: the textblocks in `from..to` become
+    /// `nodeType`.
+    [<Emit("$0.setBlockType($1, $2, $3, $4)")>]
+    let trSetBlockType (tr: Transaction) (from: int) (until: int) (nodeType: NodeType) (attrs: NodeAttrs) : Transaction = jsNative
+
+    [<Import("TextSelection", "prosemirror-state")>]
+    let private textSelectionClass : obj = jsNative
+    [<Emit("$0.create($1, $2)")>]
+    let private textSelectionCreate (cls: obj) (doc: Node) (pos: int) : obj = jsNative
+    /// A collapsed caret at `pos` in `doc`.
+    let caretAt (doc: Node) (pos: int) : obj = textSelectionCreate textSelectionClass doc pos
+
+    /// The textblock the caret is in, as a key that acts on a whole line reads it.
+    type CaretBlock =
+        /// The block's node type name (`paragraph`, `code_block`, …).
+        abstract blockType : string
+        abstract text : string
+        /// The selection is a caret at the very end of the block.
+        abstract atEnd : bool
+        abstract contentStart : int
+        abstract contentEnd : int
+        /// The position just past the block's closing token.
+        abstract after : int
+
+    [<Emit("(function (state) { const sel = state.selection; const at = sel['\\x24from']; return { blockType: at.parent.type.name, text: at.parent.textContent, atEnd: sel.empty && at.parentOffset === at.parent.content.size, contentStart: at.start(), contentEnd: at.end(), after: at.after() } })($0)")>]
+    let caretBlock (state: EditorState) : CaretBlock = jsNative
+
     // --- prosemirror-inputrules ------------------------------------------------------------
 
     /// What `inputRules` is handed: the rules, tried in order.
@@ -502,6 +545,10 @@ module ProseMirror =
     /// A plugin that runs `rules` against text as it is typed.
     let inputRules (rules: InputRule[]) : Plugin =
         inputRulesFn (jsOptions<InputRulesConfig> (fun config -> config.rules <- rules))
+    /// Reverts the input rule that fired on the last keystroke, putting back the text it
+    /// replaced (`> ` after a quote opened); declines when the last change was not a rule.
+    [<Import("undoInputRule", "prosemirror-inputrules")>]
+    let undoInputRule : Command = jsNative
     [<Import("wrappingInputRule", "prosemirror-inputrules")>]
     let wrappingInputRule (regexp: obj) (nodeType: NodeType) : InputRule = jsNative
     /// What ProseMirror hands an input rule's callbacks is the REGEX MATCH that fired it, and
@@ -519,8 +566,6 @@ module ProseMirror =
         (getAttrs: System.Func<string[], NodeAttrs>)
         (joinPredicate: System.Func<string[], Node, bool>)
         : InputRule = jsNative
-    [<Import("textblockTypeInputRule", "prosemirror-inputrules")>]
-    let textblockTypeInputRule (regexp: obj) (nodeType: NodeType) : InputRule = jsNative
     [<Import("textblockTypeInputRule", "prosemirror-inputrules")>]
     let textblockTypeInputRuleAttrs
         (regexp: obj)
