@@ -5022,6 +5022,11 @@ module Style =
     /// (`navReopen`), so the two marks either side of the title point at one stroke.
     let terminalReopen =
         navChevronBack + " shrink-0 *:first:translate-y-[3px] phone:*:first:translate-y-[1.5px]"
+    /// Its face says what it opens on a wide screen ("2 terminals", `View.contentReopen`), and
+    /// only the count on a phone, whose band has no room for the words. Exactly one of the two
+    /// is drawn at any size, by the one pair of variants that split the screens.
+    let terminalReopenWords = "phone:hidden"
+    let terminalReopenBare = "wide:hidden"
 
     // --- ANSI styling ---------------------------------------------------------------------------
     // Turning a parsed `AnsiStyle` into what a span wears. Split in two on purpose:

@@ -1426,10 +1426,11 @@ module View =
     /// were nowhere on the first screen until somebody went looking. A running command is
     /// said to the eye by the composer's tray (`composerTray`), which can take the reader to
     /// it; here only in the tab's accessible name.
-    /// A mark, not words: a terminal on a stack (`Icon.content`), and the count as a bare number beside it while
-    /// any are open. "‹ terminals" spent a third of a phone's band saying what the mark says,
-    /// and was the one word in the band that is not the session's own. The words live on in
-    /// the accessible name and the hover title.
+    /// A mark, and on a wide screen the words beside it: a terminal on a stack (`Icon.content`),
+    /// then "2 terminals". The mark with a bare number ("⧉ 2") said nothing a reader could
+    /// look up, and the hover title that named it is the tooltip principle 4 refuses. A phone
+    /// keeps the mark and the bare number: "‹ terminals" spent a third of its band saying what
+    /// the mark says. There the words live on in the accessible name.
     let private contentReopen (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         if model.TerminalsOpen then Lit.nothing
         else
@@ -1440,10 +1441,10 @@ module View =
                 // By the name the strip and the list give it (P1-1), so the edge tab's spoken
                 // "build running" is the word a reader will find once the pane is open.
                 |> List.map (TerminalName.display model.Terminals)
+            let n = List.length live
+            let bare = if n = 0 then Lit.nothing else html $"""<span class="{Style.terminalReopenBare}">{n}</span>"""
             let count =
-                match List.length live with
-                | 0 -> Lit.nothing
-                | n -> html $"""<span data-terminals-count>{n}</span>"""
+                html $"""<span data-terminals-count><span class="{Style.terminalReopenWords}">{Dom.Text.terminalsCount n}</span>{bare}</span>"""
             html $"""
                 <button type="button" class="{Style.terminalReopen}"
                         title="{Dom.Text.showTerminals}" aria-label="{Dom.Text.showTerminalsNamed (List.length live) running}"
