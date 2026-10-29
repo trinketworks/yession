@@ -255,7 +255,7 @@ module Declarations =
         | Unreadable (reason, lastRead) ->
             Some (
                 sprintf
-                    "this session could not read its checkouts' yession.yaml: %s.%s add_repo, switch_branch or remove_repo reads them again, and so does a relaunch"
+                    "this session could not read its checkouts' yession.yaml: %s.%s add_repo, switch_branch or remove_repo reads them again. A relaunch also reads them"
                     reason
                     (match lastRead with
                      | Some _ -> " What it knows comes from the last read that succeeded."
