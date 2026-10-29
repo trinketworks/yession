@@ -288,6 +288,9 @@ ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
   scripts."bench-guard".exec = ''exec dotnet fsi tasks.fsx bench-guard'';
   scripts."bench-publish".exec = ''exec dotnet fsi tasks.fsx bench-publish "$@"'';
   scripts.version.exec = ''exec dotnet fsi tasks.fsx version'';
+  # The camera: one picture or a film of a page. `frames --harness replies --still` photographs a
+  # conversation that has content (tasks.fsx, `frames`).
+  scripts.frames.exec = ''exec dotnet fsi tasks.fsx frames "$@"'';
   # Local package (compile + bundle + smoke + pack). For the release tarball as a Nix output,
   # use `devenv build outputs.npm`. Usage: package [1.2.3] — with no argument tasks.fsx computes
   # the version from the commit history, so there is no default to duplicate here.

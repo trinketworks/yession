@@ -32,6 +32,7 @@ open Microsoft.Playwright
 
 open Yession.Domain
 open Yession.Tests.Browser
+open Yession.Tests.Loopback
 open Yession.Tests.BrowserProbe
 open Yession.Tests.BrowserHarness
 
