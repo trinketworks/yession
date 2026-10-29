@@ -653,13 +653,25 @@ module Style =
     /// names reads as a list of names; blue and underlined under the pointer, because
     /// blue is what interactive means here. Underline (not colour) at rest would say the
     /// same thing, but on every row at once — the same noise in a quieter register.
+    ///
+    /// The SAME look while the tap that opened it is still landing — `group-aria-busy/open:`,
+    /// reading the hold the outer link carries (`recordRowLink`, `ManagerPage.fs`'s click
+    /// handler), because a touch has no hover and this is the only pointer this control can
+    /// give one. Not a second look: held wears exactly the hover one, same as Create's own
+    /// press wears its own hover-equivalent fill.
     let recordLink =
-        cls [ body; "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"; focusRing ]
+        cls [ body
+              "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"
+              "group-aria-busy/open:text-blue group-aria-busy/open:underline"
+              focusRing ]
 
     /// The same link on a record that is not live (`bodyDim`): still the way in — opening a
     /// stopped session is what starts it — but a step back from the ones already running.
     let recordLinkQuiet =
-        cls [ bodyDim; "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"; focusRing ]
+        cls [ bodyDim
+              "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"
+              "group-aria-busy/open:text-blue group-aria-busy/open:underline"
+              focusRing ]
 
     /// The mark that says a record link LEAVES (the session serves its own origin). Fainter
     /// than the faintest ink (`opacity-70` over `ink-faint`, safe because this is decorative
@@ -679,7 +691,15 @@ module Style =
     /// (`recordLink` / `recordLinkQuiet`, worn by a span inside), so hovering the state word
     /// does not blue it — only the name was ever styled to look like a link, this just widens what you
     /// can press to get it.
-    let recordRowLink = cls [ "block no-underline"; focusRing ]
+    ///
+    /// `group/open`, named for the hold a tap puts on it (`ManagerPage.fs`'s click handler
+    /// sets `aria-busy` on exactly this element) rather than `data-press`'s tilt: that tilt is
+    /// sized for an 80px-wide button (app/tailwind.css), and this hit area is a whole row
+    /// wide, so the same geometry here would read as the row keeling over rather than a
+    /// button going in. The name span inside reads the hold instead (`recordLink`'s
+    /// `group-aria-busy/open:`), and `aria-busy:cursor-progress` says the same thing the
+    /// pointer does on every other held control.
+    let recordRowLink = cls [ "group/open block no-underline aria-busy:cursor-progress"; focusRing ]
 
     /// A listed record's name and its leaves mark (`recordLinkMark`), as two flex children
     /// rather than one truncating block: on a narrow row (a phone) something has to give, and
