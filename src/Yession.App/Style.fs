@@ -109,6 +109,10 @@ module Style =
         /// The only stroke whose tone is off the neutral ramp, and the reason `acrylic` below
         /// composes a name from here rather than writing its own `border-*`.
         let acrylicTop = "border-t border-acrylic-edge"
+        /// The same rim on the BOTTOM, for a band pinned to the top of a scroller: what it
+        /// covers scrolls up under its lower edge. Worn only while pinned (`stuck:`), on the
+        /// band's ground (`before:`), because that is the only time anything is under it.
+        let acrylicBottomPinned = "stuck:before:border-b stuck:before:border-acrylic-edge"
 
         /// The region divider: a hairline on ONE side, separating two surfaces rather than
         /// enclosing a control. Named per side because which side it is on is structural,
@@ -2365,8 +2369,30 @@ module Style =
     /// the screen and the name still stands on the line. Without it the band stopped at the
     /// column's padding while every item under it ran 16px past, so a scrolled item's own
     /// trailing control showed in that strip, beside the author line pinned over it.
+    ///
+    /// PINNED, it is a BAND, not a label left floating. It was the name on 28px of black flush
+    /// against the header's rule, with the ground ending 8px under the name: at 1440x900 the
+    /// name sat 10px under the rule and the next line was sliced across its glyphs right
+    /// beneath it, so the pinned line read as a stray label over a cut. Now the ground holds
+    /// the name in the middle of the band — `pt-2` over it to match the `pb-2` under it, and
+    /// `-mt-2` so in flow the name stands where it did and the pad spends the gap above — and,
+    /// while it is stuck, that ground is the `acrylic` with its rim on the lower edge
+    /// (`Stroke.acrylicBottomPinned`): what scrolls under it is blurred out of reading rather
+    /// than cut, and the band's end is an edge the reader can see. At rest nothing is under
+    /// it, so it is the column's own black and every author line in the conversation stays
+    /// as it was. A browser without the `stuck` query keeps the black band.
+    ///
+    /// The ground is the band's `::before`, not its own background, because a scroll-state
+    /// container's query styles what is IN it and never the container itself. The blur and
+    /// tint are `acrylic`'s, spelled out under the variant, because Tailwind writes only the
+    /// classes a `.fs` file spells as a literal.
     let messageGroupHead =
-        "sticky top-0 z-10 bg-bg flex items-center gap-3 pb-2 -mb-1 max-md:-mx-4 max-md:px-4"
+        cls [ "sticky top-0 z-10 flex items-center gap-3 pt-2 -mt-2 pb-2 -mb-1 max-md:-mx-4 max-md:px-4"
+              "[container-type:scroll-state] before:absolute before:inset-0 before:-z-10 before:bg-bg"
+              "stuck:before:bg-acrylic stuck:before:backdrop-blur-acrylic stuck:before:backdrop-saturate-150"
+              "reduced-transparency:stuck:before:bg-panel reduced-transparency:stuck:before:backdrop-blur-none"
+              "reduced-transparency:stuck:before:backdrop-saturate-100"
+              Stroke.acrylicBottomPinned ]
 
     /// Catching up, drawn as the author line that will take its place (`View.chat`): its dot
     /// centred in the box an avatar fills, so the words stand where a name will.
