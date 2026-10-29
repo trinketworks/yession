@@ -398,9 +398,9 @@ The last section holds trust boundaries as sharp as the first section's.
   Supervision and secrets custody cross the boundary as a secret-scoped control RPC (environments
   are session-owned via the sandbox seam). The htmx management UI creates, launches, resumes and
   stops sessions. But **children die with the Manager**: no daemonising and no orphan adoption,
-  so a Manager restart stops every running session. `GET /sessions/{id}/open` launches a stopped
-  session and lands on its address (Plan 11), and the client offers that route when its session
-  has gone.
+  so a Manager restart stops every running session. `GET /sessions/{id}/open` answers a stopped
+  session with the opening screen, which launches it by POST and lands on its address (Plan 11),
+  and the client offers that route when its session has gone.
 - **The hook relay takes a session's word on what it may receive.** The Manager verifies a
   DELIVERY (it comes from the internet) and trusts a SUBSCRIPTION (it comes over the
   authenticated control channel from a child the Manager spawned)

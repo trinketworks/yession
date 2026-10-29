@@ -9480,6 +9480,26 @@ let pressTests =
 
 let private openingDataDir = "tests/browser/.data-opening"
 
+/// A second origin the case owns, answering every request with `html`. A real listener on
+/// loopback, not a routed fake: Chromium refuses a page on a public address space the
+/// requests it makes to loopback (Private Network Access), and a refusal there would leave
+/// the Manager's own refusal untested.
+let private elsewhere (html: string) : Serving =
+    let served = listenOnLoopback ()
+    let rec loop () =
+        async {
+            match! Async.Catch (served.Listener.GetContextAsync () |> Async.AwaitTask) with
+            | Choice1Of2 ctx ->
+                let bytes = Text.Encoding.UTF8.GetBytes html
+                ctx.Response.ContentType <- "text/html"
+                ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
+                ctx.Response.Close ()
+                return! loop ()
+            | Choice2Of2 _ -> ()
+        }
+    Async.Start (loop ())
+    served
+
 let private withOpening (name: string) (prepare: IPage -> Async<unit>) (body: Deployed -> IPage -> string -> Async<unit>) : Async<unit> =
     async {
         if Directory.Exists openingDataDir then Directory.Delete (openingDataDir, true)
@@ -9571,6 +9591,62 @@ let openingTests =
                 let! _ = await (page.GotoAsync opening)
                 do! Wait.until "the reason on the screen"
                         (fun () -> Read.text page "#status") (Option.exists (fun t -> t.Contains "exited before ready (code 3)"))
+            })
+
+        // `/open` changes nothing, so the launch is the screen's to ask for, by POST, under the
+        // Manager's request-origin rule. The real launch, the real readiness and the real
+        // session: the browser lands in it only if the screen asked.
+        testCaseAsync "the screen launches the session by POST, and the browser lands in it" <|
+            withOpening "launch by POST" (fun _ -> async { return () }) (fun manager page opening -> async {
+                let launches = ResizeArray<string> ()
+                page.Request.Add (fun r -> if r.Method = "POST" && r.Url.EndsWith "/launch" then launches.Add r.Url)
+                let! _ = await (page.GotoAsync opening)
+                do! Wait.until "the browser to have left for the session" (fun () -> Read.url page) (fun at -> at.Port <> manager.Port)
+                Expect.equal (List.ofSeq launches) [ opening.Replace ("/open", "/launch") ] "one launch, sent by the screen"
+            })
+
+        // A page on another origin, in the same browser that carries the operator's identity: its form
+        // cannot make a session, and its image cannot start one.
+        testCaseAsync "a form on another origin cannot create a session" <|
+            withOpening "a foreign form" (fun _ -> async { return () }) (fun manager page _ -> async {
+                let sessionsNow () =
+                    async {
+                        use http = new HttpClient ()
+                        let! body = await (http.GetStringAsync (manager.At "/"))
+                        return Text.RegularExpressions.Regex.Matches(body, sprintf "%s=\"" Yession.App.Dom.Manager.session).Count
+                    }
+                let! before = sessionsNow ()
+                let answers = ResizeArray<int> ()
+                page.Response.Add (fun r -> if r.Request.Method = "POST" && r.Url.EndsWith "/sessions" then answers.Add r.Status)
+                let foreign =
+                    elsewhere (
+                        sprintf "<form method=\"post\" action=\"%s\"><input name=\"name\" value=\"theirs\"><button>go</button></form>" (manager.At "/sessions"))
+                try
+                    let! _ = await (page.GotoAsync (foreign.At "/form"))
+                    do! awaitU (page.ClickAsync "button")
+                    do! Wait.until "the Manager to have answered the form" (fun () -> async { return List.ofSeq answers }) (List.isEmpty >> not)
+                finally
+                    foreign.Stop ()
+                let! after = sessionsNow ()
+                Expect.equal (List.ofSeq answers, after) ([ 403 ], before) "refused, and no session made"
+            })
+
+        testCaseAsync "an image on another origin cannot start a session" <|
+            withOpening "a foreign image" (fun _ -> async { return () }) (fun _ page opening -> async {
+                // Settled either way: the browser's own blocking of a cross-origin HTML answer
+                // (ORB) fails the request only after the Manager has answered it.
+                let settled = ResizeArray<string> ()
+                page.RequestFinished.Add (fun r -> if r.Url = opening then settled.Add "finished")
+                page.RequestFailed.Add (fun r -> if r.Url = opening then settled.Add r.Failure)
+                let foreign = elsewhere (sprintf "<img src=\"%s\" alt=\"\">" opening)
+                try
+                    let! _ = await (page.GotoAsync (foreign.At "/image"))
+                    do! Wait.until "the image's request to have settled" (fun () -> async { return List.ofSeq settled }) (List.isEmpty >> not)
+                finally
+                    foreign.Stop ()
+                use http = new HttpClient ()
+                let! ready = await (http.GetAsync (opening.Replace ("/open", "/ready")))
+                Expect.equal (int ready.StatusCode) 503 "the session is not running, and nothing is launching it"
             })
 
         testCaseAsync "a reader who declined motion is shown the still mark, and only it" <|
