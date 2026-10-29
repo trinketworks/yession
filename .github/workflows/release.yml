@@ -245,6 +245,41 @@ jobs:
       - name: Build the Nix package (its install check boots every bin)
         run: nix build .#yession --print-build-logs
 
+  # The aarch64-darwin half of the binary cache, and the only job that fills it. pr.yaml's
+  # `darwin-package` builds the same two things on every pull request, but a pull request runs
+  # code master has not merged, so it only reads the cache (its `test` job's cachix step says
+  # why). This runs after the merge, so what it pushes is master's.
+  #
+  # The release does NOT need it. A cache that missed costs the next darwin run compile time and
+  # nothing else, and pr.yaml's `darwin-package` is the guard that the darwin build works.
+  darwin-cache:
+    name: "cache:darwin"
+    if: github.ref == 'refs/heads/master'
+    runs-on: macos-latest
+    # pr.yaml's `darwin-package` builds the same package and dev shell cold in under its 45.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      # A cache push may not fail the job (verify.yml's step says why). `extraPullNames` for the
+      # reason pr.yaml's `test` job gives: this file owns the substituter list.
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        continue-on-error: true
+        with:
+          name: yession
+          extraPullNames: devenv
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      # What a Mac installs: `nix profile install github:trinketworks/yession`.
+      - name: Build the installable package
+        run: nix build .#yession --print-build-logs
+      # What a Mac developer enters, and what pr.yaml's `darwin-package` enters on every pull
+      # request: the dev shell's closure is most of what this cache spares it.
+      - name: Build the dev shell
+        run: DEVENV_ROOT="$PWD" nix develop --impure --command true
+
   release:
     # `bench` is here so its artifact exists to download, NOT so it can stop the release. The
     # steps inside bench.yml tolerate a failed measurement, but the JOB can still fail for
