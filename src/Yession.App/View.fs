@@ -2109,7 +2109,8 @@ module View =
                     @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading entry.Terminal)))}>
               <span class="{Style.cls [ Style.chatChipPrompt; Style.terminalPrompt ]}">$</span>
               <code class="{Style.chatChipCommand}" data-terminal-text="{BodyKey.terminalQueued entry.QueueId}"></code>
-              <span class="{Style.chatChipSubject}" data-pending-subject="terminal:{TerminalId.value entry.Terminal}">{what}</span>
+              <span class="{Style.chatChipIn}">in</span>
+              <span class="{Style.chatChipSubject}" data-pending-subject="terminal:{TerminalId.value entry.Terminal}" title="{what}">{what}</span>
               <span class="shrink-0">{statusLine}</span>
             </button>"""
 
@@ -3507,7 +3508,7 @@ module View =
                                     <button type="button" class="{Style.bandAct}" data-chat-refused-open="{id}"
                                             aria-label="{Dom.Text.showTerminal}: {where}"
                                             @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading view.TerminalId)))}>{Dom.Text.showTerminal}</button>
-                                    <span class="{Style.chatChipSubject}">{where}</span>
+                                    <span class="{Style.chatChipSubject}" title="{where}">{where}</span>
                                   </div>
                                 </article>"""
                         ))

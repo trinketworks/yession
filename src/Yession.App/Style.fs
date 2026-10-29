@@ -3051,21 +3051,30 @@ module Style =
     /// not do is move the words it leads. `pr-3` then stands the glyph on the avatars' 20px
     /// column, where every other mark this margin carries stands (`fold`, `replyRefMark`).
     let chatChipPrompt = "-ml-rail -mr-2 w-rail pr-3 flex justify-center"
-    /// Which terminal a queued command waits in. The same voice as `chatChipWho`, but it
-    /// TRUNCATES, and is held to half the row: an agent's terminal is titled `[sandbox]
-    /// reason…`, sixty characters of caps, and a name that will not shrink is wider than a
-    /// phone's column on its own — it took the whole conversation sideways with it.
-    let chatChipSubject = caps + " text-ink-faint truncate min-w-0 max-w-[50%]"
+    /// Which terminal a queued command waits in, by its name: MONO, because a terminal an agent
+    /// opens is named for what it runs (`dotnet fsi tasks.fsx build 2>&1 | tee build.log`), and
+    /// mono is the terminal's face. It wore the caps voice, which is for short labels: a
+    /// command in tracked capitals is the wall of text the doctrine warns of, and it read as
+    /// chrome rather than as the name it is (docs/visual-design.md, Type).
+    ///
+    /// It takes the ROOM THE COMMAND LEAVES (`flex-1` on a zero basis), down to a floor that
+    /// still shows a name's first word. It was held to half the row instead, which cut a
+    /// 1440px chip's name at `… | t…` with half the row standing empty beside a short
+    /// command: the cut fell on exactly the part that tells two such terminals apart. And it
+    /// TRUNCATES, because a name that will not shrink is wider than a phone's column on its
+    /// own and takes the whole conversation sideways with it.
+    let chatChipSubject = "font-terminal text-code-sm text-ink-faint truncate flex-1 min-w-24"
+    /// The `in` that joins a queued command to the terminal it waits in, in the act's prose
+    /// voice: two mono runs side by side read as one command line.
+    let chatChipIn = "font-ui font-light text-small text-ink-faint shrink-0"
     /// The command itself: mono, truncated to one line. A chip that wrapped to three would
     /// stop being a chip.
     ///
-    /// `flex-auto` and not `flex-1`, which is the same grow on a basis of ZERO: a zero basis
-    /// has nothing to give up, so the command was cut from its first character while the
-    /// terminal's caps name beside it kept every one of its own up to the cap — the command,
-    /// which is the content of the line, truncating before the chrome naming where it waits.
-    /// On its content's basis the two give way in proportion to what each is asking for, and
-    /// the name's cap is then a guarantee rather than the only thing holding it back.
-    let chatChipCommand = "font-terminal text-code-sm text-ink-dim truncate min-w-0 flex-auto"
+    /// On its CONTENT'S basis and never growing: the command is the content of the line, so it
+    /// keeps every character it has room for, and the terminal's name beside it gives way
+    /// first (`chatChipSubject`). It was `flex-1`, a zero basis, which has nothing to give up:
+    /// the command was cut from its first character while the name kept all of its own.
+    let chatChipCommand = "font-terminal text-code-sm text-ink-dim truncate min-w-0 flex-initial"
     /// A ran command's line: "ran" and what ran, truncated together as one sentence.
     let chatChipLine = "truncate min-w-0 flex-1"
     /// What ran, when its author described it: prose a step brighter than its verb
