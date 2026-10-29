@@ -3521,7 +3521,11 @@ module Style =
     /// column already answers: with the timeline's `break-words` reaching in here, no line can
     /// exceed the block, so the scroll container never had anything to scroll and only hid
     /// which rule was doing the work.
-    let prosePre = "font-terminal text-code leading-5 bg-surface-2 text-ink p-3 [&:not(:first-child)]:mt-2 whitespace-pre-wrap"
+    ///
+    /// Outlined, not filled: the composer goes `bg-surface-2` while focused, the top step of
+    /// the ramp, so a filled block had no lighter step to stand on there and vanished. The
+    /// timeline wears the same outline so the two draw one code block.
+    let prosePre = Stroke.ring + " " + Stroke.hair + " font-terminal text-code leading-5 text-ink p-3 [&:not(:first-child)]:mt-2 whitespace-pre-wrap"
     let proseQuote = Stroke.lead + " " + Stroke.hair + " pl-3 text-ink-dim [&:not(:first-child)]:mt-2"
     /// The one hyperlink face: prose links and the references that lead somewhere
     /// (`entityLink`) compose the same words, so a link is a link wherever it stands.
