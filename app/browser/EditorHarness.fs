@@ -1,3 +1,4 @@
+[<Yession.App.Harness>]
 module Yession.Browser.EditorHarness
 
 // A host-free browser harness for the rich-editor E2E. Mounts a ProseMirror editor on a fresh
