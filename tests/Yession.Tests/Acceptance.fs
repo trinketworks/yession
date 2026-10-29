@@ -2363,6 +2363,38 @@ let private uiChecklistTests =
                 ((ruleOf "msg-1" (Support.render named)).Contains "Where it was settled")
                 "a name that says more than the message does belongs on the rule"
 
+        // A pull request's own milestone opens a chapter BY NATURE (`AutoChapters`), which
+        // never gets an entry in the doc and so wears its guess for good
+        // (`AutoChapters.fs`, "written to be kept"). That guess ("Merged PR #…") is never
+        // the sentence the merge card itself prints, so the rule's usual dedup — leave a
+        // guess unsaid because the message repeats it — does not apply here, and hiding it
+        // anyway would be the chapter's only name, gone.
+        testCase "a rule over a chapter a pull request opened by itself wears its guess" <| fun () ->
+            let pr = PrRef.create (RepoRef.create "octo/hello" |> expect) 12 |> expect
+            let merged : ConversationItem =
+                { MessageId = MessageId.create "msg-1" |> expect
+                  Author = PeerRef ada
+                  Content =
+                    ItemContent.Act (
+                        Act.PrTransitioned
+                            { MessageId = MessageId.create "msg-1" |> expect
+                              Pr = pr
+                              Transition = PrTransition.Merged
+                              State = PrMerged
+                              Checks = ChecksGreen
+                              Watcher = Principal.Peer ada
+                              OccurredAt = None
+                              Title = Some "Add feature" })
+                  Status = Complete
+                  Offset = EventOffset.create 1L |> expect
+                  Woke = None; CausedBy = None }
+            let model =
+                { representativeModel with
+                    Conversation = { representativeModel.Conversation with Recent = List.rev [ merged ] } }
+            Expect.isTrue
+                ((ruleOf "msg-1" (Support.render model)).Contains "Merged PR #12 Add feature")
+                "nobody will ever name this chapter, so its only name had better be on the rule"
+
         testCase "the contents still name a chapter nobody named by its guess" <| fun () ->
             let html = Support.render (withChapters [ "msg-1" ])
             let start = html.IndexOf (Dom.attr Dom.Hooks.chapterEntry "msg-1")
