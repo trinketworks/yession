@@ -215,6 +215,10 @@ module Editor =
             | Some command -> Chord.withShift Key.Enter, command
             | None -> ()
             Chord.plain Key.Enter, newParagraph
+            // Ahead of the base keymap's Backspace: right after `> ` or `# ` became a block,
+            // Backspace gives back the characters typed, so a rule nobody meant is one key to
+            // undo. Anywhere else it declines and Backspace deletes as always.
+            Chord.plain Key.Backspace, undoInputRule
             match onSubmit with
             | Some submit -> Chord.withMod Key.Enter, effectCommand submit
             | None -> () ]
