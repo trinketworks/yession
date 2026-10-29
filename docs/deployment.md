@@ -11,6 +11,23 @@ whatever sits in front of it. The integrations are worked examples that satisfy 
 
 ---
 
+## Checking a release
+
+Each GitHub release carries `SHA256SUMS` beside its assets. The tarball and `SHA256SUMS` also
+carry signed build provenance: which workflow, on which commit of this repository, made them.
+Download the assets into one directory, then check them before you install the tarball:
+
+```sh
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify yession-<version>.tgz --repo trinketworks/yession
+gh attestation verify SHA256SUMS --repo trinketworks/yession
+```
+
+`sha256sum -c` proves that the downloads match the list. `gh attestation verify` proves that
+this repository's release workflow made them. If either fails, do not install the tarball.
+
+---
+
 ## Installing a release
 
 The npm package is a release asset, `yession-<version>.tgz`. It carries `npm-shrinkwrap.json`,
@@ -588,6 +605,32 @@ Two bounds answer different questions:
 - **`--secrets ephemeral`** — keep the sharing, lose the permanence: the credential dies with
   this Manager process.
 - **`--auth trusted-headers`** — lose the sharing: each human owns their own credential.
+
+##### What a tailnet member can do
+
+Under `trusted-headers`, identity is per human and sessions are shared by every member. The
+rule establishes who is calling. Nothing then decides what that person may do, so every
+authenticated member is an operator of every session. A member can:
+
+- create, launch, stop and archive any session,
+- join any session, read its whole event log and its terminals, drive its agent, and type
+  into its sandboxes,
+- declare MCP servers, which every session they name connects to.
+
+What stays the member's own is their credential. A turn and a lent token run on the credential
+of the person who acted, so no member's turn spends another's Claude or GitHub account.
+
+Two places cross that boundary:
+
+- **A repository's `setup:` block** runs under the authority of whoever triggered the fold
+  that started its sandbox: the person who added the repository, approved what its
+  `yession.yaml` asks for, or otherwise ran a repo verb (`Authority.configuredBy` in
+  `RepoSandboxes.foldOnce`, built by `Commands.startWorkSandboxCall`).
+- **A webhook delivery** reaches every session whose filter matches, so one member's session
+  reads another member's pull-request traffic.
+
+So the deployment is for one team that shares its work. A per-session owner is not
+implemented ([GAPS.md](GAPS.md#security--trust)).
 
 #### Addressing
 

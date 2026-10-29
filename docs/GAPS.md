@@ -153,6 +153,25 @@ The last section holds trust boundaries as sharp as the first section's.
   every session, so the boundary is the same. Authors stay `PeerRef`, so event ATTRIBUTION does
   not change. [deployment.md](deployment.md#what---auth-localhost-costs-here) gives both exits
   (`--secrets ephemeral`, `--auth trusted-headers`).
+- **Under `--auth trusted-headers` every member is an operator of every session.** The rule
+  establishes who the caller is. Nothing decides what they may do.
+  - Holds: identity is per human, and credential custody is per human. A turn and a lent token
+    run on the acting person's own credential (`Authority.credential`), so no member's turn
+    spends another's account.
+  - Does not hold: session ownership and membership. The Manager answers every attributed user
+    (`gated`, `app/ManagerUi.fs`), so any member creates, launches, stops and archives any
+    session, and declares MCP servers for all. `/authorize` (`authorize`,
+    `src/Yession.Oidc/Provider.fs`) issues a code for any registered client to any attributed
+    user, so any member joins any session, reads its log and terminals, drives its agent, and
+    types into its sandboxes.
+  - Two places cross the credential boundary. A repository's `setup:` block runs under
+    whoever triggered the fold that started its sandbox (`Authority.configuredBy` in
+    `RepoSandboxes.foldOnce`, built by `Commands.startWorkSandboxCall`). A webhook
+    delivery goes to every session whose filter matches (`deliver`, `app/WebhookRelay.fs`).
+  - Open: a session owner, a member list the owner edits, and a policy row for the Manager
+    verbs and `/authorize`. Nothing is built.
+    [deployment.md](deployment.md#what-a-tailnet-member-can-do) tells operators the model as
+    it is.
 - **No transport encryption guarantees beyond WebRTC/DTLS.** The Manager and every session bind
   127.0.0.1, or a unix socket under `trusted-headers`. Loopback HTTP is the RFC 8252 pattern.
   Two listeners bind wider, because a sandbox has to reach them: the git gateway and the

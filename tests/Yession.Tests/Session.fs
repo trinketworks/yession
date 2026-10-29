@@ -166,12 +166,40 @@ let private handshakeTests =
         async {
             let log = newLog ()
             let clientEnd, serverEnd = InMemoryChannel.createPair<unit> ()
-            let! server = Async.StartChild (PeerSession.run sessionId attributionOf log PeerSession.PeerHandlers.none serverEnd)
+            let! server = Async.StartChild (PeerSession.run sessionId attributionOf (PeerSession.LivePeers ()) log PeerSession.PeerHandlers.none serverEnd)
             do! client clientEnd
             do! server
             let! events = allEventsAfter log None
             return events |> List.map (fun e -> e.Event)
         }
+
+    let ada = UserId.create "ada@example.com" |> expect
+    let bob = UserId.create "bob@example.com" |> expect
+    let tokenUsers (t: string) =
+        match t with
+        | "tok-ada" | "tok-ada-2" -> Some (AttributedUser ada)
+        | "tok-bob" -> Some (AttributedUser bob)
+        | "anon-1" | "anon-2" -> Some UnattributedAccess
+        | _ -> None
+
+    /// Connect one peer presenting `peerId` and `token` to a session's shared `live` set and
+    /// `log`. Returns the client end, the running server, and the first reply.
+    let connect live log (token: string) =
+        async {
+            let clientEnd, serverEnd = InMemoryChannel.createPair<unit> ()
+            let! server = Async.StartChild (PeerSession.run sessionId tokenUsers live log PeerSession.PeerHandlers.none serverEnd)
+            do! clientEnd.Send (Control (PeerHello { PeerId = peerId; DisplayName = "Ada"; Token = token }))
+            let! response = clientEnd.Receive ()
+            return clientEnd, server, response
+        }
+
+    let isAccepted (response: SessionFrame<unit> option) =
+        match response with
+        | Some (Control (PeerAccepted _)) -> true
+        | _ -> false
+
+    let joinedCount (events: EventEnvelope<SessionEvent> list) =
+        events |> List.filter (fun e -> match e.Event with PeerJoined _ -> true | _ -> false) |> List.length
 
     testList "Peer handshake and presence" [
         testCaseAsync "a valid hello is accepted and appends PeerJoined" <|
@@ -240,6 +268,71 @@ let private handshakeTests =
                     [ PeerJoined { PeerId = peerId; DisplayName = "Ada"; User = None }
                       PeerLeft { PeerId = peerId } ]
                     "PeerJoined then PeerLeft"
+            }
+
+        testCaseAsync "a hello with a peer id live as another user is refused with PeerRejected" <|
+            async {
+                let live = PeerSession.LivePeers ()
+                let log = newLog ()
+                let! first, firstServer, _ = connect live log "tok-ada"
+                let! _, _, response = connect live log "tok-bob"
+                do! first.Close ()
+                do! firstServer
+                match response with
+                | Some (Control (PeerRejected reason)) -> Expect.equal reason "peer id in use" "refusal reason"
+                | other -> failwithf "expected PeerRejected, got %A" other
+            }
+
+        testCaseAsync "a refused hello appends no second PeerJoined" <|
+            async {
+                let live = PeerSession.LivePeers ()
+                let log = newLog ()
+                let! first, firstServer, _ = connect live log "tok-ada"
+                let! _, refusedServer, _ = connect live log "tok-bob"
+                do! refusedServer
+                do! first.Close ()
+                do! firstServer
+                let! events = allEventsAfter log None
+                Expect.equal (joinedCount events) 1 "only the first peer joined"
+            }
+
+        testCaseAsync "a hello with a peer id live as the same user is accepted" <|
+            async {
+                let live = PeerSession.LivePeers ()
+                let log = newLog ()
+                let! first, firstServer, _ = connect live log "tok-ada"
+                let! second, secondServer, response = connect live log "tok-ada-2"
+                do! second.Close ()
+                do! secondServer
+                do! first.Close ()
+                do! firstServer
+                Expect.isTrue (isAccepted response) "same user, same peer id: accepted"
+            }
+
+        testCaseAsync "a hello with a peer id that was live and has left is accepted" <|
+            async {
+                let live = PeerSession.LivePeers ()
+                let log = newLog ()
+                let! first, firstServer, _ = connect live log "tok-ada"
+                do! first.Close ()
+                do! firstServer
+                let! second, secondServer, response = connect live log "tok-bob"
+                do! second.Close ()
+                do! secondServer
+                Expect.isTrue (isAccepted response) "the peer id was free again"
+            }
+
+        testCaseAsync "two unattributed hellos with one peer id are accepted" <|
+            async {
+                let live = PeerSession.LivePeers ()
+                let log = newLog ()
+                let! first, firstServer, _ = connect live log "anon-1"
+                let! second, secondServer, response = connect live log "anon-2"
+                do! second.Close ()
+                do! secondServer
+                do! first.Close ()
+                do! firstServer
+                Expect.isTrue (isAccepted response) "unattributed peers are one user"
             }
     ]
 

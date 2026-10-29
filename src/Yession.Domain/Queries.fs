@@ -137,7 +137,9 @@ module QueryCell =
         | CellFlag true -> "yes"
         | CellFlag false -> "no"
         | CellStatus (text, _) -> text
-        | CellAbsent -> "—"
+        // The mark a table shows for an empty cell, alone: a glyph, not a dash between two
+        // clauses, so there is no sentence to split.
+        | CellAbsent -> "—" // fsharpanalyzer: ignore-line YES018
 
 /// A query's answer, in its declared shape. Constructed by the capability that owns the
 /// state, rendered by whoever is asking.

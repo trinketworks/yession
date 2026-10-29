@@ -49,7 +49,7 @@ module Style =
     //   `underline` — the single exception, and it is a shape not a third width: a heading
     //            that edits in place (the session title), where a rectangle drawn round
     //            28px type reads as a box rather than a field. It has exactly one wearer
-    //            (`titleInput`), which is what keeps it a shape; a second would make it a
+    //            (`titleWrap`, round `titleInput`), which is what keeps it a shape; a second would make it a
     //            variant, and principle 5 does not admit one.
     //
     // Two rules keep the states honest, and they are opposites on purpose:
@@ -73,7 +73,7 @@ module Style =
         /// exists to stop.
         let clear = "border-transparent"
         /// The one SHAPE in this vocabulary rather than a width: the bottom edge alone, for the
-        /// session title (`titleInput`) — a heading that edits in place, where a rectangle drawn
+        /// session title (`titleWrap`, round `titleInput`) — a heading that edits in place, where a rectangle drawn
         /// round 28px type reads as a box rather than a field. `border-0` first, so the shape is
         /// stated and not inherited from whatever the UA gives an `<input>`.
         ///
@@ -109,6 +109,10 @@ module Style =
         /// The only stroke whose tone is off the neutral ramp, and the reason `acrylic` below
         /// composes a name from here rather than writing its own `border-*`.
         let acrylicTop = "border-t border-acrylic-edge"
+        /// The same rim on the BOTTOM, for a band pinned to the top of a scroller: what it
+        /// covers scrolls up under its lower edge. Worn only while pinned (`stuck:`), on the
+        /// band's ground (`before:`), because that is the only time anything is under it.
+        let acrylicBottomPinned = "stuck:before:border-b stuck:before:border-acrylic-edge"
 
         /// The region divider: a hairline on ONE side, separating two surfaces rather than
         /// enclosing a control. Named per side because which side it is on is structural,
@@ -231,7 +235,7 @@ module Style =
     /// full stop that was its one colour is the mark's job now (assets/logo/lockup.svg).
     let wordmark = "font-normal text-wordmark tracking-wordmark text-ink"
     /// The mark and the wordmark on one line, the lockup's own proportions scaled to the
-    /// band: the mark 56px to the word's 32 (the lockup file draws 64 to 32, which the 88px
+    /// band: the mark 56px to the word's 32 (the lockup file draws 64 to 32, which the
     /// band has no room for), its foot 15px below the word's line box so the x-height band
     /// sits where the lockup puts it — on the mark's optical middle, a little above its own.
     let lockup = "flex items-end gap-2"
@@ -1496,7 +1500,7 @@ module Style =
     /// 15px below the wordmark's line box, and no bottom padding seats 71px of object inside
     /// 60px of band. The fix is a phone step on `lockup`/`lockupMark`/`wordmark` (Typography),
     /// after which this is one `phone:h-band-phone` and a smaller `pb`.
-    let sideHead = "h-band shrink-0 flex items-end justify-between pb-5 " + Stroke.dividerBottom
+    let sideHead = "h-band shrink-0 flex items-end justify-between pb-band-foot " + Stroke.dividerBottom
     /// A group in the column: its head, then its rows. There is one of these and not two —
     /// a `sideSectionFirst` stood beside it, byte for byte the same value, left over from when
     /// the first group carried the rule the head now owns. A second name for one way of
@@ -1516,7 +1520,21 @@ module Style =
     /// A standing's mark in the column's status block (`standingsSection`): centred in the
     /// AVATAR's 20px column, so the marks stack on the axis the roster's avatars do and every
     /// word in the block starts on the rail the names below it start on.
-    let standingMarkSeat = "w-5 shrink-0 self-center grid place-items-center"
+    ///
+    /// Vertically, placed by the font rather than by eye (the Space rule `agentMark` already
+    /// answers to): the attention mark stays a fixed 12px, because its shape needs the room
+    /// (`attentionMark`'s comment), but the small circle inside that box has to read as
+    /// CENTRED on the word beside it, which means the x-height band, not the row's own
+    /// line-box. `self-center` centred it on the latter — the row's full `leading-5`, which a
+    /// font typically carries more of above the x-height than below it — and so the mark read
+    /// high of the word every time, a pixel further off wherever a surface set the row's
+    /// type at another size. Left on `items-baseline` (the row's default: no `self-*` here),
+    /// the mark's own box starts flush on the baseline like a word does, and is carried up by
+    /// half of what is left once the x-height is subtracted from the box's fixed height — so
+    /// the shift is a formula in the two things that decide it (the box and the font), never a
+    /// constant, and reads true at a size this file has not tried yet.
+    let standingMarkSeat =
+        "w-5 shrink-0 grid place-items-center translate-y-[calc((0.75rem_-_1ex)/2)]"
     /// A standing that GOES somewhere (the pull requests' line opens their rows in settings):
     /// the roster row's own shape, pressable. A thumb's height on a phone, centred there
     /// because a baseline row in a 44px box parks its words at the top of it.
@@ -1808,8 +1826,8 @@ module Style =
     /// (docs/visual-design.md, Space: the band is `spacing-band`, and on a phone it is
     /// `spacing-band-phone`). The phone one was the literal `h-14`, which is the same 56px
     /// said in a second place, and a second place is where two heads come to disagree: the
-    /// column's own head is still 88px under a thumb, so the two hairlines a drawer shows at
-    /// once sit 28px apart (see `sideHead`).
+    /// column's own head is still the full `spacing-band` under a thumb, so the two hairlines a
+    /// drawer shows at once sit 32px apart (see `sideHead`).
     ///
     /// The left padding is the timeline's own plus `--column-gutter` (`mainColumn`), so the
     /// title stands in exactly as far as the conversation does: with the pane shut and the
@@ -1818,7 +1836,7 @@ module Style =
     /// the band's right-hand group is the way to the pane, and it stays at the edge the pane
     /// opens from.
     let header =
-        "relative h-band shrink-0 flex items-end gap-4 pl-[calc(var(--column-gutter)+2rem)] pr-8 pb-5 "
+        "relative h-band shrink-0 flex items-end gap-4 pl-[calc(var(--column-gutter)+2rem)] pr-8 pb-band-foot "
         + "phone:h-band-phone phone:items-center phone:gap-2 phone:px-4 phone:pb-[15px] "
         + Stroke.dividerBottom
 
@@ -2041,7 +2059,15 @@ module Style =
     /// title's text and the timeline's caret both start at x=48.
     /// `phone:flex-1` is what makes the phone's band a row: the title takes the space the
     /// two chevrons leave rather than sizing to an input's default 20 characters.
-    let titleWrap = "relative flex flex-col min-w-0 ml-8 phone:ml-3 phone:flex-1"
+    ///
+    /// The wrap, not the field, wears the title's rule (`titleInput` says why, and why not on a
+    /// phone). The field pays its 8px padding back with `-mx-2`, so the wrap's box is the
+    /// text's own extent: the rule starts at the first glyph and ends at the last. The field's
+    /// box still reaches 8px past it, so `wide:mr-2` keeps the band's gap between that box and
+    /// the terminals' door (measured live with a title the band cannot hold).
+    let titleWrap =
+        cls [ "relative wide:top-[2px] flex flex-col min-w-0 ml-8 wide:mr-2 phone:ml-3 phone:flex-1"
+              Stroke.underline; Stroke.rim; "phone:border-b-0" ]
 
     /// The title itself: the heading, worn by a text input — and it says SO AT REST, with the
     /// one shape the `Stroke` vocabulary keeps for it (`Stroke.underline` in `Stroke.rim`).
@@ -2051,7 +2077,9 @@ module Style =
     /// (`hover:bg-surface-2`). That argument is the one principle 4 refuses: what a thing is —
     /// here, that it edits — is visible at rest, because a thumb has no hover and a reader has
     /// no tooltip. A heading nobody hovers is a heading nobody learns is a field. So the rule
-    /// is back, and `Stroke.underline` has its wearer again.
+    /// is back, and `Stroke.underline` has its wearer again. The wrap round this field wears
+    /// it (`titleWrap`), so the rule is the text's width and not the padded box's, and the
+    /// field itself is bare (`bareBox`).
     ///
     /// What does NOT come back is the DASH. It was `border-dotted border-ink-faint` over this
     /// same `border-0 border-b`, and the dash had a name in the vocabulary (`Stroke.dotted`,
@@ -2086,13 +2114,25 @@ module Style =
     /// only: a phone's band seats the id 2px under the title's line box, and vertical padding
     /// put the fill and its ring through it.
     ///
+    /// As wide as its text, not as wide as an input's default 20 characters: the rule under
+    /// "session" ran 300px, twice the word, and began 8px before it in the padding below.
+    /// `field-sizing:content` sizes the box to the value, or to the placeholder while there
+    /// is none, so an empty title still wears a rule as long as "session". It sizes the height
+    /// too, and a placeholder's line is taller than the value's (38px against 32, measured
+    /// live), so `wide:h-8` holds the box to the heading's line. The wrap is that
+    /// wide, and the field stretches across it, so a long title the band cannot hold shrinks
+    /// the wrap (`min-w-0`) and truncates as before. On a phone the wrap takes the row
+    /// (`titleWrap`) and `phone:w-full` keeps the field the box it was, the thumb's target
+    /// across it, clear of the terminals' door.
+    ///
     /// `focusRing` is what a keyboard sees. The fill alone is a real focus signal for a
     /// pointer, but it is a tone step on a dark ground; the ring is the product's own
     /// vocabulary and the UI baseline's floor (AGENTS.md), so the two ride together.
     ///
-    /// `md:top-[2px]` is optical: a 28/32 line box holds its baseline 2px higher over the
-    /// shared bottom edge than the wordmark's 32/36 does, so the input steps down to put both
-    /// on one line (measured live). A phone has no cross-column baseline to meet and no room
+    /// The wrap's `wide:top-[2px]` (`titleWrap`) is optical, and it moves this field and its
+    /// rule together: a 28/32 line box holds its baseline 2px higher over the shared bottom
+    /// edge than the wordmark's 32/36 does, so the title steps down to put both on one line
+    /// (measured live). A phone has no cross-column baseline to meet and no room
     /// for 28px in a 56px row, so it takes the pivot step (19/24) and no nudge.
     ///
     /// And on a phone the field is a thumb's height, which a 24px line in a 60px band does
@@ -2104,11 +2144,10 @@ module Style =
     /// `Render.placeInputCursor`'s marker subtracts the padding and the border off the live box,
     /// so a collaborator's caret stays the height of the line.
     let titleInput =
-        cls [ "w-full min-w-0 bg-transparent px-2 -mx-2 py-0 phone:h-11 phone:pb-5 phone:-mb-5"
-              Stroke.underline; Stroke.rim; "phone:border-b-0"
+        cls [ bareBox; "[field-sizing:content] wide:h-8 phone:w-full min-w-0 bg-transparent px-2 -mx-2 py-0 phone:h-11 phone:pb-5 phone:-mb-5"
               "hover:bg-surface-2 focus:bg-surface-2 transition-colors"; focusRing
               "font-extralight text-heading phone:text-pivot tracking-[-0.01em] lowercase text-ink"
-              "placeholder:text-ink-faint truncate relative wide:top-[2px]" ]
+              "placeholder:text-ink-faint truncate relative" ]
 
     /// The session id, shown small and dim under the title as a stable secondary identifier.
     /// It hangs OUT OF FLOW below the title, into the band's bottom padding: in flow it added
@@ -2122,7 +2161,10 @@ module Style =
     /// through to the field could only ever edit the title, never select the id.
     /// Its `mt-1` and its line are `--spacing-id-drop`, which the chevron's mark lands on
     /// (`navReopenMark`): change one and change the other.
-    let titleId = "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full left-0 right-0 select-text"
+    /// On a wide screen the wrap carries the title's 2px optical drop and its 1px rule
+    /// (`titleWrap`), which together put the padding box's bottom 1px lower than the line the
+    /// id hung from when the field wore both. `wide:top-[calc(100%-1px)]` pays it back.
+    let titleId = "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full wide:top-[calc(100%-1px)] left-0 right-0 select-text"
 
     /// A collaborator's selection highlight in the title: an absolutely-positioned span the
     /// browser places and sizes against the input's own box by measurement (the translucent
@@ -2150,9 +2192,10 @@ module Style =
     /// with the conversation centred it stays beside the title rather than at the window's
     /// edge, which is where #1521 left it (measured at 1280: chevron at x=15, title at 306).
     /// And it stands on the title's LINE, as it does on a phone: the title's middle is 35px
-    /// over the band's padding foot (`pb-5`, the field's 1px rule, half its 32px line, less
-    /// the field's 2px `top` nudge), and 30px, with the 6px `-m-1.5` takes back, puts the
-    /// glyph's middle on it (measured live at 1280 and 1600: glyph and title both at y=86).
+    /// over the band's floor (`pb-band-foot`, the field's 1px rule, half its 32px line, less
+    /// the field's 2px `top` nudge), and the foot and 10px, with the 6px `-m-1.5` takes back,
+    /// puts the glyph's middle on it (measured live at 1280 and 1600: glyph and title both at
+    /// y=86). It is placed from the foot's token so the two cannot part when the band grows.
     /// It sat on `bottom-4.5` once, 12px under the title's middle.
     ///
     /// Across, it stands on the AVATAR's column: the glyph and the mark under it centred on the
@@ -2176,7 +2219,7 @@ module Style =
     /// because the mark is an svg too), so the box, and the mark placed from it (`navReopenMark`), stay on the
     /// id's line. The terminals' mark across the band drops the same way (`terminalReopen`).
     let navReopen =
-        "absolute left-[calc(var(--column-gutter)+var(--spacing-rail)+0.625rem-7px)] bottom-[30px] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
+        "absolute left-[calc(var(--column-gutter)+var(--spacing-rail)+0.625rem-7px)] bottom-[calc(var(--spacing-band-foot)+10px)] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
         + "*:first:translate-y-[3px] phone:*:first:translate-y-[1.5px] "
         + "phone:relative phone:inset-auto phone:grid phone:[.nav-alt_&]:hidden phone:-ml-3 phone:-mr-5"
 
@@ -2193,7 +2236,7 @@ module Style =
     /// - A phone centres both on one line, so the title line's middle is the 44px target's
     ///   middle, and the id's is 12px (half the 24px `text-pivot` line) and the drop under it.
     ///   The glyph is centred in the target, so the target's middle is the glyph's.
-    /// - A wide screen bottoms the title on the band's `pb-5` (20px) and lifts the box with
+    /// - A wide screen bottoms the title on the band's `pb-band-foot` and lifts the box with
     ///   its glyph onto the title's middle (`navReopen`), which leaves the id's middle, the
     ///   drop under the title's foot, the drop and 4px under the box's. The 14px glyph
     ///   overflows the 24px box's 12px of content to the right, so its middle is 13px in (the
@@ -2278,7 +2321,10 @@ module Style =
     /// `overscroll-behavior: none` (app/tailwind.css) holds still. The pixel is the `::after`
     /// — absolutely placed just under the box (`relative` makes the box its containing
     /// block), so it adds scroll without entering the flex column the `::before` fills, and
-    /// sits inside a long conversation's content where it adds nothing. `overscroll-y-contain`
+    /// sits inside a long conversation's content where it adds nothing. It takes no presses:
+    /// inside that content it lies across whichever item happens to be one box-height down,
+    /// and a press there landed on the scroller instead (at 1440x900, the middle of the sixth
+    /// item under the launch card). `overscroll-y-contain`
     /// keeps the bounce in here rather than chaining it to the page. The pixel means "at the
     /// end" cannot be `scrollTop + clientHeight = scrollHeight` with no slack: see
     /// `Tail.atEnd` (app/browser/Tail.fs), whose 4px slack is what absorbs it.
@@ -2296,7 +2342,7 @@ module Style =
         "relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain "
         + "mx-[calc(var(--column-gutter)*-1)] px-[calc(var(--column-gutter)+2rem)] pb-6 flex flex-col gap-6 "
         + "[scrollbar-width:thin] [scrollbar-color:var(--color-edge)_transparent] "
-        + "after:absolute after:inset-x-0 after:top-full after:h-px "
+        + "after:absolute after:inset-x-0 after:top-full after:h-px after:pointer-events-none "
         + "before:grow [&>*:first-child]:mt-0 too-short:invisible "
         + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:before:-mb-1 break-words "
         + focusRingInset
@@ -2365,8 +2411,30 @@ module Style =
     /// the screen and the name still stands on the line. Without it the band stopped at the
     /// column's padding while every item under it ran 16px past, so a scrolled item's own
     /// trailing control showed in that strip, beside the author line pinned over it.
+    ///
+    /// PINNED, it is a BAND, not a label left floating. It was the name on 28px of black flush
+    /// against the header's rule, with the ground ending 8px under the name: at 1440x900 the
+    /// name sat 10px under the rule and the next line was sliced across its glyphs right
+    /// beneath it, so the pinned line read as a stray label over a cut. Now the ground holds
+    /// the name in the middle of the band — `pt-2` over it to match the `pb-2` under it, and
+    /// `-mt-2` so in flow the name stands where it did and the pad spends the gap above — and,
+    /// while it is stuck, that ground is the `acrylic` with its rim on the lower edge
+    /// (`Stroke.acrylicBottomPinned`): what scrolls under it is blurred out of reading rather
+    /// than cut, and the band's end is an edge the reader can see. At rest nothing is under
+    /// it, so it is the column's own black and every author line in the conversation stays
+    /// as it was. A browser without the `stuck` query keeps the black band.
+    ///
+    /// The ground is the band's `::before`, not its own background, because a scroll-state
+    /// container's query styles what is IN it and never the container itself. The blur and
+    /// tint are `acrylic`'s, spelled out under the variant, because Tailwind writes only the
+    /// classes a `.fs` file spells as a literal.
     let messageGroupHead =
-        "sticky top-0 z-10 bg-bg flex items-center gap-3 pb-2 -mb-1 max-md:-mx-4 max-md:px-4"
+        cls [ "sticky top-0 z-10 flex items-center gap-3 pt-2 -mt-2 pb-2 -mb-1 max-md:-mx-4 max-md:px-4"
+              "[container-type:scroll-state] before:absolute before:inset-0 before:-z-10 before:bg-bg"
+              "stuck:before:bg-acrylic stuck:before:backdrop-blur-acrylic stuck:before:backdrop-saturate-150"
+              "reduced-transparency:stuck:before:bg-panel reduced-transparency:stuck:before:backdrop-blur-none"
+              "reduced-transparency:stuck:before:backdrop-saturate-100"
+              Stroke.acrylicBottomPinned ]
 
     /// Catching up, drawn as the author line that will take its place (`View.chat`): its dot
     /// centred in the box an avatar fills, so the words stand where a name will.
@@ -3565,16 +3633,26 @@ module Style =
     // Inline code keeps the paragraph's line box (no leading of its own), so only the size
     // is set — 13px, the small step, but written bare to leave line-height inherited.
     let proseCode = "font-terminal text-[13px] bg-surface-2 text-ink px-1 py-0.5"
-    /// A fenced block WRAPS, as the terminal's own output does — it does not scroll inside
-    /// itself. The `overflow-x-auto` it used to carry was the second answer to a question the
-    /// column already answers: with the timeline's `break-words` reaching in here, no line can
-    /// exceed the block, so the scroll container never had anything to scroll and only hid
-    /// which rule was doing the work.
-    ///
-    /// Outlined, not filled: the composer goes `bg-surface-2` while focused, the top step of
-    /// the ramp, so a filled block had no lighter step to stand on there and vanished. The
-    /// timeline wears the same outline so the two draw one code block.
-    let prosePre = Stroke.ring + " " + Stroke.hair + " font-terminal text-code leading-5 text-ink p-3 [&:not(:first-child)]:mt-2 whitespace-pre-wrap"
+    /// A fenced block. Outlined, not filled: the composer goes `bg-surface-2` while focused,
+    /// the top step of the ramp, so a filled block had no lighter step to stand on there and
+    /// vanished. The timeline wears the same outline so the two draw one code block.
+    let private proseFence =
+        Stroke.ring + " " + Stroke.hair + " font-terminal text-code leading-5 text-ink p-3 [&:not(:first-child)]:mt-2"
+    /// The block being written WRAPS: it is in the composer's editor, which needs
+    /// `white-space: pre-wrap` (`[data-rich-body]` in app/tailwind.css), and a line being typed
+    /// stays in view.
+    let prosePre = proseFence + " whitespace-pre-wrap"
+    /// The block being read keeps its lines and SCROLLS sideways, as a table does
+    /// (`proseTableWrap`). A fence's line break is its meaning: a shell line wrapped at the
+    /// reading column's 38rem — the measure prose is held to, about 68 characters of the body
+    /// face (`readingColumn`) — read as four commands where there was one. So the column stays
+    /// at the measure, which is the reading column's to set, and the one thing in it whose
+    /// shape cannot reflow goes the way the doctrine already has for that: it holds more than
+    /// fits and says so with a control, the scrollbar (docs/visual-design.md, Colour: a
+    /// surface that holds more than fits says so with a control or a rule). The bar is
+    /// `timeline`'s: thin, `edge`, on a clear track.
+    let proseFenceRead =
+        proseFence + " whitespace-pre overflow-x-auto [scrollbar-width:thin] [scrollbar-color:var(--color-edge)_transparent]"
     let proseQuote = Stroke.lead + " " + Stroke.hair + " pl-3 text-ink-dim [&:not(:first-child)]:mt-2"
     /// The one hyperlink face: prose links and the references that lead somewhere
     /// (`entityLink`) compose the same words, so a link is a link wherever it stands.
@@ -4076,7 +4154,7 @@ module Style =
     // come back, and the thing you were reading never moves. Its open state is one bit on the
     // root <html> element (`settings-open`, drawn from the model's `Column.Face`).
 
-    /// The settings face's header band: the same 88px rhythm as the nav and the main header, so
+    /// The settings face's header band: the same band rhythm as the nav and the main header, so
     /// the three baselines still align when the column changes face — the nav's head, hairline
     /// and all, so the band's rule does not come and go as the faces turn.
     let settingsHead = sideHead
@@ -5229,7 +5307,7 @@ module Style =
     /// layout question rather than a reading column's (docs/visual-design.md, Phone and wide).
     let pageBand =
         cls [ "h-band phone:h-band-phone shrink-0 sticky top-0 z-ground bg-bg"
-              "flex items-end pb-5 phone:items-center phone:pb-0"
+              "flex items-end pb-band-foot phone:items-center phone:pb-0"
               Stroke.dividerBottom ]
 
     /// The lockup in that band. On a phone the band is one thumb-sized row, which cannot hold

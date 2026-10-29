@@ -1003,6 +1003,7 @@ let private linkTests =
                     Yession.Session.PeerSession.run
                         (SessionId.create "handshake" |> expect)
                         (fun t -> if t = token then Some Yession.Session.UnattributedAccess else None)
+                        (Yession.Session.PeerSession.LivePeers ())
                         log
                         Yession.Session.PeerSession.PeerHandlers.none
                         server)

@@ -131,7 +131,7 @@ module RichText =
             | 3 -> html $"""<h3 class="{Style.proseH3}">{inlineContent node}</h3>"""
             | _ -> html $"""<h4 class="{Style.proseH4}">{inlineContent node}</h4>"""
         | "blockquote" -> html $"""<blockquote class="{Style.proseQuote}">{blocks node}</blockquote>"""
-        | "code_block" -> html $"""<pre class="{Style.prosePre}"><code>{nodeTextContent node}</code>{tail}</pre>"""
+        | "code_block" -> html $"""<pre class="{Style.proseFenceRead}"><code>{nodeTextContent node}</code>{tail}</pre>"""
         | "bullet_list" -> html $"""<ul class="{Style.proseUl}">{blocks node}</ul>"""
         | "ordered_list" -> html $"""<ol class="{Style.proseOl}" start="{listStart node}">{blocks node}</ol>"""
         | "list_item" -> html $"""<li class="{Style.proseLi}">{blocks node}</li>"""
