@@ -3260,6 +3260,91 @@ let lint () =
         // the refusal above says what to do next, and a stack trace would bury it.
         exit unfinishedExit
 
+// --- audit: the shipped npm tree against the advisory database ---------------------------------
+//
+// `npm audit --omit=dev` asks the registry which advisories cover the production tree that
+// package-lock.json locks. Every advisory it reports fails this verb, unless
+// `audit-exceptions.json` lists it: an advisory somebody has read and cannot close yet, with why
+// and since when. So a new advisory stops the next pull request rather than waiting for somebody
+// to run an audit by hand, and one that cannot be fixed stays written down beside the reason.
+//
+// An exception names the advisory's URL and the package's path in the lock, not its bare name.
+// One advisory can cover two copies of a package, and the path keeps an exception for a copy
+// nothing can move from also covering one that a bump would fix: the nested `zod` 3 under the
+// sandbox runtime, and the root `zod` 4 beside it.
+//
+// It is not part of `lint`. It reads the registry, and lint judges the source alone, so it gives
+// the same answer offline and on a commit that has not changed.
+
+/// One advisory `npm audit` reported against one copy of a package.
+type private Advisory =
+    { /// The package's path in package-lock.json, as `node_modules/<name>` or nested below one.
+      Package: string
+      Url: string
+      Severity: string
+      Title: string }
+
+let private auditExceptions = Path.Combine (repoRoot, "audit-exceptions.json")
+
+/// The advisories `audit-exceptions.json` lists, as (package, advisory URL). An entry with no
+/// reason or no date is refused: an exception nobody can judge again is one nobody removes.
+let private listedExceptions () : Set<string * string> =
+    use doc = Text.Json.JsonDocument.Parse (File.ReadAllText auditExceptions)
+    [ for entry in doc.RootElement.EnumerateArray () do
+          let field (name: string) =
+              match entry.TryGetProperty name with
+              | true, value when value.ValueKind = Text.Json.JsonValueKind.String && value.GetString () <> "" -> value.GetString ()
+              | _ -> failwithf "audit: an entry in audit-exceptions.json has no `%s`:\n%s" name (entry.GetRawText ())
+          let package, advisory = field "package", field "advisory"
+          field "reason" |> ignore
+          match DateOnly.TryParseExact (field "date", "yyyy-MM-dd") with
+          | true, _ -> ()
+          | _ -> failwithf "audit: the `date` of the exception for %s is not yyyy-MM-dd" advisory
+          package, advisory ]
+    |> Set.ofList
+
+/// What `npm audit` reports. It exits 1 when it finds an advisory, so the exit code says nothing
+/// here: the JSON does, and a failed lookup is a JSON with an `error` in it.
+let private reportedAdvisories () : Advisory list =
+    let psi = ProcessStartInfo "npm"
+    [ "audit"; "--omit=dev"; "--json" ] |> List.iter psi.ArgumentList.Add
+    psi.WorkingDirectory <- repoRoot
+    psi.RedirectStandardOutput <- true
+    use p = Process.Start psi
+    let output = p.StandardOutput.ReadToEndAsync ()
+    awaitExit p
+    use doc = Text.Json.JsonDocument.Parse output.Result
+    match doc.RootElement.TryGetProperty "error" with
+    | true, error -> failwithf "audit: npm audit could not answer (exit %d):\n%s" p.ExitCode (error.GetRawText ())
+    | _ -> ()
+    // A package's `via` holds its own advisories as objects, and the packages it inherits one
+    // from as names. The names are skipped: that advisory is reported again on the package it is in.
+    [ for vulnerability in doc.RootElement.GetProperty("vulnerabilities").EnumerateObject () do
+          for via in vulnerability.Value.GetProperty("via").EnumerateArray () do
+              if via.ValueKind = Text.Json.JsonValueKind.Object then
+                  for node in vulnerability.Value.GetProperty("nodes").EnumerateArray () do
+                      { Package = node.GetString ()
+                        Url = via.GetProperty("url").GetString ()
+                        Severity = via.GetProperty("severity").GetString ()
+                        Title = via.GetProperty("title").GetString () } ]
+    |> List.distinct
+
+let audit () =
+    let listed = listedExceptions ()
+    let unlisted =
+        reportedAdvisories ()
+        |> List.filter (fun advisory -> not (listed.Contains (advisory.Package, advisory.Url)))
+    for advisory in unlisted do
+        eprintfn "%-8s %s  %s\n         %s" advisory.Severity advisory.Package advisory.Url advisory.Title
+    if not unlisted.IsEmpty then
+        // An exit, not a `failwith`: the lines above are the finding, and a stack trace would bury them.
+        eprintfn
+            "audit: %d advisor%s against the production tree, not in audit-exceptions.json. Move the package out of the range (`npm update <name>`, or a bump in package.json); list it only when no release does, with the reason and the date."
+            unlisted.Length
+            (if unlisted.Length = 1 then "y" else "ies")
+        exit 1
+    printfn "audit: no advisory outside audit-exceptions.json"
+
 // --- pr-gate: lint and check at once ----------------------------------------------------------
 //
 // pr.yaml's `test` job ran `lint` and then `check`, and neither needs anything the other makes:
@@ -3746,6 +3831,7 @@ let rec private verbs () : Verb list =
         Summary = "run a Node tier in the Colima VM, under strict Srt. Takes check's args"
         Run = vmCheck Colima }
       { Name = "lint"; Summary = "actionlint, then the F# analyzers"; Run = fun _ -> withBuildSlot "lint" lint }
+      { Name = "audit"; Summary = "fail on an npm advisory against the production tree not in audit-exceptions.json"; Run = fun _ -> audit () }
       { Name = "pr-gate"
         Summary = "run lint and check at once, each line marked with its side. Takes check's args"
         // No slot here: each side takes its own (the `pr-gate` section says why).

@@ -280,6 +280,8 @@ ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
   # actionlint over .github/workflows — release.yml is otherwise only validated when it runs,
   # which is on master, after a merge.
   scripts.lint.exec = ''exec dotnet fsi tasks.fsx lint'';
+  # npm's advisories against the production tree, less audit-exceptions.json: a pr.yaml step.
+  scripts.audit.exec = ''exec dotnet fsi tasks.fsx audit'';
   # lint and check at once, each line marked with its side: pr.yaml's `test` job.
   scripts."pr-gate".exec = ''exec dotnet fsi tasks.fsx pr-gate "$@"'';
   # Measuring, judging and recording, deliberately three: the release records without judging,

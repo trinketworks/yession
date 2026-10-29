@@ -117,6 +117,12 @@ jobs:
       # absorbs and why one warm-up covers a whole job.
       - name: Warm the devenv shell
         uses: ./.github/actions/devenv-warm
+      # Every advisory npm knows against the production tree, unless audit-exceptions.json
+      # lists it with a reason and a date (tasks.fsx's `audit` says why). Its own step and not
+      # part of `lint`, because it reads the registry: a new advisory fails the next pull
+      # request on a commit that did not change, which is the point, and lint stays offline.
+      - name: Audit the production npm tree
+        run: devenv shell -- audit
       # Ubuntu 24.04 ships `kernel.apparmor_restrict_unprivileged_userns=1`, which strips the
       # capabilities from a new user namespace. Both of srt's profiles run a command in one, so
       # neither runs here without this (docs/GAPS.md). The first run of the sandbox probes here
