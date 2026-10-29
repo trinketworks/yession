@@ -30,7 +30,7 @@ The last section holds trust boundaries as sharp as the first section's.
 ## Security & trust
 
 - **A Manager route that changes state trusts a request that names no origin.** The
-  request-origin rule (`ManagerUi.requestOrigin`, [§5 rule 22](technical-design.md#5-architectural-invariants))
+  request-origin rule (`ManagerUi.requestOrigin`, [§5 rule 24](technical-design.md#5-architectural-invariants))
   accepts `Sec-Fetch-Site: same-origin` or `none`, or, without it, an `Origin` whose host and
   port are the request's `Host`. Its third branch accepts a request with neither header.
   - Why: a browser sends at least one of the two on every POST, so such a request is no
