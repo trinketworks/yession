@@ -652,7 +652,7 @@ let private packageJson (version: string) =
   "bin": {
 %s
   },
-  "files": ["bin/", "manager.js", "session.js", "SandboxHost.js", "assets/", "README.md"],
+  "files": ["bin/", "manager.js", "session.js", "SandboxHost.js", "assets/", "README.md", "npm-shrinkwrap.json"],
   "engines": { "node": ">=24.14" },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "%s",
@@ -1184,8 +1184,56 @@ let bootSmoke (ready: string) (command: string) (arguments: string -> string lis
 
 // --- package: restore + stage + boot smoke + npm pack ----------------------------------------
 
+/// Each package an npm lockfile pins, `node_modules/…` path to version. The root entry (`""`) is
+/// the project itself and is left out.
+let private lockedVersions (lockfile: string) : Map<string, string> =
+    use doc = Text.Json.JsonDocument.Parse (File.ReadAllText lockfile)
+    [ for entry in doc.RootElement.GetProperty("packages").EnumerateObject () do
+        if entry.Name <> "" then
+            match entry.Value.TryGetProperty "version" with
+            | true, version -> yield entry.Name, version.GetString ()
+            | _ -> () ]
+    |> Map.ofList
+
+/// The shrinkwrap the tarball ships, beside the manifest in `dist/npm`.
+let private shrinkwrapOf (dir: string) = Path.Combine (dir, "npm-shrinkwrap.json")
+
+/// Pin the production tree the tarball installs to the one `check` ran: `dist/npm`'s manifest
+/// over the repository's own package-lock.json, pruned to what that manifest needs, as
+/// `npm-shrinkwrap.json`. npm honours a dependency's shrinkwrap, so `npm i -g` of the tarball
+/// installs these versions instead of resolving the manifest's `^` ranges afresh (which picked
+/// versions CI never ran, with install scripts on).
+///
+/// The cost is the point: a fix in a transitive dependency reaches an operator through a Yession
+/// release, never through `npm i -g` alone.
+///
+/// `--package-lock-only --offline`: npm reconciles the lock against the manifest and fetches
+/// nothing, so a manifest the lock cannot satisfy fails here rather than resolving a new version.
+/// npm writes the tree; nobody writes it by hand. Then every pinned version is held to the lock,
+/// so "the tree `check` ran" is checked rather than trusted to npm's reconciliation.
+///
+/// In `package`, not in `assemble`: the Nix build runs `stage` offline and ships its own
+/// `node_modules`, and has no use for a file only an npm install reads.
+let private shrinkwrap () =
+    let repoLock = Path.Combine (repoRoot, "package-lock.json")
+    File.Copy (repoLock, Path.Combine (pkg, "package-lock.json"), true)
+    runIn pkg "npm" [ "install"; "--package-lock-only"; "--ignore-scripts"; "--offline"; "--no-audit"; "--no-fund" ] |> ignore
+    runIn pkg "npm" [ "shrinkwrap"; "--offline" ] |> ignore
+    let pinnedHere = lockedVersions (shrinkwrapOf pkg)
+    let locked = lockedVersions repoLock
+    let drifted =
+        [ for KeyValue (path, version) in pinnedHere do
+            match Map.tryFind path locked with
+            | Some lockedVersion when lockedVersion = version -> ()
+            | Some lockedVersion -> yield sprintf "%s: %s, where package-lock.json has %s" path version lockedVersion
+            | None -> yield sprintf "%s: %s, which package-lock.json does not pin" path version ]
+    if not drifted.IsEmpty then
+        failwithf "package: npm-shrinkwrap.json does not match package-lock.json:\n  %s" (String.concat "\n  " drifted)
+    printfn "package: npm-shrinkwrap.json pins %d packages, each at package-lock.json's version" pinnedHere.Count
+
 let package (version: string) =
     stage version
+    shrinkwrap ()
     // Every shim the manifest offers runs, then the Manager's boots (it self-sets
     // YESSION_SPAWN_MAIN); externals resolve from the repo node_modules two levels up from
     // dist/npm.
@@ -1253,9 +1301,51 @@ let private installed (tgz: string) : string =
             attempt (n + 1)
     bounded budget (fun () -> attempt 1)
 
+/// Every package the tarball's shrinkwrap pins is installed at that version. npm hoists the
+/// tarball's tree into the prefix's `node_modules`, so a pinned `node_modules/<path>` sits there
+/// or, where it could not hoist, under `node_modules/yession`. An optional package for another
+/// platform (the SDK's other `claude` binaries) is pinned and rightly absent; a required one that
+/// is absent is a failure.
+let private installedAsShrinkwrapped (tgz: string) (prefix: string) =
+    let unpacked = Path.Combine (Path.GetTempPath (), "yession-tgz-" + Guid.NewGuid().ToString "N")
+    Directory.CreateDirectory unpacked |> ignore
+    try
+        runIn unpacked "tar" [ "-xzf"; tgz ] |> ignore
+        let shrinkwrap = shrinkwrapOf (Path.Combine (unpacked, "package"))
+        if not (File.Exists shrinkwrap) then
+            failwith "install-smoke: the tarball carries no npm-shrinkwrap.json, so `npm i -g` resolves a tree CI never ran"
+        use doc = Text.Json.JsonDocument.Parse (File.ReadAllText shrinkwrap)
+        let wrong =
+            [ for entry in doc.RootElement.GetProperty("packages").EnumerateObject () do
+                match entry.Name, entry.Value.TryGetProperty "version" with
+                | "", _ | _, (false, _) -> ()
+                | path, (true, pinned) ->
+                    let optional =
+                        match entry.Value.TryGetProperty "optional" with
+                        | true, flag -> flag.ValueKind = Text.Json.JsonValueKind.True
+                        | _ -> false
+                    let found =
+                        [ Path.Combine (prefix, path); Path.Combine (prefix, "node_modules/yession", path) ]
+                        |> List.map (fun dir -> Path.Combine (dir, "package.json"))
+                        |> List.tryFind File.Exists
+                    match found with
+                    | None when optional -> ()
+                    | None -> yield sprintf "%s: pinned at %s, not installed" path (pinned.GetString ())
+                    | Some manifest ->
+                        use installed = Text.Json.JsonDocument.Parse (File.ReadAllText manifest)
+                        let version = installed.RootElement.GetProperty("version").GetString ()
+                        if version <> pinned.GetString () then
+                            yield sprintf "%s: pinned at %s, installed at %s" path (pinned.GetString ()) version ]
+        if not wrong.IsEmpty then
+            failwithf "install-smoke: the installed tree is not the one the tarball's shrinkwrap pins:\n  %s" (String.concat "\n  " wrong)
+        printfn "install-smoke: the installed tree is the shrinkwrapped one"
+    finally
+        try Directory.Delete (unpacked, true) with _ -> ()
+
 let installSmoke (tgz: string) =
     let tgz = Path.GetFullPath tgz // a bare dist/x.tgz looks like a GitHub owner/repo to npm.
     let prefix = installed tgz
+    installedAsShrinkwrapped tgz prefix
 
     // The SDK's native `claude` binary is an optional dep keyed by platform (…-linux-x64 etc.);
     // assert one such package resolved, without hard-coding the arch suffix.
