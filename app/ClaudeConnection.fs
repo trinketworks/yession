@@ -239,8 +239,7 @@ let private fetchModels (credential: string * string) (url: string) : Async<Mode
                 match pageOf body with
                 | Error reason -> settled <- Some { Ok = false; Reason = reason; Status = 0; Models = [] }
                 | Ok read ->
-                    for row in read.Rows do
-                        models.Add (row.Id, row.DisplayName)
+                    read.Rows |> Seq.iter (fun row -> models.Add (row.Id, row.DisplayName))
                     // A page that says there is more, and says where: both, or this is the
                     // last page. `after_id` with nothing to put in it would ask for the first
                     // page again, for ever.
