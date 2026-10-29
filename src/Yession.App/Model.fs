@@ -4585,16 +4585,23 @@ module ClientModel =
         | said -> said
 
     /// What a chapter's DIVIDER in the timeline says: the name somebody chose, and nothing
-    /// for a chapter still wearing the guess.
+    /// for a chapter still wearing a guess that would repeat the item under it.
     ///
-    /// The guess is the opening message's own words (`Chapters.defaultName`), and the divider
-    /// stands directly above that message — so printing it there says the same sentence twice,
-    /// one line apart. A name only earns the divider once it says something the message under
-    /// it does not: a person's, or the model's. The list of chapters keeps `chapterName`,
-    /// guess and all, because there a name is how one entry is told from the next and no
-    /// message is beside it.
+    /// "Repeat" is the test, not "unwritten": the ordinary guess is the opening message's own
+    /// words (`Chapters.defaultName` with nothing from the policy), and the divider stands
+    /// directly above that message — so printing it there says the same sentence twice, one
+    /// line apart. But a chapter the POLICY opened (`AutoChapters`, a pull request's own
+    /// milestone) never gets touched, so it wears that guess for good (`AutoChapters.fs`) —
+    /// and the policy's words ("Merged PR #12 …") are never what the item itself renders (a
+    /// card, not that sentence), so hiding them loses the only name that chapter will ever
+    /// have. A name earns the divider once it says something the message under it does not —
+    /// a person's, the model's, or the policy's own, which the message never repeats either.
+    /// The list of chapters keeps `chapterName`, guess and all, because there a name is how
+    /// one entry is told from the next and no message is beside it.
     let chapterRuleName (model: ClientModel) (item: ConversationItem) : string =
-        if Chapters.unwritten CollabText.ylmish AutoChapters.policy model.Synced.Chapters item then ""
+        let stillGuessing = Chapters.unwritten CollabText.ylmish AutoChapters.policy model.Synced.Chapters item
+        let guessIsThePolicysOwn = AutoChapters.policy.Guess item |> Option.isSome
+        if stillGuessing && not guessIsThePolicysOwn then ""
         else chapterName model item
 
     /// What the chapter at this message is called, for a surface that has an id and not the
