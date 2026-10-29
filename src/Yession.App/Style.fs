@@ -49,7 +49,7 @@ module Style =
     //   `underline` — the single exception, and it is a shape not a third width: a heading
     //            that edits in place (the session title), where a rectangle drawn round
     //            28px type reads as a box rather than a field. It has exactly one wearer
-    //            (`titleInput`), which is what keeps it a shape; a second would make it a
+    //            (`titleWrap`, round `titleInput`), which is what keeps it a shape; a second would make it a
     //            variant, and principle 5 does not admit one.
     //
     // Two rules keep the states honest, and they are opposites on purpose:
@@ -73,7 +73,7 @@ module Style =
         /// exists to stop.
         let clear = "border-transparent"
         /// The one SHAPE in this vocabulary rather than a width: the bottom edge alone, for the
-        /// session title (`titleInput`) — a heading that edits in place, where a rectangle drawn
+        /// session title (`titleWrap`, round `titleInput`) — a heading that edits in place, where a rectangle drawn
         /// round 28px type reads as a box rather than a field. `border-0` first, so the shape is
         /// stated and not inherited from whatever the UA gives an `<input>`.
         ///
@@ -2041,7 +2041,15 @@ module Style =
     /// title's text and the timeline's caret both start at x=48.
     /// `phone:flex-1` is what makes the phone's band a row: the title takes the space the
     /// two chevrons leave rather than sizing to an input's default 20 characters.
-    let titleWrap = "relative flex flex-col min-w-0 ml-8 phone:ml-3 phone:flex-1"
+    ///
+    /// The wrap, not the field, wears the title's rule (`titleInput` says why, and why not on a
+    /// phone). The field pays its 8px padding back with `-mx-2`, so the wrap's box is the
+    /// text's own extent: the rule starts at the first glyph and ends at the last. The field's
+    /// box still reaches 8px past it, so `wide:mr-2` keeps the band's gap between that box and
+    /// the terminals' door (measured live with a title the band cannot hold).
+    let titleWrap =
+        cls [ "relative wide:top-[2px] flex flex-col min-w-0 ml-8 wide:mr-2 phone:ml-3 phone:flex-1"
+              Stroke.underline; Stroke.rim; "phone:border-b-0" ]
 
     /// The title itself: the heading, worn by a text input — and it says SO AT REST, with the
     /// one shape the `Stroke` vocabulary keeps for it (`Stroke.underline` in `Stroke.rim`).
@@ -2051,7 +2059,9 @@ module Style =
     /// (`hover:bg-surface-2`). That argument is the one principle 4 refuses: what a thing is —
     /// here, that it edits — is visible at rest, because a thumb has no hover and a reader has
     /// no tooltip. A heading nobody hovers is a heading nobody learns is a field. So the rule
-    /// is back, and `Stroke.underline` has its wearer again.
+    /// is back, and `Stroke.underline` has its wearer again. The wrap round this field wears
+    /// it (`titleWrap`), so the rule is the text's width and not the padded box's, and the
+    /// field itself is bare (`bareBox`).
     ///
     /// What does NOT come back is the DASH. It was `border-dotted border-ink-faint` over this
     /// same `border-0 border-b`, and the dash had a name in the vocabulary (`Stroke.dotted`,
@@ -2086,13 +2096,25 @@ module Style =
     /// only: a phone's band seats the id 2px under the title's line box, and vertical padding
     /// put the fill and its ring through it.
     ///
+    /// As wide as its text, not as wide as an input's default 20 characters: the rule under
+    /// "session" ran 300px, twice the word, and began 8px before it in the padding below.
+    /// `field-sizing:content` sizes the box to the value, or to the placeholder while there
+    /// is none, so an empty title still wears a rule as long as "session". It sizes the height
+    /// too, and a placeholder's line is taller than the value's (38px against 32, measured
+    /// live), so `wide:h-8` holds the box to the heading's line. The wrap is that
+    /// wide, and the field stretches across it, so a long title the band cannot hold shrinks
+    /// the wrap (`min-w-0`) and truncates as before. On a phone the wrap takes the row
+    /// (`titleWrap`) and `phone:w-full` keeps the field the box it was, the thumb's target
+    /// across it, clear of the terminals' door.
+    ///
     /// `focusRing` is what a keyboard sees. The fill alone is a real focus signal for a
     /// pointer, but it is a tone step on a dark ground; the ring is the product's own
     /// vocabulary and the UI baseline's floor (AGENTS.md), so the two ride together.
     ///
-    /// `md:top-[2px]` is optical: a 28/32 line box holds its baseline 2px higher over the
-    /// shared bottom edge than the wordmark's 32/36 does, so the input steps down to put both
-    /// on one line (measured live). A phone has no cross-column baseline to meet and no room
+    /// The wrap's `wide:top-[2px]` (`titleWrap`) is optical, and it moves this field and its
+    /// rule together: a 28/32 line box holds its baseline 2px higher over the shared bottom
+    /// edge than the wordmark's 32/36 does, so the title steps down to put both on one line
+    /// (measured live). A phone has no cross-column baseline to meet and no room
     /// for 28px in a 56px row, so it takes the pivot step (19/24) and no nudge.
     ///
     /// And on a phone the field is a thumb's height, which a 24px line in a 60px band does
@@ -2104,11 +2126,10 @@ module Style =
     /// `Render.placeInputCursor`'s marker subtracts the padding and the border off the live box,
     /// so a collaborator's caret stays the height of the line.
     let titleInput =
-        cls [ "w-full min-w-0 bg-transparent px-2 -mx-2 py-0 phone:h-11 phone:pb-5 phone:-mb-5"
-              Stroke.underline; Stroke.rim; "phone:border-b-0"
+        cls [ bareBox; "[field-sizing:content] wide:h-8 phone:w-full min-w-0 bg-transparent px-2 -mx-2 py-0 phone:h-11 phone:pb-5 phone:-mb-5"
               "hover:bg-surface-2 focus:bg-surface-2 transition-colors"; focusRing
               "font-extralight text-heading phone:text-pivot tracking-[-0.01em] lowercase text-ink"
-              "placeholder:text-ink-faint truncate relative wide:top-[2px]" ]
+              "placeholder:text-ink-faint truncate relative" ]
 
     /// The session id, shown small and dim under the title as a stable secondary identifier.
     /// It hangs OUT OF FLOW below the title, into the band's bottom padding: in flow it added
@@ -2122,7 +2143,10 @@ module Style =
     /// through to the field could only ever edit the title, never select the id.
     /// Its `mt-1` and its line are `--spacing-id-drop`, which the chevron's mark lands on
     /// (`navReopenMark`): change one and change the other.
-    let titleId = "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full left-0 right-0 select-text"
+    /// On a wide screen the wrap carries the title's 2px optical drop and its 1px rule
+    /// (`titleWrap`), which together put the padding box's bottom 1px lower than the line the
+    /// id hung from when the field wore both. `wide:top-[calc(100%-1px)]` pays it back.
+    let titleId = "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full wide:top-[calc(100%-1px)] left-0 right-0 select-text"
 
     /// A collaborator's selection highlight in the title: an absolutely-positioned span the
     /// browser places and sizes against the input's own box by measurement (the translucent
