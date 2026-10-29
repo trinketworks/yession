@@ -3353,7 +3353,7 @@ let forBackend (backend: SandboxBackend) (network: DockerSandbox.Network) (name:
     | (HostBackend | SrtBackend), Container container ->
         Error (
             sprintf
-                "this session's work sandbox is %s, which runs no container.%s A container needs the docker backend."
+                "this session's work sandbox is %s. It runs no container.%s A container needs the docker backend."
                 (SandboxBackend.describe backend)
                 (match container.Command with
                  | Some command -> sprintf " It thus has nothing to run '%s' as." command

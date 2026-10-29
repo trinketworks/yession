@@ -297,16 +297,16 @@ module Listener =
             match door, access with
             | Door.LoopbackPort, _ ->
                 Error
-                    "--auth localhost reads the peer address of a TCP connection, and a unix socket has none. Use --port, or --auth trusted-headers behind a proxy."
+                    "--auth localhost reads the peer address of a TCP connection. A unix socket has no peer address. Use --port, or --auth trusted-headers behind a proxy."
             | _, Loopback ->
                 Error
-                    "--socket needs YESSION_MANAGER_URL and YESSION_SESSION_URL: a browser cannot dial a unix socket, so it reaches this Manager only through the proxy's origin."
+                    "--socket needs YESSION_MANAGER_URL and YESSION_SESSION_URL. A browser cannot dial a unix socket. It reaches this Manager only through the proxy's origin."
             | _ -> Ok (Listener.Socket path)
         | given, None ->
             match door with
             | Door.ProxyOnly ->
                 Error
-                    "--auth trusted-headers believes the x-yession-user header, which is true only if nothing but the proxy could send it. Every process on this host can dial a TCP port, and so can a container whose network reaches the host loopback. Give --socket <path>, and point the proxy at it."
+                    "--auth trusted-headers believes the x-yession-user header. That header is true only if nothing but the proxy could send it. Every process on this host can dial a TCP port. A container whose network reaches the host loopback can dial it too. Give --socket <path>, and point the proxy at it."
             | Door.Any
             | Door.LoopbackPort -> Ok (Listener.Port (defaultArg given ManagerPort.Default))
 
