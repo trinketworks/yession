@@ -102,7 +102,7 @@ declaration and not a change to the mechanism.
   and a `Verdict` are its policy: values that compose, print and test without an operation.
 - A Session has the mechanism to spawn and confine sandboxes (`CreateSandbox`,
   `SandboxBackend`). The operator's declarations are the policy: what a session may reach,
-  which connections and which MCP servers ([§3](#3-authority-model-phase-2)). A
+  which connections and which MCP servers ([§3](#3-authority-model)). A
   `yession.yaml` narrows that ceiling and never makes it wider
   ([§4](#4-repo-local-configuration)).
 
@@ -279,7 +279,7 @@ App
   - consumes read-only event pages by offset
   - renders projections from events and synced state
 
-Manager (Phase 2)
+Manager
   - launches Sessions
   - owns launch, identity, and secret custody
   - declares what a session may reach, and holds no environment authority itself
@@ -360,7 +360,7 @@ in the project of the component that owns the contract.
 
 ---
 
-## 3. Authority model (Phase 2)
+## 3. Authority model
 
 The Manager owns launch, identity, and secret custody, but not environment authority. A
 Session spawns its own sandboxes through the `CreateSandbox` seam and confines them, the
