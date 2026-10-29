@@ -9,6 +9,14 @@ open Fable.BrowserExtras
 // and the key — a `PageGlobal` — is the type: a case that calls one with the wrong arguments, or
 // reads one as the wrong thing, does not compile.
 
+/// Marks a module that builds the harness page rather than the product: its strings are test
+/// data a browser case asserts on, not copy anyone who uses the product reads. `lint` holds
+/// product copy to no em dash (YES018, `analyzers/Yession.Analyzers/EmDashes.fs`), and this is
+/// that rule's whole exemption, in plain sight on the module.
+[<System.AttributeUsage(System.AttributeTargets.Class)>]
+type HarnessAttribute () =
+    inherit System.Attribute ()
+
 /// What this page publishes on `window`, which is the harness's INTERFACE: the browser cases
 /// and the bench scenarios read and call these out of a Playwright `evaluate`, which can see
 /// a global and cannot see a module binding. Each is the measurement's output or the

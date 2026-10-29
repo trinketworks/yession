@@ -56,7 +56,8 @@ let private repoRoot () : string option =
 /// is: a job with no group and a job with one are different things to say about a release.
 /// `Bound` is its `timeout-minutes`. `None` is a job GitHub stops at six hours.
 /// `Name` is its `name`, which is what its check is called when it sets one.
-/// `Steps` are its steps, as far as the binary cache rules below read them.
+/// `Permissions` is its own `permissions` map, empty when it sets none and takes the workflow's.
+/// `Steps` are its steps, as far as the rules below read them.
 /// `Environment` is the name of the environment it deploys to, as written: a name or an expression.
 [<RequireQualifiedAccess>]
 type private Job =
@@ -66,6 +67,7 @@ type private Job =
       Calls : string option
       Bound : Bound option
       Name : string option
+      Permissions : (string * string) list
       Steps : Step list
       Environment : string option }
 
@@ -115,6 +117,10 @@ let private step : Decoder<Step> =
         { Step.Uses = get.Optional.Field "uses" Decode.string
           With = get.Optional.Field "with" (Decode.keyValuePairs input) |> Option.defaultValue [] })
 
+/// A `permissions` map, scope to level. The shorthand `read-all` / `write-all` is a string this
+/// does not expand, and it fails the read rather than passing for a map that grants nothing.
+let private permissions : Decoder<(string * string) list> = Decode.keyValuePairs Decode.string
+
 let private job : Decoder<Job> =
     Decode.object (fun get ->
         { Job.Needs = get.Optional.Field "needs" needs |> Option.defaultValue []
@@ -128,6 +134,7 @@ let private job : Decoder<Job> =
                     [ Decode.float |> Decode.map Bound.Minutes
                       Decode.string |> Decode.map Bound.Evaluated ])
           Name = get.Optional.Field "name" Decode.string
+          Permissions = get.Optional.Field "permissions" permissions |> Option.defaultValue []
           Steps = get.Optional.Field "steps" (Decode.list step) |> Option.defaultValue []
           Environment =
             get.Optional.Field
@@ -160,6 +167,36 @@ let private jobsOf (file: string) : (string * Job) list =
     | None -> []
 
 let private releaseJobs () : (string * Job) list = jobsOf "release.yml"
+
+/// release.yml's own top-level `permissions`, which every job that sets none runs under.
+let private releasePermissions () : (string * string) list =
+    let top = Decode.object (fun get -> get.Optional.Field "permissions" permissions |> Option.defaultValue [])
+    match repoRoot () |> Option.bind (fun root -> try Some (TestFiles.read (root + "/.github/workflows/release.yml")) with _ -> None) with
+    | None -> []
+    | Some text ->
+        match Decode.fromString top (Fable.Yaml.Plain.json (Fable.Yaml.parse text)) with
+        | Error reason -> failwithf "release.yml is not a document this file can read: %s" reason
+        | Ok found -> found
+
+/// The writes each release.yml job may hold, and why. A job not named here holds none.
+let private allowedWrites =
+    [ "release", [ "contents"; "id-token"; "attestations" ]   // the tag, the release, its provenance
+      "bench", [ "contents" ] ]                                 // `bench-publish` pushes the `bench` branch
+
+/// Each write a job holds that `allowedWrites` does not give it, as the message that says so.
+let private unexpectedWrites (jobs: (string * Job) list) : string list =
+    [ for id, job in jobs do
+        let allowed = allowedWrites |> List.tryFind (fun (name, _) -> name = id) |> Option.map snd |> Option.defaultValue []
+        for scope, level in job.Permissions do
+            if level = "write" && not (List.contains scope allowed) then
+                yield sprintf "release.yml's `%s` job holds `%s: write`, which nothing it does needs" id scope ]
+
+/// `owner/repo@<40 hex>`, with an optional path after the repo: an action pinned to a commit.
+/// A tag can be moved to other code after review; a commit cannot.
+let private pinned (uses: string) =
+    match uses.Split '@' with
+    | [| _; ref |] -> ref.Length = 40 && ref |> Seq.forall (fun c -> System.Char.IsDigit c || (c >= 'a' && c <= 'f'))
+    | _ -> false
 
 /// Every workflow in the repository with its jobs, by file name. Its population is the first
 /// case's: the same root and the same reading, so a root this cannot find is that case's red.
@@ -564,6 +601,56 @@ let tests =
                     "a pr.yaml"
                     "jobs:\n  test:\n    steps:\n      - uses: cachix/cachix-action@0\n        with:\n          name: yession\n          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}\n"
             Expect.isNonEmpty (branchPushes "pr.yaml" jobs) "a pull request's cachix step that holds the token can push"
+
+        // A write is held only where it is spent. The package jobs build from the commit and run
+        // what its dev shell fetched, so a write there is one any of that could use, and the
+        // release's assets and tag are the thing it would forge.
+        testCase "release.yml reads by default, and a job writes only what it publishes" <| fun () ->
+            Expect.equal
+                (releasePermissions () |> List.tryFind (fun (scope, _) -> scope = "contents") |> Option.map snd)
+                (Some "read")
+                "release.yml's top-level `permissions` gives every job `contents: read`; a job that writes says so on itself"
+            Expect.isFalse
+                (releasePermissions () |> List.exists (fun (_, level) -> level = "write"))
+                "release.yml's top-level `permissions` grants no write; the job that needs one declares it"
+            let writes = unexpectedWrites (releaseJobs ())
+            Expect.isEmpty writes (String.concat ".\n" writes)
+            Expect.isTrue
+                (releaseJob () |> Option.exists (fun release -> List.contains ("contents", "write") release.Permissions))
+                "the release job declares `contents: write`, which tagging and publishing need"
+
+        // The rule's red: a package job that kept the write the whole workflow used to hold.
+        testCase "a package job holding contents: write is a write nothing spends" <| fun () ->
+            let jobs = jobsIn "a release.yml" "jobs:\n  package-npm:\n    permissions:\n      contents: write\n"
+            Expect.isNonEmpty (unexpectedWrites jobs) "a package job's `contents: write` is reported"
+
+        // What an operator checks a download against (docs/deployment.md, "Checking a release").
+        testCase "the release attests its assets" <| fun () ->
+            match releaseJob () with
+            | None -> ()   // the population case above is what says this
+            | Some release ->
+                Expect.isTrue
+                    (release.Steps
+                     |> List.exists (fun step -> step.Uses |> Option.exists (fun uses -> uses.StartsWith "actions/attest-build-provenance@")))
+                    "the release job runs actions/attest-build-provenance, so a published tarball carries signed provenance"
+
+        // Every action, in every workflow: a tag is a name its owner can move to code nobody here
+        // reviewed, and a release job runs with the write to forge what it publishes.
+        testCase "every action a workflow runs is pinned to a commit" <| fun () ->
+            let loose =
+                [ for file, jobs in workflowJobs () do
+                    for id, job in jobs do
+                        for step in job.Steps do
+                            match step.Uses with
+                            | Some uses when not (uses.StartsWith "./") && not (pinned uses) -> yield sprintf "%s:%s runs %s" file id uses
+                            | _ -> () ]
+            Expect.isEmpty
+                loose
+                (sprintf "these actions are not pinned to a commit: %s. Write `owner/repo@<full sha> # <tag>`" (String.concat ", " loose))
+
+        testCase "an action pinned to a tag is not pinned" <| fun () ->
+            Expect.isFalse (pinned "actions/attest-build-provenance@v4") "a tag is a name its owner can move"
+            Expect.isTrue (pinned "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8") "a full commit sha is pinned"
 
         // The merge queue's arithmetic, over a pr.yaml written here. `queueTests` below holds the
         // real pr.yaml against the real queue; the numbers that started this are the red example.

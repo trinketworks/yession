@@ -2890,7 +2890,12 @@ let private fixtures =
       "YES016", "Yession.UncheckedCastFixture", [ "Product.fs" ]
       "YES016", "UncheckedCastInBindingFixture", [ "Binding.fs" ]
       "YES017", "Yession.ObjSignatureFixture", [ "Signatures.fs" ]
-      "YES017", "ObjSignatureInBindingFixture", [ "Binding.fs" ] ]
+      "YES017", "ObjSignatureInBindingFixture", [ "Binding.fs" ]
+      // Two for YES018, on the same line between product and binding (`Population.reach`): a
+      // Yession project, which must be reported, and one with nothing Yession in reach, which
+      // must stay silent over the same literals.
+      "YES018", "Yession.EmDashFixture", [ "Copy.fs" ]
+      "YES018", "EmDashInBindingFixture", [ "Binding.fs" ] ]
 
 let private fixtureProject name =
     Path.Combine ("analyzers", "fixtures", name, name + ".fsproj")

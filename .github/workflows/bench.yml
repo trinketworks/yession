@@ -62,8 +62,9 @@ concurrency:
 # in the log to read. `contents: write` here did exactly that to the pull-request gate, because
 # pr.yaml declares no permissions and so gets the repository default.
 #
-# So the caller decides: release.yml declares `contents: write` at its top and `bench-publish`
-# pushes the orphan branch under it; pr.yaml grants nothing extra and does not record. That is
+# So the caller decides: release.yml grants `contents: write` on its `bench` job, and
+# `bench-publish` pushes the orphan branch under it; pr.yaml grants nothing extra and does not
+# record. That is
 # also verify.yml's arrangement, and the reason to match it rather than invent a second one.
 #
 # `lint` does not catch this: actionlint type-checks a workflow in isolation and has no view of
