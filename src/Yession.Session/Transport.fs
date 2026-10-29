@@ -41,6 +41,35 @@ module PeerSession =
               OnTerminal = fun _ _ -> ()
               OnAccepted = fun _ _ -> async { return fun () -> () } }
 
+    /// The peers connected to one session, and the user each is connected as. The one place
+    /// that knows which `PeerId` is live, so the rule in `run` and the state it reads cannot
+    /// drift apart. Create one per session and pass it to every `run` of that session.
+    ///
+    /// A `PeerId` can be live on several connections at once (a second tab), so it is
+    /// counted: it leaves the set when its last connection ends.
+    type LivePeers() =
+        let mutable live : Map<PeerId, UserId option * int> = Map.empty
+
+        /// Record a connection of `peerId` as `user`. False, and nothing recorded, when
+        /// `peerId` is live as a different user.
+        member _.TryJoin (peerId: PeerId) (user: UserId option) : bool =
+            lock live (fun () ->
+                match Map.tryFind peerId live with
+                | Some (liveUser, _) when liveUser <> user -> false
+                | Some (_, count) ->
+                    live <- Map.add peerId (user, count + 1) live
+                    true
+                | None ->
+                    live <- Map.add peerId (user, 1) live
+                    true)
+
+        /// Record that a connection of `peerId` has ended.
+        member _.Leave (peerId: PeerId) : unit =
+            lock live (fun () ->
+                match Map.tryFind peerId live with
+                | Some (user, count) when count > 1 -> live <- Map.add peerId (user, count - 1) live
+                | _ -> live <- Map.remove peerId live)
+
     /// Run a peer session over a connected channel until the peer disconnects.
     ///
     /// - On a `PeerHello` whose token `attributionOf` recognises (the composition root
@@ -50,12 +79,20 @@ module PeerSession =
     ///   `handlers.OnAccepted`, pump frames until the channel closes (`State` payloads
     ///   go to `handlers.OnState`), run the cleanup, then append `PeerLeft`.
     /// - On an invalid token or an unexpected first frame: reply `PeerRejected` and close.
+    /// - On a `PeerId` that is live as a different user (`live`): reply `PeerRejected
+    ///   "peer id in use"` and close, appending nothing. The token fixes the user, but
+    ///   nothing fixes the `PeerId`: the peer chooses it, and every later frame is
+    ///   attributed to it, so a second hello could otherwise fold its acts under another
+    ///   user's `PeerRef`. The same user reconnecting, or opening a second tab, presents
+    ///   the same `PeerId` and is accepted. Two unattributed peers count as one user.
+    ///   The `PeerId` leaves `live` when its connection ends, beside `PeerLeft`.
     ///
     /// Side effects (appends) go through the injected `EventLog`, honouring "the Session
     /// is the only event writer".
     let run
         (sessionId: SessionId)
         (attributionOf: string -> PeerAttribution option)
+        (live: LivePeers)
         (log: EventLog<SessionEvent>)
         (handlers: PeerHandlers<'State>)
         (channel: FrameChannel<'State>)
@@ -63,6 +100,10 @@ module PeerSession =
         async {
             let! first = channel.Receive ()
             match first |> Option.map (fun f -> f, (match f with Control (PeerHello h) -> attributionOf h.Token | _ -> None)) with
+            | Some (Control (PeerHello hello), Some attribution)
+                when not (live.TryJoin hello.PeerId (PeerAttribution.userOf attribution)) ->
+                do! channel.Send (Control (PeerRejected "peer id in use"))
+                do! channel.Close ()
             | Some (Control (PeerHello hello), Some attribution) ->
                 let actor = PeerRef hello.PeerId
                 let! joined =
@@ -110,6 +151,7 @@ module PeerSession =
                 do! pump ()
 
                 cleanup ()
+                live.Leave hello.PeerId
                 let! _ = log.Append actor (PeerLeft { PeerId = hello.PeerId })
                 return ()
             | Some (Control (PeerHello _), None) ->

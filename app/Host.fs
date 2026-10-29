@@ -199,6 +199,7 @@ let startFull
         // Peer access: every joining peer presents a token THIS process minted (served
         // to authenticated browsers by `/me`, handed to tests via `MintPeerToken`).
         let peerTokens = PeerTokens (Interop.randomSecret)
+        let livePeers = PeerSession.LivePeers ()
         // Restart ordering (Step 19): replay the persisted doc FIRST — before any
         // observer registers — then open the log, then the boot drain repairs the
         // crash-between-append-and-removal window via the log-anchored dedup.
@@ -1135,7 +1136,7 @@ let startFull
                         } }
             Async.StartImmediate(
                 async {
-                    do! PeerSession.run sessionId peerTokens.Validate log handlers channel
+                    do! PeerSession.run sessionId peerTokens.Validate livePeers log handlers channel
                     signalSessionEnded ()
                 })
 
