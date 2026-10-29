@@ -176,8 +176,8 @@ The last section holds trust boundaries as sharp as the first section's.
   allowlist, which the credential-leak regression test pins. An operator must choose it
   deliberately. `=docker` is the full-userland option for the WorkSandbox.
   - **A Linux host without the confinement tools cannot start a session.** srt needs bubblewrap,
-    socat and ripgrep. The Nix installable names all three. An `npm i -g yession` on a bare box
-    does not have them. The session then fails when it creates its sandbox, and does not start
+    socat and ripgrep. The Nix installable names all three. An npm install of a release on a bare
+    box does not have them. The session then fails when it creates its sandbox, and does not start
     unconfined. That is the intended trade: install the tools or choose `host` deliberately.
   - **srt reports a probe it could not RUN as a tool that is not there**, so a bad minute makes
     srt refuse every sandbox in a run. Yession checks the refusal against this process's own

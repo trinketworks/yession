@@ -25,7 +25,7 @@ npm i -g ~/.local/share/yession
 ```
 
 The directory is the install. `npm i -g` links the two commands to it, so do not delete the
-directory. To upgrade, extract the new tarball into a fresh directory and run the same steps.
+directory. To upgrade, delete the directory, then run the same steps with the new tarball.
 
 Do not run `npm i -g yession-<version>.tgz`. npm honours a dependency's shrinkwrap only when
 the package came from a registry, so an install by path or URL resolves the version ranges
