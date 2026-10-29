@@ -259,11 +259,15 @@ let private frameChannel (transport: Transport) : FrameChannel<string> =
             closed <- true
             stopLooking ()
             deliver None
+    let take = FramePieces.assembler ()
     channel.onmessage <-
         fun message ->
-            match Codec.fromString frameCodec (string message.data) with
-            | Ok frame -> deliver (Some frame)
-            | Error detail -> JS.console.error ("frame decode failed: " + detail)
+            match take (string message.data) with
+            | None -> ()
+            | Some whole ->
+                match Codec.fromString frameCodec whole with
+                | Ok frame -> deliver (Some frame)
+                | Error detail -> JS.console.error ("frame decode failed: " + detail)
     channel.onclose <- fun _ -> finish ()
     onPeerFinished peer finish
     stopLooking <- onResume transport finish
@@ -271,9 +275,11 @@ let private frameChannel (transport: Transport) : FrameChannel<string> =
         fun frame ->
             async {
                 // A peer can vanish between frames; sending into a channel that is no longer
-                // open is a no-op, not a throw.
+                // open is a no-op, not a throw. A frame longer than one message goes as
+                // pieces (`FramePieces`); the browser refuses an oversized send.
                 if channel.readyState = Browser.Types.RTCDataChannelState.Open then
-                    channel.send (U4.Case1 (Codec.toString frameCodec frame))
+                    FramePieces.split (Codec.toString frameCodec frame)
+                    |> List.iter (fun piece -> channel.send (U4.Case1 piece))
             }
       Receive =
         fun () ->

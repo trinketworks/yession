@@ -39,10 +39,14 @@ let frameChannel (dc: DataChannel) : FrameChannel<string> =
             cont item
         | None -> queue.Enqueue item
 
+    let take = FramePieces.assembler ()
     dc.onMessage (fun (msg: string) ->
-        match Codec.fromString frameCodec msg with
-        | Ok frame -> deliver (Some frame)
-        | Error e -> JS.console.error ("frame decode failed: " + e))
+        match take msg with
+        | None -> ()
+        | Some whole ->
+            match Codec.fromString frameCodec whole with
+            | Ok frame -> deliver (Some frame)
+            | Error e -> JS.console.error ("frame decode failed: " + e))
 
     dc.onClosed (fun () ->
         if not closed then
@@ -59,8 +63,13 @@ let frameChannel (dc: DataChannel) : FrameChannel<string> =
                 // native send, making `send()` throw. With the addon sharing the process C++
                 // runtime (see nix/node-datachannel.nix) that throw is an ordinary catchable
                 // JS error, so we swallow it here — a lost frame on a dying channel is a no-op.
+                // Not on macOS: there a throw from libdatachannel aborts the process. The one
+                // throw a sender can cause, a message over the peer's limit, `FramePieces`
+                // rules out.
                 if not closed && dc.isOpen () then
-                    try dc.sendMessage (Codec.toString frameCodec frame) |> ignore
+                    try
+                        FramePieces.split (Codec.toString frameCodec frame)
+                        |> List.iter (fun piece -> dc.sendMessage piece |> ignore)
                     with _ -> ()
             }
       Receive =

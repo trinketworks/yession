@@ -346,6 +346,21 @@ let private frameSerializationTests =
                 let roundTripped = Codec.toString codec frame |> Codec.fromString codec |> expect
                 Expect.equal roundTripped frame "frame round-trip"
 
+        // A surrogate pair straddles the first cut, which a cut by length alone splits.
+        testCase "a frame cut into pieces is the frame once they are put back together" <| fun () ->
+            let text = String.replicate (FramePieces.length - 1) "a" + String.replicate 40_000 "🦀"
+            let take = FramePieces.assembler ()
+            let wholes = FramePieces.split text |> List.choose take
+            Expect.equal wholes [ text ] "one whole frame, as sent"
+
+        testCase "no piece of a long frame is longer than a piece may be" <| fun () ->
+            let longest = FramePieces.split (String.replicate 100_000 "y") |> List.map String.length |> List.max
+            Expect.isTrue (longest <= FramePieces.length + 1) "the piece and its mark fit"
+
+        testCase "a frame that fits one message goes as it is" <| fun () ->
+            let text = """{"State":["StateSync","short"]}"""
+            Expect.equal (FramePieces.split text) [ text ] "unchanged"
+
         testCase "PeerJoined and PeerLeft events round-trip through the envelope codec" <| fun () ->
             let joined = { sampleEnvelope with Event = PeerJoined { PeerId = peerId; DisplayName = "Ada"; User = None } }
             let left = { sampleEnvelope with Event = PeerLeft { PeerId = peerId } }
