@@ -3591,16 +3591,26 @@ module Style =
     // Inline code keeps the paragraph's line box (no leading of its own), so only the size
     // is set — 13px, the small step, but written bare to leave line-height inherited.
     let proseCode = "font-terminal text-[13px] bg-surface-2 text-ink px-1 py-0.5"
-    /// A fenced block WRAPS, as the terminal's own output does — it does not scroll inside
-    /// itself. The `overflow-x-auto` it used to carry was the second answer to a question the
-    /// column already answers: with the timeline's `break-words` reaching in here, no line can
-    /// exceed the block, so the scroll container never had anything to scroll and only hid
-    /// which rule was doing the work.
-    ///
-    /// Outlined, not filled: the composer goes `bg-surface-2` while focused, the top step of
-    /// the ramp, so a filled block had no lighter step to stand on there and vanished. The
-    /// timeline wears the same outline so the two draw one code block.
-    let prosePre = Stroke.ring + " " + Stroke.hair + " font-terminal text-code leading-5 text-ink p-3 [&:not(:first-child)]:mt-2 whitespace-pre-wrap"
+    /// A fenced block. Outlined, not filled: the composer goes `bg-surface-2` while focused,
+    /// the top step of the ramp, so a filled block had no lighter step to stand on there and
+    /// vanished. The timeline wears the same outline so the two draw one code block.
+    let private proseFence =
+        Stroke.ring + " " + Stroke.hair + " font-terminal text-code leading-5 text-ink p-3 [&:not(:first-child)]:mt-2"
+    /// The block being written WRAPS: it is in the composer's editor, which needs
+    /// `white-space: pre-wrap` (`[data-rich-body]` in app/tailwind.css), and a line being typed
+    /// stays in view.
+    let prosePre = proseFence + " whitespace-pre-wrap"
+    /// The block being read keeps its lines and SCROLLS sideways, as a table does
+    /// (`proseTableWrap`). A fence's line break is its meaning: a shell line wrapped at the
+    /// reading column's 38rem — the measure prose is held to, about 68 characters of the body
+    /// face (`readingColumn`) — read as four commands where there was one. So the column stays
+    /// at the measure, which is the reading column's to set, and the one thing in it whose
+    /// shape cannot reflow goes the way the doctrine already has for that: it holds more than
+    /// fits and says so with a control, the scrollbar (docs/visual-design.md, Colour: a
+    /// surface that holds more than fits says so with a control or a rule). The bar is
+    /// `timeline`'s: thin, `edge`, on a clear track.
+    let proseFenceRead =
+        proseFence + " whitespace-pre overflow-x-auto [scrollbar-width:thin] [scrollbar-color:var(--color-edge)_transparent]"
     let proseQuote = Stroke.lead + " " + Stroke.hair + " pl-3 text-ink-dim [&:not(:first-child)]:mt-2"
     /// The one hyperlink face: prose links and the references that lead somewhere
     /// (`entityLink`) compose the same words, so a link is a link wherever it stands.
