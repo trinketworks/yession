@@ -277,6 +277,15 @@ let envOr (name: string) (fallback: string) : string =
 
 let setEnv (name: string) (value: string) : unit = ProcessEnv.set name value
 
+/// Read a variable as `envOr` does, and remove it from this process's environment. For a value
+/// no child may inherit: every child spawned with the process environment gets a copy of it,
+/// so a secret read once at boot and left there is a secret handed to each of them. The
+/// variable is gone afterwards whether or not it was set.
+let takeEnv (name: string) (fallback: string) : string =
+    let value = envOr name fallback
+    ProcessEnv.unset name
+    value
+
 /// Every variable name in this process's environment, sorted. NAMES only, and that is the
 /// point: a report can say which are present without reading any of them, so this is not a
 /// second reader of anything — `envOr` remains the one way a value is read.

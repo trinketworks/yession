@@ -83,6 +83,10 @@ module Launch =
     /// session's secrets and the authority to register as an OIDC client. `yession.yaml`
     /// refuses the whole `YESSION_` prefix for exactly this reason, and the host baseline
     /// is an allowlist, so this never reaches a sandboxed command either.
+    ///
+    /// READ ONCE, THEN GONE. The Session takes it out of its own environment as it decodes it
+    /// (`Interop.takeEnv`), so a child it spawns with that environment — the srt host helper
+    /// is one — never holds the secret.
     [<Literal>]
     let Variable = "YESSION_LAUNCH"
 
