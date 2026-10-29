@@ -3220,6 +3220,41 @@ let editorTests =
                 Expect.stringContains md "* item one" "bullet serialized to markdown"
             }
 
+        // A block an input rule makes has to LOOK like that block while it is typed. The reset
+        // strips every default a bare `<blockquote>`, `<pre>` or `<ul>` had, so a composer that
+        // drew them bare turned `> ` into a quote nobody could see.
+        fixtureCase "a quote typed in the composer draws its rule" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "> quoted")
+                do! waitPresent ".ProseMirror blockquote to be on the page" page "#host .ProseMirror blockquote"
+                let! rule = Probe.computed page "#host .ProseMirror blockquote" "border-left-width"
+                Expect.notEqual rule (Some "0px") "the quote draws a rule beside it"
+            }
+
+        // An outline and not a fill: the focused composer is already on the top grey, so a
+        // filled block drew on its own colour and could not be seen.
+        fixtureCase "a code block typed in the composer draws its outline" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "```")
+                do! waitPresent ".ProseMirror pre to be on the page" page "#host .ProseMirror pre"
+                let! outline = Probe.computed page "#host .ProseMirror pre" "border-top-width"
+                Expect.equal outline (Some "1px") "the code block draws a hairline round it"
+            }
+
+        fixtureCase "a bullet list typed in the composer draws its bullets" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "- item")
+                do! waitPresent ".ProseMirror ul to be on the page" page "#host .ProseMirror ul"
+                let! marker = Probe.computed page "#host .ProseMirror ul" "list-style-type"
+                Expect.equal marker (Some "disc") "the list draws a bullet per item"
+            }
+
         // Addressing somebody is reachable from the keyboard alone: an @ greys in the rest of a
         // name, and Tab takes it.
         fixtureCase "Tab completes the hinted address" <| fun page ->
