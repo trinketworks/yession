@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    One of two projects for YES018: a project with nothing Yession in its reach, the shape of a
+    binding project under src/Fable.*. It writes the literals Yession.EmDashFixture is reported
+    for, and must be reported clean. Not in Yession.slnx, for the reason no fixture is.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Binding.fs" />
+  </ItemGroup>
+
+</Project>
