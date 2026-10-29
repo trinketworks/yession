@@ -35,6 +35,29 @@ it: `frames --manager <url> --still …`. Seed it through the real endpoint, so 
 exercise every state the view renders:
 `curl -X POST <url>/sessions -H 'content-type: application/x-www-form-urlencoded' --data 'name=a much longer session name'`.
 
+### A conversation with content
+
+`--boot` starts an empty session. Only a real agent can fill its conversation, and a real agent
+needs an API key. To photograph a conversation that has content, photograph the browser harness:
+
+```
+dotnet fsi tasks.fsx frames --harness replies --still --desktop     # a person and the agent, 24 items
+dotnet fsi tasks.fsx frames --harness replies=60 --still            # the same with 60 items, phone
+dotnet fsi tasks.fsx frames --harness lines --still                 # the model the browser cases use
+```
+
+The harness (`app/browser/EditorHarness.fs`) renders the real `View.view` on a seeded model. No
+session and no agent are behind it. The model has chips, a burst of commands, chapters, a queued
+command and terminals. The verb builds the harness, serves `tests/browser` with the browser
+suite's own server, and gives the camera that address. `--size` and `--measure` work as they do
+with `--boot`.
+
+Use `--boot` when the question is about the real page load, the connection or the empty state.
+The harness does not show them.
+
+Do not serve `tests/browser` yourself. Do not run `check --only` to build the harness. The verb
+does both.
+
 For a page that MOVES (a jump, a flash, a pane that opens and closes), remove `--still` and the
 verb films. The header of `tools/Yession.Frames/Frames.fs` says how to read a film.
 

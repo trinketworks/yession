@@ -30,6 +30,9 @@
          `/?fixtures` is the FIXTURES' page: the bundle puts them back in the page's flow, above
          the shell, for the cases about the editor, the players and the two peers.
 
+         `/?replies=<n>` is the shell's page with a longer conversation: a person and the agent
+         take turns, `n` items in all. Only `frames --harness replies` asks for it.
+
          They used to be in the flow on every page, and the shell started 488px down. Its foot
          was on the screen only once the window had scrolled to it, and only Playwright scrolled
          it: each retry of a click on a moving target scrolls with the next of four alignments,

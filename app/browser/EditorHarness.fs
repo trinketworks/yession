@@ -1140,6 +1140,18 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
 
 let private shellModel : ClientModel = shellModelOf Lines 16
 
+/// The model that the shell's page shows first. `/?replies=<n>` shows the `Replies`
+/// conversation with `n` items, so that a picture (`frames --harness replies`) shows the prose
+/// of a working session. Every other address shows `shellModel`, which the cases use.
+let private openingModel : ClientModel =
+    let asked = "?replies="
+    let search = Browser.Dom.window.location.search
+    if search.StartsWith asked then
+        match System.Int32.TryParse (search.Substring asked.Length) with
+        | true, items when items > 0 -> shellModelOf Replies items
+        | _ -> failwithf "%s: give a count above 0, for example ?replies=24" search
+    else shellModel
+
 /// The shell with an act whose sentence points at things — a sandbox, a connection — so
 /// the page holds a reference drawn INSIDE a line of words. What a rendered string cannot
 /// say about one is where it sits: a reference is part of the sentence, and only a browser
@@ -1702,7 +1714,7 @@ do
                 { SendDraft = ignore
                   SendTerminalDraft = fun _ _ -> ()
                   ReportFocus = Render.focusReporter (fun () -> caretHeld ()) (fun focus -> dispatchRef (CaretMovedMsg focus)) } }
-    let mutable model = { shellModel with Column = { shellModel.Column with Wide = PaneShell.onDesktop () } }
+    let mutable model = { openingModel with Column = { openingModel.Column with Wide = PaneShell.onDesktop () } }
     /// What `HarnessPage.closed` reads, kept here for `typed`'s reason: the count is this
     /// instrument's output, not the place it keeps it.
     let mutable closed : string array = [||]

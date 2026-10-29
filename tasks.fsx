@@ -31,6 +31,10 @@ open Yession.App
 // by, so `check` admits exactly the boxes its suite can launch one on.
 #load "src/Fable.NodeExtras/ChromiumExecutable.fs"
 
+// The server that the browser suite serves its harness page with (`tests/Yession.Tests/Loopback.fs`),
+// loaded for `frames --harness`. The camera then photographs the page as the suite serves it.
+#load "tests/Yession.Tests/Loopback.fs"
+
 let repoRoot = Path.GetFullPath __SOURCE_DIRECTORY__
 let dist = Path.Combine (repoRoot, "dist")
 let pkg = Path.Combine (dist, "npm")
@@ -3581,17 +3585,49 @@ let probe (args: string list) =
 /// repository's resources profile (without one a session has no sandboxes at all, so a
 /// terminal cannot open) — and `booted` is what knows the bin is up rather than a port loop.
 /// They are said once, here, so a skill that wants a picture names a verb and not a recipe.
+///
+/// The other argument of this verb is `--harness <page>`. It photographs the browser harness
+/// (`app/browser/EditorHarness.fs`): the real `View.view` on a seeded model, with no session and
+/// no agent behind it. Use it to see a conversation that has content. A `--boot` session starts
+/// empty, and only a real agent can fill it. The verb builds `Target.Harness`, serves
+/// `tests/browser` with the browser suite's own server (`Loopback.serveStatic`), and gives the
+/// camera that address with `--page`. The pages:
+///
+///   lines         the model that the browser cases use: 16 short lines, chips, a burst of
+///                 commands, a queued command and terminals.
+///   replies       the same model, with 24 items in which a person and the agent take turns.
+///                 The agent replies with paragraphs, a list and a code block.
+///   replies=<n>   the same, with <n> items.
 let frames (args: string list) =
     let out = Path.Combine (repoRoot, "tools", "Yession.Frames", "out")
+    let harnessPage, cameraArgs =
+        match List.tryFindIndex ((=) "--harness") args with
+        | None -> None, args
+        | Some at ->
+            if List.contains "--boot" args then
+                failwith "frames: give --harness or --boot, not both. The harness has no Manager."
+            let page =
+                match List.tryItem (at + 1) args with
+                | Some "lines" -> "/"
+                | Some "replies" -> "/?replies=24"
+                | Some page when page.StartsWith "replies=" -> "/?" + page
+                | _ -> failwith "frames --harness: give lines, replies or replies=<n>"
+            Some page, List.take at args @ List.skip (at + 2) args
     withBuildSlot "frames" (fun () ->
         make [ Target.Tools; Target.Packages ]
-        fable (Path.Combine (repoRoot, "tools", "Yession.Frames", "Yession.Frames.fsproj")) out)
+        fable (Path.Combine (repoRoot, "tools", "Yession.Frames", "Yession.Frames.fsproj")) out
+        if harnessPage.IsSome then make [ Target.Harness ])
     let camera (args: string list) =
         match runInherit repoRoot "node" ([ Path.Combine (out, "Frames.js") ] @ args) with
         | 0 -> ()
         | code -> failwithf "frames: the camera failed (%s)" (diedOf code)
-    if not (List.contains "--boot" args) then camera args
-    else
+    match harnessPage with
+    | Some page ->
+        let server = Yession.Tests.Loopback.serveStatic (Path.Combine (repoRoot, Yession.Tests.Loopback.harnessRoot))
+        try camera ([ "--page"; server.At page ] @ cameraArgs)
+        finally server.Stop ()
+    | None when not (List.contains "--boot" args) -> camera args
+    | None ->
         withBuildSlot "frames" build
         withScratchDataDir (fun dataDir ->
             let manager, said =
@@ -3871,7 +3907,7 @@ let rec private verbs () : Verb list =
             | [] -> failwith "example <name>   (see examples/)" }
       { Name = "probe"; Summary = "run the headless probe peer (tools/Yession.Probe). Args pass through"; Run = probe }
       { Name = "frames"
-        Summary = "photograph a page's frames (tools/Yession.Frames). [--boot] starts a scratch Manager"
+        Summary = "photograph a page's frames (tools/Yession.Frames). [--boot] starts a scratch Manager. [--harness lines|replies[=<n>]] serves the harness"
         Run = frames }
       { Name = "brand"; Summary = "regenerate src/Yession.App/Brand.fs from assets/logo"; Run = fun _ -> brand () }
       { Name = "crash-repro"
