@@ -129,9 +129,9 @@ jobs:
     name: "package:npm"
     needs: verify
     if: github.ref == 'refs/heads/master'
-    # The cache's push token is a secret of the `cache-push` environment, which only master may
+    # The cache's push token is a secret of the `cache` environment, which only master may
     # deploy to (pr.yaml's `test` job says why).
-    environment: cache-push
+    environment: cache
     runs-on: ubuntu-latest
     # Above the suites' own budgets, never below them: verify.yml's `verify` job says why. `verify`
     # and `bench` above are calls, which cannot carry one; the jobs they call carry their own.
@@ -225,9 +225,9 @@ jobs:
     name: "package:nix (${{ matrix.arch }})"
     needs: verify
     if: github.ref == 'refs/heads/master'
-    # The cache's push token is a secret of the `cache-push` environment, which only master may
+    # The cache's push token is a secret of the `cache` environment, which only master may
     # deploy to (pr.yaml's `test` job says why).
-    environment: cache-push
+    environment: cache
     runs-on: ${{ matrix.runner }}
     # pr.yaml's `darwin-package` builds the darwin package and dev shell cold inside its 45, and
     # a cold dev shell is the slowest thing any leg here builds (16m11s, pr.yaml's darwin job).

@@ -301,22 +301,22 @@ let private branchPushes (file: string) (jobs: (string * Job) list) : string lis
 
 /// The environment that holds the cache's push token. Its deployment branches are master alone, so
 /// a branch cannot read the token, even from a workflow it edited.
-let private cachePush = "cache-push"
+let private cacheEnvironment = "cache"
 
 /// Each job in `file` whose cachix step carries the token while it does not deploy to
-/// `cache-push`, as the message that says so. Outside that environment the token is a repository
+/// `cache`, as the message that says so. Outside that environment the token is a repository
 /// secret, which a same-repository pull request can read.
 let private tokenOutsideEnvironment (file: string) (jobs: (string * Job) list) : string list =
     [ for id, job in jobs do
         let holdsToken = job.Steps |> List.exists (fun step -> cachix step && (inputOf "authToken" step).IsSome)
-        let inEnvironment = job.Environment |> Option.exists (fun written -> written.Contains (sprintf "'%s'" cachePush) || written = cachePush)
+        let inEnvironment = job.Environment |> Option.exists (fun written -> written.Contains (sprintf "'%s'" cacheEnvironment) || written = cacheEnvironment)
         if holdsToken && not inEnvironment then
             yield
                 sprintf
                     "%s's `%s` job pushes to the binary cache and declares no `environment: %s`, so the token it reads is a repository secret that any same-repository pull request can read too"
                     file
                     id
-                    cachePush ]
+                    cacheEnvironment ]
 
 // --- the merge queue ----------------------------------------------------------------------
 // The queue in front of master gives an entry's required checks a fixed time to report

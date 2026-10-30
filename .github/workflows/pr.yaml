@@ -94,7 +94,7 @@ jobs:
       #
       # `skipPush` alone stops an honest branch, not a hostile one: GitHub hands a repository
       # secret to every same-repository pull request, and a branch can add the token back to its
-      # own copy of this file. So the token is a secret of the `cache-push` environment, whose
+      # own copy of this file. So the token is a secret of the `cache` environment, whose
       # deployment branches are master alone, and every job that pushes declares it. A branch
       # cannot reach an environment secret that only master may use.
       - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
