@@ -1852,13 +1852,12 @@ module Style =
 
     /// The header's right-hand group: the way back to the terminals. The session's standings
     /// are the sidebar's (`standingsSection`), and the band only wears the worst of them,
-    /// under the chevron that opens it (`navReopenMark`). The door is a mark, not words
-    /// (`View.contentReopen`), so it stands on the title's LINE as the sidebar's chevron does
-    /// across the band (`navReopen`): `pb-2` lifts the 14px mark's middle onto the title's
-    /// line (measured live at 1440: mark and chevron both at y=52, the title's middle 52.5; the
-    /// words' `pb-[1px]` left it 6.5px low), and the glyph then drops onto the x-height as the
-    /// chevron's does (`terminalReopen`). On a phone the group centres on the title's line.
-    let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-2 phone:items-center phone:gap-3 phone:pb-0"
+    /// under the chevron that opens it (`navReopenMark`). On a wide screen the door carries
+    /// words ("2 terminals", `View.contentReopen`), and `pb-[1px]` stands them on the title's
+    /// baseline (measured live at 1440: both at y=63; `pb-2` left the words 7px high). The
+    /// mark beside them then rises onto the title's x-height on its own (`terminalReopen`).
+    /// On a phone the group centres on the title's line.
+    let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-[1px] phone:items-center phone:gap-3 phone:pb-0"
     let headerStatus = "shrink-0"
 
     /// The nav column's own mount of the connection report. Hidden on a phone, where the bar
@@ -5106,10 +5105,12 @@ module Style =
     /// variant: whether the control exists is a fact about the model, and a button that is
     /// merely invisible is still in the tab order.
     ///
-    /// Its glyph drops onto the title's x-height by the sidebar chevron's own amounts
-    /// (`navReopen`), so the two marks either side of the title point at one stroke.
+    /// Its glyph sits on the title's x-height, so the two marks either side of the title
+    /// point at one stroke (`navReopen`). On a phone it drops by the chevron's own amount. On
+    /// a wide screen the button stands its words on the title's baseline (`headerAside`), which
+    /// leaves the glyph's middle below the stroke, so it rises instead.
     let terminalReopen =
-        navChevronBack + " shrink-0 *:first:translate-y-[3px] phone:*:first:translate-y-[1.5px]"
+        navChevronBack + " shrink-0 *:first:-translate-y-[3px] phone:*:first:translate-y-[1.5px]"
     /// Its face says what it opens on a wide screen ("2 terminals", `View.contentReopen`), and
     /// only the count on a phone, whose band has no room for the words. Exactly one of the two
     /// is drawn at any size, by the one pair of variants that split the screens.
