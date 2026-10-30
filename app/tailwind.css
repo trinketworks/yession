@@ -590,7 +590,7 @@ summary::-webkit-details-marker { display: none; }
    Three boxes: the mark (the caret's box, and the perspective), the TIP (tilts, flips and
    tumbles about an axis in the screen, scaled), and the CUBE (turns about its own upright,
    standing at 45deg so its top is a diamond). The cube's top face lies in the mark's plane and
-   the rest of it behind, so at rest the depth cannot show. Its faces are all the brand blue;
+   the rest of it behind, so at rest the depth cannot show. Its faces are all the agent's blue;
    each is darkened by a black veil whose opacity is that face's angle to one light, which is
    what puts the logo's own two side blues on the sides when it tips toward you and dims the
    top when it tips away.
@@ -650,7 +650,7 @@ summary::-webkit-details-marker { display: none; }
 .agent-think-cube > i {
   position: absolute;
   inset: 0;
-  background: var(--color-blue);
+  background: var(--color-agent);
   backface-visibility: hidden;
 }
 .agent-think-cube > i::after {

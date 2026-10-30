@@ -29,6 +29,7 @@
   --color-grey-16: color-mix(in oklab, var(--color-white) calc(var(--step-grey) * 16), var(--color-black));
   --color-grey-20: color-mix(in oklab, var(--color-white) calc(var(--step-grey) * 20), var(--color-black));
   --color-blue-up-1: color-mix(in oklab, var(--color-blue), var(--color-white) calc(var(--step-tone) * 1));    /* hover: the lit side */
+  --color-blue-down-1: color-mix(in oklab, var(--color-blue), var(--color-black) calc(var(--step-tone) * 1));  /* the agent's own marks; paint, never text */
   --color-blue-down-5: color-mix(in oklab, var(--color-blue), var(--color-black) calc(var(--step-tone) * 5));  /* the agent avatar's ground; paint, never text */
   --color-green-down-2: color-mix(in oklab, var(--color-green), var(--color-black) calc(var(--step-tone) * 2)); /* live's dim: the low of a live dot's beat, still 3:1 as a mark (Phase4 pins it) */
 
@@ -45,6 +46,7 @@
   --color-ink-dim: var(--color-grey-20);
   --color-ink-faint: var(--color-grey-16);  /* the faintest ink still means something, so it keeps AA on every surface (Phase4 pins it) */
   --color-err: var(--color-red);
+  --color-agent: var(--color-blue-down-1);  /* the agent's marks: one shade under the blue a control is pressed in, so a mark of the agent never reads as something to press */
   --color-agent-ground: var(--color-blue-down-5);
 
   /* Acrylic: what a surface wears floating over another — tint, rim, blur. `Style.acrylic`

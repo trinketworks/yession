@@ -75,7 +75,10 @@ it too. The mark is the carrier and the step is emphasis. So hover, which is tra
 which no thumb has, may share the step. The mark is what a reader finds at rest. Three hues
 mean three things:
 
-- `blue` is interactive, and it is the agent.
+- `blue` is interactive, and it is the agent. The agent's own marks (its diamond, its caret,
+  the cube that turns while it thinks) wear `agent`, one tone under `blue`, so a reader can
+  tell the agent from a thing to press. Text in either is the interactive blue, because a
+  shade under it would fall below the text floor on the panels.
 - `green` is live, and it is the people.
 - `err` is wrong.
 
