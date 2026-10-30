@@ -2991,7 +2991,8 @@ let private fixtures =
       // Yession project, which must be reported, and one with nothing Yession in reach, which
       // must stay silent over the same literals.
       "YES018", "Yession.EmDashFixture", [ "Copy.fs" ]
-      "YES018", "EmDashInBindingFixture", [ "Binding.fs" ] ]
+      "YES018", "EmDashInBindingFixture", [ "Binding.fs" ]
+      "YES019", "SyncLoopFixture", [ "Loops.fs" ] ]
 
 let private fixtureProject name =
     Path.Combine ("analyzers", "fixtures", name, name + ".fsproj")

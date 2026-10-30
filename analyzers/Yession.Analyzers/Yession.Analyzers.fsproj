@@ -46,6 +46,7 @@
     <Compile Include="UncheckedCast.fs" />
     <Compile Include="ObjSignature.fs" />
     <Compile Include="EmDashes.fs" />
+    <Compile Include="SyncLoops.fs" />
   </ItemGroup>
 
   <ItemGroup>
