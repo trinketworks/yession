@@ -264,7 +264,8 @@ let private reachListeners : (string -> Async<Result<unit, string>>) ref =
 /// The session's containers share one network of their own (`DockerSandbox.Network`).
 let private dockerNetwork : Sandboxes.DockerSandbox.Network =
     { Name = sprintf "yession-%s" (SessionId.value sessionId)
-      Reached = fun gateway -> reachListeners.Value gateway }
+      Reached = fun gateway -> reachListeners.Value gateway
+      Ceiling = resourceProfile |> Option.map (fun file -> file.Container) |> Option.defaultValue ContainerCeiling.none }
 
 /// The session's WorkSandboxes (Plan 15, stage 2), by name — each in the workspace
 /// `SessionLayout` gives it, all of them sharing the one repos directory, which is what

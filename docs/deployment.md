@@ -118,6 +118,13 @@ exists only if you declare it. Without it, a session has nowhere to run a comman
 repo's sandbox starts. Declare it with what it should hold: `wants: [ github ]` for `git push`
 from a terminal.
 
+The same file may bound every container on this host, under `container:`, in compose's
+spelling: `mem_limit`, `pids_limit` and `cgroup_parent`. A repo's `mem_limit` and
+`pids_limit` may be lower than yours, never higher. A higher one refuses the sandbox, and the
+refusal names both values. A repo that names none gets yours. Only you name `cgroup_parent`.
+A repo that writes it is refused ([technical-design.md
+§4](technical-design.md#container-limits)).
+
 The same file carries what you say about the agent, under `agent`. `agent.guidance` is
 appended after the product's own system prompt on every turn, as the operator's words. It never
 replaces that prompt, which already describes the build's tools and sandboxes. Write only what
@@ -741,6 +748,15 @@ let
         mount: { from: /private/etc/ssl/cert.pem, mode: read }
         env:
           NIX_SSL_CERT_FILE: /private/etc/ssl/cert.pem
+    # The ceiling on every container on this host. A repo's `mem_limit` and
+    # `pids_limit` may be lower, never higher. The pool: one cgroup that holds every
+    # session's containers, with a limit below the VM's total, so an overrun of the sum
+    # stays inside it and the daemon lives. yession does not make it. The Colima start
+    # wrapper makes `/sys/fs/cgroup/yession` at every boot, with memory.max = VM RAM -
+    # 768 MiB (~7 GiB of the 8 GiB VM) and pids.max = 32768. A bare name works under
+    # both cgroup drivers: `/yession` under cgroupfs, `yession.slice` under systemd.
+    container:
+      cgroup_parent: yession
     sandboxes:
       default:
         uses: [ ca ]

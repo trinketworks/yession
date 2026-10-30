@@ -264,7 +264,7 @@ let tests =
             Expect.isNonEmpty containers "this repo declares containers"
             for name, container in containers do
                 for driver in [ "cgroupfs"; "systemd" ] do
-                    match Yession.Domain.Sandboxes.ContainerSpec.forDaemon container vm driver with
+                    match Yession.Domain.Sandboxes.ContainerSpec.forDaemon container Yession.Domain.Sandboxes.ContainerCeiling.none vm driver with
                     | Ok _ -> ()
                     | Error reason -> failwithf "%s: a %s daemon refuses it: %s" name driver reason
 

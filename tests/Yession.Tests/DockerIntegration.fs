@@ -226,13 +226,15 @@ let tests =
             // A cgroup parent is not visible from inside (the container has its own cgroup
             // namespace), so this asks the daemon. The parent is the one the daemon uses
             // anyway, for its driver, so the case creates no cgroup on the host that
-            // outlives it: what it shows is that a declared parent reaches the daemon.
-            testCaseAsync "a container is created under the cgroup parent its declaration names" (async {
+            // outlives it: what it shows is that the operator's parent reaches the daemon.
+            testCaseAsync "a container is created under the cgroup parent the operator names" (async {
                 let client = DK.create ()
                 let! info = client.info () |> Interop.awaitPromise
                 let parent = if info.CgroupDriver = "systemd" then "system.slice" else "/docker"
-                let spec = alpineSpec |> withContainer (fun c -> { c with CgroupParent = Some (CgroupParent.parse parent |> expect) })
-                let! name, sandbox = startOrFail spec
+                let network =
+                    { DockerFixture.quietNetwork () with
+                        Ceiling = { ContainerCeiling.none with CgroupParent = Some (CgroupParent.parse parent |> expect) } }
+                let! name, sandbox = startOrFailOn network alpineSpec
                 let! found =
                     client.listContainers (
                         jsOptions<DK.ListContainersOptions> (fun o ->
@@ -242,7 +244,7 @@ let tests =
                     |> Interop.awaitPromise
                 Expect.equal found.Length 1 "the sandbox's one container"
                 let! inspected = client.getContainer(found.[0].Id).inspect () |> Interop.awaitPromise
-                Expect.equal inspected.HostConfig.CgroupParent parent "the daemon created it under the declared parent"
+                Expect.equal inspected.HostConfig.CgroupParent parent "the daemon created it under the operator's parent"
                 do! sandbox.Dispose ()
             })
 

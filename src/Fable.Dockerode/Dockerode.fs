@@ -200,6 +200,10 @@ type BuildOptions =
     abstract t: string with get, set
     /// Relative to the context. Absent, the context's own `Dockerfile`.
     abstract dockerfile: string with get, set
+    /// The build's memory ceiling, in bytes.
+    abstract memory: float with get, set
+    /// Memory plus swap, in bytes. Equal to `memory`, a build gets no swap.
+    abstract memswap: float with get, set
 
 /// A running `docker exec` handle.
 type [<AllowNullLiteral>] Exec =

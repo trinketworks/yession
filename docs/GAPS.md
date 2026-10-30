@@ -1058,14 +1058,15 @@ After the fixes land, one pass rewrites it to what still reproduces.
         it ran the entrypoint and the work directly.
       - The Docker tier pins case (a) with a 64m container. Nothing tests case (b) for real: it
         needs the whole VM to run out of memory.
-    - **No operator ceiling on a container's memory.** Yession checks a repo's `mem_limit:` against
-      what the daemon has, not a share the operator chose. Six sessions that each declare most of
-      the VM all pass.
-    - **A `cgroup_parent` is the repo's to name, and the host's to make.** Nothing in yession
+    - **The operator's ceiling bounds one container, not the sum.** A repo's `mem_limit` and
+      `pids_limit` are at most the operator's (`container:` in the profile, invariant 26). Six
+      sessions that each take the whole ceiling all pass. The pool cgroup bounds the sum.
+    - **A `cgroup_parent` is the operator's to name, and the host's to make.** Nothing in yession
       creates the parent cgroup or limits it
       ([technical-design.md §4](technical-design.md#4-repo-local-configuration) gives the
       spelling per driver and what happens when the parent is missing). Yession checks a
-      `mem_limit:` against the daemon's total, not the parent's limit.
+      `mem_limit:` against the operator's ceiling and the daemon's total, not the parent's
+      limit.
     - **No `${VAR}` in an entrypoint.** compose interpolates from the host's environment at parse
       time, the wrong environment here. Nothing needs it yet. The string form splits into words
       and nothing else. A value that needs expansion belongs in an actual `sh -c`.
@@ -1139,6 +1140,15 @@ After the fixes land, one pass rewrites it to what still reproduces.
       operator. The refusal above stays under it as the floor.
     - **It is a policy on the proxy, not on the container.** A container's own direct egress
       is the Docker network's, and reaches what that network reaches.
+    - **Deferred: the session network becomes an internal network.** The session's Docker
+      network becomes `Internal`. Its only way out is the credential proxy. The proxy tunnels
+      the domains that the sandbox's `endpoint` resources name. This waits for an endpoint
+      list that the operator keeps. It also waits for a measurement: does
+      `host.docker.internal` reach the gateway from an internal network on Colima and on
+      Docker Desktop?
+    - **Deferred: the image build runs on the session network.** The build gets the proxy as
+      build arguments. This waits for the internal network above. It also waits for the
+      classic builder, because BuildKit does not honour a custom network.
   - **The AgentSandbox has no grants.** The agent CLI runs with no built-in tools. Every command
     it issues runs in a work sandbox, under that sandbox's grants. Its own process holds no
     connection and no proxy, and nothing in the profile can give it one. If the CLI ever runs
