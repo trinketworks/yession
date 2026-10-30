@@ -62,6 +62,10 @@ let rec private within (e: FSharpExpr) =
             yield! within sub
     }
 
+/// Every call written inside `e`, itself included: the walk `of'` makes of a binding's body, for a
+/// rule that asks about one expression within it rather than the whole binding.
+let callsIn (e: FSharpExpr) = List.ofSeq (within e)
+
 let rec private declared (ds: FSharpImplementationFileDeclaration list) =
     seq {
         for d in ds do
