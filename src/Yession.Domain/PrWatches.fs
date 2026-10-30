@@ -176,7 +176,7 @@ module PrStatus =
     let attention (word: string) : Attention =
         match tone word with
         | ToneBad -> Wrong
-        | ToneBusy -> Moving
+        | ToneBusy -> Pending
         | ToneOk
         | ToneMuted -> Rest
 

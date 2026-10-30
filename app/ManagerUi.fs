@@ -148,7 +148,7 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
 /// disagree.
 ///
 /// A state is ranked by what it asks of a reader: a launch that failed or a crash is WRONG;
-/// a launch under way is MOVING; a session at rest, stopped or archived, is REST. A running
+/// a launch under way is PENDING, a machine's work; a session at rest, stopped or archived, is REST. A running
 /// session that has not yet said anything is at rest too — it has nothing in flight it has
 /// told anyone about.
 let private rowSays (view: ProcessManager.SessionView) : (Attention * string * string option) list =
@@ -159,7 +159,7 @@ let private rowSays (view: ProcessManager.SessionView) : (Attention * string * s
         match Standing.byConcern view.Standings with
         | [] -> [ Rest, "running", None ]
         | standings -> standings |> List.map (fun s -> s.Attention, s.Word, Some s.Facet)
-    | None, ProcessManager.Launching -> [ Moving, "starting", None ]
+    | None, ProcessManager.Launching -> [ Pending, "starting", None ]
     | None, ProcessManager.LaunchFailed reason -> [ Wrong, sprintf "failed to start · %s" reason, None ]
     | None, ProcessManager.Exited code ->
         let reason = code |> Option.map string |> Option.defaultValue "signal"

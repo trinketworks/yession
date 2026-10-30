@@ -82,7 +82,9 @@ mean three things:
 - `green` is live, and it is the people.
 - `err` is wrong.
 
-Blue is never a status. A wait is `ink-dim` text: reconnecting, catching up, queued, looking
+Blue is never a status, with one exception: the attention mark of an agent at work (Working,
+see Attention) wears the agent's own blue, because it is a mark of the agent, and that blue is
+the tone a control never wears. A wait is `ink-dim` text: reconnecting, catching up, queued, looking
 and no agent yet. A wait leads with a dot. The dot beats if the wait is live.
 
 Live is `green` text: a running command, a connected peer, a session that runs. A record of
@@ -215,7 +217,7 @@ is a tilt: in fast, back with a hair of overshoot. A pressed control is *held* (
 
 A wait is a beat (`animate-beat`), not a spinner. A beating dot animates its colour between a
 role and its dim, never its opacity. The one thing that goes round is the attention mark's
-Moving (see Attention): it is not a wait on the reader but work under way, and its arc is
+arc, Working's and Pending's (see Attention): it is not a wait on the reader but work under way, and its arc is
 always at its ink. `motion-reduce` rides every one: it keeps the fill and
 drops the geometry.
 
@@ -243,7 +245,8 @@ carry a rank (WCAG 1.4.1).
 |---|---|---|---|---|
 | Wrong | disc in a ring, the whole box | `err` | the ring draws round and the core springs in, once | nothing moves until a person fixes it: sign in again, a PR conflicted or failed |
 | Wanted | disc | `green` | the arc closes and fills, then a halo breathes out three times | a person's turn: the agent is waiting |
-| Moving | quarter arc on a faint track | `ink-dim` | goes round, 1.6s, for as long as the work does | under way, needs nobody: working, running, checks pending |
+| Working | quarter arc on a faint track | `agent` | goes round, 1.6s, for as long as the work does | the agent at work: a turn is running |
+| Pending | quarter arc on a faint track | `ink-dim` | goes round, 1.6s, for as long as the work does | a machine's work, needs nobody: a command the agent left running, checks, the queue, a launch |
 | Absent | empty ring | `ink-dim` | none | no agent, chosen knowingly |
 | Rest | point | `ink-faint` | none | nothing to say: stopped, or everything watched is fine |
 
@@ -253,11 +256,16 @@ still running it is waiting on them, so it says "waiting" at Rest and the checks
 (`AgentStatus.withWatched`).
 Wanted is green because green is the people, not because it is good.
 
+Working outranks Pending: the agent thinking is nearer a person's turn than a machine
+finishing. A command the agent left running is Pending, because no turn is thinking and the
+agent wakes when it ends, as it does for checks. The two share a shape, because both are work
+under way, and are the one pair told apart by ink alone; the word beside the mark says which.
+
 Attention is ink: each level carries more than the one below it, so the order survives
-greyscale and a blur. The five share one 12px box, centre and the chrome's 1.5px stroke. The
+greyscale and a blur. They share one 12px box, centre and the chrome's 1.5px stroke. The
 mark is larger than a status's 6px dot because its shape carries the rank.
 
-Motion goes only where a state is live or asks. Moving keeps going because the work does.
+Motion goes only where a state is live or asks. Working and Pending keep going because the work does.
 Wanted asks a few times and then sits still, so a session left waiting does not nag. Wrong
 never fidgets: a mark that kept moving would read as a spinner, not a fault. What moves is
 geometry, never the ink the meaning rests on. `motion-reduce` keeps every still face.

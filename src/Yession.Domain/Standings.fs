@@ -9,8 +9,11 @@ type Attention =
     | Rest
     /// Nobody is there to do anything, and the person chose that knowingly: no agent.
     | Absent
-    /// Under way, and nobody is needed for it to finish: a turn, a command, a check.
-    | Moving
+    /// Under way on a machine, and nobody is needed for it to finish: a command the agent
+    /// left running, a pull request's checks or its place in the queue.
+    | Pending
+    /// The agent itself at work: a turn is running.
+    | Working
     /// A person's turn: the agent is idle and the next word is theirs.
     | Wanted
     /// Something went wrong, and nothing moves until a person fixes it.
@@ -23,7 +26,8 @@ module Attention =
         match attention with
         | Rest -> "rest"
         | Absent -> "absent"
-        | Moving -> "moving"
+        | Pending -> "pending"
+        | Working -> "working"
         | Wanted -> "wanted"
         | Wrong -> "wrong"
 
@@ -31,7 +35,8 @@ module Attention =
         match raw with
         | "rest" -> Some Rest
         | "absent" -> Some Absent
-        | "moving" -> Some Moving
+        | "pending" -> Some Pending
+        | "working" -> Some Working
         | "wanted" -> Some Wanted
         | "wrong" -> Some Wrong
         | _ -> None
@@ -60,9 +65,10 @@ module Standing =
         match attention with
         | Wrong -> 0
         | Wanted -> 1
-        | Moving -> 2
-        | Absent -> 3
-        | Rest -> 4
+        | Working -> 2
+        | Pending -> 3
+        | Absent -> 4
+        | Rest -> 5
 
     /// The one to show where there is room for one. Ties go to the earlier, so a producer
     /// that lists its facets in a fixed order gets a stable answer.
@@ -105,7 +111,7 @@ type AgentSituation =
 /// ("sign in again", "no agent"), because a state has one name on every screen
 /// (docs/visual-design.md, Colour). "Waiting" is a person's turn, so it asks for more than
 /// work under way does, which asks for nobody. "No agent" is a choice somebody made, not a
-/// wrong thing, so it is the quietest of the five.
+/// wrong thing, so it is the quietest of the levels that say anything.
 module AgentStatus =
 
     let facet = "agent"
@@ -117,16 +123,19 @@ module AgentStatus =
     /// signed in. Otherwise the two that need a person outrank a command still running,
     /// which is under way and needs nobody.
     ///
+    /// A command left running is Pending, not Working: no turn is thinking, a machine is,
+    /// and the agent wakes when it ends, as it would for a pull request's checks.
+    ///
     /// "running" names no command. A command's name is a sentence of its own, and it took
     /// the roster row's and the header's room; the composer's tray names it, one press from
     /// the terminal.
     let standing (situation: AgentSituation) : Standing =
         let say word attention = { Facet = facet; Word = word; Attention = attention }
-        if situation.TurnRunning then say "working" Moving
+        if situation.TurnRunning then say "working" Working
         elif situation.SignInRequired then say signInAgain Wrong
         elif situation.NoAgent then say noAgent Absent
         elif List.isEmpty situation.BusyTerminals then say "waiting" Wanted
-        else say "running" Moving
+        else say "running" Pending
 
     /// Where a session stands, in the order it reports it: its agent, then what it watches.
     /// The one way the two are put together, so the Manager's roster and the session page
@@ -137,7 +146,7 @@ module AgentStatus =
     /// green "waiting" ranked over them sent a person to a session that had nothing for them.
     /// It still says "waiting", at rest, so the sidebar still names what the agent is doing.
     let withWatched (watched: Standing list) (agent: Standing option) : Standing list =
-        let underWay = watched |> List.exists (fun s -> s.Attention = Moving)
+        let underWay = watched |> List.exists (fun s -> s.Attention = Pending)
         let agent =
             agent
             |> Option.map (fun a -> if underWay && a.Attention = Wanted then { a with Attention = Rest } else a)
