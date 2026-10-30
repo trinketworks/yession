@@ -171,7 +171,7 @@ let tests =
             // The OOM score and the process bound, read where the kernel keeps them: the
             // work's own `oom_score_adj` (a work exec sets it on itself, and the work runs
             // in execs) and the container's cgroup `pids.max`.
-            testCaseAsync "a container is created with the oom-score-adj and pids-limit its declaration names" (async {
+            testCaseAsync "a container is created with the oom_score_adj and pids_limit its declaration names" (async {
                 let spec =
                     alpineSpec
                     |> withContainer (fun c ->
@@ -188,7 +188,7 @@ let tests =
             // No declaration is 500 and 4096, never docker's 0 and no limit: a sandbox
             // process is the kernel's victim before the daemon's own, and a fork bomb
             // uses up its own container.
-            testCaseAsync "a container that declares neither gets oom-score-adj 500 and pids-limit 4096" (async {
+            testCaseAsync "a container that declares neither gets oom_score_adj 500 and pids_limit 4096" (async {
                 let! _, sandbox = startOrFail alpineSpec
                 let! run, out, err = runInSandbox sandbox "sh" [ "-c"; "cat /proc/self/oom_score_adj /sys/fs/cgroup/pids.max" ] Map.empty None
                 Expect.equal run (SandboxExited 0) (sprintf "both were read: %s" err)
@@ -200,7 +200,7 @@ let tests =
             // such as the read of the memory counters, stay at 0 under work at 700. An
             // overrun's second kill takes the lowest-ranked process only when nothing above
             // it is left, so these two are what the kill passes over.
-            testCaseAsync "the container's init and its housekeeping execs stay at oom-score-adj 0 under its work" (async {
+            testCaseAsync "the container's init and its housekeeping execs stay at oom_score_adj 0 under its work" (async {
                 let spec = alpineSpec |> withContainer (fun c -> { c with OomScoreAdj = Some (OomScoreAdj.ofInt 700 |> expect) })
                 let! _, sandbox = startOrFail spec
                 let! run, out, err = runInSandbox sandbox "cat" [ "/proc/1/oom_score_adj" ] Map.empty None

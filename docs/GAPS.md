@@ -1030,8 +1030,8 @@ After the fixes land, one pass rewrites it to what still reproduces.
       when the clone lands. A symlink at `HEAD` is no file for any of the three (rule 20).
     - **No inter-sandbox networking.** A `db:` sandbox's process is reachable from inside that
       sandbox only. A compose-like shared network is a design of its own.
-    - **A `command` (`cmd`), an `entrypoint`, the limits (`memory`, `oom-score-adj`,
-      `pids-limit`, `cgroup-parent`) and a `dialect` are docker-only.** They live in or beside
+    - **A `command`, an `entrypoint`, the limits (`mem_limit`, `oom_score_adj`,
+      `pids_limit`, `cgroup_parent`) and a `dialect` are docker-only.** They live in or beside
       the `container:` block, so under `srt` or `host` there is nowhere to write one. The
       exception is `dialect`, which a sandbox with no container refuses because it reads as if
       it would apply.
@@ -1058,14 +1058,14 @@ After the fixes land, one pass rewrites it to what still reproduces.
         it ran the entrypoint and the work directly.
       - The Docker tier pins case (a) with a 64m container. Nothing tests case (b) for real: it
         needs the whole VM to run out of memory.
-    - **No operator ceiling on a container's memory.** Yession checks a repo's `memory:` against
+    - **No operator ceiling on a container's memory.** Yession checks a repo's `mem_limit:` against
       what the daemon has, not a share the operator chose. Six sessions that each declare most of
       the VM all pass.
-    - **A `cgroup-parent` is the repo's to name, and the host's to make.** Nothing in yession
+    - **A `cgroup_parent` is the repo's to name, and the host's to make.** Nothing in yession
       creates the parent cgroup or limits it
       ([technical-design.md §4](technical-design.md#4-repo-local-configuration) gives the
       spelling per driver and what happens when the parent is missing). Yession checks a
-      `memory:` against the daemon's total, not the parent's limit.
+      `mem_limit:` against the daemon's total, not the parent's limit.
     - **No `${VAR}` in an entrypoint.** compose interpolates from the host's environment at parse
       time, the wrong environment here. Nothing needs it yet. The string form splits into words
       and nothing else. A value that needs expansion belongs in an actual `sh -c`.
@@ -1203,7 +1203,7 @@ After the fixes land, one pass rewrites it to what still reproduces.
   an 8 GiB Colima VM. A `dotnet` or `node` run by hand, another repository's build, or a `dev`
   watch takes no slot, and can still push the pool into the kernel's OOM killer, which picks the
   largest process in ANY session. The slot is admission, not a limit. A per-container memory
-  limit (#1312) bounds one container. The pool cgroup (`cgroup-parent: yession`) keeps the
+  limit (#1312) bounds one container. The pool cgroup (`cgroup_parent: yession`) keeps the
   daemon out of reach, where the host makes it
   ([technical-design.md §4](technical-design.md#4-repo-local-configuration)).
 - **The composition E2E and install smoke run on Linux/CI.** Other platforms' npm resolution

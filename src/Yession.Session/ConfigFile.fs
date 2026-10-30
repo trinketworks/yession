@@ -175,27 +175,74 @@ module ConfigFile =
     /// could read and seed another session's state. This used to say "a named volume is the
     /// session's to create", which was the workspace volume's property wrongly generalised:
     /// nothing scoped an arbitrary name to a session.
+    let private sourceOf (raw: string) : Result<MountSource, string> =
+        match raw.Trim () with
+        | "workspace" -> Ok SessionWorkspace
+        | "" -> Error "a volume needs a source"
+        | source ->
+            Error (
+                sprintf
+                    "'%s' is not a source a %s may name. Write 'workspace'. The operator offers a shared named volume as a `volume:` resource. Select it with `uses:`"
+                    source
+                    FileName)
+
     let private mountSource : Decoder<MountSource> =
         Decode.string
         |> Decode.andThen (fun raw ->
-            match raw.Trim () with
-            | "workspace" -> Decode.succeed SessionWorkspace
-            | "" -> Decode.fail "a volume needs a source"
-            | source ->
-                Decode.fail (
-                    sprintf
-                        "'%s' is not a source a %s may name. Write 'workspace'. The operator offers a shared named volume as a `volume:` resource. Select it with `uses:`"
-                        source
-                        FileName))
+            match sourceOf raw with
+            | Ok source -> Decode.succeed source
+            | Error reason -> Decode.fail reason)
 
+    /// `read_only`, compose's word. `mode: ro` was this file's own, and is refused by name.
+    let private mountKeys = [ "type"; "source"; "target"; "read_only" ]
+
+    /// A volume in compose's long syntax: `{ type: volume, source, target, read_only }`.
+    /// `type` may be left out, and the only type a file may write is `volume`: a `bind` is a
+    /// host path, which `mountSource` refuses for the reason it gives.
+    let private longMount : Decoder<ContainerMount> =
+        Decode.optional "mode" Decode.value
+        |> Decode.andThen (function
+            | Some _ -> Decode.fail "`mode:` is not compose's. Write `read_only: true` for a read-only volume"
+            | None -> noUnknownKeys mountKeys)
+        |> Decode.andThen (fun () ->
+            Decode.optional "type" Decode.string
+            |> Decode.andThen (function
+                | None
+                | Some "volume" -> Decode.succeed ()
+                | Some other ->
+                    Decode.fail (
+                        sprintf
+                            "a volume of type '%s' is not one a %s may name. Write `type: volume` with `source: workspace`"
+                            other
+                            FileName)))
+        |> Decode.andThen (fun () ->
+            Decode.object (fun get ->
+                { Source = get.Required.Field "source" mountSource
+                  Target = get.Required.Field "target" Decode.string
+                  Mode =
+                    if get.Optional.Field "read_only" Decode.bool |> Option.defaultValue false then ReadOnly
+                    else ReadWrite }))
+
+    /// A volume in compose's short syntax: `source:target` or `source:target:ro`.
+    let private shortMount (raw: string) : Result<ContainerMount, string> =
+        let mounted source target mode =
+            sourceOf source |> Result.map (fun source -> { Source = source; Target = target; Mode = mode })
+        match raw.Split ':' with
+        | [| source; target |] -> mounted source target ReadWrite
+        | [| source; target; "ro" |] -> mounted source target ReadOnly
+        | [| source; target; "rw" |] -> mounted source target ReadWrite
+        | _ -> Error (sprintf "'%s' is not a volume. Write source:target or source:target:ro, like workspace:/work:ro" raw)
+
+    /// Either of compose's syntaxes. A string is the short one, anything else the long one,
+    /// so a refusal comes from the one syntax the file wrote and not from both.
     let private mount : Decoder<ContainerMount> =
-        Decode.object (fun get ->
-            { Source = get.Required.Field "source" mountSource
-              Target = get.Required.Field "target" Decode.string
-              Mode =
-                match get.Optional.Field "mode" Decode.string with
-                | Some "ro" -> ReadOnly
-                | _ -> ReadWrite })
+        Decode.oneOf [ Decode.string |> Decode.map Some; Decode.succeed None ]
+        |> Decode.andThen (function
+            | Some raw ->
+                match shortMount raw with
+                | Ok mount -> Decode.succeed mount
+                | Error reason -> Decode.fail reason
+            | None -> longMount)
 
     /// An argv, as compose writes one: a list of words, or one string split into words the
     /// way a POSIX shell would read them — quotes group, a backslash escapes, nothing is
@@ -212,7 +259,7 @@ module ConfigFile =
                   | Ok words -> Decode.succeed words
                   | Error reason -> Decode.fail (sprintf "%s: %s" field reason)) ]
 
-    /// `memory:` — the container's ceiling, in compose's byte-value grammar (`4g`), or a
+    /// `mem_limit:` — the container's ceiling, in compose's byte-value grammar (`4g`), or a
     /// bare number of bytes, which is what YAML makes of one written without a unit.
     /// The JSON is read first and judged after, so a size that is refused is refused in
     /// the one sentence that says why, not beside a second decoder's complaint.
@@ -232,7 +279,7 @@ module ConfigFile =
             | Ok value -> Decode.succeed value
             | Error reason -> Decode.fail reason)
 
-    /// `cgroup-parent:` — the cgroup the container's own is put under (`CgroupParent`).
+    /// `cgroup_parent:` — the cgroup the container's own is put under (`CgroupParent`).
     let private cgroupParent : Decoder<CgroupParent> =
         Decode.string
         |> Decode.andThen (fun raw ->
@@ -241,32 +288,65 @@ module ConfigFile =
             | Error reason -> Decode.fail reason)
 
     let private containerKeys =
-        [ "image"; "build"; "volumes"; "cmd"; "command"; "entrypoint"; "memory"; "oom-score-adj"; "pids-limit"; "cgroup-parent" ]
+        [ "image"; "build"; "volumes"; "command"; "entrypoint"; "mem_limit"; "oom_score_adj"; "pids_limit"; "cgroup_parent" ]
 
-    /// The container block. `command` lives HERE and nowhere else, which is the whole reason
-    /// the block exists: a sandbox with no container has no place to write one. `cmd` is the
-    /// same key by its older name; one of the two, not both.
+    /// The spellings this block had before it was a compose service fragment, each with
+    /// compose's name for the same key. Refused by name, not left to `noUnknownKeys`: a
+    /// file that has one worked yesterday, and its author needs the word that replaced it.
+    let private renamedKeys =
+        [ "memory", "mem_limit"
+          "oom-score-adj", "oom_score_adj"
+          "pids-limit", "pids_limit"
+          "cgroup-parent", "cgroup_parent"
+          "cmd", "command" ]
+
+    /// Compose service keys this block does not take, each with what this file offers
+    /// instead. A compose key copied in must not read as the unknown key of a typo: it is a
+    /// word, and its author is told where its meaning lives here, or that it has none.
+    let private unsupportedKeys =
+        [ "deploy", "`deploy:` is not read. Write the memory ceiling as `mem_limit:` on the container block"
+          "ports", "`ports:` is not read. A sandbox's process is reachable from inside that sandbox only"
+          "network_mode", "`network_mode:` is not read. The session puts the container on the session's own network"
+          "privileged", "`privileged:` is not read. A container never runs privileged. The operator grants a socket or a mount as a resource. Select it with `uses:`"
+          "cap_add", "`cap_add:` is not read. A container drops every capability but CHOWN, FOWNER and DAC_OVERRIDE. The operator grants a socket or a mount as a resource. Select it with `uses:`"
+          "environment", "`environment:` is not read here. Write `env:` on the sandbox, beside `container:`"
+          "working_dir", "`working_dir:` is not read here. Write `workdir:` on the sandbox, beside `container:`"
+          "depends_on", "`depends_on:` is not read. Each sandbox starts on its own"
+          "restart", "`restart:` is not read. A sandbox lives exactly as long as its `command`"
+          "user", "`user:` is not read. A command runs as the user that the image names" ]
+
+    let private noForeignKeys : Decoder<unit> =
+        Decode.keys
+        |> Decode.andThen (fun keys ->
+            let renamed =
+                renamedKeys
+                |> List.tryFind (fun (old, _) -> List.contains old keys)
+                |> Option.map (fun (old, compose) ->
+                    sprintf "`%s:` is now `%s:`, compose's name for it. Write `%s:`" old compose compose)
+            let unsupported =
+                unsupportedKeys |> List.tryFind (fun (key, _) -> List.contains key keys) |> Option.map snd
+            match Option.orElse unsupported renamed with
+            | Some reason -> Decode.fail reason
+            | None -> Decode.succeed ())
+
+    /// The container block: a compose service fragment, read with compose's names and
+    /// meanings. `command` lives HERE and nowhere else, which is the whole reason the block
+    /// exists: a sandbox with no container has no place to write one.
     let private container : Decoder<ContainerSpec> =
-        noUnknownKeys containerKeys
+        noForeignKeys
+        |> Decode.andThen (fun () -> noUnknownKeys containerKeys)
         |> Decode.andThen (fun () ->
             Decode.object (fun get ->
-                let cmd = get.Optional.Field "cmd" Decode.string
-                let command = get.Optional.Field "command" Decode.string
                 { Image = get.Optional.Field "image" image
                   Build = get.Optional.Field "build" build
                   Mounts = get.Optional.Field "volumes" (Decode.list mount) |> Option.defaultValue []
-                  Command = (match cmd, command with | Some _, Some _ -> None | Some c, None | None, Some c -> Some c | None, None -> None)
+                  Command = get.Optional.Field "command" Decode.string
                   Entrypoint = get.Optional.Field "entrypoint" (argv "entrypoint")
                   Dialect = None
-                  Memory = get.Optional.Field "memory" memory
-                  OomScoreAdj = get.Optional.Field "oom-score-adj" (judgedInt OomScoreAdj.ofInt)
-                  PidsLimit = get.Optional.Field "pids-limit" (judgedInt PidsLimit.ofInt)
-                  CgroupParent = get.Optional.Field "cgroup-parent" cgroupParent },
-                (cmd, command)))
-        |> Decode.andThen (fun (spec, (cmd, command)) ->
-            match cmd, command with
-            | Some _, Some _ -> Decode.fail "`cmd` and `command` are two names for one key. Write only one of them"
-            | _ -> Decode.succeed spec)
+                  Memory = get.Optional.Field "mem_limit" memory
+                  OomScoreAdj = get.Optional.Field "oom_score_adj" (judgedInt OomScoreAdj.ofInt)
+                  PidsLimit = get.Optional.Field "pids_limit" (judgedInt PidsLimit.ofInt)
+                  CgroupParent = get.Optional.Field "cgroup_parent" cgroupParent }))
 
     let private sandboxKeys =
         [ "container"; "dialect"; "workdir"; "env"; "uses"; "wants"; "files"; "setup"; "description" ]
@@ -484,7 +564,8 @@ module ConfigFile =
                             container.Mounts
                             |> List.map (fun mount ->
                                 Encode.object
-                                    [ "source",
+                                    [ "type", Encode.string "volume"
+                                      "source",
                                       Encode.string (
                                           match mount.Source with
                                           | SessionWorkspace -> "workspace"
@@ -497,16 +578,15 @@ module ConfigFile =
                                           // host-path mount cannot cross the gate.
                                           | HostPath path -> path)
                                       "target", Encode.string mount.Target
-                                      "mode",
-                                      Encode.string (match mount.Mode with ReadOnly -> "ro" | ReadWrite -> "rw") ]))
+                                      "read_only", Encode.bool (mount.Mode = ReadOnly) ]))
                       if container.Command.IsSome then "command", Encode.string container.Command.Value
                       if container.Entrypoint.IsSome then
                         "entrypoint", Encode.list (container.Entrypoint.Value |> List.map Encode.string)
-                      if container.Memory.IsSome then "memory", Encode.string (ContainerMemory.render container.Memory.Value)
-                      if container.OomScoreAdj.IsSome then "oom-score-adj", Encode.int (OomScoreAdj.value container.OomScoreAdj.Value)
-                      if container.PidsLimit.IsSome then "pids-limit", Encode.int (PidsLimit.value container.PidsLimit.Value)
+                      if container.Memory.IsSome then "mem_limit", Encode.string (ContainerMemory.render container.Memory.Value)
+                      if container.OomScoreAdj.IsSome then "oom_score_adj", Encode.int (OomScoreAdj.value container.OomScoreAdj.Value)
+                      if container.PidsLimit.IsSome then "pids_limit", Encode.int (PidsLimit.value container.PidsLimit.Value)
                       if container.CgroupParent.IsSome then
-                        "cgroup-parent", Encode.string (CgroupParent.value container.CgroupParent.Value) ])
+                        "cgroup_parent", Encode.string (CgroupParent.value container.CgroupParent.Value) ])
         let env =
             decl.EnvironmentVariables
             |> Map.toList

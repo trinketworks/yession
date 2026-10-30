@@ -448,8 +448,8 @@ sandboxes:
     container:
       image: node:24
       entrypoint: nix develop --command   # compose's word: what every piece of WORK runs behind
-      command: ./serve                    # compose's word for the container's own process (`cmd` still reads)
-      memory: 4g                          # optional: its memory ceiling, else 3/4 of the daemon's
+      command: ./serve                    # compose's word for the container's own process
+      mem_limit: 4g                       # optional: its memory ceiling, else 3/4 of the daemon's
     dialect: bash                         # optional: the shell a terminal opens, else detected
     workdir: ./packages/web
     env:
@@ -458,6 +458,13 @@ sandboxes:
     uses: [ npm-cache ]
     wants: [ github ]                     # the operator's `{ connection: { github: [git, api] } }`, where offered
 ```
+
+The `container:` block is a compose service fragment: compose's keys, with compose's
+meanings, so a block copied from a compose file means the same thing here. `docker compose
+config` can lint it once the file it is pasted into declares `workspace` under a top-level
+`volumes:`, because compose refuses a volume source that no top-level entry declares. The
+decoder refuses, by name, each key that it does not take, and says what this file offers
+instead.
 
 ### Connections and references
 
@@ -548,20 +555,20 @@ reasoning.
 
 | key | when nothing is declared | what it does |
 |---|---|---|
-| `memory:` (`ContainerMemory`) | three quarters of what the daemon reports | The cgroup's `memory.max`, no swap beyond it, in compose's grammar (`4g`). The kernel kills inside the container that overran. A declaration above the daemon's total refuses the sandbox. |
+| `mem_limit:` (`ContainerMemory`) | three quarters of what the daemon reports | The cgroup's `memory.max`, no swap beyond it, in compose's grammar (`4g`). The kernel kills inside the container that overran. A declaration above the daemon's total refuses the sandbox. |
 | `oom_score_adj:` (`OomScoreAdj`) | 500 | From 0 to 1000. Work (a terminal's shell, a block, `setup:`) sets it on itself before it starts. The container, its init, its main process and the session's housekeeping execs stay at 0. The daemon's processes are below zero, so the global killer takes a sandbox process first. Inside the container, an overrun's kills take work, never the processes that keep the container up. |
-| `pids-limit:` (`PidsLimit`) | 4096 | A fork bomb uses up its own container and not the host. |
-| `cgroup-parent:` (`CgroupParent`) | the daemon's own parent | Puts the container under a pool that the host's operator limits below the VM's total, so an OOM stays inside it. |
+| `pids_limit:` (`PidsLimit`) | 4096 | A fork bomb uses up its own container and not the host. |
+| `cgroup_parent:` (`CgroupParent`) | the daemon's own parent | Puts the container under a pool that the host's operator limits below the VM's total, so an OOM stays inside it. |
 
 Containers that each stay under their ceiling can still add up to more than the VM has. The
 OOM score and the parent cgroup cover that case.
 
-Write `cgroup-parent:` as a bare name (`yession`), so that daemons of both cgroup drivers can
+Write `cgroup_parent:` as a bare name (`yession`), so that daemons of both cgroup drivers can
 read one `yession.yaml`. The backend spells it for the driver (`CgroupParent.forDriver`). Under
 systemd the backend refuses a path. `CgroupParent` lists the spellings.
 
 Yession does not make the parent. Docker (cgroupfs) or systemd makes a missing one with no
-limit, and an OOM can again reach the daemon. [GAPS.md](GAPS.md#agent) ("A `cgroup-parent` is
+limit, and an OOM can again reach the daemon. [GAPS.md](GAPS.md#agent) ("A `cgroup_parent` is
 the repo's to name, and the host's to make") says how this repo's host makes it.
 
 ### Scope of the file
