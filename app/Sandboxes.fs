@@ -1547,7 +1547,8 @@ module DockerSandbox =
     /// behind the container's entrypoint when one is declared: the entrypoint is work too,
     /// and everything it starts inherits the score (`OomScoreAdj`). Raising needs no
     /// capability. A write the kernel refuses stops the work, saying why on stderr, rather
-    /// than run it ranked with the processes that keep the container up.
+    /// than run it ranked with the processes that keep the container up. The raise is an
+    /// `sh -c`, so work needs `sh` in the image, as the start command already does.
     let private argvFor (entrypoint: string list option) (work: OomScoreAdj) (exec: SandboxExec) : string list =
         match exec.Via with
         | Direct -> exec.Executable :: exec.Arguments

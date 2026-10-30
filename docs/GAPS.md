@@ -1054,6 +1054,8 @@ After the fixes land, one pass rewrites it to what still reproduces.
         block that the second kill hit reads as killed for memory, which it was.
       - The container's main process runs at 0, a declared `command` included. Work can
         write its own score back down to 0, never below.
+      - Work sets its score through `sh -c`, so a work exec needs `sh` in the image. Before,
+        it ran the entrypoint and the work directly.
       - The Docker tier pins case (a) with a 64m container. Nothing tests case (b) for real: it
         needs the whole VM to run out of memory.
     - **No operator ceiling on a container's memory.** Yession checks a repo's `memory:` against
