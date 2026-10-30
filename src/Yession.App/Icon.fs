@@ -296,7 +296,8 @@ module Icon =
     ///
     /// - Rest: a point, radius 1.75.
     /// - Absent: an empty ring, radius 4.25: a seat with nobody in it.
-    /// - Moving: a quarter of that ring, going round a faint track of the rest of it.
+    /// - Pending and Working: a quarter of that ring, going round a faint track of the rest
+    ///   of it. One shape, because both are work under way; the ink says whose (`Style.attentionInk`).
     /// - Wanted: a disc, radius 4, with a halo that breathes out three times on arrival.
     /// - Wrong: a disc, radius 3, in a ring, radius 5.25: the most ink, the whole box.
     ///
@@ -314,7 +315,8 @@ module Icon =
         | Yession.Domain.Standings.Absent ->
             html
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5"></circle></svg>"""
-        | Yession.Domain.Standings.Moving ->
+        | Yession.Domain.Standings.Pending
+        | Yession.Domain.Standings.Working ->
             html
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.35"></circle><g transform="rotate(-90 6 6)"><circle class="{Style.markOrbit}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 26.7"></circle></g></svg>"""
         | Yession.Domain.Standings.Wanted ->

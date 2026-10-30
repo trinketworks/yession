@@ -1651,12 +1651,14 @@ module Style =
         | Yession.Domain.Tools.ToneMuted -> toneMuted
 
     /// The ink a standing's attention asks for. A person's turn is green, because green is
-    /// the people; work under way and an absent agent are a wait, dim; wrong is red; rest
-    /// recedes.
+    /// the people; the agent at work is the agent's own blue, a tone under the one a control
+    /// is pressed in; a machine's work and an absent agent are a wait, dim; wrong is red;
+    /// rest recedes.
     let attentionInk (attention: Yession.Domain.Standings.Attention) : string =
         match attention with
         | Yession.Domain.Standings.Wanted -> toneOk
-        | Yession.Domain.Standings.Moving
+        | Yession.Domain.Standings.Working -> "text-agent"
+        | Yession.Domain.Standings.Pending
         | Yession.Domain.Standings.Absent -> toneBusy
         | Yession.Domain.Standings.Wrong -> toneBad
         | Yession.Domain.Standings.Rest -> toneMuted
@@ -1671,7 +1673,7 @@ module Style =
     // about its own centre (`fill-box`), which for every circle here is the box's (6,6). Motion
     // goes only where a state is live or asks, and `motion-reduce` keeps the still face.
 
-    /// Moving's arc going round its track: the one mark that never stops, because the work
+    /// Working's and Pending's arc going round its track: the one mark that never stops, because the work
     /// under it has not. Under reduced motion the arc holds still at three o'clock.
     let markOrbit = "origin-center [transform-box:fill-box] animate-mark-orbit motion-reduce:animate-none"
     /// Wanted's halo: breathes out three times once the mark has arrived, then is gone, so a

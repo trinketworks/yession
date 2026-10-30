@@ -597,7 +597,7 @@ let private controlRpcTests =
 // -----------------------------------------------------------------------------
 
 let private stalled : Yession.Domain.Standings.Standing = { Facet = "prs"; Word = "3 PRs · 1 stalled"; Attention = Yession.Domain.Standings.Wrong }
-let private working : Yession.Domain.Standings.Standing = { Facet = "agent"; Word = "working"; Attention = Yession.Domain.Standings.Moving }
+let private working : Yession.Domain.Standings.Standing = { Facet = "agent"; Word = "working"; Attention = Yession.Domain.Standings.Working }
 
 let private uiRecord : SessionRecord =
     { SessionId = SessionId.create "ui-render" |> expect
@@ -716,7 +716,7 @@ let private uiRenderTests =
             let row status standings = ManagerUi.sessionRow { Record = uiRecord; Status = status; Standings = standings }
             let ranked =
                 [ "stopped", row ProcessManager.NotRunning [], Yession.Domain.Standings.Rest
-                  "starting", row ProcessManager.Launching [], Yession.Domain.Standings.Moving
+                  "starting", row ProcessManager.Launching [], Yession.Domain.Standings.Pending
                   "failed", row (ProcessManager.LaunchFailed "no sandbox") [], Yession.Domain.Standings.Wrong
                   "exited", row (ProcessManager.Exited (Some 1)) [], Yession.Domain.Standings.Wrong
                   "running and quiet", row (ProcessManager.Running (8199, 42, None)) [], Yession.Domain.Standings.Rest
@@ -749,7 +749,8 @@ let private uiRenderTests =
             // The row's own mark rides down to the first line, so that line draws none, and
             // the lines after it each draw their own.
             Expect.isFalse (detail.Substring(0, stalledAt).Contains "data-attention=") "the first line repeats no mark"
-            Expect.isTrue (detail.Substring(stalledAt, workingAt - stalledAt).Contains "data-attention=\"moving\"") "a later line draws its own"
+            // The later line's mark spells its level, so anchor on the mark, not the word.
+            Expect.isTrue (detail.IndexOf "data-attention=\"working\"" > stalledAt) "a later line draws its own"
 
         // The FLOOR. A row says its state in words, in every arm. Drop a word and four of the
         // six states are one solid dot — stopped, archived, failed to start and exited — and

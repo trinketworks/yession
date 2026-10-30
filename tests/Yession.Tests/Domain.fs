@@ -2013,27 +2013,30 @@ let private prWatchTests =
             Expect.equal said.Attention Standings.Wrong "at its worst live word's attention"
             Expect.equal said.Facet PrStatus.facet "under the pull requests' facet"
             let pending = PrStatus.summary [ at 1 "queued" ] |> Option.get
-            Expect.equal pending.Attention Standings.Moving "on its way in asks for nobody"
+            Expect.equal pending.Attention Standings.Pending "on its way in is a machine's work, and asks for nobody"
             let opened = PrStatus.summary [ at 1 "open" ] |> Option.get
             Expect.equal opened.Attention Standings.Rest "an ordinary word rests"
 
         testCase "the standing shown alone is the one that wants a person most" <| fun () ->
             let at facet attention : Standings.Standing = { Facet = facet; Word = facet; Attention = attention }
-            let rest, absent, moving, wanted, wrong =
-                at "a" Standings.Rest, at "b" Standings.Absent, at "c" Standings.Moving, at "d" Standings.Wanted, at "e" Standings.Wrong
+            let rest, absent, pending, working, wanted, wrong =
+                at "a" Standings.Rest, at "b" Standings.Absent, at "c" Standings.Pending, at "f" Standings.Working,
+                at "d" Standings.Wanted, at "e" Standings.Wrong
             Expect.equal (Standings.Standing.worst []) None "nothing reported is nothing to show"
-            Expect.equal (Standings.Standing.worst [ rest; absent; moving; wanted; wrong ]) (Some wrong) "wrong over everything"
-            Expect.equal (Standings.Standing.worst [ moving; wanted ]) (Some wanted) "a person's turn over work under way"
-            Expect.equal (Standings.Standing.worst [ absent; moving ]) (Some moving) "work under way over nobody there"
+            Expect.equal (Standings.Standing.worst [ rest; absent; pending; working; wanted; wrong ]) (Some wrong) "wrong over everything"
+            Expect.equal (Standings.Standing.worst [ working; wanted ]) (Some wanted) "a person's turn over the agent at work"
+            Expect.equal (Standings.Standing.worst [ pending; working ]) (Some working) "the agent at work over a machine's"
+            Expect.equal (Standings.Standing.worst [ absent; pending ]) (Some pending) "work under way over nobody there"
             Expect.equal (Standings.Standing.worst [ rest; absent ]) (Some absent) "nobody there over nothing to say"
             Expect.equal (Standings.Standing.worst [ at "x" Standings.Rest; rest ]) (Some (at "x" Standings.Rest)) "a tie goes to the earlier"
             Expect.equal
-                (Standings.Standing.byConcern [ rest; wrong; absent; wanted; moving ])
-                [ wrong; wanted; moving; absent; rest ]
+                (Standings.Standing.byConcern [ rest; pending; wrong; absent; wanted; working ])
+                [ wrong; wanted; working; pending; absent; rest ]
                 "all of them, worst first"
 
         testCase "an attention survives the wire's spelling of it" <| fun () ->
-            for attention in [ Standings.Rest; Standings.Absent; Standings.Moving; Standings.Wanted; Standings.Wrong ] do
+            for attention in
+                [ Standings.Rest; Standings.Absent; Standings.Pending; Standings.Working; Standings.Wanted; Standings.Wrong ] do
                 Expect.equal (Standings.Attention.parse (Standings.Attention.name attention)) (Some attention) (Standings.Attention.name attention)
             Expect.equal (Standings.Attention.parse "bad") None "a tone is not an attention"
 
@@ -2045,9 +2048,12 @@ let private prWatchTests =
                 Expect.equal s.Facet Standings.AgentStatus.facet "always under the agent's facet"
                 s.Word, s.Attention
             Expect.equal (say idle) ("waiting", Standings.Wanted) "idle is the ball with the people: their turn"
-            Expect.equal (say { idle with TurnRunning = true }) ("working", Standings.Moving) "a turn is work"
-            Expect.equal (say { idle with BusyTerminals = [ "build" ] }) ("running", Standings.Moving) "a command owes a wake, and is not named"
-            Expect.equal (say { idle with BusyTerminals = [ "a"; "b" ] }) ("running", Standings.Moving) "nor are several counted"
+            Expect.equal (say { idle with TurnRunning = true }) ("working", Standings.Working) "a turn is the agent at work"
+            Expect.equal
+                (say { idle with BusyTerminals = [ "build" ] })
+                ("running", Standings.Pending)
+                "a command is a machine's work, owes a wake, and is not named"
+            Expect.equal (say { idle with BusyTerminals = [ "a"; "b" ] }) ("running", Standings.Pending) "nor are several counted"
             Expect.equal (say { idle with NoAgent = true }) ("no agent", Standings.Absent) "nobody there, by choice"
             Expect.equal (say { idle with SignInRequired = true }) ("sign in again", Standings.Wrong) "the sidebar's word for it"
             Expect.equal
@@ -2060,14 +2066,14 @@ let private prWatchTests =
                 "no agent outranks a command it can never be woken by"
             Expect.equal
                 (say { idle with TurnRunning = true; NoAgent = true; SignInRequired = true })
-                ("working", Standings.Moving)
+                ("working", Standings.Working)
                 "a running turn proves an agent is there"
 
         testCase "an idle agent is nobody's turn while what it watches is under way" <| fun () ->
             let at facet word attention : Standings.Standing = { Facet = facet; Word = word; Attention = attention }
             let waiting = at Standings.AgentStatus.facet "waiting" Standings.Wanted
-            let working = at Standings.AgentStatus.facet "working" Standings.Moving
-            let armed = at "prs" "2 PRs · 1 armed" Standings.Moving
+            let working = at Standings.AgentStatus.facet "working" Standings.Working
+            let armed = at "prs" "2 PRs · 1 armed" Standings.Pending
             let fine = at "prs" "#42 open" Standings.Rest
             let conflicted = at "prs" "#42 conflicted" Standings.Wrong
             let settled = Standings.AgentStatus.withWatched [ armed ] (Some waiting)
@@ -2085,6 +2091,7 @@ let private prWatchTests =
                 (Standings.AgentStatus.withWatched [ armed ] (Some working))
                 [ working; armed ]
                 "an agent at work is left as it is"
+            Expect.equal (Standings.Standing.worst [ working; armed ]) (Some working) "and shown over the checks"
             Expect.equal (Standings.AgentStatus.withWatched [ armed ] None) [ armed ] "no agent standing yet, none invented"
 
         testCase "a watch cannot be built on the deployment's own credential" <| fun () ->
