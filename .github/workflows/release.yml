@@ -216,7 +216,8 @@ jobs:
   # wrapped bins, so `nix profile install github:trinketworks/yession` stays green — and push
   # the result to the binary cache, which is what spares consumers the source build.
   #
-  # Both Linux arches, one job each. aarch64 is not hypothetical: the repo's own work
+  # Three platforms, one job each: x86_64-linux, aarch64-linux and aarch64-darwin. Each builds the
+  # package and the dev shell, and pushes both. aarch64-linux is not hypothetical: the repo's own work
   # sandboxes are arm64 containers (yession.yaml runs `nix develop` in nixos/nix on an
   # Apple-silicon operator's dockerd), and until this pushed aarch64-linux closures every
   # fresh container compiled the from-source pieces — libdatachannel included — cold.
@@ -228,7 +229,9 @@ jobs:
     # deploy to (pr.yaml's `test` job says why).
     environment: cache-push
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    # pr.yaml's `darwin-package` builds the darwin package and dev shell cold inside its 45, and
+    # a cold dev shell is the slowest thing any leg here builds (16m11s, pr.yaml's darwin job).
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -237,6 +240,13 @@ jobs:
             runner: ubuntu-latest
           - arch: aarch64-linux
             runner: ubuntu-24.04-arm
+          # The only job that fills the aarch64-darwin half of the cache. pr.yaml's
+          # `darwin-package` builds the same things on every pull request, but it only reads the
+          # cache (its `test` job's cachix step says why). This runs after the merge, so what it
+          # pushes is master's. And a Mac's `nix profile install` is a channel like the other two:
+          # a darwin build that fails stops the release, as an arm64 one does.
+          - arch: aarch64-darwin
+            runner: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
@@ -246,11 +256,14 @@ jobs:
       # Publishes the INSTALLABLE's closure: what a consumer gets from
       # `nix profile install github:trinketworks/yession`, who otherwise compiles libdatachannel on
       # their own machine. That reach, not the CI minutes, is what makes this cache worth keeping.
-      # A cache push may not fail the job (verify.yml's step says why).
+      # A cache push may not fail the job (verify.yml's step says why). `extraPullNames` for the
+      # dev shell below, for the reason pr.yaml's `test` job gives: this file owns the substituter
+      # list.
       - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         continue-on-error: true
         with:
           name: yession
+          extraPullNames: devenv
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       # The build IS the smoke: the derivation's `installCheckPhase` runs every bin it wrapped
       # (`--version`) and boots the Manager to its readiness line, so a package that cannot
@@ -260,42 +273,9 @@ jobs:
       # because a step here runs only after a merge.
       - name: Build the Nix package (its install check boots every bin)
         run: nix build .#yession --print-build-logs
-
-  # The aarch64-darwin half of the binary cache, and the only job that fills it. pr.yaml's
-  # `darwin-package` builds the same two things on every pull request, but a pull request runs
-  # code master has not merged, so it only reads the cache (its `test` job's cachix step says
-  # why). This runs after the merge, so what it pushes is master's.
-  #
-  # The release does NOT need it. A cache that missed costs the next darwin run compile time and
-  # nothing else, and pr.yaml's `darwin-package` is the guard that the darwin build works.
-  darwin-cache:
-    name: "cache:darwin"
-    if: github.ref == 'refs/heads/master'
-    # The cache's push token is a secret of the `cache-push` environment, which only master may
-    # deploy to (pr.yaml's `test` job says why).
-    environment: cache-push
-    runs-on: macos-latest
-    # pr.yaml's `darwin-package` builds the same package and dev shell cold in under its 45.
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-      # A cache push may not fail the job (verify.yml's step says why). `extraPullNames` for the
-      # reason pr.yaml's `test` job gives: this file owns the substituter list.
-      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
-        continue-on-error: true
-        with:
-          name: yession
-          extraPullNames: devenv
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      # What a Mac installs: `nix profile install github:trinketworks/yession`.
-      - name: Build the installable package
-        run: nix build .#yession --print-build-logs
-      # What a Mac developer enters, and what pr.yaml's `darwin-package` enters on every pull
-      # request: the dev shell's closure is most of what this cache spares it.
+      # What a developer enters on this platform: on a Mac, and in the arm64 work sandboxes, which
+      # run `nix develop`. Its closure is most of what this cache spares them. x86_64-linux's is
+      # already there from `verify`, so that leg substitutes it.
       - name: Build the dev shell
         run: DEVENV_ROOT="$PWD" nix develop --impure --command true
 

@@ -87,7 +87,7 @@ jobs:
       # tasks.fsx, devenv.nix and nix/*.nix, and anybody who can push a branch could otherwise
       # publish an output under a derivation master later substitutes (`yession-node-modules`,
       # say) — and master's packages, every work sandbox and every agent container would take it.
-      # So only code master has merged pushes: release.yml's jobs, its `darwin-cache` job
+      # So only code master has merged pushes: release.yml's jobs, its `package-nix` darwin leg
       # included, which keeps the aarch64-darwin half warm now that `darwin-package` here does not.
       # The cost: a pull request that changes the dev shell builds it cold once, and master fills
       # the cache after the merge. "Release gate" holds every cachix step here to this.
@@ -217,7 +217,7 @@ jobs:
       # — and one 418 disables it for the whole run. So a warm darwin run compiled 99 CXX objects,
       # exactly as many as a cold one, while Linux went 99 -> 0. Two jobs sharing one repository's
       # Actions cache is what provoked it, and no amount of retrying fixes a rate limit.
-      # Read-only, as the Linux job's step says; release.yml's `darwin-cache` is what fills it.
+      # Read-only, as the Linux job's step says; release.yml's `package-nix` darwin leg fills it.
       - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         continue-on-error: true
         with:
