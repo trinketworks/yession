@@ -553,23 +553,29 @@ can make the global OOM killer take another session's work. Every container ther
 four limits. The doc comment of each type in `src/Yession.Domain/Environment.fs` gives its
 reasoning.
 
-| key | when nothing is declared | what it does |
-|---|---|---|
-| `mem_limit:` (`ContainerMemory`) | three quarters of what the daemon reports | The cgroup's `memory.max`, no swap beyond it, in compose's grammar (`4g`). The kernel kills inside the container that overran. A declaration above the daemon's total refuses the sandbox. |
-| `oom_score_adj:` (`OomScoreAdj`) | 500 | From 0 to 1000. Work (a terminal's shell, a block, `setup:`) sets it on itself before it starts. The container, its init, its main process and the session's housekeeping execs stay at 0. The daemon's processes are below zero, so the global killer takes a sandbox process first. Inside the container, an overrun's kills take work, never the processes that keep the container up. |
-| `pids_limit:` (`PidsLimit`) | 4096 | A fork bomb uses up its own container and not the host. |
-| `cgroup_parent:` (`CgroupParent`) | the daemon's own parent | Puts the container under a pool that the host's operator limits below the VM's total, so an OOM stays inside it. |
+The operator profile's `container:` block (`ContainerCeiling`) is a ceiling on the repo's
+limits, in the same spelling. A repo may name less, never more. A value above the ceiling
+refuses the sandbox, with a sentence that names both values and the file that owns each. It
+is never lowered in silence. A repo that names nothing gets the operator's value
+(`ContainerSpec.forDaemon`).
+
+| key | who writes it | when nothing is declared | what it does |
+|---|---|---|---|
+| `mem_limit:` (`ContainerMemory`) | repo, under the operator's ceiling | the operator's ceiling, else three quarters of what the daemon reports | The cgroup's `memory.max`, no swap beyond it, in compose's grammar (`4g`). The kernel kills inside the container that overran. A value above the daemon's total refuses the sandbox. An image build runs under the same ceiling, with no swap (`ContainerLimits.buildMemory`). |
+| `oom_score_adj:` (`OomScoreAdj`) | repo | 500 | From 0 to 1000. Work (a terminal's shell, a block, `setup:`) sets it on itself before it starts. The container, its init, its main process and the session's housekeeping execs stay at 0. The daemon's processes are below zero, so the global killer takes a sandbox process first. Inside the container, an overrun's kills take work, never the processes that keep the container up. |
+| `pids_limit:` (`PidsLimit`) | repo, under the operator's ceiling | the operator's ceiling, else 4096 | A fork bomb uses up its own container and not the host. |
+| `cgroup_parent:` (`CgroupParent`) | operator only | the daemon's own parent | Puts the container under a pool that the host's operator limits below the VM's total, so an OOM stays inside it. A repo that writes it is refused. |
 
 Containers that each stay under their ceiling can still add up to more than the VM has. The
 OOM score and the parent cgroup cover that case.
 
 Write `cgroup_parent:` as a bare name (`yession`), so that daemons of both cgroup drivers can
-read one `yession.yaml`. The backend spells it for the driver (`CgroupParent.forDriver`). Under
+read one profile. The backend spells it for the driver (`CgroupParent.forDriver`). Under
 systemd the backend refuses a path. `CgroupParent` lists the spellings.
 
 Yession does not make the parent. Docker (cgroupfs) or systemd makes a missing one with no
 limit, and an OOM can again reach the daemon. [GAPS.md](GAPS.md#agent) ("A `cgroup_parent` is
-the repo's to name, and the host's to make") says how this repo's host makes it.
+the operator's to name, and the host's to make") says how this repo's host makes it.
 
 ### Scope of the file
 
@@ -596,7 +602,8 @@ Three properties make the file safe to read from code a session just cloned:
 - **Whoever can push to the repo authors the file**, and that person is neither the operator
   nor anybody in the session. So the file's acts are `ActorRef.Configured`, and it owns no
   credential. The schema refuses what a repo may not name: the whole `YESSION_` prefix in
-  `env:`, a host path as a volume source, and a `workdir` outside the checkout. So the session
+  `env:`, a host path as a volume source, a `workdir` outside the checkout, and a
+  `cgroup_parent`. So the session
   reads the file from the checkout's `HEAD`, out of git's object store, and never from the
   working tree. An edit in the working tree declares nothing until somebody commits it. A
   `yession.yaml` that `HEAD` commits as a symlink is no file (rule 20).
@@ -665,6 +672,8 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     user, so it needs their approval, whatever its declaration says (`ResourceLeaf.floor`). A
     volume or a socket reaches other sessions and the host, so the operator decides it in the
     profile, and a volume states its mode there. The session's user is not asked about it.
+26. A repository's container limits narrow the operator's, and only the operator names a
+    cgroup (`ContainerSpec.forDaemon`, `ContainerCeiling`).
 
 Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
 roots, keyed by `BodyKey`, that the app co-manages outside the encoded tree, and the structural

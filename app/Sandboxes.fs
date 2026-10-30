@@ -1411,7 +1411,10 @@ module DockerSandbox =
           /// session's containers then binds there, and not on every interface. A daemon in a
           /// VM (Colima, Docker Desktop) gives the host no address on the network, and its
           /// containers reach the host by its loopback, so nothing is told.
-          Reached : string -> Async<Result<unit, string>> }
+          Reached : string -> Async<Result<unit, string>>
+          /// The operator's ceiling on every container this session makes on the network
+          /// (`ContainerCeiling`), from the profile's `container:` block.
+          Ceiling : ContainerCeiling }
 
     /// How a container on the network names this host (`hostAddressFrom`'s
     /// `host.docker.internal`): the network's gateway where this host `owns` it, and the
@@ -1762,18 +1765,19 @@ module DockerSandbox =
                     let entrypoint = container.Entrypoint
                     let work = OomScoreAdj.forWork container.OomScoreAdj
                     let client = DK.create ()
-                    // The memory ceiling, decided before anything is pulled or built: the
+                    // The limits, decided before anything is pulled or built: the memory
                     // default is a share of what THIS daemon has, which only the daemon can
-                    // say, and a declaration this host cannot give is refused before it
-                    // costs a pull (`ContainerMemory.forDaemon`).
+                    // say, and a declaration above the operator's ceiling or this host's
+                    // total is refused before it costs a pull (`ContainerSpec.forDaemon`).
                     // The cgroup parent likewise: whether a name is one this daemon takes
                     // depends on its cgroup driver, and a bare name is spelled for
                     // it (`CgroupParent.forDriver`).
                     let! daemon = client.info () |> Interop.awaitPromise
-                    let limits = ContainerSpec.forDaemon container (int64 daemon.MemTotal) daemon.CgroupDriver
+                    let limits = ContainerSpec.forDaemon container network.Ceiling (int64 daemon.MemTotal) daemon.CgroupDriver
                     match limits with
                     | Error reason -> return Error reason
-                    | Ok (memory, cgroupParent) ->
+                    | Ok limits ->
+                    let memory = limits.Memory
                     // Resolve the image: build it from the context, or pull the named image.
                     let! imageResult =
                         async {
@@ -1788,7 +1792,13 @@ module DockerSandbox =
                                 let opts =
                                     jsOptions<DK.BuildOptions> (fun o ->
                                         o.t <- tag
-                                        build.DockerfilePath |> Option.iter (fun d -> o.dockerfile <- d))
+                                        build.DockerfilePath |> Option.iter (fun d -> o.dockerfile <- d)
+                                        // The repository's Dockerfile runs under the
+                                        // container's own memory ceiling, with no swap
+                                        // (`ContainerLimits.buildMemory`).
+                                        let ceiling = ContainerLimits.buildMemory limits
+                                        o.memory <- float ceiling.Memory
+                                        o.memswap <- float ceiling.MemorySwap)
                                 let! stream = client.buildImage (context, opts) |> Interop.awaitPromise
                                 let! drained = drainProgress client stream
                                 return drained |> Result.map (fun () -> tag)
@@ -1919,10 +1929,10 @@ module DockerSandbox =
                                             // A bound on processes, so a fork bomb uses
                                             // up this container, not the host (`PidsLimit`).
                                             host.PidsLimit <-
-                                                PidsLimit.value (PidsLimit.forContainer declared.PidsLimit)
-                                            // Only when declared: absent, the daemon's
+                                                PidsLimit.value limits.PidsLimit
+                                            // Only when the operator names one: absent, the daemon's
                                             // own parent (`CgroupParent`).
-                                            cgroupParent |> Option.iter (fun parent -> host.CgroupParent <- CgroupParent.value parent)
+                                            limits.CgroupParent |> Option.iter (fun parent -> host.CgroupParent <- CgroupParent.value parent)
                                             // /dev/shm, above docker's 64MB default.
                                             // Chromium composites through shared memory
                                             // and starves the moment more than one page

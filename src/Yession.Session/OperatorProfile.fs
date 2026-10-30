@@ -27,7 +27,8 @@ module OperatorProfile =
     [<Literal>]
     let Version = 1
 
-    let private fileKeys = [ "version"; "resources"; "always"; "agent"; "sandboxes" ]
+    let private fileKeys = [ "version"; "resources"; "always"; "agent"; "sandboxes"; "container" ]
+    let private containerKeys = [ "mem_limit"; "pids_limit"; "cgroup_parent" ]
     let private agentKeys = [ "guidance"; "prompt" ]
     let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "connection"; "sensitive" ]
     let private mountKeys = [ "from"; "at"; "mode" ]
@@ -372,6 +373,33 @@ module OperatorProfile =
                     { Guidance = words
                       Prompt = strategy |> Option.defaultValue AgentProfile.defaults.Prompt })
 
+    /// A value judged after it is read, so a refused one is refused in the one sentence
+    /// that says why.
+    let private judged (read: Decoder<'raw>) (judge: 'raw -> Result<'T, string>) : Decoder<'T> =
+        read
+        |> Decode.andThen (fun raw ->
+            match judge raw with
+            | Ok value -> Decode.succeed value
+            | Error reason -> Decode.fail reason)
+
+    /// `container:` — the ceiling on every container on this host, in compose's spelling
+    /// and grammar, as a repository's `container:` block writes the same keys. Each key may
+    /// be left out, and a missing one keeps today's default (`ContainerCeiling`).
+    let private container : Decoder<ContainerCeiling> =
+        noUnknownKeys containerKeys
+        |> Decode.andThen (fun () ->
+            Decode.object (fun get ->
+                { ContainerCeiling.Memory =
+                    get.Optional.Field
+                        "mem_limit"
+                        (judged
+                            (Decode.oneOf
+                                [ Decode.string |> Decode.map ContainerMemory.parse
+                                  Decode.int64 |> Decode.map ContainerMemory.ofBytes ])
+                            id)
+                  PidsLimit = get.Optional.Field "pids_limit" (judged Decode.int PidsLimit.ofInt)
+                  CgroupParent = get.Optional.Field "cgroup_parent" (judged Decode.string CgroupParent.parse) }))
+
     /// `default` is the spelling `always` had before it was named for what it does. Refused
     /// BY NAME rather than left to `noUnknownKeys`, which would say "unknown key: default
     /// (known: version, resources, always)" and leave an operator to work out that one
@@ -395,22 +423,25 @@ module OperatorProfile =
                 failIf
                     (version <> Version)
                     (sprintf "this build speaks %s version %d, not %d" FileName Version version)
-                    (Decode.map5
-                        (fun declared selection said sandboxes maintained ->
-                            declared, selection, said, sandboxes, maintained)
-                        (Decode.field "resources" resources)
-                        (Decode.optional "always" names |> Decode.map (Option.defaultValue []))
-                        (Decode.optional "agent" agent |> Decode.map (Option.defaultValue AgentProfile.defaults))
-                        (Decode.optional "sandboxes" Decode.value
-                         |> Decode.andThen (fun block ->
-                             match block with
-                             | None -> Decode.succeed Map.empty
-                             | Some block ->
-                                 match ConfigFile.parseSandboxes (Encode.toString 0 block) with
-                                 | Ok declared -> Decode.succeed declared
-                                 | Error e -> Decode.fail (sprintf "sandboxes: %s" e)))
-                        (Decode.field "resources" maintenance))))
-        |> Decode.andThen (fun (declared, selection, said, sandboxes, maintained) ->
+                    (Decode.map2
+                        (fun read ceiling -> read, ceiling)
+                        (Decode.map5
+                            (fun declared selection said sandboxes maintained ->
+                                declared, selection, said, sandboxes, maintained)
+                            (Decode.field "resources" resources)
+                            (Decode.optional "always" names |> Decode.map (Option.defaultValue []))
+                            (Decode.optional "agent" agent |> Decode.map (Option.defaultValue AgentProfile.defaults))
+                            (Decode.optional "sandboxes" Decode.value
+                             |> Decode.andThen (fun block ->
+                                 match block with
+                                 | None -> Decode.succeed Map.empty
+                                 | Some block ->
+                                     match ConfigFile.parseSandboxes (Encode.toString 0 block) with
+                                     | Ok declared -> Decode.succeed declared
+                                     | Error e -> Decode.fail (sprintf "sandboxes: %s" e)))
+                            (Decode.field "resources" maintenance))
+                        (Decode.optional "container" container |> Decode.map (Option.defaultValue ContainerCeiling.none)))))
+        |> Decode.andThen (fun ((declared, selection, said, sandboxes, maintained), ceiling) ->
             // The algebra's own refusals — a cycle, a dangling name, a name declared twice, a
             // resource that contradicts itself — reached through `load` and NOT re-checked
             // here. A decoder with its own copy of those rules is the redundant spare that
@@ -430,6 +461,7 @@ module OperatorProfile =
                           Always = selection
                           Agent = said
                           Sandboxes = sandboxes
-                          Maintenance = maintained })
+                          Maintenance = maintained
+                          Container = ceiling })
 
     let parse (json: string) : Result<ProfileFile, string> = Decode.fromString decoder json

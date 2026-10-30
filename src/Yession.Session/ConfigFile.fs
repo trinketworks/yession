@@ -279,16 +279,8 @@ module ConfigFile =
             | Ok value -> Decode.succeed value
             | Error reason -> Decode.fail reason)
 
-    /// `cgroup_parent:` — the cgroup the container's own is put under (`CgroupParent`).
-    let private cgroupParent : Decoder<CgroupParent> =
-        Decode.string
-        |> Decode.andThen (fun raw ->
-            match CgroupParent.parse raw with
-            | Ok parent -> Decode.succeed parent
-            | Error reason -> Decode.fail reason)
-
     let private containerKeys =
-        [ "image"; "build"; "volumes"; "command"; "entrypoint"; "mem_limit"; "oom_score_adj"; "pids_limit"; "cgroup_parent" ]
+        [ "image"; "build"; "volumes"; "command"; "entrypoint"; "mem_limit"; "oom_score_adj"; "pids_limit" ]
 
     /// The spellings this block had before it was a compose service fragment, each with
     /// compose's name for the same key. Refused by name, not left to `noUnknownKeys`: a
@@ -297,7 +289,6 @@ module ConfigFile =
         [ "memory", "mem_limit"
           "oom-score-adj", "oom_score_adj"
           "pids-limit", "pids_limit"
-          "cgroup-parent", "cgroup_parent"
           "cmd", "command" ]
 
     /// Compose service keys this block does not take, each with what this file offers
@@ -315,6 +306,18 @@ module ConfigFile =
           "restart", "`restart:` is not read. A sandbox lives exactly as long as its `command`"
           "user", "`user:` is not read. A command runs as the user that the image names" ]
 
+    /// The cgroup a container is put under is the operator's alone. A repository that could
+    /// name one could leave the host's pool, and take the daemon's memory and pid table.
+    /// Refused by name, in either spelling, like `forward:`: the file that has it worked
+    /// yesterday.
+    let private operatorsKeys =
+        [ "cgroup_parent"; "cgroup-parent" ]
+        |> List.map (fun key ->
+            key,
+            sprintf
+                "`%s:` belongs to the operator. The operator's resources.yaml names it under `container:`, for every container on this host. Remove it from this file"
+                key)
+
     let private noForeignKeys : Decoder<unit> =
         Decode.keys
         |> Decode.andThen (fun keys ->
@@ -324,7 +327,9 @@ module ConfigFile =
                 |> Option.map (fun (old, compose) ->
                     sprintf "`%s:` is now `%s:`, compose's name for it. Write `%s:`" old compose compose)
             let unsupported =
-                unsupportedKeys |> List.tryFind (fun (key, _) -> List.contains key keys) |> Option.map snd
+                operatorsKeys @ unsupportedKeys
+                |> List.tryFind (fun (key, _) -> List.contains key keys)
+                |> Option.map snd
             match Option.orElse unsupported renamed with
             | Some reason -> Decode.fail reason
             | None -> Decode.succeed ())
@@ -345,8 +350,7 @@ module ConfigFile =
                   Dialect = None
                   Memory = get.Optional.Field "mem_limit" memory
                   OomScoreAdj = get.Optional.Field "oom_score_adj" (judgedInt OomScoreAdj.ofInt)
-                  PidsLimit = get.Optional.Field "pids_limit" (judgedInt PidsLimit.ofInt)
-                  CgroupParent = get.Optional.Field "cgroup_parent" cgroupParent }))
+                  PidsLimit = get.Optional.Field "pids_limit" (judgedInt PidsLimit.ofInt) }))
 
     let private sandboxKeys =
         [ "container"; "dialect"; "workdir"; "env"; "uses"; "wants"; "files"; "setup"; "description" ]
@@ -584,9 +588,7 @@ module ConfigFile =
                         "entrypoint", Encode.list (container.Entrypoint.Value |> List.map Encode.string)
                       if container.Memory.IsSome then "mem_limit", Encode.string (ContainerMemory.render container.Memory.Value)
                       if container.OomScoreAdj.IsSome then "oom_score_adj", Encode.int (OomScoreAdj.value container.OomScoreAdj.Value)
-                      if container.PidsLimit.IsSome then "pids_limit", Encode.int (PidsLimit.value container.PidsLimit.Value)
-                      if container.CgroupParent.IsSome then
-                        "cgroup_parent", Encode.string (CgroupParent.value container.CgroupParent.Value) ])
+                      if container.PidsLimit.IsSome then "pids_limit", Encode.int (PidsLimit.value container.PidsLimit.Value) ])
         let env =
             decl.EnvironmentVariables
             |> Map.toList

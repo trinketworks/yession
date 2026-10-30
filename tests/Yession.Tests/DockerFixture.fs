@@ -36,7 +36,7 @@ let name () : string =
 /// A session network this run owns, as the product names one per session, told the
 /// host's address on it through `reached` (a listener's `Open`, or nothing to open).
 let network (reached: string -> Async<Result<unit, string>>) : Sandboxes.DockerSandbox.Network =
-    { Name = name (); Reached = reached }
+    { Name = name (); Reached = reached; Ceiling = Yession.Domain.Sandboxes.ContainerCeiling.none }
 
 /// A session network whose host address nothing listens on.
 let quietNetwork () : Sandboxes.DockerSandbox.Network = network (fun _ -> async { return Ok () })

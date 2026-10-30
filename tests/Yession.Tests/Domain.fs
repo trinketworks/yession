@@ -2734,31 +2734,30 @@ let private configTests =
         // backend asks the daemon and hands the answer here (`ContainerMemory.forDaemon`).
         testCase "a container that declares no memory gets three quarters of what the daemon has" <| fun () ->
             let daemon = 8L * 1024L * 1024L * 1024L
-            let limit = ContainerMemory.forDaemon None daemon |> expect
+            let limit = ContainerMemory.forDaemon None None daemon |> expect
             Expect.equal (ContainerMemory.bytes limit) (6L * 1024L * 1024L * 1024L) "never no ceiling, which is the whole host"
 
         testCase "a container's declared memory is its ceiling, when the daemon has that much" <| fun () ->
             let declared = ContainerMemory.parse "2g" |> expect
-            let limit = ContainerMemory.forDaemon (Some declared) (8L * 1024L * 1024L * 1024L) |> expect
+            let limit = ContainerMemory.forDaemon (Some declared) None (8L * 1024L * 1024L * 1024L) |> expect
             Expect.equal limit declared "as declared, not the default share"
 
         testCase "a container that declares more memory than the daemon has is refused, not left unbounded" <| fun () ->
             let declared = ContainerMemory.parse "16g" |> expect
-            match ContainerMemory.forDaemon (Some declared) (5L * 1024L * 1024L * 1024L) with
+            match ContainerMemory.forDaemon (Some declared) None (5L * 1024L * 1024L * 1024L) with
             | Ok _ -> failwith "a ceiling the host runs out before reaching contains nothing"
             | Error reason -> Expect.stringContains reason "16g" "the refusal names what was declared"
 
         // The other limits on the container block, read and refused like `mem_limit:`.
-        testCase "a container's oom_score_adj, pids_limit and cgroup_parent are read from its block" <| fun () ->
+        testCase "a container's oom_score_adj and pids_limit are read from its block" <| fun () ->
             let container =
-                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "oom_score_adj": 800, "pids_limit": 512, "cgroup_parent": "/yession" } } } }"""
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "oom_score_adj": 800, "pids_limit": 512 } } } }"""
                 |> expect
                 |> fun file -> (file.Sandboxes |> Map.find (sandboxName "dev")).Container |> Option.get
             Expect.equal (container.OomScoreAdj |> Option.map OomScoreAdj.value) (Some 800) "oom_score_adj as written"
             Expect.equal (container.PidsLimit |> Option.map PidsLimit.value) (Some 512) "pids_limit as written"
-            Expect.equal (container.CgroupParent |> Option.map CgroupParent.value) (Some "/yession") "cgroup_parent as written"
 
-        testCase "an oom_score_adj below zero, a pids_limit that is no limit, and a blank cgroup_parent are refused, saying why" <| fun () ->
+        testCase "an oom_score_adj below zero, a pids_limit that is no limit, and a blank or climbing cgroup parent are refused, saying why" <| fun () ->
             let refusal (field: string) =
                 match ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", %s } } } }""" field) with
                 | Ok _ -> failwithf "%s was accepted" field
@@ -2766,12 +2765,16 @@ let private configTests =
             Expect.stringContains (refusal "\"oom_score_adj\": -500") "not from 0 to 1000" "a sandbox cannot rank itself with the daemon"
             Expect.stringContains (refusal "\"oom_score_adj\": 1001") "not from 0 to 1000" "nor past the kernel's range"
             Expect.stringContains (refusal "\"pids_limit\": 0") "is not a limit" "docker reads 0 as no limit"
-            Expect.stringContains (refusal "\"cgroup_parent\": \" \"") "cannot be blank" "a blank parent"
-            Expect.stringContains (refusal "\"cgroup_parent\": \"/yession/../docker\"") "cannot climb" "a parent with a climb"
+            let parentRefusal (raw: string) =
+                match CgroupParent.parse raw with
+                | Ok _ -> failwithf "%s was accepted" raw
+                | Error reason -> reason
+            Expect.stringContains (parentRefusal " ") "cannot be blank" "a blank parent"
+            Expect.stringContains (parentRefusal "/yession/../docker") "cannot climb" "a parent with a climb"
 
         testCase "the container limits survive the round trip the command gate rides" <| fun () ->
             let dev =
-                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "oom_score_adj": 700, "pids_limit": 1024, "cgroup_parent": "yession.slice" } } } }"""
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "oom_score_adj": 700, "pids_limit": 1024 } } } }"""
                 |> expect
                 |> fun file -> file.Sandboxes |> Map.find (sandboxName "dev")
             let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
@@ -2793,8 +2796,6 @@ let private configTests =
                 Expect.equal ((containerOf "\"pids_limit\": 512" |> expect).PidsLimit) (Some (PidsLimit.ofInt 512 |> expect)) "compose's pids_limit"
             testCase "oom_score_adj is the OOM score" <| fun () ->
                 Expect.equal ((containerOf "\"oom_score_adj\": 800" |> expect).OomScoreAdj) (Some (OomScoreAdj.ofInt 800 |> expect)) "compose's oom_score_adj"
-            testCase "cgroup_parent is the parent cgroup" <| fun () ->
-                Expect.equal ((containerOf "\"cgroup_parent\": \"yession\"" |> expect).CgroupParent) (Some (CgroupParent.parse "yession" |> expect)) "compose's cgroup_parent"
             testCase "command is the container's own process" <| fun () ->
                 Expect.equal ((containerOf "\"command\": \"./serve\"" |> expect).Command) (Some "./serve") "compose's command"
 
@@ -2804,7 +2805,6 @@ let private configTests =
                 [ "memory", "mem_limit", "\"3g\""
                   "pids-limit", "pids_limit", "512"
                   "oom-score-adj", "oom_score_adj", "800"
-                  "cgroup-parent", "cgroup_parent", "\"yession\""
                   "cmd", "command", "\"./serve\"" ] do
                 testCase (sprintf "the old key %s is refused, naming %s" old compose) <| fun () ->
                     Expect.stringContains (refusal (sprintf "\"%s\": %s" old value)) (sprintf "`%s:`" compose) "the refusal names compose's key"
@@ -2853,17 +2853,93 @@ let private configTests =
 
         testCase "a whole compose container block survives the round trip the command gate rides" <| fun () ->
             let dev =
-                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "command": "./serve", "entrypoint": [ "env" ], "mem_limit": "3g", "oom_score_adj": 700, "pids_limit": 1024, "cgroup_parent": "yession", "volumes": [ "workspace:/w:ro", { "source": "workspace", "target": "/x" } ] } } } }"""
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "command": "./serve", "entrypoint": [ "env" ], "mem_limit": "3g", "oom_score_adj": 700, "pids_limit": 1024, "volumes": [ "workspace:/w:ro", { "source": "workspace", "target": "/x" } ] } } } }"""
                 |> expect
                 |> fun file -> file.Sandboxes |> Map.find (sandboxName "dev")
             let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
             Expect.equal back.Container dev.Container "what `encode` writes, `parseSandbox` reads back whole"
 
+        // The operator's `container:` block is a ceiling: a repository narrows it, never
+        // widens it, and never names a cgroup (invariant 26).
+        testList "the operator's container ceiling" [
+            let gib = 1024L * 1024L * 1024L
+            let daemon = 16L * gib
+            let memory (raw: string) = ContainerMemory.parse raw |> expect
+            let pids (n: int) = PidsLimit.ofInt n |> expect
+            let ceiling =
+                { ContainerCeiling.none with Memory = Some (memory "4g"); PidsLimit = Some (pids 2048) }
+            let limitsOf (container: ContainerSpec) (ceiling: ContainerCeiling) =
+                ContainerSpec.forDaemon container ceiling daemon "cgroupfs"
+            let refusal (container: ContainerSpec) =
+                match limitsOf container ceiling with
+                | Ok _ -> failwith "a value above the operator's ceiling was accepted"
+                | Error reason -> reason
+
+            testCase "a repository memory below the ceiling is kept" <| fun () ->
+                let limits = limitsOf { ContainerSpec.defaults with Memory = Some (memory "3g") } ceiling |> expect
+                Expect.equal limits.Memory (memory "3g") "the repository's value, not the ceiling"
+            testCase "a repository pids_limit below the ceiling is kept" <| fun () ->
+                let limits = limitsOf { ContainerSpec.defaults with PidsLimit = Some (pids 512) } ceiling |> expect
+                Expect.equal limits.PidsLimit (pids 512) "the repository's value, not the ceiling"
+            testCase "a repository memory above the ceiling is refused, naming both values" <| fun () ->
+                let reason = refusal { ContainerSpec.defaults with Memory = Some (memory "8g") }
+                Expect.isTrue (reason.Contains "mem_limit: 8g" && reason.Contains "mem_limit: 4g") (sprintf "both values: %s" reason)
+            testCase "a repository memory above the ceiling names the file that owns each value" <| fun () ->
+                let reason = refusal { ContainerSpec.defaults with Memory = Some (memory "8g") }
+                Expect.isTrue (reason.Contains "yession.yaml" && reason.Contains "resources.yaml") (sprintf "both files: %s" reason)
+            testCase "a repository pids_limit above the ceiling is refused, naming both values" <| fun () ->
+                let reason = refusal { ContainerSpec.defaults with PidsLimit = Some (pids 4096) }
+                Expect.isTrue (reason.Contains "pids_limit: 4096" && reason.Contains "pids_limit: 2048") (sprintf "both values: %s" reason)
+            testCase "a repository that names no memory gets the ceiling" <| fun () ->
+                Expect.equal (limitsOf ContainerSpec.defaults ceiling |> expect).Memory (memory "4g") "the operator's value"
+            testCase "a repository that names no pids_limit gets the ceiling" <| fun () ->
+                Expect.equal (limitsOf ContainerSpec.defaults ceiling |> expect).PidsLimit (pids 2048) "the operator's value"
+            testCase "no operator memory ceiling keeps three quarters of the daemon" <| fun () ->
+                Expect.equal (limitsOf ContainerSpec.defaults ContainerCeiling.none |> expect).Memory (ContainerMemory.defaultFor daemon) "today's default"
+            testCase "no operator pids ceiling keeps the standard 4096" <| fun () ->
+                Expect.equal (limitsOf ContainerSpec.defaults ContainerCeiling.none |> expect).PidsLimit PidsLimit.standard "today's default"
+            testCase "the operator's cgroup parent reaches the container, spelled for the driver" <| fun () ->
+                let pooled = { ceiling with CgroupParent = Some (CgroupParent.parse "yession" |> expect) }
+                Expect.equal
+                    ((limitsOf ContainerSpec.defaults pooled |> expect).CgroupParent |> Option.map CgroupParent.value)
+                    (Some "/yession")
+                    "the operator's pool, under cgroupfs"
+            testCase "a repository cgroup_parent is refused, naming the operator profile" <| fun () ->
+                match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "cgroup_parent": "yession" } } } }""" with
+                | Ok _ -> failwith "a repository named a cgroup"
+                | Error reason -> Expect.stringContains reason "belongs to the operator" "it says who owns it"
+            testCase "a repository cgroup-parent, the old spelling, is refused the same way" <| fun () ->
+                match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "cgroup-parent": "yession" } } } }""" with
+                | Ok _ -> failwith "a repository named a cgroup"
+                | Error reason -> Expect.stringContains reason "belongs to the operator" "it says who owns it"
+            testCase "an image build runs under the memory ceiling with no swap" <| fun () ->
+                let limits = limitsOf ContainerSpec.defaults ceiling |> expect
+                let build = ContainerLimits.buildMemory limits
+                Expect.equal (build.Memory, build.MemorySwap) (4L * gib, 4L * gib) "memory and memswap, equal"
+            testCase "the operator profile reads its container block" <| fun () ->
+                let profile =
+                    OperatorProfile.parse
+                        """{ "version": 1, "resources": { "x": { "endpoint": "example.com" } },
+                             "container": { "mem_limit": "4g", "pids_limit": 2048, "cgroup_parent": "yession" } }"""
+                    |> expect
+                Expect.equal
+                    profile.Container
+                    { ceiling with CgroupParent = Some (CgroupParent.parse "yession" |> expect) }
+                    "each key as written"
+            testCase "the operator profile refuses an unknown key in its container block" <| fun () ->
+                match
+                    OperatorProfile.parse
+                        """{ "version": 1, "resources": { "x": { "endpoint": "example.com" } }, "container": { "memory": "4g" } }"""
+                with
+                | Ok _ -> failwith "an unknown key was read as nothing"
+                | Error reason -> Expect.stringContains reason "unknown key: memory" "it names the key"
+        ]
+
         // What the docker backend runs work at, and creates a container with, when the
         // block names nothing.
         testCase "a container that declares no oom_score_adj or pids_limit gets 500 and 4096" <| fun () ->
             Expect.equal (OomScoreAdj.value (OomScoreAdj.forWork None)) 500 "a victim before the daemon's own processes (0, -500, -999)"
-            Expect.equal (PidsLimit.value (PidsLimit.forContainer None)) 4096 "never docker's default, which is no limit"
+            Expect.equal (PidsLimit.value (PidsLimit.forContainer None None |> expect)) 4096 "never docker's default, which is no limit"
             let declared = OomScoreAdj.ofInt 900 |> expect
             Expect.equal (OomScoreAdj.forWork (Some declared)) declared "a declaration is the value"
 

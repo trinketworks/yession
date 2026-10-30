@@ -81,7 +81,10 @@ type ProfileFile =
       /// volume and not about any grant of it. Declared on a `volume` leaf (`maintain`), and
       /// deliberately not part of the leaf itself, so what a sandbox is told it holds
       /// (`vol:NAME>AT`) does not change with how the operator looks after it.
-      Maintenance : Map<string, VolumeMaintenance> }
+      Maintenance : Map<string, VolumeMaintenance>
+      /// The ceiling on every container on this host (`ContainerCeiling`): a repository's
+      /// limits narrow it, and only the operator names a cgroup.
+      Container : ContainerCeiling }
 
 module ProfileFile =
 
@@ -90,4 +93,5 @@ module ProfileFile =
           Always = []
           Agent = AgentProfile.defaults
           Sandboxes = Map.empty
-          Maintenance = Map.empty }
+          Maintenance = Map.empty
+          Container = ContainerCeiling.none }

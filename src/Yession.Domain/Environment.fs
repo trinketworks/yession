@@ -191,20 +191,38 @@ module ContainerMemory =
     let defaultFor (daemonTotal: int64) : ContainerMemory =
         ContainerMemory (max minimum (daemonTotal / 4L * 3L))
 
-    /// The ceiling a container is created with: what it declared, or the default share of
-    /// what the daemon has. A declaration above the daemon's total is refused rather than
-    /// applied — a ceiling the host runs out before reaching contains nothing, and the
-    /// repo asked for memory this host cannot give.
-    let forDaemon (declared: ContainerMemory option) (daemonTotal: int64) : Result<ContainerMemory, string> =
-        match declared with
-        | None -> Ok (defaultFor daemonTotal)
-        | Some (ContainerMemory b) when b > daemonTotal ->
+    /// The ceiling a container is created with: what the repository declared, else the
+    /// operator's ceiling, else the default share of what the daemon has.
+    ///
+    /// The operator's ceiling (`ContainerCeiling`) bounds a declaration: a repository can
+    /// name less, never more. A value above it is refused with a sentence, never lowered,
+    /// so a file that reads as 8g never runs as 4g. Whatever is chosen is then checked
+    /// against the daemon's total: a ceiling the host runs out before reaching contains
+    /// nothing.
+    let forDaemon
+        (declared: ContainerMemory option)
+        (ceiling: ContainerMemory option)
+        (daemonTotal: int64)
+        : Result<ContainerMemory, string> =
+        match declared, ceiling with
+        | Some (ContainerMemory d), Some (ContainerMemory c) when d > c ->
             Error (
                 sprintf
-                    "the container declares mem_limit: %s. The docker daemon has %s in all. The host exhausts its memory before it reaches that ceiling. So the ceiling contains nothing. Give the daemon more memory (Colima: `colima start --memory <GiB>`). As an alternative, declare less"
-                    (render (ContainerMemory b))
-                    (describe daemonTotal))
-        | Some declared -> Ok declared
+                    "the repository's yession.yaml declares mem_limit: %s. The operator's resources.yaml sets mem_limit: %s as the ceiling for every container on this host. A repository can declare less, never more. Declare %s or less"
+                    (render (ContainerMemory d))
+                    (render (ContainerMemory c))
+                    (render (ContainerMemory c)))
+        | _ ->
+            match declared |> Option.orElse ceiling with
+            | None -> Ok (defaultFor daemonTotal)
+            | Some (ContainerMemory b) when b > daemonTotal ->
+                Error (
+                    sprintf
+                        "the container's mem_limit is %s (from %s). The docker daemon has %s in all. The host exhausts its memory before it reaches that ceiling. So the ceiling contains nothing. Give the daemon more memory (Colima: `colima start --memory <GiB>`). As an alternative, declare less"
+                        (render (ContainerMemory b))
+                        (if declared.IsSome then "the repository's yession.yaml" else "the operator's resources.yaml")
+                        (describe daemonTotal))
+            | Some chosen -> Ok chosen
 
 /// How strongly the kernel prefers a sandbox's WORK as an OOM victim, from 0 to 1000: what a
 /// person or agent runs (`ProcessEntry.Entrypoint`) writes it to its own
@@ -278,10 +296,19 @@ module PidsLimit =
         if n < 1 then Error (sprintf "pids_limit: %d is not a limit. Write a number of processes, 1 or more" n)
         else Ok (PidsLimit n)
 
-    /// What a container is created with: what it declared, or `standard`. Never docker's
-    /// own default, which is no limit.
-    let forContainer (declared: PidsLimit option) : PidsLimit =
-        declared |> Option.defaultValue standard
+    /// What a container is created with: what the repository declared, else the operator's
+    /// ceiling, else `standard`. Never docker's own default, which is no limit. A
+    /// declaration above the operator's ceiling is refused, not lowered.
+    let forContainer (declared: PidsLimit option) (ceiling: PidsLimit option) : Result<PidsLimit, string> =
+        match declared, ceiling with
+        | Some (PidsLimit d), Some (PidsLimit c) when d > c ->
+            Error (
+                sprintf
+                    "the repository's yession.yaml declares pids_limit: %d. The operator's resources.yaml sets pids_limit: %d as the ceiling for every container on this host. A repository can declare less, never more. Declare %d or less"
+                    d
+                    c
+                    c)
+        | _ -> Ok (declared |> Option.orElse ceiling |> Option.defaultValue standard)
 
 /// The cgroup that a container's cgroup is put under — `docker run --cgroup-parent`.
 ///
@@ -298,7 +325,9 @@ module PidsLimit =
 /// (the operator's Colima VM is cgroupfs, CI's docker is systemd), so a repo writes the
 /// bare name.
 ///
-/// `None` — the usual — keeps the daemon's own parent.
+/// The operator names it, in the profile's `container:` block (`ContainerCeiling`), and a
+/// repository never does: a pool that a repository could name is a pool it could leave,
+/// taking the daemon's memory and pid table with it. `None` keeps the daemon's own parent.
 type CgroupParent = private CgroupParent of string
 
 [<RequireQualifiedAccess>]
@@ -333,9 +362,44 @@ module CgroupParent =
         | Some (CgroupParent path) when driver = "systemd" && not (path.EndsWith ".slice") ->
             Error (
                 sprintf
-                    "the container declares cgroup_parent: %s. The docker daemon uses the systemd cgroup driver. That driver takes only a slice name, like yession.slice. A bare name (like yession) works under both drivers"
+                    "the operator's resources.yaml sets cgroup_parent: %s. The docker daemon uses the systemd cgroup driver. That driver takes only a slice name, like yession.slice. A bare name (like yession) works under both drivers"
                     path)
         | declared -> Ok declared
+
+/// What the OPERATOR bounds every container on this host with: the profile's `container:`
+/// block, in compose's spelling (`mem_limit`, `pids_limit`, `cgroup_parent`).
+///
+/// A repository's limits narrow these and never widen them (`ContainerMemory.forDaemon`,
+/// `PidsLimit.forContainer`), and only the operator names a cgroup. A repository that
+/// names nothing gets the operator's value. `None` keeps today's default for that limit.
+[<RequireQualifiedAccess>]
+type ContainerCeiling =
+    { Memory : ContainerMemory option
+      PidsLimit : PidsLimit option
+      CgroupParent : CgroupParent option }
+
+module ContainerCeiling =
+
+    /// An operator who names no ceiling: every limit takes its default.
+    let none : ContainerCeiling = { ContainerCeiling.Memory = None; PidsLimit = None; CgroupParent = None }
+
+/// The limits a container is created with, resolved for one daemon (`ContainerSpec.forDaemon`).
+[<RequireQualifiedAccess>]
+type ContainerLimits =
+    { Memory : ContainerMemory
+      PidsLimit : PidsLimit
+      /// Spelled for the daemon's cgroup driver. `None` keeps the daemon's own parent.
+      CgroupParent : CgroupParent option }
+
+module ContainerLimits =
+
+    /// The memory an image BUILD runs under: the container's ceiling, as `memory` and
+    /// `memswap` with equal values, so a build gets no swap. A repository's Dockerfile is
+    /// its code running on the host as much as its container is, and a build with no
+    /// ceiling is the overrun that `ContainerMemory` exists to contain, moved earlier.
+    let buildMemory (limits: ContainerLimits) : {| Memory : int64; MemorySwap : int64 |} =
+        let bytes = ContainerMemory.bytes limits.Memory
+        {| Memory = bytes; MemorySwap = bytes |}
 
 /// What a CONTAINER is. Every field here is one only a container has — an image to run, a
 /// filesystem to build, volumes to mount, a process to be.
@@ -370,10 +434,9 @@ type ContainerSpec =
       Memory : ContainerMemory option
       /// `oom_score_adj:`. `None` — the usual — is `OomScoreAdj.standard`.
       OomScoreAdj : OomScoreAdj option
-      /// `pids_limit:`. `None` — the usual — is `PidsLimit.standard`.
-      PidsLimit : PidsLimit option
-      /// `cgroup_parent:`. `None` — the usual — keeps the daemon's own parent.
-      CgroupParent : CgroupParent option }
+      /// `pids_limit:`. `None` — the usual — is the operator's ceiling, else
+      /// `PidsLimit.standard`.
+      PidsLimit : PidsLimit option }
 
 module ContainerSpec =
 
@@ -386,22 +449,24 @@ module ContainerSpec =
           Dialect = None
           Memory = None
           OomScoreAdj = None
-          PidsLimit = None
-          CgroupParent = None }
+          PidsLimit = None }
 
-    /// The memory ceiling and the cgroup parent THIS daemon creates the container with,
-    /// from its total memory and its cgroup driver (`docker info`). Pure, so a test can ask
-    /// what a daemon it does not have would say (`ContainerMemory.forDaemon`,
-    /// `CgroupParent.forDriver`).
+    /// The limits THIS daemon creates the container with, from the repository's
+    /// declaration, the operator's ceiling, and the daemon's total memory and cgroup driver
+    /// (`docker info`). Pure, so a test can ask what a daemon it does not have would say
+    /// (`ContainerMemory.forDaemon`, `PidsLimit.forContainer`, `CgroupParent.forDriver`).
     let forDaemon
         (container: ContainerSpec)
+        (ceiling: ContainerCeiling)
         (daemonTotal: int64)
         (cgroupDriver: string)
-        : Result<ContainerMemory * CgroupParent option, string> =
-        ContainerMemory.forDaemon container.Memory daemonTotal
+        : Result<ContainerLimits, string> =
+        ContainerMemory.forDaemon container.Memory ceiling.Memory daemonTotal
         |> Result.bind (fun memory ->
-            CgroupParent.forDriver container.CgroupParent cgroupDriver
-            |> Result.map (fun parent -> memory, parent))
+            PidsLimit.forContainer container.PidsLimit ceiling.PidsLimit
+            |> Result.bind (fun pids ->
+                CgroupParent.forDriver ceiling.CgroupParent cgroupDriver
+                |> Result.map (fun parent -> { ContainerLimits.Memory = memory; PidsLimit = pids; CgroupParent = parent })))
 
 /// What the sandbox IS, and the distinction is load-bearing rather than descriptive.
 ///
