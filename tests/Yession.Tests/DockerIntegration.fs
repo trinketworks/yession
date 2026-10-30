@@ -174,7 +174,7 @@ let tests =
                 let! info = client.info () |> Interop.awaitPromise
                 printfn "PROBE daemon: version=%s kernel=%s driver=%s cgroupVersion=%s os=%s"
                     (string info?ServerVersion) (string info?KernelVersion) info.CgroupDriver (string info?CgroupVersion) (string info?OperatingSystem)
-                for i in 1 .. 8 do
+                for i in 1 .. 20 do
                     let spec = alpineSpec |> withContainer (fun c -> { c with Memory = Some (ContainerMemory.parse "64m" |> expect) })
                     let! _, sandbox = startOrFail spec
                     let inOne =
@@ -191,6 +191,8 @@ let tests =
                         printfn "PROBE %d   +%.0fms cat=%A out=%s err=%s" i (DateTime.UtcNow - started).TotalMilliseconds r (o.Replace ("\n", " ")) e
                         do! Async.Sleep 100
                     do! sandbox.Dispose ()
+                let execSync : string -> obj = import "execSync" "node:child_process"
+                printfn "PROBE dmesg:\n%s" (string (execSync "sudo dmesg | grep -iE 'oom|killed process|memory cgroup' | tail -400 || true"))
             })
 
             // The OOM score and the process bound, read where the kernel keeps them: a
