@@ -1139,7 +1139,9 @@ After the fixes land, one pass rewrites it to what still reproduces.
     Nobody shows it to a person who joins a session. A change to a profile or a repo's file
     widens what every later sandbox holds, and asks nobody. Two remedies build on the closure,
     not on a second account of it: show it at join or at connect, or record it per person so a
-    later configuration cannot widen a grant silently.
+    later configuration cannot widen a grant silently. Only a SENSITIVE set asks, once per
+    repository: a volume, a connection and a socket always are (invariant 25), and the other
+    kinds are only when the operator marks them `sensitive: true`.
   - **An external MCP server's read-only tools are not queries yet.** A server declares
     `readOnlyHint`, Yession does not infer it, so that a third-party server's queries could join
     the registry without a yession-specific convention. But only in-process registrations reach

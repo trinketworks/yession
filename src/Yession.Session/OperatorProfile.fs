@@ -31,7 +31,7 @@ module OperatorProfile =
     let private agentKeys = [ "guidance"; "prompt" ]
     let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "connection"; "sensitive" ]
     let private mountKeys = [ "from"; "at"; "mode" ]
-    let private volumeKeys = [ "name"; "at"; "maintain" ]
+    let private volumeKeys = [ "name"; "at"; "mode"; "maintain" ]
     let private maintainKeys = [ "pin"; "every" ]
 
     let private failIf (condition: bool) (message: string) (decoder: Decoder<'a>) : Decoder<'a> =
@@ -115,15 +115,36 @@ module OperatorProfile =
                 (sprintf "pin '%s' must be an absolute path inside the sandbox" m.Pin)
                 (Decode.succeed m))
 
+    /// `read` or `write`, and never `overlay`: a volume is already the shared layer, and
+    /// there is no read-only source under it for an overlay to sit on.
+    let private volumeMode : Decoder<ResourceMountMode> =
+        Decode.string
+        |> Decode.andThen (function
+            | "read" -> Decode.succeed ResourceMountMode.Read
+            | "write" -> Decode.succeed ResourceMountMode.Write
+            | other -> Decode.fail (sprintf "'%s' is not a volume mode. A volume is read or write" other))
+
     /// Both halves required: a volume with no `at` is a thing with nowhere to be, and the
     /// operator is the one author who knows where it belongs. `maintain` is decoded here so
     /// a mistake in it is refused at its own address, and collected by `maintenance`.
+    ///
+    /// `mode` defaults to `write`, which is what every volume was before it had a mode, so
+    /// a profile written then reads the same now.
     let private volume : Decoder<ResourceLeaf> =
         noUnknownKeys volumeKeys
         |> Decode.andThen (fun () ->
             Decode.object (fun get ->
-                get.Optional.Field "maintain" maintain |> ignore
-                Volume (get.Required.Field "name" Decode.string, get.Required.Field "at" Decode.string)))
+                let maintained = get.Optional.Field "maintain" maintain |> Option.isSome
+                let mode = get.Optional.Field "mode" volumeMode |> Option.defaultValue ResourceMountMode.Write
+                maintained,
+                Volume (get.Required.Field "name" Decode.string, get.Required.Field "at" Decode.string, mode)))
+        |> Decode.andThen (fun (maintained, leaf) ->
+            // A lease is written into the volume (`VolumeLeases.leaseDir`), so a maintained
+            // volume the sandbox cannot write is a pin that fails every time it runs.
+            failIf
+                (maintained && (match leaf with Volume (_, _, ResourceMountMode.Read) -> true | _ -> false))
+                "a read volume cannot be maintained: each sandbox writes its lease into the volume. Make it write, or drop maintain"
+                (Decode.succeed leaf))
 
     /// A variable's value: text, or — where it carries `${` — what only the session can
     /// supply: `${proxy.https|ca-file|ca-dir}`, `${session.version}` and `${env.NAME}` composed with text, or a
@@ -191,6 +212,8 @@ module OperatorProfile =
                 let variables =
                     get.Optional.Field "env" (Decode.keyValuePairs variableValue)
                     |> Option.defaultValue []
+                // What the operator declares. It can only RAISE a leaf: a volume, a
+                // connection or a socket is sensitive whatever this says (`ResourceLeaf.floor`).
                 let sensitivity =
                     if get.Optional.Field "sensitive" Decode.bool |> Option.defaultValue false then
                         Sensitivity.Sensitive

@@ -654,6 +654,9 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     `Origin` names the Manager's own origin (`ManagerUi.requestOrigin`). A request with
     neither is no browser's, and passes on its identity alone. A `GET` changes no state, so
     `/sessions/{id}/open` answers a stopped session with a screen that asks for the launch.
+25. A grant that crosses sessions or carries a credential is sensitive by construction. A
+    volume, a connection or a socket needs the approval of a person, whatever its declaration
+    says (`ResourceLeaf.floor`).
 
 Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
 roots, keyed by `BodyKey`, that the app co-manages outside the encoded tree, and the structural

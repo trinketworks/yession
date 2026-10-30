@@ -127,10 +127,11 @@ type SandboxPolicy =
       /// declared target. Both fields are filled from the same leaves in one place
       /// (`Sandboxes.policyFor`), which is what keeps them one fact.
       Binds : ResourceMount list
-      /// Granted named volumes, as (volume, target). Only a container backend can hold
+      /// Granted named volumes, as (volume, target, mode). Only a container backend can hold
       /// one — everywhere else the leaf is withheld before a policy exists — so a backend
-      /// that ignores this field is a backend that never receives it filled.
-      Volumes : (string * string) list
+      /// that ignores this field is a backend that never receives it filled. The mode is
+      /// `Read` or `Write`, never `Overlay` (the profile refuses one on a volume).
+      Volumes : (string * string * ResourceMountMode) list
       Env : Map<string, string>
       /// Where this sandbox stands: an ABSOLUTE directory, and the two things that
       /// depend on it are why it has to be.

@@ -72,7 +72,7 @@ type private Scripted () =
           Shell = None
           Dispose = fun () -> async { this.Disposed <- true } }
 
-let private holding (volumes: (string * string) list) = { emptyPolicy with Volumes = volumes }
+let private holding (volumes: (string * string * ResourceMountMode) list) = { emptyPolicy with Volumes = volumes }
 
 /// `scripted`, created through the lease decoration under `policy`.
 let private leased (clock: VirtualClock) (said: ResizeArray<string>) (scripted: Scripted) (policy: SandboxPolicy) =
@@ -92,7 +92,7 @@ let private leaseTests =
                 "one directory per sandbox, under the mount point, however it was spelled"
 
         testCase "only a maintained volume is leased" <| fun () ->
-            let leases = VolumeLeases.leasesFor maintained "s1-dev" [ "yession-nix", "/nix"; "scratch", "/scratch" ]
+            let leases = VolumeLeases.leasesFor maintained "s1-dev" [ "yession-nix", "/nix", ResourceMountMode.Write; "scratch", "/scratch", ResourceMountMode.Write ]
             Expect.equal
                 (leases |> List.map (fun lease -> lease.Volume, lease.Dir))
                 [ "yession-nix", "/nix/.yession/leases/s1-dev" ]
@@ -104,7 +104,7 @@ let private lifeTests =
         testCaseAsync "a sandbox holding no maintained volume runs nothing" <| async {
             let clock = virtualClock started
             let scripted = Scripted ()
-            let! sandbox = leased clock (ResizeArray ()) scripted (holding [ "scratch", "/scratch" ])
+            let! sandbox = leased clock (ResizeArray ()) scripted (holding [ "scratch", "/scratch", ResourceMountMode.Write ])
             do! sandbox.Dispose ()
             Expect.isEmpty scripted.Ran "nothing is run in a sandbox the operator asked nothing of"
         }
@@ -112,7 +112,7 @@ let private lifeTests =
         testCaseAsync "the pin runs when the sandbox comes up, bare, with its lease as its one argument" <| async {
             let clock = virtualClock started
             let scripted = Scripted ()
-            let! _ = leased clock (ResizeArray ()) scripted (holding [ "yession-nix", "/nix" ])
+            let! _ = leased clock (ResizeArray ()) scripted (holding [ "yession-nix", "/nix", ResourceMountMode.Write ])
             Expect.equal
                 (scripted.Ran |> Seq.map (fun exec -> exec.Executable, exec.Arguments, exec.Via) |> List.ofSeq)
                 [ "/nix/var/yession/pin", [ "/nix/.yession/leases/s1-dev" ], Direct ]
@@ -122,7 +122,7 @@ let private lifeTests =
         testCaseAsync "the lease is renewed every interval" <| async {
             let clock = virtualClock started
             let scripted = Scripted ()
-            let! _ = leased clock (ResizeArray ()) scripted (holding [ "yession-nix", "/nix" ])
+            let! _ = leased clock (ResizeArray ()) scripted (holding [ "yession-nix", "/nix", ResourceMountMode.Write ])
             scripted.Finish 0
             clock.Advance nix.Every
             Expect.equal scripted.Ran.Count 2 "once at start, once an interval later"
@@ -131,7 +131,7 @@ let private lifeTests =
         testCaseAsync "a renewal due while the last pin still runs is skipped, not queued" <| async {
             let clock = virtualClock started
             let scripted = Scripted ()
-            let! _ = leased clock (ResizeArray ()) scripted (holding [ "yession-nix", "/nix" ])
+            let! _ = leased clock (ResizeArray ()) scripted (holding [ "yession-nix", "/nix", ResourceMountMode.Write ])
             clock.Advance nix.Every
             Expect.equal scripted.Ran.Count 1 "two pins of one lease never run at once"
         }
@@ -139,7 +139,7 @@ let private lifeTests =
         testCaseAsync "removing the sandbox pins once more first, and renews nothing after" <| async {
             let clock = virtualClock started
             let scripted = Scripted ()
-            let! sandbox = leased clock (ResizeArray ()) scripted (holding [ "yession-nix", "/nix" ])
+            let! sandbox = leased clock (ResizeArray ()) scripted (holding [ "yession-nix", "/nix", ResourceMountMode.Write ])
             scripted.Finish 0
             Async.StartImmediate (sandbox.Dispose ())
             Expect.equal scripted.Ran.Count 2 "the last word, before the sandbox goes"
@@ -154,7 +154,7 @@ let private lifeTests =
             let clock = virtualClock started
             let said = ResizeArray ()
             let scripted = Scripted ()
-            let! _ = leased clock said scripted (holding [ "yession-nix", "/nix" ])
+            let! _ = leased clock said scripted (holding [ "yession-nix", "/nix", ResourceMountMode.Write ])
             scripted.Finish 3
             Expect.equal (List.ofSeq said) [ "volume yession-nix: pin /nix/var/yession/pin exited 3" ] "which volume, which pin, how"
             clock.Advance nix.Every
@@ -165,7 +165,7 @@ let private lifeTests =
             let clock = virtualClock started
             let said = ResizeArray ()
             let scripted = Scripted ()
-            let! _ = leased clock said scripted (holding [ "yession-nix", "/nix" ])
+            let! _ = leased clock said scripted (holding [ "yession-nix", "/nix", ResourceMountMode.Write ])
             clock.Advance VolumeLeases.pinLimit
             Expect.equal scripted.Killed 1 "killed at its limit"
             clock.Advance nix.Every

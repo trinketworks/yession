@@ -709,7 +709,9 @@ let
 
   # Paths as the kernel sees them (/private/etc, not /etc): the profile refuses
   # symlinked spellings. This repository's yession.yaml `wants:` both
-  # `nix-container-store` and `github`.
+  # `nix-container-store` and `github`. Each asks a person once per repository: a
+  # volume, a connection and a socket are sensitive whatever the profile says, because
+  # a volume is shared by every session's sandbox and a connection carries a credential.
   resources = pkgs.writeText "yession-resources.yaml" ''
     version: 1
     resources:
@@ -718,6 +720,8 @@ let
         volume:
           name: yession-nix
           at: /nix
+          # `write` is the default. `mode: read` offers the store without letting a
+          # repository change what other sessions build from (it cannot be maintained).
           maintain: { pin: /nix/var/yession/pin, every: 10m }
       # For a repo's CONTAINER sandboxes: the gateway, and the credential proxy's URL,
       # trust bundle (every root, so replacing the image's loses nothing) and a token

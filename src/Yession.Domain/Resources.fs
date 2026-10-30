@@ -23,7 +23,8 @@ open Yession.Domain
 // one thing while a backend materialises another is the failure this shape exists to make
 // unrepresentable.
 
-/// Whether the operator marked a leaf as one a person should be told about.
+/// Whether a leaf is one a person should be told about: what the operator marked, joined
+/// with the floor of its kind (`ResourceLeaf.floor`).
 ///
 /// A join semilattice with `Sensitive` on top, and that IS the masking defence: nothing in
 /// this module lowers a value, so there is no operation an operator could reach for that
@@ -127,7 +128,11 @@ type ResourceLeaf =
     /// table — a warm store on a machine whose sessions all answer to one person — and
     /// never something a repo's file may reach for on its own (`Config.fs` refuses it
     /// there). Only a container backend can hold one; everywhere else it is withheld.
-    | Volume of name: string * at: string
+    ///
+    /// `mode` is `Read` or `Write` and never `Overlay`: a volume is already the shared
+    /// thing, and the decoder refuses an overlay on one. `Read` is how an operator offers
+    /// a warm store to a repository that should not write the next session's build.
+    | Volume of name: string * at: string * mode: ResourceMountMode
     /// ONE variable. A declared `env` map is normalised to one leaf per entry before it
     /// reaches here, and that is load-bearing rather than tidy: a set of MAPS has no useful
     /// dedup — `{A=1}` and `{A=1,B=2}` are two elements that both grant `A` — and the
@@ -191,7 +196,7 @@ module ResourceLeaf =
         | Connection (name, route) -> ConnectionTarget (name, route)
         // A volume occupies the same axis a mount does — a container path — so a volume
         // and a mount at one target collide like two mounts would.
-        | Volume (_, at) -> MountTarget at
+        | Volume (_, at, _) -> MountTarget at
 
     /// A variable's value is the one part of a grant that is arbitrary text, so it is the
     /// one part that can carry whatever a reader is splitting a list of grants on. Quoted
@@ -219,24 +224,46 @@ module ResourceLeaf =
     /// an ordinary grant — while the kernel does not make the distinction either. Two
     /// prefixes would be a claim about the filesystem that nothing here can back.
     let describe (leaf: ResourceLeaf) : string =
+        // The mode is written even when it is the operator's default, because a reader
+        // works out what a grant allows from the line rather than from what is missing
+        // off the end of it.
+        let mode (mode: ResourceMountMode) =
+            match mode with
+            | ResourceMountMode.Read -> "ro"
+            | ResourceMountMode.Write -> "rw"
+            | ResourceMountMode.Overlay -> "ovl"
         match leaf with
         | Mount mount ->
-            let mode =
-                match mount.Mode with
-                | ResourceMountMode.Read -> "ro"
-                | ResourceMountMode.Write -> "rw"
-                | ResourceMountMode.Overlay -> "ovl"
-            // The mode is written even when it is the operator's default, because a reader
-            // works out what a grant allows from the line rather than from what is missing
-            // off the end of it.
-            if mount.At = mount.From then sprintf "path:%s:%s" mount.From mode
-            else sprintf "path:%s>%s:%s" mount.From mount.At mode
+            if mount.At = mount.From then sprintf "path:%s:%s" mount.From (mode mount.Mode)
+            else sprintf "path:%s>%s:%s" mount.From mount.At (mode mount.Mode)
         | Socket path -> sprintf "sock:%s" path
         | Endpoint host -> sprintf "net:%s" host
         | Variable (name, value) -> sprintf "env:%s=%s" name (quotedValue (VariableValue.render value))
         | Exec path -> sprintf "exec:%s" path
-        | Volume (name, at) -> sprintf "vol:%s>%s" name at
+        | Volume (name, at, access) -> sprintf "vol:%s>%s:%s" name at (mode access)
         | Connection (name, route) -> sprintf "conn:%s/%s" name (ConnectionRoute.name route)
+
+    /// The least sensitivity a leaf of this kind can have, whatever its declaration says.
+    ///
+    /// `Sensitive` for the three kinds that reach past the one sandbox: a volume is the same
+    /// volume in each container on this host, so one repository writes what the next
+    /// session builds from; a connection carries a credential; a socket is a door into a
+    /// process outside, and on Linux every socket (`sock:*`). Those need a person's yes, and
+    /// an operator who forgot `sensitive: true` on one is not a reason to skip it.
+    ///
+    /// A FLOOR, joined with the declaration rather than replacing it, so it only raises: an
+    /// operator can still mark an ordinary kind sensitive, and nothing can mark one of these
+    /// three ordinary. Applied where a closure is built (`ResourceClosure`), so each path to
+    /// a closure has it.
+    let floor (leaf: ResourceLeaf) : Sensitivity =
+        match leaf with
+        | Volume _
+        | Connection _
+        | Socket _ -> Sensitivity.Sensitive
+        | Mount _
+        | Endpoint _
+        | Variable _
+        | Exec _ -> Sensitivity.Ordinary
 
     /// Every colliding pair in a set of leaves.
     ///
@@ -300,8 +327,14 @@ module ResourceClosure =
                 left.Grants
         { Grants = grants; Reached = Set.union left.Reached right.Reached }
 
+    /// Each leaf at the join of what was declared and its kind's floor (`ResourceLeaf.floor`).
     let private ofLeaves (name: ResourceName) (leaves: ResourceLeaf list) (sensitivity: Sensitivity) : ResourceClosure =
-        { Grants = leaves |> List.map (fun leaf -> leaf, sensitivity) |> Map.ofList
+        let joined leaf =
+            match sensitivity, ResourceLeaf.floor leaf with
+            | Sensitivity.Sensitive, _
+            | _, Sensitivity.Sensitive -> Sensitivity.Sensitive
+            | Sensitivity.Ordinary, Sensitivity.Ordinary -> Sensitivity.Ordinary
+        { Grants = leaves |> List.map (fun leaf -> leaf, joined leaf) |> Map.ofList
           Reached = Set.singleton name }
 
     let internal single = ofLeaves
@@ -589,9 +622,9 @@ module GrantNotation =
         | Socket _ -> "sock:PATH", "a unix socket"
         | Endpoint _ -> "net:HOST", "that host may be reached over the network"
         | Volume _ ->
-            "vol:NAME>AT",
+            "vol:NAME>AT:ro|rw",
             "a named volume at AT. It persists. It is shared with every sandbox on this \
-             host that holds it"
+             host that holds it. ro is read-only. rw is writable"
         | Variable _ ->
             "env:NAME=VALUE",
             "an environment variable, its value quoted where it carries anything that could \
@@ -609,7 +642,7 @@ module GrantNotation =
         [ Mount { From = "/nix"; At = "/nix"; Mode = ResourceMountMode.Read }
           Socket "/run/docker.sock"
           Endpoint "registry.npmjs.org"
-          Volume ("yession-nix", "/nix")
+          Volume ("yession-nix", "/nix", ResourceMountMode.Write)
           Variable ("CI", VariableValue.Text "1")
           Exec "/usr/bin/git"
           Connection ("github", ConnectionRoute.Git) ]

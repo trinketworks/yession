@@ -2965,8 +2965,8 @@ let private configTests =
             let name raw = ResourceName.create raw |> expect
             let leaves, optional =
                 ResourceProfile.grants profile.Resources [] [ name "tools" ] [ name "warm-store" ] |> expect
-            Expect.isTrue (leaves |> List.contains (Volume ("warm", "/nix"))) "the offered want is held"
-            Expect.equal optional (Set.ofList [ Volume ("warm", "/nix") ]) "and only the want's leaf is droppable"
+            Expect.isTrue (leaves |> List.contains (Volume ("warm", "/nix", ResourceMountMode.Write))) "the offered want is held"
+            Expect.equal optional (Set.ofList [ Volume ("warm", "/nix", ResourceMountMode.Write) ]) "and only the want's leaf is droppable"
 
         testCase "a leaf both used and wanted is not droppable" <| fun () ->
             let profile =
