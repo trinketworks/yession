@@ -1673,9 +1673,16 @@ module Style =
     // about its own centre (`fill-box`), which for every circle here is the box's (6,6). Motion
     // goes only where a state is live or asks, and `motion-reduce` keeps the still face.
 
-    /// Working's and Pending's arc going round its track: the one mark that never stops, because the work
+    /// Pending's arc going round its track: the one mark that never stops, because the work
     /// under it has not. Under reduced motion the arc holds still at three o'clock.
     let markOrbit = "origin-center [transform-box:fill-box] animate-mark-orbit motion-reduce:animate-none"
+    /// Working's own motion: the agent's diamond beating in place, scale only, on the beat
+    /// `Style.actNoteRunningOther` already keeps for a running act that is not the agent's —
+    /// one tempo, two readings: a circle beats where the agent did not do the work, a diamond
+    /// beats where it did. Never opacity: the attention mark's ink owes the surface 3:1 at
+    /// every frame of the beat, the same rule `markOrbit`'s arc keeps by staying at its ink
+    /// and only turning. Reduced motion holds the diamond at its full size, solid and still.
+    let markBeat = "origin-center [transform-box:fill-box] animate-beat motion-reduce:animate-none"
     /// Wanted's halo: breathes out three times once the mark has arrived, then is gone, so a
     /// session left waiting an hour does not nag. Reduced motion draws no halo at all.
     let markHalo = "origin-center [transform-box:fill-box] animate-mark-halo motion-reduce:hidden"

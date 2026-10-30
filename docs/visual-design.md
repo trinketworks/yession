@@ -217,9 +217,11 @@ is a tilt: in fast, back with a hair of overshoot. A pressed control is *held* (
 
 A wait is a beat (`animate-beat`), not a spinner. A beating dot animates its colour between a
 role and its dim, never its opacity. The one thing that goes round is the attention mark's
-arc, Working's and Pending's (see Attention): it is not a wait on the reader but work under way, and its arc is
-always at its ink. `motion-reduce` rides every one: it keeps the fill and
-drops the geometry.
+arc, Pending's (see Attention): it is not a wait on the reader but work under way, and its arc
+is always at its ink. Working beats too, on the same clock, but it is the agent's own diamond
+and it is the SIZE that beats, never the colour: the mark's ink still owes the surface 3:1 at
+every frame, same as the arc does by only turning. `motion-reduce` rides every one: it keeps
+the fill and drops the geometry.
 
 ### State
 
@@ -245,7 +247,7 @@ carry a rank (WCAG 1.4.1).
 |---|---|---|---|---|
 | Wrong | disc in a ring, the whole box | `err` | the ring draws round and the core springs in, once | nothing moves until a person fixes it: sign in again, a PR conflicted or failed |
 | Wanted | disc | `green` | the arc closes and fills, then a halo breathes out three times | a person's turn: the agent is waiting |
-| Working | quarter arc on a faint track | `agent` | goes round, 1.6s, for as long as the work does | the agent at work: a turn is running |
+| Working | solid diamond | `agent` | beats in place, 1.4s, for as long as the turn does | the agent at work: a turn is running |
 | Pending | quarter arc on a faint track | `ink-dim` | goes round, 1.6s, for as long as the work does | a machine's work, needs nobody: a command the agent left running, checks, the queue, a launch |
 | Absent | empty ring | `ink-dim` | none | no agent, chosen knowingly |
 | Rest | point | `ink-faint` | none | nothing to say: stopped, or everything watched is fine |
@@ -258,17 +260,19 @@ Wanted is green because green is the people, not because it is good.
 
 Working outranks Pending: the agent thinking is nearer a person's turn than a machine
 finishing. A command the agent left running is Pending, because no turn is thinking and the
-agent wakes when it ends, as it does for checks. The two share a shape, because both are work
-under way, and are the one pair told apart by ink alone; the word beside the mark says which.
+agent wakes when it ends, as it does for checks. Working wears its own diamond — the agent's
+shape, nowhere else in the five other levels — rather than Pending's arc, so a reader does not
+need the ink to tell whose work is under way; the word beside the mark still says which.
 
 Attention is ink: each level carries more than the one below it, so the order survives
 greyscale and a blur. They share one 12px box, centre and the chrome's 1.5px stroke. The
 mark is larger than a status's 6px dot because its shape carries the rank.
 
-Motion goes only where a state is live or asks. Working and Pending keep going because the work does.
-Wanted asks a few times and then sits still, so a session left waiting does not nag. Wrong
-never fidgets: a mark that kept moving would read as a spinner, not a fault. What moves is
-geometry, never the ink the meaning rests on. `motion-reduce` keeps every still face.
+Motion goes only where a state is live or asks. Working and Pending keep going because the work does,
+one beating and one going round. Wanted asks a few times and then sits still, so a session left
+waiting does not nag. Wrong never fidgets: a mark that kept moving would read as a spinner, not
+a fault. What moves is geometry, never the ink the meaning rests on. `motion-reduce` keeps every
+still face.
 
 The mark never stands alone. A word beside it, or the name of the control it sits in, says
 the state.
@@ -282,7 +286,7 @@ and leaves a track behind it that starts at a point on its seat, so a reader see
 came from and the line has no squared end. The track is a causal link's rail, one pixel of
 `edge`: it joins two things the way the timeline's arrows do, and it must never weigh what the
 mark does.
-*Test: print the roster in greyscale and blur it. The five levels still read in order.*
+*Test: print the roster in greyscale and blur it. The six levels still read in order.*
 
 ## Hierarchy of controls
 
