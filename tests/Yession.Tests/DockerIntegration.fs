@@ -171,7 +171,7 @@ let tests =
             // The OOM score and the process bound, read where the kernel keeps them: a
             // process's own `oom_score_adj` (an exec has the container's, which is the
             // point — the work runs in execs) and the container's cgroup `pids.max`.
-            testCaseAsync "a container is created with the oom-score-adj and pids-limit its declaration names" (async {
+            testCaseAsync "a container is created with the oom_score_adj and pids_limit its declaration names" (async {
                 let spec =
                     alpineSpec
                     |> withContainer (fun c ->
@@ -188,7 +188,7 @@ let tests =
             // No declaration is 500 and 4096, never docker's 0 and no limit: a sandbox
             // process is the kernel's victim before the daemon's own, and a fork bomb
             // uses up its own container.
-            testCaseAsync "a container that declares neither gets oom-score-adj 500 and pids-limit 4096" (async {
+            testCaseAsync "a container that declares neither gets oom_score_adj 500 and pids_limit 4096" (async {
                 let! _, sandbox = startOrFail alpineSpec
                 let! run, out, err = runInSandbox sandbox "sh" [ "-c"; "cat /proc/self/oom_score_adj /sys/fs/cgroup/pids.max" ] Map.empty None
                 Expect.equal run (SandboxExited 0) (sprintf "both were read: %s" err)

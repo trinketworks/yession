@@ -460,8 +460,11 @@ sandboxes:
 ```
 
 The `container:` block is a compose service fragment: compose's keys, with compose's
-meanings, so `docker compose config` can lint it. The decoder refuses, by name, each key that
-it does not take, and says what this file offers instead.
+meanings, so a block copied from a compose file means the same thing here. `docker compose
+config` can lint it once the file it is pasted into declares `workspace` under a top-level
+`volumes:`, because compose refuses a volume source that no top-level entry declares. The
+decoder refuses, by name, each key that it does not take, and says what this file offers
+instead.
 
 ### Connections and references
 
