@@ -33,6 +33,7 @@ nix-container-store:
   volume:
     name: yession-nix
     at: /nix
+    mode: write
     maintain: { pin: /nix/var/yession/pin, every: 10m }
 ```
 

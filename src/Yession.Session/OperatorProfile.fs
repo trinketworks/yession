@@ -124,20 +124,32 @@ module OperatorProfile =
             | "write" -> Decode.succeed ResourceMountMode.Write
             | other -> Decode.fail (sprintf "'%s' is not a volume mode. A volume is read or write" other))
 
-    /// Both halves required: a volume with no `at` is a thing with nowhere to be, and the
-    /// operator is the one author who knows where it belongs. `maintain` is decoded here so
-    /// a mistake in it is refused at its own address, and collected by `maintenance`.
+    /// `name`, `at` and `mode` required: a volume with no `at` is a thing with nowhere to
+    /// be, and the operator is the one author who knows where it belongs. `maintain` is
+    /// decoded here so a mistake in it is refused at its own address, and collected by
+    /// `maintenance`.
     ///
-    /// `mode` defaults to `write`, which is what every volume was before it had a mode, so
-    /// a profile written then reads the same now.
+    /// `mode` has no default ON PURPOSE (security review, finding 9c). A writable volume
+    /// lets one repository change what every other session on the host builds from. That is
+    /// the operator's decision, not the session user's: the user does not own the volume,
+    /// is not the one harmed, and so is not asked (`ResourceLeaf.floor`). A default would
+    /// make the decision without anyone writing it down.
     let private volume : Decoder<ResourceLeaf> =
         noUnknownKeys volumeKeys
         |> Decode.andThen (fun () ->
             Decode.object (fun get ->
                 let maintained = get.Optional.Field "maintain" maintain |> Option.isSome
-                let mode = get.Optional.Field "mode" volumeMode |> Option.defaultValue ResourceMountMode.Write
-                maintained,
-                Volume (get.Required.Field "name" Decode.string, get.Required.Field "at" Decode.string, mode)))
+                let name = get.Required.Field "name" Decode.string
+                let at = get.Required.Field "at" Decode.string
+                maintained, name, at, get.Optional.Field "mode" volumeMode))
+        |> Decode.andThen (fun (maintained, name, at, mode) ->
+            match mode with
+            | Some mode -> Decode.succeed (maintained, Volume (name, at, mode))
+            | None ->
+                Decode.fail (
+                    sprintf
+                        "volume '%s' names no mode. Write mode: read, or mode: write to let every sandbox that holds it change what each other session on this host reads from it"
+                        name))
         |> Decode.andThen (fun (maintained, leaf) ->
             // A lease is written into the volume (`VolumeLeases.leaseDir`), so a maintained
             // volume the sandbox cannot write is a pin that fails every time it runs.

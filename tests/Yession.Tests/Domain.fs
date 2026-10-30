@@ -2960,7 +2960,7 @@ let private configTests =
                     """{ "version": 1,
                          "resources": {
                            "tools": { "mount": { "from": "/opt/tools" } },
-                           "warm-store": { "volume": { "name": "warm", "at": "/nix" } } } }"""
+                           "warm-store": { "volume": { "name": "warm", "at": "/nix", "mode": "write" } } } }"""
                 |> expect
             let name raw = ResourceName.create raw |> expect
             let leaves, optional =
@@ -2972,7 +2972,7 @@ let private configTests =
             let profile =
                 OperatorProfile.parse
                     """{ "version": 1,
-                         "resources": { "warm-store": { "volume": { "name": "warm", "at": "/nix" } } } }"""
+                         "resources": { "warm-store": { "volume": { "name": "warm", "at": "/nix", "mode": "write" } } } }"""
                 |> expect
             let name raw = ResourceName.create raw |> expect
             let _, optional =

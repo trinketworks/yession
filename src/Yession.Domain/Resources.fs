@@ -245,21 +245,25 @@ module ResourceLeaf =
 
     /// The least sensitivity a leaf of this kind can have, whatever its declaration says.
     ///
-    /// `Sensitive` for the three kinds that reach past the one sandbox: a volume is the same
-    /// volume in each container on this host, so one repository writes what the next
-    /// session builds from; a connection carries a credential; a socket is a door into a
-    /// process outside, and on Linux every socket (`sock:*`). Those need a person's yes, and
-    /// an operator who forgot `sensitive: true` on one is not a reason to skip it.
+    /// The approval prompt asks the person a sandbox's commands run for, so it is the right
+    /// question only about what is THEIRS. A connection is: it is spent as them. So a
+    /// connection is `Sensitive`, and an operator who forgot `sensitive: true` on one is not
+    /// a reason to skip asking.
     ///
-    /// A FLOOR, joined with the declaration rather than replacing it, so it only raises: an
-    /// operator can still mark an ordinary kind sensitive, and nothing can mark one of these
-    /// three ordinary. Applied where a closure is built (`ResourceClosure`), so each path to
-    /// a closure has it.
+    /// Not a volume or a socket, deliberately (security review, finding 9c). Both reach past
+    /// the sandbox — a volume is shared with every session on the host, a socket is a door
+    /// into a host process — but they are the OPERATOR's: the harm lands on other sessions,
+    /// not on the person who would be asked, who does not own them and will say yes. So
+    /// that decision is the operator's, written in the profile: a volume states its mode
+    /// (`OperatorProfile`), and either kind can be marked `sensitive: true`.
+    ///
+    /// A FLOOR, joined with the declaration rather than replacing it, so it only raises.
+    /// Applied where a closure is built (`ResourceClosure`), so each path to a closure has it.
     let floor (leaf: ResourceLeaf) : Sensitivity =
         match leaf with
+        | Connection _ -> Sensitivity.Sensitive
         | Volume _
-        | Connection _
-        | Socket _ -> Sensitivity.Sensitive
+        | Socket _
         | Mount _
         | Endpoint _
         | Variable _
