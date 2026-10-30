@@ -1328,15 +1328,16 @@ module Style =
     /// A person's checker, from their seat (`Attribution.seatOf`).
     let humanAvatar (seat: int) : string = "checker " + personColours.[seat % seats]
 
-    /// The agent's mark: a dark square holding a small solid blue DIAMOND — the product's
-    /// mark seen from above, its first frame, in the same blue the mark is drawn in. The
-    /// square turned 45° is the whole of it: solid, one colour, no rim. The humans keep their
+    /// The agent's mark: a dark square holding a small solid DIAMOND — the product's mark
+    /// seen from above, its first frame — in `agent`, the shade under the interactive blue,
+    /// so the agent and a control that can be pressed are two blues and not one. The square
+    /// turned 45° is the whole of it: solid, one colour, no rim. The humans keep their
     /// checkers; a diamond is the agent and only the agent.
     let agentAvatar =
-        "bg-agent-ground grid place-items-center after:content-[''] after:w-2 after:h-2 after:bg-blue after:rotate-45"
+        "bg-agent-ground grid place-items-center after:content-[''] after:w-2 after:h-2 after:bg-agent after:rotate-45"
 
     let agentAvatarSm =
-        "bg-agent-ground grid place-items-center after:content-[''] after:w-1.5 after:h-1.5 after:bg-blue after:rotate-45"
+        "bg-agent-ground grid place-items-center after:content-[''] after:w-1.5 after:h-1.5 after:bg-agent after:rotate-45"
 
     /// A thing's mark — the session, the system, a repo's file: the agent's shape with the
     /// colour taken out. A dark square holding a small grey SQUARE, upright where the agent's
@@ -1650,12 +1651,14 @@ module Style =
         | Yession.Domain.Tools.ToneMuted -> toneMuted
 
     /// The ink a standing's attention asks for. A person's turn is green, because green is
-    /// the people; work under way and an absent agent are a wait, dim; wrong is red; rest
-    /// recedes.
+    /// the people; the agent at work is the agent's own blue, a tone under the one a control
+    /// is pressed in; a machine's work and an absent agent are a wait, dim; wrong is red;
+    /// rest recedes.
     let attentionInk (attention: Yession.Domain.Standings.Attention) : string =
         match attention with
         | Yession.Domain.Standings.Wanted -> toneOk
-        | Yession.Domain.Standings.Moving
+        | Yession.Domain.Standings.Working -> "text-agent"
+        | Yession.Domain.Standings.Pending
         | Yession.Domain.Standings.Absent -> toneBusy
         | Yession.Domain.Standings.Wrong -> toneBad
         | Yession.Domain.Standings.Rest -> toneMuted
@@ -1670,7 +1673,7 @@ module Style =
     // about its own centre (`fill-box`), which for every circle here is the box's (6,6). Motion
     // goes only where a state is live or asks, and `motion-reduce` keeps the still face.
 
-    /// Moving's arc going round its track: the one mark that never stops, because the work
+    /// Working's and Pending's arc going round its track: the one mark that never stops, because the work
     /// under it has not. Under reduced motion the arc holds still at three o'clock.
     let markOrbit = "origin-center [transform-box:fill-box] animate-mark-orbit motion-reduce:animate-none"
     /// Wanted's halo: breathes out three times once the mark has arrived, then is gone, so a
@@ -2668,7 +2671,7 @@ module Style =
     /// its line (the box is 0.06em larger and lowered by half of that), which is about
     /// twice what Noto's `o` overshoots by and the usual ratio for a point against a curve.
     let private agentMark =
-        "inline-block w-[calc(1ex_+_0.06em)] h-[calc(1ex_+_0.06em)] align-[-0.03em] bg-blue "
+        "inline-block w-[calc(1ex_+_0.06em)] h-[calc(1ex_+_0.06em)] align-[-0.03em] bg-agent "
         + "[clip-path:polygon(50%_0,100%_50%,50%_100%,0_50%)]"
 
     /// Writing: held still, a small space after the last word. The words arriving are the
@@ -4201,7 +4204,7 @@ module Style =
     let noAgentPrompt = "grid grid-cols-[20px_1fr] gap-x-2.5"
     /// The edge itself: the product's 2px edge width, in the agent's blue, centred in the
     /// avatar column and spanning the prompt's height.
-    let noAgentEdge = "w-0.5 justify-self-center bg-blue"
+    let noAgentEdge = "w-0.5 justify-self-center bg-agent"
     /// The prompt's text column: the explainer over its one action.
     let noAgentBody = "flex flex-col gap-2 phone:gap-0"
     /// Full-width within the column so it reads as the section's one action, and a thumb's

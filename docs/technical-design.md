@@ -556,7 +556,7 @@ reasoning.
 | key | when nothing is declared | what it does |
 |---|---|---|
 | `mem_limit:` (`ContainerMemory`) | three quarters of what the daemon reports | The cgroup's `memory.max`, no swap beyond it, in compose's grammar (`4g`). The kernel kills inside the container that overran. A declaration above the daemon's total refuses the sandbox. |
-| `oom_score_adj:` (`OomScoreAdj`) | 500 | From 0 to 1000. The daemon's processes are below zero, so the global killer takes a sandbox process first. |
+| `oom_score_adj:` (`OomScoreAdj`) | 500 | From 0 to 1000. Work (a terminal's shell, a block, `setup:`) sets it on itself before it starts. The container, its init, its main process and the session's housekeeping execs stay at 0. The daemon's processes are below zero, so the global killer takes a sandbox process first. Inside the container, an overrun's kills take work, never the processes that keep the container up. |
 | `pids_limit:` (`PidsLimit`) | 4096 | A fork bomb uses up its own container and not the host. |
 | `cgroup_parent:` (`CgroupParent`) | the daemon's own parent | Puts the container under a pool that the host's operator limits below the VM's total, so an OOM stays inside it. |
 

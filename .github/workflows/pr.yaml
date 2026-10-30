@@ -83,11 +83,20 @@ jobs:
       # so a source change still rebuilds and a stale entry is never consulted: this can miss, it
       # cannot serve a wrong answer.
       #
-      # This job PUSHES as well as reads, and so does darwin, because a job publishing what it
-      # built is the only rule that covers both. release.yml has no darwin job, so aarch64-darwin
-      # paths are built nowhere but here — a read-only PR tier would leave the darwin half of the
-      # cache permanently empty. Fork pull requests get no secret, so they read and skip the push.
-      # A cache push may not fail the job (verify.yml's step says why).
+      # READ-ONLY, and so is every job in this file. A pull request runs its branch's own
+      # tasks.fsx, devenv.nix and nix/*.nix, and anybody who can push a branch could otherwise
+      # publish an output under a derivation master later substitutes (`yession-node-modules`,
+      # say) — and master's packages, every work sandbox and every agent container would take it.
+      # So only code master has merged pushes: release.yml's jobs, its `package-nix` darwin leg
+      # included, which keeps the aarch64-darwin half warm now that `darwin-package` here does not.
+      # The cost: a pull request that changes the dev shell builds it cold once, and master fills
+      # the cache after the merge. "Release gate" holds every cachix step here to this.
+      #
+      # `skipPush` alone stops an honest branch, not a hostile one: GitHub hands a repository
+      # secret to every same-repository pull request, and a branch can add the token back to its
+      # own copy of this file. So the token is a secret of the `cache` environment, whose
+      # deployment branches are master alone, and every job that pushes declares it. A branch
+      # cannot reach an environment secret that only master may use.
       - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         continue-on-error: true
         with:
@@ -99,7 +108,7 @@ jobs:
           # darwin dev-shell step went 0m51s back to 16m11s, recompiling all 872 derivations.
           # So one file owns substituters, and everything we pull from is named in it.
           extraPullNames: devenv
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          skipPush: true
       # `nixpkgs#devenv` resolves through the flake registry to the nixpkgs-unstable CHANNEL,
       # so which devenv CI ran was a moving target: the toolchain could change under this
       # repository with no commit, and two runs of one commit could disagree about it.
@@ -178,12 +187,14 @@ jobs:
   #
   # It does NOT record. The history is master's, and a pull request measuring itself into it
   # would make the baseline a average of everything anybody ever tried.
+  #
+  # No `secrets`: the one bench.yml reads is the cache's push token, and a pull request does not
+  # push (the `test` job's cachix step says why).
   bench:
     uses: ./.github/workflows/bench.yml
     with:
       guard: true
       record: false
-    secrets: inherit
 
   # The installable package, built on macOS. flake.nix advertises aarch64-darwin and
   # x86_64-darwin and nix/node-datachannel.nix claims platforms.unix, but every other job
@@ -206,7 +217,7 @@ jobs:
       # — and one 418 disables it for the whole run. So a warm darwin run compiled 99 CXX objects,
       # exactly as many as a cold one, while Linux went 99 -> 0. Two jobs sharing one repository's
       # Actions cache is what provoked it, and no amount of retrying fixes a rate limit.
-      # A cache push may not fail the job (verify.yml's step says why).
+      # Read-only, as the Linux job's step says; release.yml's `package-nix` darwin leg fills it.
       - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         continue-on-error: true
         with:
@@ -218,7 +229,7 @@ jobs:
           # darwin dev-shell step went 0m51s back to 16m11s, recompiling all 872 derivations.
           # So one file owns substituters, and everything we pull from is named in it.
           extraPullNames: devenv
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          skipPush: true
       # Deliberately `nix build` and not devenv: this is the `nix profile install
       # github:trinketworks/yession` path a user actually takes, and it must stay pure.
       - name: Build the installable package

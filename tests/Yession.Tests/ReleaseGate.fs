@@ -58,6 +58,7 @@ let private repoRoot () : string option =
 /// `Name` is its `name`, which is what its check is called when it sets one.
 /// `Permissions` is its own `permissions` map, empty when it sets none and takes the workflow's.
 /// `Steps` are its steps, as far as the rules below read them.
+/// `Environment` is the name of the environment it deploys to, as written: a name or an expression.
 [<RequireQualifiedAccess>]
 type private Job =
     { Needs : string list
@@ -67,7 +68,8 @@ type private Job =
       Bound : Bound option
       Name : string option
       Permissions : (string * string) list
-      Steps : Step list }
+      Steps : Step list
+      Environment : string option }
 
 /// A job's `concurrency`. The shorthand form is a bare group name, which means the default
 /// `cancel-in-progress: false` — so both spellings decode to the same answer and a reader here
@@ -83,8 +85,12 @@ and [<RequireQualifiedAccess>] private Bound =
     | Minutes of float
     | Evaluated of string
 
-/// One step: the action it runs, if it runs one.
-and [<RequireQualifiedAccess>] private Step = { Uses : string option }
+/// One step: the action it runs, and its `with:` inputs as the text GitHub hands the action.
+/// YAML writes `skipPush: true` as a boolean and `${{ … }}` as a string, and an action reads both
+/// as a string, so both decode to one.
+and [<RequireQualifiedAccess>] private Step =
+    { Uses : string option
+      With : (string * string) list }
 
 /// `needs:` is one job or a list of them, and the file writes it both ways.
 let private needs : Decoder<string list> =
@@ -100,8 +106,16 @@ let private concurrency : Decoder<Concurrency> =
               CancelInProgress =
                 get.Optional.Field "cancel-in-progress" Decode.bool |> Option.defaultValue false }) ]
 
+let private input : Decoder<string> =
+    Decode.oneOf
+        [ Decode.string
+          Decode.bool |> Decode.map (fun value -> if value then "true" else "false")
+          Decode.float |> Decode.map string ]
+
 let private step : Decoder<Step> =
-    Decode.object (fun get -> { Step.Uses = get.Optional.Field "uses" Decode.string })
+    Decode.object (fun get ->
+        { Step.Uses = get.Optional.Field "uses" Decode.string
+          With = get.Optional.Field "with" (Decode.keyValuePairs input) |> Option.defaultValue [] })
 
 /// A `permissions` map, scope to level. The shorthand `read-all` / `write-all` is a string this
 /// does not expand, and it fails the read rather than passing for a map that grants nothing.
@@ -121,7 +135,11 @@ let private job : Decoder<Job> =
                       Decode.string |> Decode.map Bound.Evaluated ])
           Name = get.Optional.Field "name" Decode.string
           Permissions = get.Optional.Field "permissions" permissions |> Option.defaultValue []
-          Steps = get.Optional.Field "steps" (Decode.list step) |> Option.defaultValue [] })
+          Steps = get.Optional.Field "steps" (Decode.list step) |> Option.defaultValue []
+          Environment =
+            get.Optional.Field
+                "environment"
+                (Decode.oneOf [ Decode.string; Decode.field "name" Decode.string ]) })
 
 /// A workflow's own top-level `concurrency`, which is the one that decides whether a run of it can
 /// be cancelled by the next one.
@@ -231,6 +249,74 @@ let private demands (channel: string) (condition: string option) =
     | None -> false
     | Some written ->
         written.Replace(" ", "").Replace("\"", "'").Contains (sprintf "needs.%s.result=='success'" channel)
+
+// --- the binary cache ----------------------------------------------------------------------
+// Master's packages, every work sandbox and every agent container substitute from the yession
+// cachix cache. A job that pushes there runs its checkout's own tasks.fsx, devenv.nix and
+// nix/*.nix, so a pushing job on a branch could publish any output under a derivation master
+// later substitutes. So only code master has merged pushes: release.yml, which runs on a master
+// push alone, and the workflows it calls, when it is the one calling them.
+
+let private cachix (step: Step) =
+    step.Uses |> Option.exists (fun uses -> uses.StartsWith "cachix/cachix-action@")
+
+let private inputOf (name: string) (step: Step) =
+    step.With |> List.tryFind (fun (key, _) -> key = name) |> Option.map snd
+
+let private shown (input: string option) =
+    match input with
+    | Some value -> sprintf "`%s`" value
+    | None -> "unset"
+
+/// What a called workflow's cachix step writes for "push only when a master push called me".
+/// `github.event_name` in a called workflow is its caller's event, and release.yml's is `push`.
+let private pushOnlyOnPush = "${{ github.event_name != 'push' }}"
+
+/// Each cachix step in `file` that can push from code master has not merged, as the message
+/// that says so. pr.yaml's run on `pull_request` and `merge_group` alone, so theirs never push
+/// and carry no token. A workflow that something other than release.yml can run pushes only
+/// when release.yml's push event ran it.
+let private branchPushes (file: string) (jobs: (string * Job) list) : string list =
+    [ for id, job in jobs do
+        for step in job.Steps |> List.filter cachix do
+            match file with
+            | "release.yml" -> ()
+            | "pr.yaml" ->
+                if inputOf "skipPush" step <> Some "true" || (inputOf "authToken" step).IsSome then
+                    yield
+                        sprintf
+                            "pr.yaml's `%s` job runs cachix-action with skipPush %s and authToken %s. A pull request runs its branch's own Nix and tasks.fsx, so its cachix step carries `skipPush: true` and no `authToken`; release.yml's jobs fill the cache after the merge"
+                            id
+                            (shown (inputOf "skipPush" step))
+                            (if (inputOf "authToken" step).IsSome then "set" else "unset")
+            | _ ->
+                if (inputOf "authToken" step).IsSome && inputOf "skipPush" step <> Some "true" && inputOf "skipPush" step <> Some pushOnlyOnPush then
+                    yield
+                        sprintf
+                            "%s's `%s` job runs cachix-action with a token and skipPush %s, so a pull request or a dispatch on a branch that runs it can push. Write `skipPush: %s`, so only release.yml's master push does"
+                            file
+                            id
+                            (shown (inputOf "skipPush" step))
+                            pushOnlyOnPush ]
+
+/// The environment that holds the cache's push token. Its deployment branches are master alone, so
+/// a branch cannot read the token, even from a workflow it edited.
+let private cacheEnvironment = "cache"
+
+/// Each job in `file` whose cachix step carries the token while it does not deploy to
+/// `cache`, as the message that says so. Outside that environment the token is a repository
+/// secret, which a same-repository pull request can read.
+let private tokenOutsideEnvironment (file: string) (jobs: (string * Job) list) : string list =
+    [ for id, job in jobs do
+        let holdsToken = job.Steps |> List.exists (fun step -> cachix step && (inputOf "authToken" step).IsSome)
+        let inEnvironment = job.Environment |> Option.exists (fun written -> written.Contains (sprintf "'%s'" cacheEnvironment) || written = cacheEnvironment)
+        if holdsToken && not inEnvironment then
+            yield
+                sprintf
+                    "%s's `%s` job pushes to the binary cache and declares no `environment: %s`, so the token it reads is a repository secret that any same-repository pull request can read too"
+                    file
+                    id
+                    cacheEnvironment ]
 
 // --- the merge queue ----------------------------------------------------------------------
 // The queue in front of master gives an entry's required checks a fixed time to report
@@ -486,6 +572,35 @@ let tests =
                 (sprintf
                     "these jobs declare no `timeout-minutes`: %s. A hang outside their steps' own budgets (the suites', `lint`'s, the Nix build's, the npm install's) holds such a runner for GitHub's six hours. Measure the job's slowest recent runs, then add the key above that plus the most budget one of those steps left unspent in them and a cold dev shell. The comment on verify.yml's `verify` job says why the bound sits above the steps' budgets"
                     (String.concat ", " unbounded))
+
+        // The population for the case after it: a cachix step this cannot see, under a key it no
+        // longer reads, would leave that loop running over nothing and calling the cache safe.
+        testCase "pull requests still read the binary cache through steps this can read" <| fun () ->
+            Expect.isTrue
+                (jobsOf "pr.yaml" |> List.exists (fun (_, job) -> job.Steps |> List.exists cachix))
+                "pr.yaml runs no cachix-action step this can find"
+
+        testCase "only code master has merged pushes to the binary cache" <| fun () ->
+            let pushes = [ for file, jobs in workflowJobs () do yield! branchPushes file jobs ]
+            Expect.isEmpty pushes (String.concat ".\n" pushes)
+
+        testCase "a job that pushes to the binary cache takes the token from the master-only environment" <| fun () ->
+            let outside = [ for file, jobs in workflowJobs () do yield! tokenOutsideEnvironment file jobs ]
+            Expect.isEmpty outside (String.concat ".\n" outside)
+            let red =
+                jobsIn
+                    "a release.yml"
+                    "jobs:\n  package:\n    steps:\n      - uses: cachix/cachix-action@0\n        with:\n          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}\n"
+            Expect.isNonEmpty (tokenOutsideEnvironment "a release.yml" red) "a pushing job with no environment reads a repository secret"
+
+        // The rule's red, over a pr.yaml written here: the step this file had until master
+        // alone could push.
+        testCase "a pull request's cachix step with a token is a branch that can push" <| fun () ->
+            let jobs =
+                jobsIn
+                    "a pr.yaml"
+                    "jobs:\n  test:\n    steps:\n      - uses: cachix/cachix-action@0\n        with:\n          name: yession\n          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}\n"
+            Expect.isNonEmpty (branchPushes "pr.yaml" jobs) "a pull request's cachix step that holds the token can push"
 
         // A write is held only where it is spent. The package jobs build from the commit and run
         // what its dev shell fetched, so a write there is one any of that could use, and the

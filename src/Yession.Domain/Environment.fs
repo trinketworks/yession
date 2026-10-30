@@ -206,9 +206,10 @@ module ContainerMemory =
                     (describe daemonTotal))
         | Some declared -> Ok declared
 
-/// How strongly the kernel prefers a container's processes as OOM victims —
-/// `docker run --oom-score-adj`, from 0 to 1000. Every process in the container has it,
-/// each exec included.
+/// How strongly the kernel prefers a sandbox's WORK as an OOM victim, from 0 to 1000: what a
+/// person or agent runs (`ProcessEntry.Entrypoint`) writes it to its own
+/// `/proc/self/oom_score_adj` before the work starts. The container itself, its init, its
+/// main process and every housekeeping exec stay at `container` (0).
 ///
 /// A ceiling (`ContainerMemory`) does not stop the host itself from running out: containers
 /// that each stay under theirs can still add up to more than the host has. The kernel's
@@ -217,15 +218,27 @@ module ContainerMemory =
 /// (measured: dockerd −500, containerd −999) and a container's are 0 by default, so the
 /// kernel can choose them. At 500, any sandbox process is chosen before any of them.
 ///
+/// Inside the container, the split decides who goes when the container hits its own
+/// `memory.max`. One overrun kills two processes: the process that overran, and a moment
+/// later a second one, before the first has given its memory back (measured: 40 overruns,
+/// 41 kills). With one score for every process, the second victim was close to arbitrary:
+/// the container's idle main process (the container stopped) or the exec that reads the
+/// memory counters. At 0 against work's 500, neither is chosen while work is there.
+///
 /// Not below zero: a sandbox that could rank itself with the daemon's own processes
 /// removes what this protects. A repo can only make its processes a more likely victim.
+/// Work can write its own score back down to 0 without a capability, never below.
 type OomScoreAdj = private OomScoreAdj of int
 
 [<RequireQualifiedAccess>]
 module OomScoreAdj =
 
-    /// What a container gets when its declaration names none.
+    /// What work gets when its declaration names none.
     let standard = OomScoreAdj 500
+
+    /// What the container is created with, so its init, its main process and every
+    /// housekeeping exec have it. Above the daemon's own, below any work.
+    let container = OomScoreAdj 0
 
     let value (OomScoreAdj n) : int = n
 
@@ -237,9 +250,9 @@ module OomScoreAdj =
                     n)
         else Ok (OomScoreAdj n)
 
-    /// What a container is created with: what it declared, or `standard`. Never docker's
-    /// own default of 0, which ranks a sandbox with the daemon's processes.
-    let forContainer (declared: OomScoreAdj option) : OomScoreAdj =
+    /// What work in a container runs at: what it declared, or `standard`. Never
+    /// `container`'s 0, which ranks work with the processes that keep the container up.
+    let forWork (declared: OomScoreAdj option) : OomScoreAdj =
         declared |> Option.defaultValue standard
 
 /// How many processes and threads a container can hold at once — its cgroup's

@@ -168,9 +168,9 @@ let tests =
                 do! sandbox.Dispose ()
             })
 
-            // The OOM score and the process bound, read where the kernel keeps them: a
-            // process's own `oom_score_adj` (an exec has the container's, which is the
-            // point — the work runs in execs) and the container's cgroup `pids.max`.
+            // The OOM score and the process bound, read where the kernel keeps them: the
+            // work's own `oom_score_adj` (a work exec sets it on itself, and the work runs
+            // in execs) and the container's cgroup `pids.max`.
             testCaseAsync "a container is created with the oom_score_adj and pids_limit its declaration names" (async {
                 let spec =
                     alpineSpec
@@ -193,6 +193,33 @@ let tests =
                 let! run, out, err = runInSandbox sandbox "sh" [ "-c"; "cat /proc/self/oom_score_adj /sys/fs/cgroup/pids.max" ] Map.empty None
                 Expect.equal run (SandboxExited 0) (sprintf "both were read: %s" err)
                 Expect.equal (out.Split '\n' |> Array.map (fun l -> l.Trim ()) |> Array.filter ((<>) "") |> List.ofArray) [ "500"; "4096" ] "the standard values"
+                do! sandbox.Dispose ()
+            })
+
+            // The other side of that split: the container's init, and a housekeeping exec
+            // such as the read of the memory counters, stay at 0 under work at 700. An
+            // overrun's second kill takes the lowest-ranked process only when nothing above
+            // it is left, so these two are what the kill passes over.
+            testCaseAsync "the container's init and its housekeeping execs stay at oom_score_adj 0 under its work" (async {
+                let spec = alpineSpec |> withContainer (fun c -> { c with OomScoreAdj = Some (OomScoreAdj.ofInt 700 |> expect) })
+                let! _, sandbox = startOrFail spec
+                let! run, out, err = runInSandbox sandbox "cat" [ "/proc/1/oom_score_adj" ] Map.empty None
+                Expect.equal run (SandboxExited 0) (sprintf "init's score was read: %s" err)
+                Expect.equal (out.Trim ()) "0" "init stays at 0"
+                let said = System.Text.StringBuilder ()
+                let! spawned =
+                    sandbox.Spawn
+                        { Executable = "cat"
+                          Arguments = [ "/proc/self/oom_score_adj" ]
+                          Env = Map.empty
+                          WorkingDirectory = None
+                          Via = Direct }
+                        (fun (_, text) -> said.Append text |> ignore)
+                match spawned with
+                | Error reason -> failwithf "the housekeeping exec did not start: %s" reason
+                | Ok handle ->
+                    let! ended = handle.Exited
+                    Expect.equal (ended, said.ToString().Trim ()) (SandboxExited 0, "0") "a housekeeping exec stays at 0"
                 do! sandbox.Dispose ()
             })
 
