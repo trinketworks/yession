@@ -28,11 +28,41 @@ let private repo (raw: string) = RepoRef.create raw |> expect
 /// The item a boot recorded, which a boot's fold names as its cause.
 let private boot = MessageId.create "boot" |> expect
 
+/// Where a case writes a checkout's `yession.yaml`, under its repos directory.
+let private pathIn (reposDir: string) (r: RepoRef) : string =
+    sprintf "%s/%s/%s" reposDir (RepoRef.relativePath r) ConfigFile.FileName
+
+/// The files a case wrote under `reposDir`, standing in for what each checkout's `HEAD`
+/// commits. The session reads git's object store (`Repos.ReposService.ReadCommitted`, whose
+/// own cases are in `GitIntegration`); what THIS suite pins is the parse and the fold over
+/// whatever that read answers.
+let private committedIn (reposDir: string) : Repos.CommittedFile =
+    fun r path ->
+        async {
+            let file = sprintf "%s/%s/%s" reposDir (RepoRef.relativePath r) path
+            return Ok (if TestFiles.exists file then Some (TestFiles.read file) else None)
+        }
+
+/// The value of an async that never waits, which `committedIn`'s reads do not: started
+/// immediately, it has settled by the time this returns.
+let private settled (work: Async<'a>) : 'a =
+    let mutable answer = None
+    Async.StartImmediate (async {
+        let! value = work
+        answer <- Some value
+    })
+    match answer with
+    | Some value -> value
+    | None -> failwith "a read that was meant to settle at once is still waiting"
+
+/// `RepoConfig.read` over the files a case wrote.
+let private readIn (reposDir: string) (r: RepoRef) = settled (RepoConfig.read (committedIn reposDir) r)
+
 /// A repos directory holding one checkout, with `text` as its `yession.yaml` when given.
 let private checkout (r: RepoRef) (text: string option) : string =
     let reposDir = TestFiles.tempDir "yession-config-"
     TestFiles.ensureDir (sprintf "%s/%s" reposDir (RepoRef.relativePath r))
-    text |> Option.iter (TestFiles.write (RepoConfig.pathIn reposDir r))
+    text |> Option.iter (TestFiles.write (pathIn reposDir r))
     reposDir
 
 // YAML fixtures live at module level: a triple-quoted string whose content starts at column 0
@@ -166,7 +196,7 @@ let tests =
             // The end-to-end claim: YAML on disk reaches the domain intact.
             let r = repo "octo/hello"
             let dir = checkout r (Some devWithNet)
-            let file = (RepoConfig.read dir r |> expect |> Option.get).File
+            let file = (readIn dir r |> expect |> Option.get).File
             let dev = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
             Expect.equal (dev.Container |> Option.get).Image (Some { Name = "node"; Tag = Some "24" })
                 "the image survived the round trip"
@@ -179,8 +209,8 @@ let tests =
             let r = repo "trinketworks/yession"
             let dir = TestFiles.tempDir "yession-config-"
             TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
-            TestFiles.write (RepoConfig.pathIn dir r) (TestFiles.read "yession.yaml")
-            let file = (RepoConfig.read dir r |> expect |> Option.get).File
+            TestFiles.write (pathIn dir r) (TestFiles.read "yession.yaml")
+            let file = (readIn dir r |> expect |> Option.get).File
             let dev = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
             let gate = file.Sandboxes |> Map.find (SandboxName.create "gate" |> expect)
             // A repo's work sandbox is a container; a declaration without one is refused
@@ -223,8 +253,8 @@ let tests =
             let r = repo "trinketworks/yession"
             let dir = TestFiles.tempDir "yession-config-"
             TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
-            TestFiles.write (RepoConfig.pathIn dir r) (TestFiles.read "yession.yaml")
-            let file = (RepoConfig.read dir r |> expect |> Option.get).File
+            TestFiles.write (pathIn dir r) (TestFiles.read "yession.yaml")
+            let file = (readIn dir r |> expect |> Option.get).File
             // The operator's VM, the smallest daemon this repo is run on.
             let vm = 8L * 1024L * 1024L * 1024L
             let containers =
@@ -241,19 +271,19 @@ let tests =
         testCase "a repo with no file asks for nothing, and that is not an error" <| fun () ->
             // The ordinary case. Most repos will never carry one.
             let r = repo "octo/plain"
-            Expect.equal (RepoConfig.read (checkout r None) r) (Ok None) "absent is absent, not broken"
+            Expect.equal (readIn (checkout r None) r) (Ok None) "absent is absent, not broken"
 
         testCase "a repo with a broken file is refused, not treated as absent" <| fun () ->
             // Folding this into the case above is how a repo silently stops being configured
             // the day somebody mistypes a key.
             let r = repo "octo/broken"
-            Expect.isError (RepoConfig.read (checkout r (Some "version: 2\nsandboxes:\n  dev:\n    workdirr: ./app\n")) r)
+            Expect.isError (readIn (checkout r (Some "version: 2\nsandboxes:\n  dev:\n    workdirr: ./app\n")) r)
                 "an unknown key fails the file rather than yielding an empty one"
 
         testCase "the refusal names the repo it came from" <| fun () ->
             // A session can hold several checkouts; "a config is broken" is not actionable.
             let r = repo "octo/broken"
-            match RepoConfig.read (checkout r (Some "version: 99\n")) r with
+            match readIn (checkout r (Some "version: 99\n")) r with
             | Ok _ -> failwith "expected a refusal"
             | Error e -> Expect.isTrue (e.Contains "octo/broken") "it says whose file"
 
@@ -263,14 +293,14 @@ let tests =
             // so without the option the second `dev` would quietly win.
             let r = repo "octo/hello"
             let dir = checkout r (Some duplicateName)
-            Expect.isError (RepoConfig.read dir r) "one name declared twice fails the file"
+            Expect.isError (readIn dir r) "one name declared twice fails the file"
 
         testCase "a YAML anchor is resolved before the decoder sees anything" <| fun () ->
             // Reuse inside a file costs the schema nothing — which is what lets a repo declare
             // a second sandbox on the same configuration without repeating it.
             let r = repo "octo/hello"
             let dir = checkout r (Some anchored)
-            let file = (RepoConfig.read dir r |> expect |> Option.get).File
+            let file = (readIn dir r |> expect |> Option.get).File
             let gate = file.Sandboxes |> Map.find (SandboxName.create "gate" |> expect)
             Expect.equal (gate.Uses |> List.map ResourceName.value) [ "npm" ] "the alias carried the anchor's value"
 
@@ -279,7 +309,7 @@ let tests =
             // would not notice it being dropped.
             let r = repo "octo/hello"
             Expect.isError
-                (RepoConfig.read (checkout r (Some "version: 2\nsandboxes: !!python/object:os.system {}\n")) r)
+                (readIn (checkout r (Some "version: 2\nsandboxes: !!python/object:os.system {}\n")) r)
                 "an unknown tag is refused"
 
         testCase "one repo's broken file does not cost the others their configuration" <| fun () ->
@@ -288,9 +318,9 @@ let tests =
             let good, bad = repo "octo/good", repo "octo/bad"
             let dir = TestFiles.tempDir "yession-config-"
             for r in [ good; bad ] do TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
-            TestFiles.write (RepoConfig.pathIn dir good) "version: 2\nsandboxes:\n  dev: {}\n"
-            TestFiles.write (RepoConfig.pathIn dir bad) "version: 2\nsandboxes:\n  dev:\n    nope: 1\n"
-            let read = RepoConfig.readAll dir [ good; bad ]
+            TestFiles.write (pathIn dir good) "version: 2\nsandboxes:\n  dev: {}\n"
+            TestFiles.write (pathIn dir bad) "version: 2\nsandboxes:\n  dev:\n    nope: 1\n"
+            let read = settled (RepoConfig.readAll (committedIn dir) [ good; bad ])
             let declared, refused = read.Declared, read.Refused
             Expect.equal (Map.count declared) 1 "the good repo's sandbox survived"
             Expect.isTrue
@@ -523,7 +553,7 @@ let tests =
 // --- The fold ----------------------------------------------------------------------------
 
 /// A repos service that answers the listing with `reads` and refuses everything else.
-let private reposReading (reads: unit -> RepoRead list) : Repos.ReposService =
+let private reposReading (reposDir: string) (reads: unit -> RepoRead list) : Repos.ReposService =
     let denied _ = async { return Error "not part of this test" }
     { AddRepo = fun _ _ -> denied ()
       ListRepos = fun () -> async { return Ok (reads ()) }
@@ -532,6 +562,7 @@ let private reposReading (reads: unit -> RepoRead list) : Repos.ReposService =
       RepoStatus = fun _ -> denied ()
       RepoLog = fun _ -> denied ()
       RepoDiff = fun _ -> denied ()
+      ReadCommitted = committedIn reposDir
       RemoveRepo = fun _ _ _ -> denied () }
 
 let private listedAt (reposDir: string) (r: RepoRef) : RepoRead =
@@ -551,7 +582,7 @@ let private unreadableAt (reposDir: string) (r: RepoRef) : RepoRead =
 /// A repos service that knows about `listed` and nothing else. Only `ListRepos` is the
 /// fold's business; every other verb is somebody else's suite.
 let private reposOver (reposDir: string) (listed: RepoRef list) : Repos.ReposService =
-    reposReading (fun () -> listed |> List.map (listedAt reposDir))
+    reposReading reposDir (fun () -> listed |> List.map (listedAt reposDir))
 
 /// The same service with a listing that fails while `failing` says so — the whole listing, as
 /// one that could not be made at all does. (A checkout git cannot read is not this: it is a
@@ -619,12 +650,11 @@ let foldTests =
                 let one, two = repo "octo/one", repo "octo/two"
                 let dir = TestFiles.tempDir "yession-config-"
                 for r in [ one; two ] do TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
-                TestFiles.write (RepoConfig.pathIn dir one) "version: 2\nsandboxes:\n  dev: {}\n"
-                TestFiles.write (RepoConfig.pathIn dir two) "version: 2\nsandboxes:\n  dev: {}\n  gate: {}\n"
+                TestFiles.write (pathIn dir one) "version: 2\nsandboxes:\n  dev: {}\n"
+                TestFiles.write (pathIn dir two) "version: 2\nsandboxes:\n  dev: {}\n  gate: {}\n"
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (reposOver dir [ one; two ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate seen)
@@ -662,7 +692,7 @@ let foldTests =
                             return Ok { Handle = None; Tool = call.Tool; Summary = call.Summary; Status = CommandRan "ok" }
                         }
                 let folded =
-                    RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) barrier (foldLog ()) noCapabilities
+                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) barrier (foldLog ()) noCapabilities
                 // Started as a child: a sequential fold would deadlock here (the first call
                 // waits on a second the fold has not started), so we do NOT await it to a
                 // finish — we check that both declarations reached the gate.
@@ -679,7 +709,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
-                    RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
+                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal (Authority.author seen.[0].Authority) (ActorRef.Configured r) "the repo's own file"
                 Expect.equal (Authority.onBehalfOf seen.[0].Authority) None "and a boot fold borrows nobody's authority"
@@ -691,7 +721,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ github ]\n")
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
-                    RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
+                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
                 let ada = Principal.User (UserId.create "ada" |> expect)
                 do! folded.Fold (FoldCause.Connected (CredentialFor.Person ada)) (CredentialFor.Person ada)
                 Expect.equal (Authority.credential seen.[0].Authority) (CredentialFor.Person ada) "whose authority the started sandbox is on"
@@ -718,7 +748,7 @@ let foldTests =
                             return Ok { Handle = None; Tool = call.Tool; Summary = call.Summary; Status = CommandRan "ok" }
                         }
                 let folded =
-                    RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) holding (foldLog ()) noCapabilities
+                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) holding (foldLog ()) noCapabilities
                 let ada = Principal.User (UserId.create "ada" |> expect)
                 let! first = Async.StartChild (folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment)
                 do! Support.waitUntil "the first fold to be held at the gate" (fun () -> release.IsSome)
@@ -740,7 +770,6 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (refusingGate "registry.npmjs.org is not in this session's egress")
@@ -761,7 +790,6 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -780,7 +808,6 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    nope: 1\n")
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -803,8 +830,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let folded =
                     RepoSandboxes.create
-                        dir
-                        (cell (Some (reposReading (fun () -> [ listedAt dir r; unreadableAt dir stray ]))))
+                        (cell (Some (reposReading dir (fun () -> [ listedAt dir r; unreadableAt dir stray ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
                         (foldLog ())
@@ -822,8 +848,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let folded =
                     RepoSandboxes.create
-                        dir
-                        (cell (Some (reposReading (fun () -> [ listedAt dir r; unreadableAt dir stray ]))))
+                        (cell (Some (reposReading dir (fun () -> [ listedAt dir r; unreadableAt dir stray ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
                         (foldLog ())
@@ -838,8 +863,7 @@ let foldTests =
                 let dir = TestFiles.tempDir "yession-config-"
                 let folded =
                     RepoSandboxes.create
-                        dir
-                        (cell (Some (reposReading (fun () -> [ unreadableAt dir stray ]))))
+                        (cell (Some (reposReading dir (fun () -> [ unreadableAt dir stray ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
                         (foldLog ())
@@ -863,8 +887,7 @@ let foldTests =
                 let readable = ref true
                 let folded =
                     RepoSandboxes.create
-                        dir
-                        (cell (Some (reposReading (fun () -> [ (if readable.Value then listedAt dir r else unreadableAt dir r) ]))))
+                        (cell (Some (reposReading dir (fun () -> [ (if readable.Value then listedAt dir r else unreadableAt dir r) ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
                         (foldLog ())
@@ -886,7 +909,7 @@ let foldTests =
                 let dir = checkout r None
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
-                    RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
+                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal seen.Count 0 "nothing was asked for"
                 Expect.equal (folded.Outcomes ()) [] "and nothing is wrong"
@@ -901,7 +924,6 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (listingFailingWhile (fun () -> true) (reposOver dir [ r ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -918,7 +940,6 @@ let foldTests =
                 let mutable failing = true
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (listingFailingWhile (fun () -> failing) (reposOver dir [ r ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -944,7 +965,6 @@ let foldTests =
                 let mutable failing = false
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (listingFailingWhile (fun () -> failing) (reposOver dir [ r ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -967,7 +987,6 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (listingFailingWhile (fun () -> true) (reposOver dir [ r ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -999,7 +1018,6 @@ let foldTests =
                 let log = foldLog ()
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (refusingGate "registry.npmjs.org is not in this session's egress")
@@ -1024,7 +1042,6 @@ let foldTests =
                 let log = foldLog ()
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (refusingGate "registry.npmjs.org is not in this session's egress")
@@ -1046,7 +1063,6 @@ let foldTests =
                 let log = foldLog ()
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (refusingGate "the ceiling is closed")
@@ -1070,7 +1086,6 @@ let foldTests =
                 let log = foldLog ()
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray ()))
@@ -1099,7 +1114,7 @@ let foldTests =
                                         Status = CommandRefusedBy (ActorRef.System, Some why) }
                         }
                 let folded =
-                    RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) moving log noCapabilities
+                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) moving log noCapabilities
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 why <- "no credential to forward"
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
@@ -1118,7 +1133,6 @@ let foldTests =
                 let log = foldLog ()
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -1142,7 +1156,6 @@ let foldTests =
                 let log = foldLog ()
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -1166,7 +1179,6 @@ let foldTests =
                 let log = foldLog ()
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -1208,7 +1220,6 @@ let foldTests =
                 let log = foldLog ()
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -1232,7 +1243,6 @@ let foldTests =
                 let mutable granted = [ "path:/nix:ro" ]
                 let folded =
                     RepoSandboxes.create
-                        dir
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -1261,7 +1271,7 @@ let foldTests =
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
                     RepoSandboxes.create
-                        dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
+                        (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate seen) (foldLog ()) (granting [ "path:/nix:ro" ])
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal seen.Count 1 "the declaration reached the gate"
@@ -1274,7 +1284,7 @@ let foldTests =
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
                     RepoSandboxes.create
-                        dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
+                        (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate seen) (foldLog ()) (sensitively [ "!net:anywhere" ])
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal seen.Count 0 "nothing was started"
@@ -1305,7 +1315,7 @@ let foldTests =
                 let log = foldLog ()
                 let folded =
                     RepoSandboxes.create
-                        dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
+                        (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate seen) log (sensitively [ "!net:anywhere" ])
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let ada = Principal.User (UserId.create "ada" |> expect)
@@ -1331,7 +1341,7 @@ let foldTests =
                 let log = foldLog ()
                 let folded =
                     RepoSandboxes.create
-                        dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
+                        (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ())) log
                         (sensitively [ "!net:anywhere" ])
                 let anonymous = Principal.Peer (PeerId.create "peer-1" |> expect)
@@ -1352,7 +1362,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ web ]\n")
                 let folded =
                     RepoSandboxes.create
-                        dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
+                        (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ())) (foldLog ())
                         (sensitively [ "!net:anywhere" ])
                 let ada = Principal.User (UserId.create "ada" |> expect)
@@ -1451,7 +1461,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsession:\n  shell-profile: src\n")
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
-                    RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
+                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
                 let ada = Principal.User (UserId.create "ada" |> expect)
                 let added = MessageId.create "added" |> expect
                 do! folded.Fold (FoldCause.Changed (r, Some added)) (CredentialFor.Person ada)
@@ -1471,11 +1481,11 @@ let foldTests =
                 let dir = TestFiles.tempDir "yession-config-"
                 for r in [ one; two ] do
                     TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
-                    TestFiles.write (RepoConfig.pathIn dir r) "version: 2\nsession:\n  shell-profile: .\n"
+                    TestFiles.write (pathIn dir r) "version: 2\nsession:\n  shell-profile: .\n"
                 let seen = ResizeArray<GatedCall> ()
                 let log = foldLog ()
                 let folded =
-                    RepoSandboxes.create dir (cell (Some (reposOver dir [ one; two ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) log noCapabilities
+                    RepoSandboxes.create (cell (Some (reposOver dir [ one; two ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) log noCapabilities
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.isEmpty (List.ofSeq seen) "no profile is set: neither file wins"
@@ -1492,7 +1502,7 @@ let foldTests =
         testCaseAsync "a session with no repos service folds nothing rather than failing" <|
             async {
                 let folded =
-                    RepoSandboxes.create "/nowhere" (cell None) (cell WorkSandboxes.unavailable) (recordingGate (ResizeArray<GatedCall> ())) (foldLog ()) noCapabilities
+                    RepoSandboxes.create (cell None) (cell WorkSandboxes.unavailable) (recordingGate (ResizeArray<GatedCall> ())) (foldLog ()) noCapabilities
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal (folded.Outcomes ()) [] "no repos is not a fault"
             }

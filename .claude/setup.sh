@@ -78,7 +78,22 @@ if ! $hook_only; then
     mkdir -p /etc/nix
     grep -q '^build-users-group' /etc/nix/nix.conf 2>/dev/null \
       || echo 'build-users-group =' >> /etc/nix/nix.conf
-    sh <(curl -L https://nixos.org/nix/install) --no-daemon
+    # The installer, pinned. `https://nixos.org/nix/install` is whatever release is newest
+    # today, and running it unseen ran whatever that URL served. This is the versioned script
+    # that URL redirected to on 2026-10-28: Nix 2.35.4, SHA-256 below. The script checks the
+    # hash of the tarball it fetches, so pinning it pins the whole install. To move to a new
+    # release, download its `install`, check it, and change both lines.
+    nix_installer_url=https://releases.nixos.org/nix/nix-2.35.4/install
+    nix_installer_sha256=118c3dfa04bdc946b3f577365b9a295607142c9b920e2c07b184e266d62b1ee1
+    nix_installer="$(mktemp)"
+    curl -fsSL -o "$nix_installer" "$nix_installer_url"
+    if ! echo "$nix_installer_sha256  $nix_installer" | sha256sum -c --quiet -; then
+      echo "setup: $nix_installer_url does not match its pinned SHA-256; not running it" >&2
+      rm -f "$nix_installer"
+      exit 1
+    fi
+    sh "$nix_installer" --no-daemon
+    rm -f "$nix_installer"
   fi
   mkdir -p "$HOME/.config/nix"
   grep -q '^experimental-features' "$HOME/.config/nix/nix.conf" 2>/dev/null \

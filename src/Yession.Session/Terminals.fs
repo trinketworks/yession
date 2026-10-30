@@ -1692,8 +1692,7 @@ module SessionTerminals =
                                 // prompts after `PS1` is armed. The profile's `cd` ahead of
                                 // the rc is answered before any prompt carries a mark.
                                 ledgers.[key] <- PromptLedger.opened instrumentation
-                                for line in lines.Split '\n' do
-                                    pty.Write (line + "\r")
+                                lines.Split '\n' |> Array.iter (fun line -> pty.Write (line + "\r"))
                                 match! started with
                                 | Ok () ->
                                     terminal.Shell <- Some pty
@@ -1881,8 +1880,7 @@ module SessionTerminals =
                         // there was one — in that order, so nothing said early is published
                         // after something said late.
                         sink.Value <- attachedSink id
-                        for held in queued do
-                            sink.Value held
+                        queued |> Seq.iter (fun held -> sink.Value held)
                         queued.Clear ()
                     let renewable =
                         match source with
@@ -2851,7 +2849,11 @@ module SessionTerminals =
                             let! spawned =
                                 (environmentFor sandbox).Spawn
                                     { Executable = shell.Executable
-                                      Arguments = shell.Arguments @ [ "pwd && cd \"$1\" && pwd"; "sh"; path ]
+                                      // `cd -- -` is `cd "$OLDPWD"`, so the path goes as a
+                                      // `PathOperand`: `./-` is a directory named `-`.
+                                      Arguments =
+                                        shell.Arguments
+                                        @ [ "pwd && cd -- \"$1\" && pwd"; "sh"; PathOperand.value (PathOperand.ofPath path) ]
                                       Env = Map.empty
                                       WorkingDirectory = None
                                       // A `cd` and two `pwd`s: housekeeping, not work.

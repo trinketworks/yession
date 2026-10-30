@@ -259,11 +259,15 @@ let private frameChannel (transport: Transport) : FrameChannel<string> =
             closed <- true
             stopLooking ()
             deliver None
+    let take = FramePieces.assembler ()
     channel.onmessage <-
         fun message ->
-            match Codec.fromString frameCodec (string message.data) with
-            | Ok frame -> deliver (Some frame)
-            | Error detail -> JS.console.error ("frame decode failed: " + detail)
+            match take (string message.data) with
+            | None -> ()
+            | Some whole ->
+                match Codec.fromString frameCodec whole with
+                | Ok frame -> deliver (Some frame)
+                | Error detail -> JS.console.error ("frame decode failed: " + detail)
     channel.onclose <- fun _ -> finish ()
     onPeerFinished peer finish
     stopLooking <- onResume transport finish
@@ -271,9 +275,11 @@ let private frameChannel (transport: Transport) : FrameChannel<string> =
         fun frame ->
             async {
                 // A peer can vanish between frames; sending into a channel that is no longer
-                // open is a no-op, not a throw.
+                // open is a no-op, not a throw. A frame longer than one message goes as
+                // pieces (`FramePieces`); the browser refuses an oversized send.
                 if channel.readyState = Browser.Types.RTCDataChannelState.Open then
-                    channel.send (U4.Case1 (Codec.toString frameCodec frame))
+                    FramePieces.split (Codec.toString frameCodec frame)
+                    |> List.iter (fun piece -> channel.send (U4.Case1 piece))
             }
       Receive =
         fun () ->
@@ -576,6 +582,19 @@ let private cacheWrite (cache: Cache) (url: string) (body: string) : JS.Promise<
     // costs this client a cold open and nothing else, and there is no caller to tell.
     cache.put (url, keptResponse body [ "content-type", ndjson ])
     |> Promise.catch (fun _ -> ())
+
+
+/// A heard error as the model keeps it. The frames are the stack's lines, less the one some
+/// browsers lead it with that repeats the name and message.
+let private pageFault (name: string, message: string, stack: string) : PageFault =
+    let headline = Dom.Text.pageFaultWhy name message
+    { Name = name
+      Message = message
+      Stack =
+        stack.Split '\n'
+        |> Array.map (fun line -> line.Trim ())
+        |> Array.filter (fun line -> line <> "" && line <> headline)
+        |> List.ofArray }
 
 /// Register the worker that makes a cold open possible with no network (Plan 20).
 ///
@@ -1255,6 +1274,7 @@ let private start () =
         |> Program.run
 
         renderer.Attach ()
+        Unhandled.hear (fun heard -> dispatchRef (PageFaultMsg (pageFault heard)))
         caretHeld <- renderer.Caret
 
         // The column is beside the chat or a drawer over it according to the stylesheet's
@@ -1267,33 +1287,54 @@ let private start () =
         // merged remote edit settle it and nothing else does.
         DraftSlot.follow doc registry peerId (fun msg -> dispatchRef msg) |> ignore
 
-        // Local-first: the doc persists in IndexedDB keyed by the session's address. Cold
-        // loads render local state (drafts, queued messages) before — and without — the
-        // network; on reconnect the full-state exchange reconciles.
-        let persistence = Fable.YIndexeddb.create (persistenceKey ()) doc
-        do! persistence.whenSynced () |> Async.AwaitPromise
-
-        // The replayed doc is state that did not arrive as a body change, so settle the rule
-        // against it explicitly: a doc stored before publication followed the body can hold an
-        // empty-bodied slot, and this is where it goes.
-        DraftSlot.settle doc registry peerId (fun msg -> dispatchRef msg)
-
-        // Durable history, out of this client's own store, BEFORE anything asks the network
-        // and regardless of what `/me` is about to say (Plan 20). The probe decides whether
-        // this client may CONNECT; it has never had any business deciding whether a client may
-        // read what it was already given. That it did is why an offline open rendered an empty
-        // conversation rather than the one it had been reading.
         // The worker first, because it is what makes the NEXT cold open work; this one is
         // already served. Fire and forget: nothing here depends on it, and a client that
         // cannot have one loses only the offline open.
         registerWorker (Page.href ServiceWorker)
 
-        let! historyCache = openHistoryCache ()
-        let! transcriptCaches = openTranscriptCaches ()
-        // `Connecting`, then the events, then the transcripts — the sequence a person watches
-        // between the first paint and the connection, and the one the harness measures
-        // (`Client.LocalOpen`, which says why the order is that).
-        do! Client.LocalOpen.replay historyCache transcriptCaches (fun msg -> dispatchRef msg)
+        // Local-first: the doc persists in IndexedDB keyed by the session's address. Cold
+        // loads render local state (drafts, queued messages) before — and without — the
+        // network; on reconnect the full-state exchange reconciles. Durable history comes out
+        // of this client's own store too, BEFORE anything asks the network and regardless of
+        // what `/me` is about to say (Plan 20). The probe decides whether this client may
+        // CONNECT; it has never had any business deciding whether a client may read what it
+        // was already given.
+        //
+        // Every step is bounded (`Client.LocalOpen.run`): a store that never answers, or throws
+        // what a store throws, is gone without for this page load, and the page says so,
+        // rather than sitting at `Connecting` before it has asked the session anything. A provider whose load runs
+        // over is left in place: if it loads late, what it kept merges into the doc like any
+        // other update, which is what a CRDT is for.
+        //
+        // A change the store cannot keep later on (its connection closed under the open page)
+        // is lost to this device only: the doc goes on, and so does everything sent to peers.
+        // Said once, because a closed store fails every change after it.
+        let writeFailedSaid = ref false
+        let writeFailed (error: exn) =
+            if not writeFailedSaid.Value then
+                writeFailedSaid.Value <- true
+                JS.console.warn ("yession/doc-store: changes are no longer kept on this device: " + error.Message)
+        let docStep =
+            async {
+                let persistence = Fable.YIndexeddb.create (persistenceKey ()) doc writeFailed
+                do! persistence.whenSynced () |> Async.AwaitPromise
+            }
+        let! opened =
+            Client.LocalOpen.run
+                Resilience.Policy.sleep
+                Client.LocalOpen.limit
+                (Client.LocalOpen.expected DomException.name)
+                { Doc = docStep
+                  History = openHistoryCache ()
+                  Transcripts = openTranscriptCaches () }
+                (fun msg -> dispatchRef msg)
+        let historyCache = opened.History
+        let transcriptCaches = opened.Transcripts
+
+        // The replayed doc is state that did not arrive as a body change, so settle the rule
+        // against it explicitly: a doc stored before publication followed the body can hold an
+        // empty-bodied slot, and this is where it goes.
+        DraftSlot.settle doc registry peerId (fun msg -> dispatchRef msg)
 
         // Authorization by renavigation: probe `/me` for a peer token. 401 -> bounce
         // through `/login` (code + PKCE via the Manager) and land back on this shell,

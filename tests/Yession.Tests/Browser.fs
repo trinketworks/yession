@@ -34,6 +34,7 @@ open Microsoft.Playwright
 open Yession.App.Codecs
 open Yession.App.Collab
 open Yession.Tests.BrowserWait
+open Yession.Tests.Loopback
 open Yession.Tests.BrowserProbe
 open Yession.Tests.BrowserHarness
 open Yession.Tests.BrowserShims
@@ -221,62 +222,6 @@ let internal withPersistentContext
             | Choice1Of2 value -> value
             | Choice2Of2 e -> raise e
     }
-
-// --- Loopback servers, on ports nobody chose ----------------------------------------------
-//
-// Nothing in this file names a port, and no case can ask for one. Hand-picked numbers are what
-// that replaces, and they had collided: the editor family took `EDITOR_PORT + n` per case with
-// five offsets used twice over, and every other constant here sat inside the block those 48
-// cases occupied. Two suites that bind one port cannot run at once, and the loser does not fail
-// legibly — it dies at `Start` with EADDRINUSE, or waits out a readiness line that never comes
-// and reports thirty seconds later as a timeout naming the wait rather than the fault. That is
-// this tier's worst failure mode, and it cost four separate runs an hour of diagnosis apiece.
-//
-// Renumbering would only have restocked the hat the next case picks from. So the rule instead:
-// whatever STARTS a server hands back the origin it came up on, and nothing else can name one.
-// There is then no number for two cases to share, and adding a case requires knowing nothing
-// about what any other case bound.
-
-/// A loopback port nothing is listening on: taken at `:0`, so the OS chooses it, and released.
-///
-/// Wanted only where a port has to be known BEFORE the thing that binds it has started — a
-/// Manager whose own origin is the OIDC issuer a booting session fetches discovery against, a
-/// Caddyfile that has to name its upstream. Everything else is told `0` and says where it
-/// landed. The race the release leaves is the narrowest one available, and it cannot produce a
-/// passing-but-wrong run: a collision fails the bind loudly.
-let private freeLoopbackPort () : int =
-    let probe = new TcpListener (IPAddress.Loopback, 0)
-    probe.Start ()
-    let port = (probe.LocalEndpoint :?> IPEndPoint).Port
-    probe.Stop ()
-    port
-
-/// A server this file started, and the origin it answers on — `http://127.0.0.1:<port>`, with
-/// no trailing slash. The two travel together because a caller holding one without the other is
-/// a caller that picked a port.
-type internal Serving =
-    { Listener : HttpListener
-      Origin : string }
-    /// This server's address for an absolute path (`"/"`, `"/s/mounted/"`).
-    member this.At (path: string) : string = this.Origin + path
-    member this.Stop () : unit = this.Listener.Stop ()
-
-/// Start an `HttpListener` on a loopback origin of its own.
-///
-/// There is no `:0` to hand it — a prefix names a port — so one is taken and released, and the
-/// window that leaves is closed by trying again rather than by anybody picking a number.
-let internal listenOnLoopback () : Serving =
-    let rec attempt (triesLeft: int) =
-        let origin = sprintf "http://127.0.0.1:%d" (freeLoopbackPort ())
-        let listener = new HttpListener ()
-        listener.Prefixes.Add (origin + "/")
-        try
-            listener.Start ()
-            { Listener = listener; Origin = origin }
-        with :? HttpListenerException when triesLeft > 1 ->
-            listener.Close ()
-            attempt (triesLeft - 1)
-    attempt 5
 
 // --- What the page saw (so a failure can say more than "timed out") ----------------------
 //
@@ -1150,6 +1095,25 @@ let tests =
                 do! sent "B's timeline to show the sent message" pageB
             }
 
+        // A page whose doc store closes under it (the browser cleared the site's data; mobile
+        // Safari also loses the connection by itself) still collaborates. The store wrote each
+        // change from inside the doc's `update` listener, and the throw there wedged the doc
+        // for the rest of the page load (`Fable.YIndexeddb.catchWrites`): the first keystroke
+        // went out, and nothing after it.
+        sessionPair "a page whose doc store closed under it still sends what is typed" <|
+            fun pageA pageB ->
+            async {
+                let! cdp = await (pageA.Context.NewCDPSessionAsync pageA)
+                let clear = Collections.Generic.Dictionary<string, obj> ()
+                clear.["origin"] <- box (Uri(pageA.Url).GetLeftPart UriPartial.Authority)
+                clear.["storageTypes"] <- box "indexeddb"
+                let! _ = await (cdp.SendAsync ("Storage.clearDataForOrigin", clear))
+                do! waitVisible "A's composer" pageA composer
+                do! awaitU (pageA.ClickAsync composer)
+                do! awaitU (pageA.Keyboard.TypeAsync "kept nowhere")
+                do! waitOwnText "B to see all of what A typed" pageB ".ProseMirror p" "kept nowhere"
+            }
+
         // Who is in the room is everyone CONNECTED, not everyone editing something: two people
         // who have only opened the session are each on the other's roster. It listed a peer
         // only while their caret was in a field, so a collaborator reading the timeline was
@@ -1979,6 +1943,7 @@ let tests =
 
                 // Connect one WITHOUT closing the drawer — the flow a person is actually in
                 // when they sign in, and the one that used to leave the note behind.
+                do! awaitU (pageA.ClickAsync "[data-claude-use-token]")
                 do! awaitU (pageA.FillAsync ("[data-claude-token]", "sk-ant-oat01-browser-case"))
                 do! awaitU (pageA.ClickAsync "[data-claude-save-token]")
                 do! waitVisible "the panel to say the account is connected" pageA "[data-claude-connected='mine']"
@@ -2115,6 +2080,25 @@ let tests =
                         (List.exists (fun seen -> seen.Painted))
             }
 
+        // An error nothing handled, raised while the page is on its way to its session, can
+        // stop it there, and the page had said "connecting" for as long as it was open with
+        // nothing to press. The handshake is held as above, so the page is still on its way
+        // when the error comes (`Probes.unhandled`); the way to start again is on screen where
+        // a phone reader can see it.
+        sessionCase "an error on a page's way to its session puts a reload on screen" <|
+            fun page ->
+            async {
+                let signal = "**" + Yession.App.RelativeUrl.under "" (Yession.App.SessionRoute.relative Yession.App.SessionRoute.Signal)
+                do! awaitU (page.RouteAsync (signal, fun route ->
+                        if route.Request.Method <> "POST" then route.ContinueAsync () |> ignore))
+                do! awaitU (page.SetViewportSizeAsync (390, 844))
+                let! _ = await (page.ReloadAsync ())
+                do! Probe.unhandled page "stopped on purpose"
+                do! Wait.until "a reload on screen where a phone reader can see it"
+                        (fun () -> Probe.seen page "[data-page-reload]")
+                        (List.exists (fun seen -> seen.Painted))
+            }
+
         // A session that answers but cannot be reached is not a session that said nothing. The
         // route between the two is taken away on the wire: the offer reaches the session with
         // none of the browser's candidates, so the session cannot find the browser either, and
@@ -2161,44 +2145,11 @@ let tests =
     ]
 
 // --- The host-free editor rendering E2E ([Browser], no Native) ---------------------------
-// Serves the static harness (app/browser/EditorHarness.fs, esbuilt to tests/browser/out/) and
+// Serves the static harness (app/browser/EditorHarness.fs, esbuilt to tests/browser/out/) with
+// `Loopback.serveStatic`, and
 // drives one Chromium page. No Session, no WebRTC — so this runs wherever Chromium
 // exists, decoupled from the native node-datachannel addon. It guards exactly what the DOM-free
 // cheap tests cannot: the input-rule → live formatting → Markdown round-trip in a real browser.
-
-let internal harnessRoot = "tests/browser"
-
-/// A tiny read-only static file server over `HttpListener` (the harness page + its bundle).
-/// Returns the server — the listener to stop, and the origin it came up on, which is the only
-/// place that origin is stated; requests are served on a background loop.
-let internal serveStatic (root: string) : Serving =
-    let served = listenOnLoopback ()
-    let listener = served.Listener
-    let rec loop () =
-        async {
-            match! Async.Catch (listener.GetContextAsync () |> Async.AwaitTask) with
-            | Choice1Of2 ctx ->
-                let rel = ctx.Request.Url.AbsolutePath.TrimStart '/'
-                let rel = if rel = "" then "editor-harness.html" else rel
-                let path = Path.Combine (root, rel)
-                if File.Exists path then
-                    let bytes = File.ReadAllBytes path
-                    ctx.Response.ContentType <-
-                        if path.EndsWith ".js" then "text/javascript"
-                        elif path.EndsWith ".html" then "text/html"
-                        // A stylesheet served as `application/octet-stream` is ignored by
-                        // the browser, silently — which makes every layout measured on this
-                        // page a fiction, and looks exactly like CSS that does not work.
-                        elif path.EndsWith ".css" then "text/css"
-                        else "application/octet-stream"
-                    ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
-                else ctx.Response.StatusCode <- 404
-                ctx.Response.Close ()
-                return! loop ()
-            | Choice2Of2 _ -> ()   // listener stopped
-        }
-    Async.Start (loop ())
-    served
 
 /// Which of the harness's two pages a case is served (`tests/browser/editor-harness.html` says
 /// why it is two). A case's geometry is the page's, and not whatever ran before it.
@@ -2890,9 +2841,9 @@ let private columnTooShort (page: IPage) : Async<float> =
             | Some s -> s.Top
             | None -> failwith "the conversation went as it was read"
         // On a phone the header, the composer and the tray leave the column under one item
-        // (72px) at this height.
+        // (76px) at this height.
         do! awaitU (page.SetViewportSizeAsync (390, 240))
-        do! Wait.until "the column to have less room than one item" (fun () -> Probe.scroll page chat) (Option.exists (fun s -> s.ClientHeight < 72.0))
+        do! Wait.until "the column to have less room than one item" (fun () -> Probe.scroll page chat) (Option.exists (fun s -> s.ClientHeight < 76.0))
         do! twoFrames page
         return was
     }
@@ -3179,6 +3130,86 @@ let editorTests =
                 Expect.stringContains md "# Heading one" "heading serialized to markdown"
                 Expect.stringContains md "**bold**" "bold serialized to markdown"
                 Expect.stringContains md "* item one" "bullet serialized to markdown"
+            }
+
+        // A block an input rule makes has to LOOK like that block while it is typed. The reset
+        // strips every default a bare `<blockquote>`, `<pre>` or `<ul>` had, so a composer that
+        // drew them bare turned `> ` into a quote nobody could see.
+        fixtureCase "a quote typed in the composer draws its rule" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "> quoted")
+                do! waitPresent ".ProseMirror blockquote to be on the page" page "#host .ProseMirror blockquote"
+                let! rule = Probe.computed page "#host .ProseMirror blockquote" "border-left-width"
+                Expect.notEqual rule (Some "0px") "the quote draws a rule beside it"
+            }
+
+        // An outline and not a fill: the focused composer is already on the top grey, so a
+        // filled block drew on its own colour and could not be seen.
+        fixtureCase "a code block typed in the composer draws its outline" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "```")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! waitPresent ".ProseMirror pre to be on the page" page "#host .ProseMirror pre"
+                let! outline = Probe.computed page "#host .ProseMirror pre" "border-top-width"
+                Expect.equal outline (Some "1px") "the code block draws a hairline round it"
+            }
+
+        // A fence opens on Enter, as Markdown reads one, so the language after the backticks
+        // can be typed and is kept.
+        fixtureCase "a fence naming a language opens a code block in that language" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "```fsharp")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! waitPresent ".ProseMirror pre to be on the page" page "#host .ProseMirror pre"
+                do! awaitU (page.Keyboard.TypeAsync "let x = 1")
+                let! md = Harness.ask page HarnessPage.md
+                Expect.equal (md.TrimEnd ()) "```fsharp\nlet x = 1\n```" "the block keeps its language"
+            }
+
+        // A code block at the end of a draft is not a place the caret can be stuck in.
+        fixtureCase "Enter on the empty last line of a code block leaves it" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "```")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! waitPresent ".ProseMirror pre to be on the page" page "#host .ProseMirror pre"
+                do! awaitU (page.Keyboard.TypeAsync "let x = 1")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! awaitU (page.Keyboard.TypeAsync "after")
+                let! md = Harness.ask page HarnessPage.md
+                Expect.equal (md.TrimEnd ()) "```\nlet x = 1\n```\n\nafter" "the line after is a paragraph, and the block lost the empty line"
+            }
+
+        fixtureCase "a bullet list typed in the composer draws its bullets" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "- item")
+                do! waitPresent ".ProseMirror ul to be on the page" page "#host .ProseMirror ul"
+                let! marker = Probe.computed page "#host .ProseMirror ul" "list-style-type"
+                Expect.equal marker (Some "disc") "the list draws a bullet per item"
+            }
+
+        // A rule that fires on a `>` nobody meant as a quote is one key to take back, and the
+        // key gives the `>` back rather than deleting it with the quote.
+        fixtureCase "Backspace right after a quote opens gives back the > typed" <| fun page ->
+            async {
+                do! waitVisible "the editor" page ".ProseMirror"
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "> ")
+                do! waitPresent ".ProseMirror blockquote to be on the page" page "#host .ProseMirror blockquote"
+                do! awaitU (page.Keyboard.PressAsync "Backspace")
+                do! waitAbsent ".ProseMirror blockquote to be gone" page "#host .ProseMirror blockquote"
+                let! text = Read.text page "#host .ProseMirror p"
+                Expect.equal (text |> Option.map (fun t -> t.Trim ())) (Some ">") "the > is back as text"
             }
 
         // Addressing somebody is reachable from the keyboard alone: an @ greys in the rest of a
@@ -9026,6 +9057,22 @@ let frontedTests =
                 finally
                     stopFronted deployed
             }
+
+        // `/control/*` is the Manager's API for its sessions, which dial its socket and never
+        // the door. Behind the door a launch secret alone gates it, so the proxy answers it
+        // itself. A Manager reached would answer 401 for the missing secret, not 404.
+        testCaseAsync "the door answers the Manager's control routes with 404" <|
+            async {
+                let deployed = deployFronted ()
+                try
+                    use client = new HttpClient ()
+                    use request = new HttpRequestMessage (HttpMethod.Get, deployed.Origin + "/control/status")
+                    request.Headers.Add ("Tailscale-User-Login", FRONTED_LOGIN)
+                    let! answer = client.SendAsync request |> Async.AwaitTask
+                    Expect.equal (int answer.StatusCode) 404 "a tailnet member is not sent to the control API"
+                finally
+                    stopFronted deployed
+            }
     ]
 
 // --- The management page's filters (browser) ----------------------------------------------
@@ -9087,6 +9134,81 @@ let filterTests =
                                 addressAndChip
                                 (fun (at, href) -> at.AbsolutePath = "/" && not (at.Query.Contains "show=archived") && offers href)
                         ()
+                        }
+                    })
+                finally
+                    manager.Stop ()
+            }
+    ]
+
+// --- A display name on the management page (browser) -------------------------------------
+//
+// A display name is the session's to choose and every peer's to edit, and the Manager page
+// puts it in the accessible name of each verb on the row. The renderer once read that hole as
+// text, so a `"` in the name closed the attribute and the rest of it was markup, in every
+// operator's browser. The row that carries it here ARRIVES, over the rows stream, because the
+// page's own parse of a fragment is the second place the name could become markup.
+
+let private hostileDataDir = "tests/browser/.data-hostile-name"
+
+let private HOSTILE_ID = "hostile-name"
+
+let private HOSTILE_NAME = "<script>window.pwned=1</script>\" onanimationstart=\"window.pwned=1"
+
+/// A Manager whose registry already holds the session, named by its worst-case peer.
+let private seedHostile () =
+    if Directory.Exists hostileDataDir then Directory.Delete (hostileDataDir, true)
+    Directory.CreateDirectory hostileDataDir |> ignore
+    let id = Yession.Domain.SessionId.create HOSTILE_ID |> Result.defaultWith failwith
+    let record : Yession.Manager.SessionRecord =
+        { SessionId = id
+          DisplayName = HOSTILE_NAME
+          CreatedAt = DateTimeOffset.UtcNow
+          DataDir = sprintf "sessions/%s" HOSTILE_ID
+          ArchivedAt = None }
+    let state =
+        Yession.Manager.ManagerState.addSession record Yession.Manager.ManagerState.empty
+        |> Result.defaultWith failwith
+    File.WriteAllText (Path.Combine (hostileDataDir, "manager.json"), Yession.Manager.ManagerCodec.toString state)
+
+// One case at a time (`BrowserRunner`): a case's Manager starts by emptying `hostileDataDir`.
+let hostileNameTests =
+    testSequenced <| testList "A display name on the management page (browser)" [
+        testCaseAsync "a row that arrives keeps a hostile display name inside its accessible name" <|
+            async {
+                seedHostile ()
+                let manager =
+                    deployProduct
+                        "the Manager"
+                        [ "--auth"; "localhost"; "--secrets"; "ephemeral"
+                          "--port"; "0"; "--data-dir"; hostileDataDir ]
+                        []
+                        (fun line -> line.Contains "management UI at")
+                try
+                    do! withContexts (fun contexts -> async {
+                        let! page = contexts.Page None
+                        page.SetDefaultTimeout 30000.0f
+                        let evidence = watching page
+                        do! reporting "a hostile display name" page evidence <| async {
+                        // Both filters lit, so the row stays on the page once it is archived.
+                        let! _ = await (page.GotoAsync (manager.At "/?show=active&show=archived"))
+                        let archive = Sel.hookIs Yession.App.Dom.Manager.archive HOSTILE_ID
+                        do! Wait.until "the session's row on the first paint" (fun () -> Read.count page archive) (fun n -> n = 1)
+                        // Archived from outside the page, so the row the page then shows is one
+                        // the rows stream carried and the page parsed.
+                        use client = new HttpClient ()
+                        let! archived =
+                            client.PostAsync (manager.At (sprintf "/sessions/%s/archive" HOSTILE_ID), new StringContent "")
+                            |> Async.AwaitTask
+                        Expect.isTrue archived.IsSuccessStatusCode "the session is archived"
+                        let unarchive = Sel.hookIs Yession.App.Dom.Manager.unarchive HOSTILE_ID
+                        do! Wait.until "the archived row, from the stream"
+                                (fun () -> Read.attr page unarchive "aria-label")
+                                (fun label -> label = Some ("Unarchive " + HOSTILE_NAME))
+                        let! handler = Read.attr page unarchive "onanimationstart"
+                        Expect.isNone handler "the name added no attribute to the control"
+                        let! pwned = Yession.Tests.PageScript.PageScript.held<System.Text.Json.JsonElement> page "pwned"
+                        Expect.equal pwned.ValueKind System.Text.Json.JsonValueKind.Null "nothing in the name ran"
                         }
                     })
                 finally
@@ -9315,6 +9437,26 @@ let pressTests =
 
 let private openingDataDir = "tests/browser/.data-opening"
 
+/// A second origin the case owns, answering every request with `html`. A real listener on
+/// loopback, not a routed fake: Chromium refuses a page on a public address space the
+/// requests it makes to loopback (Private Network Access), and a refusal there would leave
+/// the Manager's own refusal untested.
+let private elsewhere (html: string) : Serving =
+    let served = listenOnLoopback ()
+    let rec loop () =
+        async {
+            match! Async.Catch (served.Listener.GetContextAsync () |> Async.AwaitTask) with
+            | Choice1Of2 ctx ->
+                let bytes = Text.Encoding.UTF8.GetBytes html
+                ctx.Response.ContentType <- "text/html"
+                ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
+                ctx.Response.Close ()
+                return! loop ()
+            | Choice2Of2 _ -> ()
+        }
+    Async.Start (loop ())
+    served
+
 let private withOpening (name: string) (prepare: IPage -> Async<unit>) (body: Deployed -> IPage -> string -> Async<unit>) : Async<unit> =
     async {
         if Directory.Exists openingDataDir then Directory.Delete (openingDataDir, true)
@@ -9352,6 +9494,27 @@ let private withOpening (name: string) (prepare: IPage -> Async<unit>) (body: De
 let private readyAnswers (status: int) (page: IPage) : Async<unit> =
     awaitU (page.RouteAsync ("**/ready", fun route ->
         route.FulfillAsync (RouteFulfillOptions (Status = status, ContentType = "text/plain", Body = "http://127.0.0.1:1/login")) |> ignore))
+
+/// Every console error the page says from now on, but an answered request's status. A 401
+/// from the session's GitHub routes while nobody has connected GitHub is the product's
+/// answer, said in the console by the browser, and no policy refused anything to cause it.
+/// A refused script, style, font or worker is an error of its own, which stays.
+let private consoleErrors (page: IPage) : ResizeArray<string> =
+    let errors = ResizeArray<string> ()
+    page.Console.Add (fun m ->
+        if m.Type = "error" && not (m.Text.StartsWith "Failed to load resource: the server responded with a status of") then
+            errors.Add m.Text)
+    errors
+
+/// The Content-Security-Policy an answer carried, or a failure naming the answer.
+let private policyOf (answer: IResponse) : Async<string> =
+    async {
+        let! policy = await (answer.HeaderValueAsync "content-security-policy")
+        return
+            match Option.ofObj policy with
+            | Some policy -> policy
+            | None -> failwithf "%s carried no Content-Security-Policy" answer.Url
+    }
 
 /// How the intro mark and the still mark are displayed, in that order.
 let private marksShown (page: IPage) : Async<string option * string option> =
@@ -9408,6 +9571,126 @@ let openingTests =
                         (fun () -> Read.text page "#status") (Option.exists (fun t -> t.Contains "exited before ready (code 3)"))
             })
 
+        // `/open` changes nothing, so the launch is the screen's to ask for, by POST, under the
+        // Manager's request-origin rule. The real launch, the real readiness and the real
+        // session: the browser lands in it only if the screen asked.
+        testCaseAsync "the screen launches the session by POST, and the browser lands in it" <|
+            withOpening "launch by POST" (fun _ -> async { return () }) (fun manager page opening -> async {
+                let launches = ResizeArray<string> ()
+                page.Request.Add (fun r -> if r.Method = "POST" && r.Url.EndsWith "/launch" then launches.Add r.Url)
+                let! _ = await (page.GotoAsync opening)
+                do! Wait.until "the browser to have left for the session" (fun () -> Read.url page) (fun at -> at.Port <> manager.Port)
+                Expect.equal (List.ofSeq launches) [ opening.Replace ("/open", "/launch") ] "one launch, sent by the screen"
+            })
+
+        // A page on another origin, in the same browser that carries the operator's identity: its form
+        // cannot make a session, and its image cannot start one.
+        testCaseAsync "a form on another origin cannot create a session" <|
+            withOpening "a foreign form" (fun _ -> async { return () }) (fun manager page _ -> async {
+                let sessionsNow () =
+                    async {
+                        use http = new HttpClient ()
+                        let! body = await (http.GetStringAsync (manager.At "/"))
+                        return Text.RegularExpressions.Regex.Matches(body, sprintf "%s=\"" Yession.App.Dom.Manager.session).Count
+                    }
+                let! before = sessionsNow ()
+                let answers = ResizeArray<int> ()
+                page.Response.Add (fun r -> if r.Request.Method = "POST" && r.Url.EndsWith "/sessions" then answers.Add r.Status)
+                let foreign =
+                    elsewhere (
+                        sprintf "<form method=\"post\" action=\"%s\"><input name=\"name\" value=\"theirs\"><button>go</button></form>" (manager.At "/sessions"))
+                try
+                    let! _ = await (page.GotoAsync (foreign.At "/form"))
+                    do! awaitU (page.ClickAsync "button")
+                    do! Wait.until "the Manager to have answered the form" (fun () -> async { return List.ofSeq answers }) (List.isEmpty >> not)
+                finally
+                    foreign.Stop ()
+                let! after = sessionsNow ()
+                Expect.equal (List.ofSeq answers, after) ([ 403 ], before) "refused, and no session made"
+            })
+
+        testCaseAsync "an image on another origin cannot start a session" <|
+            withOpening "a foreign image" (fun _ -> async { return () }) (fun _ page opening -> async {
+                // Settled either way: the browser's own blocking of a cross-origin HTML answer
+                // (ORB) fails the request only after the Manager has answered it.
+                let settled = ResizeArray<string> ()
+                page.RequestFinished.Add (fun r -> if r.Url = opening then settled.Add "finished")
+                page.RequestFailed.Add (fun r -> if r.Url = opening then settled.Add r.Failure)
+                let foreign = elsewhere (sprintf "<img src=\"%s\" alt=\"\">" opening)
+                try
+                    let! _ = await (page.GotoAsync (foreign.At "/image"))
+                    do! Wait.until "the image's request to have settled" (fun () -> async { return List.ofSeq settled }) (List.isEmpty >> not)
+                finally
+                    foreign.Stop ()
+                use http = new HttpClient ()
+                let! ready = await (http.GetAsync (opening.Replace ("/open", "/ready")))
+                Expect.equal (int ready.StatusCode) 503 "the session is not running, and nothing is launching it"
+            })
+
+        // Every document the Manager and a session serve runs under a Content-Security-Policy.
+        // Two promises per surface: the page does what it does with nothing refused and nothing
+        // said in error (so the policy admits the inline scripts by their nonce, the modules,
+        // the fonts, the worker), and the document's answer forbids framing it.
+        testCaseAsync "the Manager page runs with nothing refused by its policy" <|
+            withOpening "the Manager page's policy" (fun _ -> async { return () }) (fun manager page _ -> async {
+                let errors = consoleErrors page
+                // The page's module program opens the rows stream: asked for, it ran.
+                let streamed = ResizeArray<string> ()
+                page.Request.Add (fun r -> if r.Url.Contains (Yession.App.ManagerRoute.path Yession.App.ManagerRoute.SessionRows) then streamed.Add r.Url)
+                let! _ = await (page.GotoAsync (manager.At "/"))
+                do! Wait.until "the page's program to have opened the rows stream" (fun () -> async { return streamed.Count }) ((<) 0)
+                let! refused = Probe.violations page
+                Expect.equal (refused, List.ofSeq errors) ([], []) "no refusal, and no error"
+            })
+
+        testCaseAsync "the Manager page cannot be framed" <|
+            withOpening "the Manager page's framing" (fun _ -> async { return () }) (fun manager page _ -> async {
+                let! answer = await (page.GotoAsync (manager.At "/"))
+                let! policy = policyOf answer
+                Expect.stringContains policy "frame-ancestors 'none'" "the Manager page's answer forbids framing it"
+            })
+
+        testCaseAsync "the opening screen runs its inline program with nothing refused" <|
+            withOpening "the opening screen's policy" (readyAnswers 503) (fun _ page opening -> async {
+                let errors = consoleErrors page
+                let launched = ResizeArray<string> ()
+                page.Request.Add (fun r -> if r.Method = "POST" && r.Url.EndsWith "/launch" then launched.Add r.Url)
+                let! _ = await (page.GotoAsync opening)
+                // The program is the screen's only inline script, and the launch is its first act.
+                do! Wait.until "the screen's program to have asked for the launch" (fun () -> async { return launched.Count }) ((<) 0)
+                let! refused = Probe.violations page
+                Expect.equal (refused, List.ofSeq errors) ([], []) "no refusal, and no error"
+            })
+
+        testCaseAsync "the opening screen cannot be framed" <|
+            withOpening "the opening screen's framing" (readyAnswers 503) (fun _ page opening -> async {
+                let! answer = await (page.GotoAsync opening)
+                let! policy = policyOf answer
+                Expect.stringContains policy "frame-ancestors 'none'" "the opening screen's answer forbids framing it"
+            })
+
+        testCaseAsync "a session's page runs with nothing refused by its policy" <|
+            withOpening "the session page's policy" (fun _ -> async { return () }) (fun manager page opening -> async {
+                let errors = consoleErrors page
+                let! _ = await (page.GotoAsync opening)
+                do! Wait.until "the browser to be in the session" (fun () -> Read.url page) (fun at -> at.Port <> manager.Port)
+                // The worker is the last thing the shell sets up, and `worker-src` governs it.
+                do! Wait.until "the service worker to be active" (fun () -> Probe.ask page Yession.App.Probes.workerActive 0) id
+                let! refused = Probe.violations page
+                Expect.equal (refused, List.ofSeq errors) ([], []) "no refusal, and no error"
+            })
+
+        testCaseAsync "a session's page cannot be framed" <|
+            withOpening "the session page's framing" (fun _ -> async { return () }) (fun manager page opening -> async {
+                let shells = ResizeArray<IResponse> ()
+                page.Response.Add (fun r ->
+                    if r.Request.ResourceType = "document" && r.Status = 200 && Uri(r.Url).Port <> manager.Port then shells.Add r)
+                let! _ = await (page.GotoAsync opening)
+                do! Wait.until "the session's shell to have arrived" (fun () -> async { return shells.Count }) ((<) 0)
+                let! policy = policyOf shells.[shells.Count - 1]
+                Expect.stringContains policy "frame-ancestors 'none'" "the session shell's answer forbids framing it"
+            })
+
         testCaseAsync "a reader who declined motion is shown the still mark, and only it" <|
             withOpening "reduced motion" (fun page -> async {
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
@@ -9441,6 +9724,7 @@ let keptOpenTests : Fable.Pyxpecto.Model.TestCase = testList "Opening a session 
 let filterTests : Fable.Pyxpecto.Model.TestCase = testList "The management page's filters (browser)" []
 let installedAppTests : Fable.Pyxpecto.Model.TestCase = testList "Opening a session from an installed Manager (browser)" []
 let pressTests : Fable.Pyxpecto.Model.TestCase = testList "Pressing Create (browser)" []
+let hostileNameTests : Fable.Pyxpecto.Model.TestCase = testList "A display name on the management page (browser)" []
 let openingTests : Fable.Pyxpecto.Model.TestCase = testList "The opening page (browser)" []
 
 #endif

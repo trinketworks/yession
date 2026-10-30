@@ -19,6 +19,11 @@ open Yession.Domain.Tools
 /// second door around `execute_command`. It is housekeeping (`Direct`), not work: it needs
 /// no toolchain and must not pay for one, and it draws no block — the tool-use record is
 /// where a read shows, and the gate's record where a change does, each saying which file.
+///
+/// An argv element is still read by the program it reaches. A tool whose descriptor says
+/// `ReadOnly` never meets the gate, so it runs only scripts that cannot write, whatever the
+/// agent passes it. For a path that is true by construction: a path reaches a script only
+/// as a `PathOperand`, which no program reads as an option (`ScriptArg`).
 module SessionFiles =
 
     [<RequireQualifiedAccess>]
@@ -76,7 +81,7 @@ module SessionFiles =
         /// and `stdin` typed in whole. Every verb here is this and a reading of the answer —
         /// so the parts that must be right once (the path never in the script, the output
         /// cap, `Direct` past the entrypoint) are right once.
-        let run (sandbox: SandboxRef) (reason: string) (script: string) (args: string list) (stdin: string option) : Async<Result<Said, string>> =
+        let run (sandbox: SandboxRef) (reason: string) (script: string) (args: ScriptArg list) (stdin: string option) : Async<Result<Said, string>> =
             async {
                 match! (environmentFor sandbox).Ensure None reason with
                 | EnvironmentUnavailable reason -> return Error reason
@@ -88,7 +93,10 @@ module SessionFiles =
                     let! spawned =
                         (environmentFor sandbox).Spawn
                             { Executable = shell.Executable
-                              Arguments = shell.Arguments @ [ script; "sh" ] @ args
+                              Arguments =
+                                shell.Arguments
+                                @ [ script; "sh" ]
+                                @ List.map ScriptArg.render args
                               Env = Map.empty
                               WorkingDirectory = workingDirectoryFor sandbox
                               Via = Direct }
@@ -134,11 +142,11 @@ module SessionFiles =
             if text = "" then sprintf "the %s sandbox's %s exited %d saying nothing" (SandboxRef.render sandbox) tool said.Code
             else text
 
-        let read (sandbox: SandboxRef) (path: string) : Async<Result<string, string>> =
+        let read (sandbox: SandboxRef) (path: PathOperand) : Async<Result<string, string>> =
             async {
-                // `--` so a path that starts with `-` is a path, and `$1` so the path is
-                // never part of the script.
-                match! run sandbox "a file was read" "cat -- \"$1\"" [ path ] None with
+                // `$1` so the path is never part of the script. `--` alone is not enough:
+                // `cat -- -` reads stdin, and the operand reads `./-`.
+                match! run sandbox "a file was read" "cat -- \"$1\"" [ ScriptArg.Path path ] None with
                 | Error reason -> return Error reason
                 | Ok said when said.Code = 0 -> return Ok said.Out
                 | Ok said -> return Error (complaint "cat" sandbox said)
@@ -149,15 +157,15 @@ module SessionFiles =
         /// sandbox's userland has, and is then read for what it IS (`ToolImage.ofBase64`).
         /// The name picks the route and the bytes decide the answer: a `.png` that holds
         /// something else is said to, rather than shown as a picture it is not.
-        let readContent (sandbox: SandboxRef) (path: string) : Async<Result<FileContent, string>> =
+        let readContent (sandbox: SandboxRef) (path: PathOperand) : Async<Result<FileContent, string>> =
             async {
-                if FileContent.namedAsPicture path then
-                    match! run sandbox "a file was read" "base64 < \"$1\"" [ path ] None with
+                if FileContent.namedAsPicture (PathOperand.given path) then
+                    match! run sandbox "a file was read" "base64 < \"$1\"" [ ScriptArg.Path path ] None with
                     | Error reason -> return Error reason
                     | Ok said when said.Code = 0 ->
                         match ToolImage.ofBase64 said.Out with
                         | Ok image -> return Ok (FileContent.Image image)
-                        | Error why -> return Error (sprintf "%s is not a picture you can be shown: %s" path why)
+                        | Error why -> return Error (sprintf "%s is not a picture you can be shown: %s" (PathOperand.given path) why)
                     | Ok said -> return Error (complaint "base64" sandbox said)
                 else
                     let! text = read sandbox path
@@ -167,10 +175,10 @@ module SessionFiles =
         /// `content` into `path`, whole. In place (`cat >`), so the file keeps its inode and
         /// mode — an executable stays executable — and the directories to it are made, so a
         /// new file in a new directory is one call rather than a refused one and a `mkdir`.
-        let put (sandbox: SandboxRef) (path: string) (content: string) : Async<Result<unit, string>> =
+        let put (sandbox: SandboxRef) (path: PathOperand) (content: string) : Async<Result<unit, string>> =
             async {
                 match!
-                    run sandbox "a file was written" "mkdir -p -- \"$(dirname -- \"$1\")\" && cat > \"$1\"" [ path ] (Some content)
+                    run sandbox "a file was written" "mkdir -p -- \"$(dirname -- \"$1\")\" && cat > \"$1\"" [ ScriptArg.Path path ] (Some content)
                 with
                 | Error reason -> return Error reason
                 | Ok said when said.Code = 0 -> return Ok ()
@@ -192,31 +200,33 @@ module SessionFiles =
                 return ()
             }
 
-        let write (actor: ActorRef) (sandbox: SandboxRef) (path: string) (content: string) : Async<Result<unit, string>> =
+        let write (actor: ActorRef) (sandbox: SandboxRef) (path: PathOperand) (content: string) : Async<Result<unit, string>> =
             async {
                 match! put sandbox path content with
                 | Error reason -> return Error reason
                 | Ok () ->
-                    do! record actor sandbox path (FileChange.Written (List.length (FileSlice.lines content))) None
+                    do! record actor sandbox (PathOperand.given path) (FileChange.Written (List.length (FileSlice.lines content))) None
                     return Ok ()
             }
 
-        let edit (actor: ActorRef) (request: FileEditRequest) : Async<Result<Edited, string>> =
+        /// `request.Path` is the path as asked; `path` is it resolved, which is what is read,
+        /// written and recorded.
+        let edit (actor: ActorRef) (request: FileEditRequest) (path: PathOperand) : Async<Result<Edited, string>> =
             async {
-                match! read request.Sandbox request.Path with
+                match! read request.Sandbox path with
                 | Error reason -> return Error reason
                 | Ok content ->
                     match FileEdit.apply content request.OldText request.NewText request.ReplaceAll with
-                    | Error failure -> return Error (FileEdit.describe request.Path failure)
+                    | Error failure -> return Error (FileEdit.describe (PathOperand.given path) failure)
                     | Ok edited ->
-                        match! put request.Sandbox request.Path edited.Content with
+                        match! put request.Sandbox path edited.Content with
                         | Error reason -> return Error reason
                         | Ok () ->
                             do!
                                 record
                                     actor
                                     request.Sandbox
-                                    request.Path
+                                    (PathOperand.given path)
                                     (FileChange.Edited (edited.Replaced, edited.LinesRemoved, edited.LinesAdded))
                                     (Some (FileDiff.ofReplacement request.OldText request.NewText))
                             return Ok edited
@@ -225,14 +235,16 @@ module SessionFiles =
         /// `grep -rn`, extended patterns, binaries and `.git` skipped. Exit 1 is grep's "no
         /// match" and an answer; 2 is a fault, in grep's words. The glob rides as
         /// `--include=` on the command line rather than in the script, like every argument.
-        let search (sandbox: SandboxRef) (pattern: string) (path: string option) (glob: string option) : Async<Result<string, string>> =
+        /// The glob is `--include`'s own argument and the pattern `-e`'s; the path stands
+        /// after `--`.
+        let search (sandbox: SandboxRef) (pattern: string) (path: PathOperand option) (glob: string option) : Async<Result<string, string>> =
             async {
                 let args =
-                    [ yield! glob |> Option.map (sprintf "--include=%s") |> Option.toList
-                      yield "-e"
-                      yield pattern
-                      yield "--"
-                      yield defaultArg path "." ]
+                    [ yield! glob |> Option.map (sprintf "--include=%s" >> ScriptArg.Word) |> Option.toList
+                      yield ScriptArg.Word "-e"
+                      yield ScriptArg.Word pattern
+                      yield ScriptArg.Word "--"
+                      yield ScriptArg.Path (defaultArg path (PathOperand.ofPath ".")) ]
                 match! run sandbox "files were searched" "grep -r -n -I -E --exclude-dir=.git \"$@\"" args None with
                 | Error reason -> return Error reason
                 | Ok said when said.Code = 0 || said.Code = 1 -> return Ok said.Out
@@ -243,20 +255,36 @@ module SessionFiles =
         /// code would stand in for find's. A glob without a slash is a NAME (`-name`), one
         /// with a slash is a path tail (`-path */glob`) — the two shapes a caller writes,
         /// each sent to the test that means it.
-        let find (sandbox: SandboxRef) (glob: string) (path: string option) : Async<Result<string, string>> =
+        ///
+        /// `find` reads its FIRST argument as an expression when it starts with `-`, `!` or
+        /// `(` — `-delete` included — and no `--` stops that on BSD. So the start point is a
+        /// `PathOperand`, and the glob is `-name`'s or `-path`'s own argument. `find` prints
+        /// each hit under the start point as given, so a `./` the operand added is taken off
+        /// again: the answer names paths as the agent wrote them.
+        let find (sandbox: SandboxRef) (glob: string) (path: PathOperand option) : Async<Result<string, string>> =
             async {
                 let test, wanted = if glob.Contains "/" then "-path", "*/" + glob.TrimStart '/' else "-name", glob
+                let start = defaultArg path (PathOperand.ofPath ".")
+                let added = PathOperand.value start <> PathOperand.given start
+                let asGiven (line: string) = if added && line.StartsWith "./" then line.Substring 2 else line
                 match!
                     run
                         sandbox
                         "files were looked for"
                         "find \"$1\" -name .git -prune -o -type f \"$2\" \"$3\" -print"
-                        [ defaultArg path "."; test; wanted ]
+                        [ ScriptArg.Path start; ScriptArg.Word test; ScriptArg.Word wanted ]
                         None
                 with
                 | Error reason -> return Error reason
                 | Ok said when said.Code = 0 ->
-                    return Ok (said.Out.Split '\n' |> Array.filter (fun line -> line <> "") |> Array.sort |> String.concat "\n")
+                    return
+                        Ok (
+                            said.Out.Split '\n'
+                            |> Array.filter (fun line -> line <> "")
+                            |> Array.map asGiven
+                            |> Array.sort
+                            |> String.concat "\n"
+                        )
                 | Ok said -> return Error (complaint "find" sandbox said)
             }
 
@@ -265,34 +293,35 @@ module SessionFiles =
         /// `printenv`, so nothing is evaluated and the value is the one its terminals see —
         /// `/tmp` in a container, a per-session directory under srt. A variable the sandbox does
         /// not set is a refusal that says so, never a path that quietly starts with `/`.
-        let resolve (sandbox: SandboxRef) (path: string) : Async<Result<string, string>> =
+        let resolve (sandbox: SandboxRef) (path: string) : Async<Result<PathOperand, string>> =
             async {
                 match SandboxPath.leadingVariable path with
-                | None -> return Ok path
+                | None -> return Ok (PathOperand.ofPath path)
                 | Some (name, rest) ->
-                    match! run sandbox "a path was resolved" "printenv -- \"$1\"" [ name ] None with
+                    match! run sandbox "a path was resolved" "printenv -- \"$1\"" [ ScriptArg.Word name ] None with
                     | Error reason -> return Error reason
-                    | Ok said when said.Code = 0 && said.Out.Trim () <> "" -> return Ok (said.Out.TrimEnd ('\n', '\r') + rest)
+                    | Ok said when said.Code = 0 && said.Out.Trim () <> "" ->
+                        return Ok (PathOperand.ofPath (said.Out.TrimEnd ('\n', '\r') + rest))
                     | Ok _ -> return Error (sprintf "%s is not set in the %s sandbox. For this reason, %s is not a path there" name (SandboxRef.render sandbox) path)
             }
 
         /// Every verb takes its path through `resolve` first — one place, so a variable means
         /// the same thing to a read, an edit and a search.
-        let resolving (sandbox: SandboxRef) (path: string) (verb: string -> Async<Result<'a, string>>) : Async<Result<'a, string>> =
+        let resolving (sandbox: SandboxRef) (path: string) (verb: PathOperand -> Async<Result<'a, string>>) : Async<Result<'a, string>> =
             async {
                 match! resolve sandbox path with
                 | Error reason -> return Error reason
                 | Ok path -> return! verb path
             }
 
-        let resolvingOptional (sandbox: SandboxRef) (path: string option) (verb: string option -> Async<Result<'a, string>>) =
+        let resolvingOptional (sandbox: SandboxRef) (path: string option) (verb: PathOperand option -> Async<Result<'a, string>>) =
             match path with
             | None -> verb None
             | Some path -> resolving sandbox path (Some >> verb)
 
         { SessionFiles.Read = fun sandbox path -> resolving sandbox path (readContent sandbox)
           SessionFiles.Edit =
-            fun actor request -> resolving request.Sandbox request.Path (fun path -> edit actor { request with Path = path })
+            fun actor request -> resolving request.Sandbox request.Path (edit actor request)
           SessionFiles.Write = fun actor sandbox path content -> resolving sandbox path (fun path -> write actor sandbox path content)
           SessionFiles.Search = fun sandbox pattern path glob -> resolvingOptional sandbox path (fun path -> search sandbox pattern path glob)
           SessionFiles.Find = fun sandbox glob path -> resolvingOptional sandbox path (fun path -> find sandbox glob path) }

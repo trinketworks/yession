@@ -145,6 +145,22 @@ let private answeringTests =
                 do! WebRtc.Answering.closeAll peers
             }
 
+        // A data channel refuses a message over the size the peer advertised (256 KiB from
+        // libdatachannel and the browsers), and on macOS libdatachannel's refusal aborted the
+        // session process: a session whose document outgrew one message died every time a
+        // browser joined.
+        testCaseAsync "a frame longer than one data-channel message arrives whole" <|
+            async {
+                let peers = WebRtc.Answering.create ()
+                let! client, received, session = answered WebRtc.Answering.shipped peers "e2e-long-frame"
+                let document = String.replicate 300_000 "y"
+                do! session.Send (State (StateSync document))
+                let! frame = received.Receive ()
+                Expect.equal frame (Some (State (StateSync document))) "the whole document"
+                do! WebRtc.closePeerConnection client
+                do! WebRtc.Answering.closeAll peers
+            }
+
         testCaseAsync "a connection whose channel the session closed is closed once it has lingered" <|
             async {
                 let peers = WebRtc.Answering.create ()

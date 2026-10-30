@@ -45,6 +45,7 @@
     <Compile Include="DynamicAccess.fs" />
     <Compile Include="UncheckedCast.fs" />
     <Compile Include="ObjSignature.fs" />
+    <Compile Include="EmDashes.fs" />
   </ItemGroup>
 
   <ItemGroup>

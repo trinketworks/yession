@@ -139,7 +139,7 @@ module ContainerMemory =
 
     let ofBytes (b: int64) : Result<ContainerMemory, string> =
         if b < minimum then
-            Error (sprintf "memory: %d bytes is under docker's 6m minimum for a container" b)
+            Error (sprintf "mem_limit: %d bytes is under docker's 6m minimum for a container" b)
         else Ok (ContainerMemory b)
 
     /// Compose's byte-value grammar, which is what `mem_limit` and
@@ -151,7 +151,7 @@ module ContainerMemory =
         let digits = text |> Seq.takeWhile Char.IsDigit |> Seq.length
         let number, unit = text.Substring (0, digits), text.Substring(digits).Trim ()
         let refuse () =
-            Error (sprintf "memory: '%s' is not a size. Write a whole number with an optional unit, like 4g. The units are b, k, m and g" raw)
+            Error (sprintf "mem_limit: '%s' is not a size. Write a whole number with an optional unit, like 4g. The units are b, k, m and g" raw)
         let scale =
             if unit = "" then Some 1L
             else units |> List.tryFind (fun (u, _) -> u = unit) |> Option.map snd
@@ -201,7 +201,7 @@ module ContainerMemory =
         | Some (ContainerMemory b) when b > daemonTotal ->
             Error (
                 sprintf
-                    "the container declares memory: %s. The docker daemon has %s in all. The host exhausts its memory before it reaches that ceiling. So the ceiling contains nothing. Give the daemon more memory (Colima: `colima start --memory <GiB>`). As an alternative, declare less"
+                    "the container declares mem_limit: %s. The docker daemon has %s in all. The host exhausts its memory before it reaches that ceiling. So the ceiling contains nothing. Give the daemon more memory (Colima: `colima start --memory <GiB>`). As an alternative, declare less"
                     (render (ContainerMemory b))
                     (describe daemonTotal))
         | Some declared -> Ok declared
@@ -233,7 +233,7 @@ module OomScoreAdj =
         if n < 0 || n > 1000 then
             Error (
                 sprintf
-                    "oom-score-adj: %d is not from 0 to 1000. A sandbox can make its processes a more likely OOM victim. It cannot make them a less likely victim than the daemon's own"
+                    "oom_score_adj: %d is not from 0 to 1000. A sandbox can make its processes a more likely OOM victim. It cannot make them a less likely victim than the daemon's own"
                     n)
         else Ok (OomScoreAdj n)
 
@@ -262,7 +262,7 @@ module PidsLimit =
     /// Docker reads 0 and below as no limit, so they are refused, not passed through:
     /// a limit that is not a limit must not look like one.
     let ofInt (n: int) : Result<PidsLimit, string> =
-        if n < 1 then Error (sprintf "pids-limit: %d is not a limit. Write a number of processes, 1 or more" n)
+        if n < 1 then Error (sprintf "pids_limit: %d is not a limit. Write a number of processes, 1 or more" n)
         else Ok (PidsLimit n)
 
     /// What a container is created with: what it declared, or `standard`. Never docker's
@@ -295,9 +295,9 @@ module CgroupParent =
 
     let parse (raw: string) : Result<CgroupParent, string> =
         let text = raw.Trim ()
-        if text = "" then Error "cgroup-parent cannot be blank"
-        elif text |> Seq.exists Char.IsWhiteSpace then Error (sprintf "cgroup-parent: '%s' contains a space" text)
-        elif text.Split '/' |> Array.contains ".." then Error (sprintf "cgroup-parent cannot climb, and '%s' does" text)
+        if text = "" then Error "cgroup_parent cannot be blank"
+        elif text |> Seq.exists Char.IsWhiteSpace then Error (sprintf "cgroup_parent: '%s' contains a space" text)
+        elif text.Split '/' |> Array.contains ".." then Error (sprintf "cgroup_parent cannot climb, and '%s' does" text)
         else Ok (CgroupParent text)
 
     /// A name that is neither a path nor a slice: the pool, spelled for no driver yet.
@@ -320,7 +320,7 @@ module CgroupParent =
         | Some (CgroupParent path) when driver = "systemd" && not (path.EndsWith ".slice") ->
             Error (
                 sprintf
-                    "the container declares cgroup-parent: %s. The docker daemon uses the systemd cgroup driver. That driver takes only a slice name, like yession.slice. A bare name (like yession) works under both drivers"
+                    "the container declares cgroup_parent: %s. The docker daemon uses the systemd cgroup driver. That driver takes only a slice name, like yession.slice. A bare name (like yession) works under both drivers"
                     path)
         | declared -> Ok declared
 
@@ -350,16 +350,16 @@ type ContainerSpec =
       /// Written at the sandbox level as `dialect:`, and carried here because only a
       /// container has a shell to choose.
       Dialect : string option
-      /// The container's memory ceiling, as the repo declared it — compose's
-      /// `deploy.resources.limits.memory`, written `memory:`. `None` — the usual — takes the
-      /// default share of the daemon's memory (`ContainerMemory.defaultFor`): never no
-      /// ceiling, because no ceiling is the whole host.
+      /// The container's memory ceiling, as the repo declared it — compose's `mem_limit:`.
+      /// `None` — the usual — takes the default share of the daemon's memory
+      /// (`ContainerMemory.defaultFor`): never no ceiling, because no ceiling is the whole
+      /// host.
       Memory : ContainerMemory option
-      /// `oom-score-adj:`. `None` — the usual — is `OomScoreAdj.standard`.
+      /// `oom_score_adj:`. `None` — the usual — is `OomScoreAdj.standard`.
       OomScoreAdj : OomScoreAdj option
-      /// `pids-limit:`. `None` — the usual — is `PidsLimit.standard`.
+      /// `pids_limit:`. `None` — the usual — is `PidsLimit.standard`.
       PidsLimit : PidsLimit option
-      /// `cgroup-parent:`. `None` — the usual — keeps the daemon's own parent.
+      /// `cgroup_parent:`. `None` — the usual — keeps the daemon's own parent.
       CgroupParent : CgroupParent option }
 
 module ContainerSpec =
@@ -556,7 +556,7 @@ type EnvironmentSpec =
       /// One command the sandbox runs before anything else does (`setup:`).
       ///
       /// A repo's chance to MAKE its environment ready rather than describe it and hope the
-      /// next reader does the same thing. It is not the container's `cmd`: that is the
+      /// next reader does the same thing. It is not the container's `command`: that is the
       /// container's own process, and one that exits takes the sandbox with it, so setup
       /// written there would end the thing it prepared. This runs in a sandbox already up.
       Setup : string option }

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    One of two projects for YES018, and the one that carries the rule's cases: a Yession
+    project, which is product code, so every literal here that holds an em dash in copy is
+    reported, and every one the rule leaves alone is beside them. YES018 judges a project by what
+    is in its reach (`Population.reach`, shared with YES011 and YES013).
+
+    Its pair is EmDashInBindingFixture, which writes the same literals with nothing Yession in
+    reach and must be reported clean. Not in Yession.slnx, for the reason no fixture is.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Copy.fs" />
+  </ItemGroup>
+
+</Project>

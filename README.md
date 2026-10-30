@@ -15,12 +15,20 @@ create, launch, resume and stop sessions. Each session runs in its own process.
 
 ### Install with npm
 
-Node 24 or later is the only prerequisite.
+Node 24 or later is the only prerequisite. Download `yession-<version>.tgz` from a release,
+then:
 
 ```sh
-npm i -g <release-tarball>
+mkdir -p ~/.local/share/yession
+tar -xzf yession-<version>.tgz --strip-components=1 -C ~/.local/share/yession
+(cd ~/.local/share/yession && npm ci --omit=dev)
+npm i -g ~/.local/share/yession
 yession-manager
 ```
+
+The directory is the install, and the global commands link into it. `npm ci` installs the
+dependency versions the release was tested with. [docs/deployment.md](docs/deployment.md#installing-a-release)
+says how to check the download first, and why the install takes these steps.
 
 ### Install with Nix
 

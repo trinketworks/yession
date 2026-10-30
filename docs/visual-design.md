@@ -244,7 +244,10 @@ carry a rank (WCAG 1.4.1).
 | Absent | empty ring | `ink-dim` | none | no agent, chosen knowingly |
 | Rest | point | `ink-faint` | none | nothing to say: stopped, or everything watched is fine |
 
-Waiting outranks working. Work under way needs nobody, and the ball with a person does.
+Waiting outranks working. Work under way needs nobody, and the ball with a person does. But an
+idle agent is only a person's turn while nothing the session watches is under way: with checks
+still running it is waiting on them, so it says "waiting" at Rest and the checks lead
+(`AgentStatus.withWatched`).
 Wanted is green because green is the people, not because it is good.
 
 Attention is ink: each level carries more than the one below it, so the order survives
@@ -263,6 +266,11 @@ Where a session is listed or entered, its mark leads it. On the Manager's roster
 on the page's rail and the name starts 32px in, where a phone's session page starts its title beside
 the chevron that wears the same mark. The roster's mark is a press: it unfolds the row to its
 words and its verbs, so a row at rest is a mark and a name and nothing to press by mistake.
+Unfolding, the mark is not drawn twice: it rides down to the first line, the thing it ranked first,
+and leaves a track behind it that starts at a point on its seat, so a reader sees where it
+came from and the line has no squared end. The track is a causal link's rail, one pixel of
+`edge`: it joins two things the way the timeline's arrows do, and it must never weigh what the
+mark does.
 *Test: print the roster in greyscale and blur it. The five levels still read in order.*
 
 ## Hierarchy of controls

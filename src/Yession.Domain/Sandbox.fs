@@ -50,6 +50,21 @@ module SandboxBackend =
             | DockerBackend -> Error "docker is a backend for the work sandbox only. The agent sandbox is host or srt"
             | backend -> Ok backend)
 
+    /// The git sandbox's backend, from `YESSION_SESSION_GIT_BACKEND` as read (`None` = unset).
+    /// The git sandbox runs the session's own git verbs: clone, fetch, switch, status, log and
+    /// diff. They read and write checkouts that every work sandbox can also write, so the
+    /// default is srt: a planted `filter.<driver>.smudge` then runs with the git sandbox's
+    /// reach, not the operator's. `host` is the operator's explicit choice. Docker is not a
+    /// git backend, for the agent sandbox's reason: a container per session boot.
+    let parseGit (raw: string option) : Result<SandboxBackend, string> =
+        match raw |> Option.map (fun r -> r.Trim ()) with
+        | None | Some "" -> Ok SrtBackend
+        | Some value ->
+            parse value
+            |> Result.bind (function
+                | DockerBackend -> Error "docker is a backend for the work sandbox only. The git sandbox is host or srt"
+                | backend -> Ok backend)
+
 /// Whether a sandbox confines the FILESYSTEM at all. Egress, env and process
 /// confinement are unaffected either way — this is only about paths.
 ///
@@ -61,6 +76,11 @@ module SandboxBackend =
 /// of what already exists on Linux, which is why the same clone succeeds there; we take
 /// the weaker state on BOTH rather than run a path in production that no CI here
 /// exercises.
+///
+/// What the clone writes, the session never reads back as a file: a repository's files reach
+/// it only through git's object store (technical-design §5, rule 20). So the exemption widens
+/// what the one `git clone` process can touch, and nothing about what the work tree it
+/// leaves can make the session open.
 ///
 /// UNDO when srt can exempt a SUBTREE from those refusals (or macOS adopts the Linux
 /// scan, which exempts a not-yet-existing checkout by construction): then the clone takes
@@ -322,6 +342,54 @@ module SandboxPath =
         // A relative path and no root: the backend's own idea of where it stands is the
         // only thing left, which is what an unconfined spawn has always used.
         | Some path, None -> Some path
+
+/// A path the agent gave, resolved (`SandboxPath.leadingVariable`), as it may stand in a
+/// program's argv: it starts with `/` or `.`, so no program reads it as anything but a path.
+///
+/// The rule reads the FIRST character only, because that is all a program reads. `find`
+/// takes a first argument that starts with `-`, `!` or `(` as the start of its expression,
+/// so `find "-delete" …` deletes where it stands, and `--` is no cure there: BSD `find`
+/// reads the argument after it as an expression still. `cd` takes `-` for `$OLDPWD`, and
+/// `cat` takes `-` for stdin. A path that starts with `/` or `.` is a path to all three,
+/// on GNU and on BSD alike, wherever it stands in the argv. A denylist of the characters
+/// each program reads would have to know every program; `./` in front is true of all.
+type PathOperand = private PathOperand of operand: string * given: string
+
+module PathOperand =
+
+    /// The one way to make one, and total. A path that already starts with `/` or `.`
+    /// (`.`, `..`, `.git`, `/tmp/x`) stands as given, and any other gets `./` in front —
+    /// `src` is `./src` and `-delete` is `./-delete`, the same file to every program.
+    let ofPath (path: string) : PathOperand =
+        if path.StartsWith "/" || path.StartsWith "." then PathOperand (path, path) else PathOperand ("./" + path, path)
+
+    /// The path as it goes into an argv.
+    let value (PathOperand (operand, _)) : string = operand
+
+    /// The path as the agent gave it: what an answer that echoes a path names, so that
+    /// `find` under `src` answers `src/x`, not a `./src/x` nobody wrote.
+    let given (PathOperand (_, given)) : string = given
+
+/// One positional parameter of a script the session runs in a sandbox (`sh -c script sh
+/// args…`). The agent's strings reach a program only through here, and only as operands
+/// (docs/technical-design.md §5).
+[<RequireQualifiedAccess>]
+type ScriptArg =
+    /// A path, as a `PathOperand`: it starts with `/` or `.`, so it stands anywhere.
+    | Path of PathOperand
+    /// A pattern, a glob, a variable name, or the script's own literal. It must stand after
+    /// `--` or as an option's own argument in the script (`-e "$1"`, `--include=…`,
+    /// `-name "$1"`), where a leading `-` is data. Nothing here can check that; the review
+    /// of each script that takes one does.
+    | Word of string
+
+module ScriptArg =
+
+    /// The argv element.
+    let render (arg: ScriptArg) : string =
+        match arg with
+        | ScriptArg.Path path -> PathOperand.value path
+        | ScriptArg.Word word -> word
 
 /// How a sandboxed process ended.
 type SandboxRun =

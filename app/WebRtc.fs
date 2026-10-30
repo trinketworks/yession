@@ -39,10 +39,14 @@ let frameChannel (dc: DataChannel) : FrameChannel<string> =
             cont item
         | None -> queue.Enqueue item
 
+    let take = FramePieces.assembler ()
     dc.onMessage (fun (msg: string) ->
-        match Codec.fromString frameCodec msg with
-        | Ok frame -> deliver (Some frame)
-        | Error e -> JS.console.error ("frame decode failed: " + e))
+        match take msg with
+        | None -> ()
+        | Some whole ->
+            match Codec.fromString frameCodec whole with
+            | Ok frame -> deliver (Some frame)
+            | Error e -> JS.console.error ("frame decode failed: " + e))
 
     dc.onClosed (fun () ->
         if not closed then
@@ -59,8 +63,13 @@ let frameChannel (dc: DataChannel) : FrameChannel<string> =
                 // native send, making `send()` throw. With the addon sharing the process C++
                 // runtime (see nix/node-datachannel.nix) that throw is an ordinary catchable
                 // JS error, so we swallow it here — a lost frame on a dying channel is a no-op.
+                // Not on macOS: there a throw from libdatachannel aborts the process. The one
+                // throw a sender can cause, a message over the peer's limit, `FramePieces`
+                // rules out.
                 if not closed && dc.isOpen () then
-                    try dc.sendMessage (Codec.toString frameCodec frame) |> ignore
+                    try
+                        FramePieces.split (Codec.toString frameCodec frame)
+                        |> List.iter (fun piece -> dc.sendMessage piece |> ignore)
                     with _ -> ()
             }
       Receive =
@@ -182,7 +191,8 @@ module Answering =
           Linger = System.TimeSpan.FromSeconds 5.0 }
 
     /// The answer, bounded: what gathering resolves with when it finishes inside `limit`,
-    /// and otherwise what `soFar` has gathered at the limit. `Error` only when there is
+    /// and otherwise what `soFar` has gathered when the limit passes or gathering fails.
+    /// `Error` only when there is
     /// nothing to send at all. `sleep` is a parameter so a test drives this rule on its own
     /// clock.
     let within
@@ -193,7 +203,7 @@ module Answering =
         : Async<Result<string, string>> =
         async {
             let complete () = async { let! answer = gathered in return Ok answer }
-            match! Resilience.Policy.deadline sleep limit () complete () with
+            match! Resilience.Policy.deadline sleep limit () (fun _ -> Some ()) complete () with
             | Ok answer -> return Ok answer
             | Error () ->
                 match soFar () with

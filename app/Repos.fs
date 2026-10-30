@@ -14,19 +14,37 @@ module Yession.Host.Repos
 // authorization path, the second set of inputs to validate, and the second place a
 // mutation's record can go missing.
 //
-// Git itself runs through the sandbox seam under the AGENT backend (`host` is the
-// explicitly lax choice; `srt` confines each spawn to the repos directory and the
-// allowlisted egress). CLONE is the one exception, and it is a whole sandbox rather
+// Git itself runs through the sandbox seam under the GIT backend
+// (`YESSION_SESSION_GIT_BACKEND`, default `srt`, which confines each spawn to the repos
+// directory and the gateway's route; `host` is the operator's explicitly lax choice). CLONE is the one exception, and it is a whole sandbox rather
 // than a flag on a spawn: it writes a work tree whose names are the repo's, and srt
 // refuses some of those names anywhere on the disk. See `unconfined` below.
 // On top of the confinement, repo-controlled EXECUTION is disabled
 // per invocation — hooks, fsmonitor, ext transport — because the WorkSandbox can write
 // the repos directory by design, so a poisoned `.git/config` is assumed and made inert
-// rather than trusted-by-placement.
+// rather than trusted-by-placement. The same reasoning turns off the rest of what a flag or
+// an env variable can turn off: symlinks in the work tree (`core.symlinks=false`), diff
+// drivers (`--no-ext-diff --no-textconv`), and under `host` any proxy the config names
+// (`NO_PROXY=*`). A checkout whose `.git` is not a directory of its own is not a checkout
+// (`present`), and a verb in a checkout has its repository and work tree pinned in its env
+// (`checkoutPins`), so `core.worktree` cannot move it. One vector is left, because nothing
+// switches it off: a `filter.<driver>.smudge`
+// runs on `switch_branch`, with the git sandbox's reach (docs/GAPS.md).
 //
-// The credential (the acting human's GitHub token, Plan 08 precedence) reaches exactly
-// one place: the env of the single confined git invocation that needs it. It is never
-// in the sandbox policy env, so nothing that outlives the invocation can read it.
+// A repository's FILES reach this process only through git's object store, read in the git
+// sandbox (`ReadCommitted`: `ls-tree` judges the entry, `cat-file` reads the blob). This
+// process opens no path a repository names. `AGENTS.md`, the skills and `yession.yaml` were
+// read off the work tree with calls that follow symlinks, so a repository whose `AGENTS.md`
+// linked to `~/.ssh/id_ed25519` put that key in the log for everyone in the session. A link
+// at `HEAD` is mode `120000`, and here that is no file (docs/technical-design.md §5, rule 20).
+//
+// The credential (the acting human's GitHub token, Plan 08 precedence) reaches no git
+// process. Clone and fetch go through the git gateway, the same route a work sandbox's git
+// takes (`GitGateway`): one `insteadOf` sends `https://github.com/` there, and a loan in the
+// spawn's env names whose credential the gateway adds. The loan is lent before the spawn and
+// returned after the exit. The token used to ride in the git process as an `extraheader`,
+// where a `.git/config` proxy or `insteadOf` could send it anywhere (docs/technical-design.md
+// §5, rule 21).
 
 open System
 open System.Collections.Generic
@@ -67,26 +85,40 @@ let validBranchName (raw: string) : Result<string, string> =
 /// reach it: Apple's git reads its own extra config (CommandLineTools
 /// `share/git-core/gitconfig`, which sets `credential.helper=osxkeychain`) regardless of
 /// `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`, and `GIT_TERMINAL_PROMPT=0` does not cover
-/// helpers. A helper here is never useful — the token rides in as a header — and under
+/// helpers. A helper here is never useful — the gateway adds the credential — and under
 /// launchd the keychain helper blocks forever on a prompt nobody can answer, so a 401
 /// became a clone hung for days. Cleared, the same fault fails in under a second.
-let hardenedEnv (allowProtocol: string) (token: string option) : (string * string) list =
+///
+/// It takes no credential. No git process holds one (docs/technical-design.md §5, rule 21):
+/// the network verbs reach github.com through the git gateway, on a loan their spawn holds
+/// (`GitRoute`), and this env sets no `http.*` key at all.
+///
+/// `core.symlinks=false` checks a committed symlink out as a plain file that holds the link
+/// text. A checkout is read by processes that follow links, and a link a repository names can
+/// point anywhere on the host, so a link in the work tree is a path the repository chose
+/// outside it. The cost is that a repository which commits symlinks has plain files in its
+/// checkout (docs/GAPS.md).
+///
+/// Under the `host` backend `NO_PROXY=*` disables any proxy a `.git/config` names: git hands
+/// it to curl as `CURLOPT_NOPROXY`, and `http.<url>.proxy` matches by the longest URL, so a
+/// proxy of our own could never outrank a planted one. Under srt the proxy IS the way out of
+/// the sandbox (srt's own `HTTP_PROXY`), and its network namespace already makes any other
+/// address unreachable, so the variable is left unset there.
+let hardenedEnv (backend: SandboxBackend) (allowProtocol: string) : (string * string) list =
     let configs =
         [ "core.hooksPath", "/dev/null"
           "core.fsmonitor", "false"
           "protocol.ext.allow", "never"
-          "credential.helper", "" ]
-        @ (match token with
-           | Some token ->
-               let basic =
-                   Convert.ToBase64String (Text.Encoding.UTF8.GetBytes ("x-access-token:" + token))
-               [ "http.https://github.com/.extraheader", "AUTHORIZATION: basic " + basic ]
-           | None -> [])
+          "credential.helper", ""
+          "core.symlinks", "false" ]
     [ "GIT_CONFIG_GLOBAL", "/dev/null"
       "GIT_CONFIG_SYSTEM", "/dev/null"
       "GIT_TERMINAL_PROMPT", "0"
       "GIT_ALLOW_PROTOCOL", allowProtocol
       "GIT_CONFIG_COUNT", string (List.length configs) ]
+    @ (match backend with
+       | HostBackend -> [ "NO_PROXY", "*" ]
+       | SrtBackend | DockerBackend -> [])
     @ (configs
        |> List.mapi (fun i (key, value) ->
            [ sprintf "GIT_CONFIG_KEY_%d" i, key
@@ -165,6 +197,20 @@ let gitExecutable (ambient: Map<string, string>) : string =
     |> Option.filter (fun path -> path <> "")
     |> Option.defaultValue "git"
 
+/// Which repository and which work tree a verb in a checkout acts on, pinned in its env.
+///
+/// `core.worktree` in `.git/config` moves a verb's work tree to any directory, and a
+/// `.git/commondir` file moves where its objects, refs and config are read. A work sandbox can
+/// write both. `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` outrank them, so a verb in a
+/// checkout acts on that checkout and nothing else. The clone names no checkout (`-C`) and gets
+/// none: it creates the repository.
+let checkoutPins (args: string list) : (string * string) list =
+    match args with
+    | "-C" :: checkout :: _ ->
+        let gitDir = sprintf "%s/.git" checkout
+        [ "GIT_DIR", gitDir; "GIT_WORK_TREE", checkout; "GIT_COMMON_DIR", gitDir ]
+    | _ -> []
+
 /// The one exec any git invocation here is built from — the probe and every verb alike.
 ///
 /// A function rather than a record literal per call site, because `hardenedEnv` is not
@@ -183,14 +229,15 @@ let gitExecutable (ambient: Map<string, string>) : string =
 /// to hand back the home it exists to deny.
 let gitExec
     (git: string)
+    (backend: SandboxBackend)
     (workingDirectory: string)
     (allowProtocol: string)
-    (token: string option)
+    (route: (string * string) list)
     (args: string list)
     : SandboxExec =
     { Executable = git
       Arguments = args
-      Env = hardenedEnv allowProtocol token |> Map.ofList
+      Env = hardenedEnv backend allowProtocol @ checkoutPins args |> Map.ofList |> Sandboxes.withGitConfig route
       WorkingDirectory = Some workingDirectory
       // Housekeeping: git by path needs no toolchain and must not pay for one.
       Via = Direct }
@@ -249,6 +296,34 @@ type private GitRun =
       Stdout : string
       Stderr : string }
 
+/// How the session's own network verbs reach github.com: through the git gateway, which adds
+/// the credential on the way (`GitGateway`). The same route a work sandbox's git is given, so
+/// one mechanism carries a credential to github.com.
+type GitRoute =
+    { /// The git config that sends `https://github.com/` to the gateway: one `insteadOf`.
+      Config : (string * string) list
+      /// Lend `Lender`'s credential to ONE git process: the git config that carries the loan,
+      /// and what returns it. Taken before the spawn and returned after the exit, so a loan
+      /// lives exactly as long as the verb that spends it.
+      Lend : GitGateway.Lender -> (string * string) list * (unit -> unit) }
+
+module GitRoute =
+    /// No gateway: the verbs reach whatever their URL names, with no credential. The test
+    /// harness's `file://` fixtures, whose verbs never ask a remote over HTTP.
+    let none : GitRoute = { Config = []; Lend = fun _ -> [], ignore }
+
+    /// The route through `gateway`, at `host` as the git sandbox reaches this process
+    /// (`Sandboxes.hostAddressHere`). One cap for the session's own git, and a borrower per
+    /// verb: two verbs can run at once, and neither is a terminal.
+    let through (gateway: GitGateway.Gateway) (host: string) : GitRoute =
+        { Config = GitGateway.gitConfig host gateway.Port (gateway.Grant GitGateway.Routed.SessionGit)
+          Lend =
+            fun lender ->
+                let borrower = GitGateway.Borrower.Verb (Guid.NewGuid ())
+                let secret = gateway.Lend GitGateway.Routed.SessionGit borrower lender
+                let key, value = GitGateway.loanConfig host gateway.Port secret
+                [ key, value ], (fun () -> gateway.Retire borrower) }
+
 type ReposConfig =
     { Backend : SandboxBackend
       /// The session's Docker network, for a backend that runs containers.
@@ -274,16 +349,20 @@ type ReposConfig =
       /// The git binary every verb spawns (`gitExecutable`). A path, or `git` for the
       /// PATH lookup that is only safe where PATH's git is really git.
       Git : string
-      /// Egress for the git sandbox. Production: github.com.
+      /// Egress for the git sandbox. Production: the gateway's route, and nothing else.
       AllowedDomains : string list
-      /// `GIT_ALLOW_PROTOCOL`. Production pins `https`; the test harness allows `file`.
+      /// `GIT_ALLOW_PROTOCOL`. Production pins `http`, the gateway's; the test harness allows
+      /// `file`.
       AllowProtocol : string
+      /// How clone and fetch reach github.com (`GitRoute`).
+      Route : GitRoute
       /// Repo -> clone URL. Production is `RepoRef.cloneUrl` (constructed, github.com
       /// only); the test harness points at local bare fixtures.
       CloneUrl : RepoRef -> string
-      /// The GitHub token for the network verbs, resolved for the CREDENTIAL actor a
-      /// caller names (Plan 08 precedence, applied by the composition). None =
-      /// anonymous — public repos still clone; a private one fails with git's own words.
+      /// The GitHub token for the CREDENTIAL actor a caller names (Plan 08 precedence, applied
+      /// by the composition), resolved by the gateway on each request a verb's loan carries,
+      /// and by the provider's name check (`Canonical`). Never handed to git. None =
+      /// anonymous — the gateway says so in words git prints.
       ResolveToken : CredentialFor -> Async<string option>
       /// What the provider calls this repo NOW, on this credential — `None` when it cannot
       /// say (unreachable, rate-limited, or a repo this credential cannot see, which the
@@ -291,14 +370,14 @@ type ReposConfig =
       /// redirect and keeps an `origin` the provider no longer answers to, so a name the
       /// provider has moved on from is refused before it is cloned, with the current one.
       Canonical : string option -> RepoRef -> Async<RepoRef option>
-      /// A network verb failed while spending the credential resolved for this actor.
+      /// github.com refused the credential resolved for this actor: the gateway was answered
+      /// 401 on a verb's loan (`Lender.Refused`).
       ///
       /// Beside `ResolveToken` deliberately, because they are two halves of one story: a
       /// caller that can hand a verb a credential but cannot be told the verb failed with it
       /// is exactly the caller that leaves a dead credential reading as healthy. Nothing here
-      /// decides what the failure MEANS — git's stderr cannot tell "your token expired" from
-      /// "that repo does not exist" (`Repository not found` is what github.com says for
-      /// both), so the composition asks the provider, which is the only place that knows.
+      /// decides what the refusal MEANS, so the composition asks the provider, which is the
+      /// only place that knows.
       OnNetworkFailure : CredentialFor -> string -> Async<unit>
       /// Where the add path's spans go. Each step of a clone is its own span, because
       /// "adding a repo is slow" has six candidates and only a measurement picks one.
@@ -321,6 +400,24 @@ type Recorded<'a> =
     { Answer : 'a
       RecordedAs : MessageId option }
 
+/// A repository's file at `HEAD`, by its path in the repository: its text, `None` when there
+/// is none (or a symlink), or why git could not say.
+type CommittedFile = RepoRef -> string -> Async<Result<string option, string>>
+
+/// One `ls-tree -z` entry: `<mode> <type> <object>\t<path>`. A regular file is a `blob`
+/// whose mode is `100644` or `100755`; `120000` is a symlink and `160000` a submodule, and
+/// neither is a file here.
+let committedBlobs (lsTree: string) : (string * string) list =
+    lsTree.Split '\000'
+    |> Array.choose (fun entry ->
+        match entry.Split ('\t', 2) with
+        | [| meta; path |] ->
+            match meta.Split ' ' with
+            | [| ("100644" | "100755"); "blob"; objectId |] -> Some (path, objectId)
+            | _ -> None
+        | _ -> None)
+    |> Array.toList
+
 /// The Process-side repo manager. Caller-taking members append the acting party onto
 /// the event; the read-only inspectors take none because they record nothing.
 type ReposService =
@@ -334,6 +431,11 @@ type ReposService =
       RepoStatus : RepoRef -> Async<Result<string, string>>
       RepoLog : RepoRef -> Async<Result<string, string>>
       RepoDiff : RepoRef -> Async<Result<string, string>>
+      /// A file as the checkout's `HEAD` commits it, read out of git's object store in the git
+      /// sandbox (`committedFile`). `None` when `HEAD` has no such file, or has a symlink there.
+      /// The one way a repository's file reaches this process: the session opens no path a
+      /// repository names (docs/technical-design.md §5, rule 20).
+      ReadCommitted : CommittedFile
       /// Delete a checkout, and answer with the path it was at AS A TERMINAL SAW IT (Plan
       /// 26). That path rather than `unit`, because it is the one fact only this service has
       /// and the only one a shell profile could have been holding — the git sandbox's own
@@ -399,15 +501,15 @@ let create (config: ReposConfig) : Result<ReposService, string> =
 
         /// Every git this service spawns, built in the one place that carries the hardened
         /// env (`gitExec`) — so the probe below cannot drift from the verbs it speaks for.
-        let execFor (token: string option) (args: string list) : SandboxExec =
-            gitExec config.Git reposDir config.AllowProtocol token args
+        let execFor (route: (string * string) list) (args: string list) : SandboxExec =
+            gitExec config.Git config.Backend reposDir config.AllowProtocol route args
 
         /// `git --version` inside the sandbox, before any verb runs one. A sandbox that
         /// cannot run git is not a git sandbox, and this is where it says so: the
         /// alternative is every verb reporting whatever the host's binary printed on its
         /// way out, once per verb, in words that name neither the sandbox nor a knob.
         ///
-        /// It runs a VERB's environment (no token: `--version` reaches no remote), because
+        /// It runs a VERB's environment (no route: `--version` reaches no remote), because
         /// a probe that runs anything else proves nothing about the invocations it gates —
         /// which is exactly how it once refused a git that worked.
         ///
@@ -417,7 +519,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         let usable (sandbox: Sandbox) : Async<Result<Sandbox, string>> =
             async {
                 let mutable output = ""
-                match! sandbox.Spawn (execFor None [ "--version" ]) (fun (_, chunk) -> output <- output + chunk) with
+                match! sandbox.Spawn (execFor [] [ "--version" ]) (fun (_, chunk) -> output <- output + chunk) with
                 | Error reason -> return Error (unusableGit config.Git reason)
                 | Ok handle ->
                     match! handle.Exited with
@@ -465,28 +567,40 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// of a whole spawn — `clone` goes back to `confined` and this sandbox goes away.
         let unconfined = lazySandbox "unconfined" { policy with Filesystem = Unconfined }
 
+        /// One git process. A network verb names the `lender` whose credential it spends: the
+        /// spawn then gets the gateway's route and a loan, lent before the spawn and returned
+        /// after the exit, whatever the exit was.
         let runGit
             (sandboxFor: unit -> Async<Result<Sandbox, string>>)
-            (token: string option)
+            (lender: GitGateway.Lender option)
             (args: string list)
             : Async<Result<GitRun, string>> =
             async {
                 match! sandboxFor () with
                 | Error e -> return Error e
                 | Ok sandbox ->
-                    let mutable stdout = ""
-                    let mutable stderr = ""
-                    match! sandbox.Spawn (execFor token args) (fun (stream, chunk) ->
-                              match stream with
-                              | Stdout -> stdout <- stdout + chunk
-                              | Stderr -> stderr <- stderr + chunk) with
-                    | Error e -> return Error e
-                    | Ok handle ->
-                        match! handle.Exited with
-                        | SandboxRunFailed reason -> return Error reason
-                        | SandboxSignalled signal -> return Error (sprintf "git was ended by %s" signal)
-                        | SandboxKilledForMemory kill -> return Error (sprintf "git was %s" (MemoryKill.described kill))
-                        | SandboxExited code -> return Ok { Code = code; Stdout = stdout; Stderr = stderr }
+                    let loan, giveBack =
+                        match lender with
+                        | None -> [], ignore
+                        | Some lender ->
+                            let loan, giveBack = config.Route.Lend lender
+                            config.Route.Config @ loan, giveBack
+                    try
+                        let mutable stdout = ""
+                        let mutable stderr = ""
+                        match! sandbox.Spawn (execFor loan args) (fun (stream, chunk) ->
+                                  match stream with
+                                  | Stdout -> stdout <- stdout + chunk
+                                  | Stderr -> stderr <- stderr + chunk) with
+                        | Error e -> return Error e
+                        | Ok handle ->
+                            match! handle.Exited with
+                            | SandboxRunFailed reason -> return Error reason
+                            | SandboxSignalled signal -> return Error (sprintf "git was ended by %s" signal)
+                            | SandboxKilledForMemory kill -> return Error (sprintf "git was %s" (MemoryKill.described kill))
+                            | SandboxExited code -> return Ok { Code = code; Stdout = stdout; Stderr = stderr }
+                    finally
+                        giveBack ()
             }
 
         /// Run and demand exit 0; a failure surfaces git's own words, capped. One span per
@@ -494,7 +608,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// first-use cost lands inside it as a child, so a slow first verb says why.
         let runOk
             (sandboxFor: unit -> Async<Result<Sandbox, string>>)
-            (token: string option)
+            (lender: GitGateway.Lender option)
             (args: string list)
             : Async<Result<GitRun, string>> =
             let verb = gitVerb args
@@ -502,9 +616,9 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                 config.Tracer
                 (sprintf "git %s" verb)
                 [ "yession.git.verb", Telemetry.AttributeValue.String verb
-                  "yession.git.authenticated", Telemetry.AttributeValue.Bool token.IsSome ]
+                  "yession.git.authenticated", Telemetry.AttributeValue.Bool lender.IsSome ]
                 (async {
-                    match! runGit sandboxFor token args with
+                    match! runGit sandboxFor lender args with
                     | Error e -> return Error e
                     | Ok run when run.Code <> 0 ->
                         let said = if run.Stderr.Trim () <> "" then run.Stderr else run.Stdout
@@ -517,64 +631,121 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// reports, and the only path anything outside the git sandbox can act on.
         let visiblePathOf (repo: RepoRef) =
             SandboxPath.reachedFrom (config.StartsAt ()) (pathOf repo)
-        let present (repo: RepoRef) = Fs.exists (sprintf "%s/.git" (pathOf repo))
+        /// A checkout is here when its owner directory, its own directory and its `.git` are
+        /// each a DIRECTORY, by `lstat`. A work sandbox can write the repos directory, so any of
+        /// the three can be a symlink to another repository on the host, and every verb would
+        /// then run on that one: under `host`, `switch_branch` would check its files out where
+        /// the work sandbox reads them. A link or a file at any of the three is "not here".
+        let present (repo: RepoRef) =
+            [ sprintf "%s/%s" reposDir (RepoRef.owner repo)
+              pathOf repo
+              sprintf "%s/.git" (pathOf repo) ]
+            |> List.forall Fs.isOwnDirectory
 
-        /// The checkout's own root `AGENTS.md`, read once at the moment the clone lands
-        /// (repo AGENTS.md into per-turn context). Missing or unreadable is `None`, never a
-        /// reason to fail an otherwise-successful clone -- an optional file's absence is not
-        /// an error. Capped in characters, the same shape as Claude Code's own CLAUDE.md
-        /// size ceiling, so one repo cannot dominate every turn's context; a file over the
-        /// cap is truncated, not dropped, so a maintainer's opening lines still land.
-        let agentsMdOf (repo: RepoRef) : string option =
-            let path = sprintf "%s/AGENTS.md" (pathOf repo)
-            if not (Fs.exists path) then None
-            else
-                try
-                    let text = Fs.readText path
-                    if text.Length > agentsMdCharCap then
-                        Some (text.Substring (0, agentsMdCharCap) + "\n\n[truncated -- AGENTS.md is longer than this session reads]")
-                    else
-                        Some text
-                with _ -> None
+        /// Why a path in the repos directory is not a checkout, when `present` says it is not.
+        let notACheckout (repo: RepoRef) : string =
+            sprintf
+                "%s is not a checkout: its .git, or a directory above it, is not a directory of its own. Use remove_repo on it, then add it again."
+                (visiblePathOf repo)
 
-        /// Every skill a checkout's `.agents/skills/` declares, read at the same moment and
-        /// for the same reason `agentsMdOf` is: right after the staging rename, the one
-        /// moment a repo-authored file is trustworthy. A directory with no `SKILL.md`, one
-        /// with no frontmatter, or frontmatter that does not decode contributes nothing --
-        /// malformed is not a reason to fail an otherwise-successful clone, the same
-        /// tolerance `agentsMdOf` already has. Sorted by name, so the menu reads the same on
-        /// every clone whatever order the filesystem happens to answer in.
-        let skillsOf (repo: RepoRef) : SkillSummary list =
-            let skillsDir = sprintf "%s/.agents/skills" (pathOf repo)
-            if not (Fs.exists skillsDir) then []
-            else
-                Fable.NodeExtras.Files.entries skillsDir
-                |> Array.filter (fun entry -> entry.isDirectory ())
-                |> Array.choose (fun entry ->
-                    let path = sprintf "%s/%s/SKILL.md" skillsDir entry.name
-                    if not (Fs.exists path) then None
-                    else
-                        try
-                            SkillFile.frontmatterOf (Fs.readText path)
-                            |> Option.bind (fun yaml -> SkillFile.decode (Fable.Yaml.Plain.json (Fable.Yaml.parse yaml)) |> Result.toOption)
-                        with _ -> None)
-                |> Array.sortBy (fun skill -> skill.Name)
-                |> Array.toList
+        /// Every regular file `HEAD` commits under `paths`, with its object id (`committedBlobs`).
+        /// `-r` walks into directories; a path that names no entry answers nothing.
+        ///
+        /// A repository with no commit yet (an unborn `HEAD`) commits nothing, which is no file,
+        /// not a failure: `ls-tree` refuses such a `HEAD`, so a refusal is asked about once more,
+        /// by exit code rather than by git's words.
+        let committedUnder (repo: RepoRef) (paths: string list) : Async<Result<(string * string) list, string>> =
+            async {
+                match! runOk confined None ([ "-C"; pathOf repo; "ls-tree"; "-r"; "-z"; "HEAD"; "--" ] @ paths) with
+                | Ok run -> return Ok (committedBlobs run.Stdout)
+                | Error e ->
+                    match! runGit confined None [ "-C"; pathOf repo; "rev-parse"; "--verify"; "--quiet"; "HEAD^{commit}" ] with
+                    | Ok run when run.Code <> 0 -> return Ok []
+                    | _ -> return Error e
+            }
+
+        /// One blob's text, by object id. By id rather than `HEAD:<path>`, so what is read is
+        /// the entry `ls-tree` judged, and a path is never parsed twice.
+        let blobText (repo: RepoRef) (objectId: string) : Async<Result<string, string>> =
+            async {
+                match! runOk confined None [ "-C"; pathOf repo; "cat-file"; "blob"; objectId ] with
+                | Error e -> return Error e
+                | Ok run -> return Ok run.Stdout
+            }
+
+        let readCommitted (repo: RepoRef) (path: string) : Async<Result<string option, string>> =
+            async {
+                if not (present repo) then return Error (notACheckout repo)
+                else
+                    match! committedUnder repo [ path ] with
+                    | Error e -> return Error e
+                    | Ok blobs ->
+                        match blobs |> List.tryFind (fun (named, _) -> named = path) with
+                        | None -> return Ok None
+                        | Some (_, objectId) ->
+                            let! text = blobText repo objectId
+                            return text |> Result.map Some
+            }
+
+        /// The checkout's own root `AGENTS.md`, as `HEAD` commits it, read once at the moment
+        /// the clone lands (repo AGENTS.md into per-turn context). Missing, a symlink, or
+        /// unreadable is `None`, never a reason to fail an otherwise-successful clone -- an
+        /// optional file's absence is not an error. Capped in characters, the same shape as
+        /// Claude Code's own CLAUDE.md size ceiling, so one repo cannot dominate every turn's
+        /// context; a file over the cap is truncated, not dropped, so a maintainer's opening
+        /// lines still land.
+        let agentsMdOf (repo: RepoRef) : Async<string option> =
+            async {
+                match! readCommitted repo "AGENTS.md" with
+                | Ok (Some text) when text.Length > agentsMdCharCap ->
+                    return Some (text.Substring (0, agentsMdCharCap) + "\n\n[truncated -- AGENTS.md is longer than this session reads]")
+                | Ok (Some text) -> return Some text
+                | Ok None | Error _ -> return None
+            }
+
+        /// Every skill `HEAD` declares under `.agents/skills/`, read at the same moment and for
+        /// the same reason `agentsMdOf` is. A directory with no `SKILL.md` (or a symlink there),
+        /// one with no frontmatter, or frontmatter that does not decode contributes nothing --
+        /// malformed is not a reason to fail an otherwise-successful clone, the same tolerance
+        /// `agentsMdOf` already has. Sorted by name, so the menu reads the same on every clone.
+        let skillsOf (repo: RepoRef) : Async<SkillSummary list> =
+            async {
+                match! committedUnder repo [ ".agents/skills" ] with
+                | Error _ -> return []
+                | Ok blobs ->
+                    let mutable skills = []
+                    for path, objectId in blobs do
+                        match path.Split '/' with
+                        | [| ".agents"; "skills"; _; "SKILL.md" |] ->
+                            match! blobText repo objectId with
+                            | Ok text ->
+                                let decoded =
+                                    try
+                                        SkillFile.frontmatterOf text
+                                        |> Option.bind (fun yaml -> SkillFile.decode (Fable.Yaml.Plain.json (Fable.Yaml.parse yaml)) |> Result.toOption)
+                                    with _ -> None
+                                skills <- skills @ Option.toList decoded
+                            | Error _ -> ()
+                        | _ -> ()
+                    return skills |> List.sortBy (fun skill -> skill.Name)
+            }
 
         let listingOf (repo: RepoRef) : Async<Result<RepoListing, string>> =
             async {
-                match! runOk confined None [ "-C"; pathOf repo; "rev-parse"; "--abbrev-ref"; "HEAD" ] with
-                | Error e -> return Error e
-                | Ok branch ->
-                    match! runOk confined None [ "-C"; pathOf repo; "status"; "--porcelain" ] with
+                if not (present repo) then return Error (notACheckout repo)
+                else
+                    match! runOk confined None [ "-C"; pathOf repo; "rev-parse"; "--abbrev-ref"; "HEAD" ] with
                     | Error e -> return Error e
-                    | Ok status ->
-                        return
-                            Ok
-                                { Repo = repo
-                                  Branch = branch.Stdout.Trim ()
-                                  Dirty = status.Stdout.Trim () <> ""
-                                  Path = visiblePathOf repo }
+                    | Ok branch ->
+                        match! runOk confined None [ "-C"; pathOf repo; "status"; "--porcelain" ] with
+                        | Error e -> return Error e
+                        | Ok status ->
+                            return
+                                Ok
+                                    { Repo = repo
+                                      Branch = branch.Stdout.Trim ()
+                                      Dirty = status.Stdout.Trim () <> ""
+                                      Path = visiblePathOf repo }
             }
 
         let mintMessageId () : MessageId =
@@ -625,6 +796,15 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                 else return! inner ()
             }
 
+        /// Whose credential a network verb spends, as the gateway asks for it: the caller's
+        /// CREDENTIAL half, resolved on every request the verb's loan carries.
+        let lenderFor (caller: RepoCaller) : GitGateway.Lender =
+            { Owner = caller.Credential
+              Resolve = fun () -> config.ResolveToken caller.Credential
+              Refused = fun () -> config.OnNetworkFailure caller.Credential "the git gateway was answered 401"
+              // The session's own verbs clone and fetch; none of them pushes.
+              Spent = fun _ -> async { return () } }
+
         /// Clone into the staging area and MOVE the finished thing into place. The rename
         /// is the moment the repo exists; before it, nothing at the visible path suggests
         /// one is coming, and a clone that dies leaves the wreckage somewhere nobody reads.
@@ -651,14 +831,11 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                 // that populates them is what fails, and a clone that asks for no
                 // templates never attempts it. Nothing here wants a hooks directory
                 // anyway: repo-controlled execution is off by construction.
-                match! runOk unconfined token [ "clone"; "--no-recurse-submodules"; "--template="; config.CloneUrl repo; relative ] with
+                match! runOk unconfined (Some (lenderFor caller)) [ "clone"; "--no-recurse-submodules"; "--template="; config.CloneUrl repo; relative ] with
                 | Error e ->
                     // git removes a target it created itself, but not one it was killed
                     // out of. Either way the staging area is ours to leave clean.
                     Fable.NodeExtras.Files.removeTree staging
-                    // Only when a credential was actually spent: an anonymous clone that
-                    // failed says nothing about anybody's sign-in.
-                    if token.IsSome then do! config.OnNetworkFailure caller.Credential e
                     return Error e
                 | Ok _ ->
                     // The owner directory is the rename's destination PARENT, and git made
@@ -696,6 +873,16 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                             (SessionEvent.RepoCloneFailed { MessageId = messageId; Repo = repo; Reason = e; Actor = caller.Actor })
                     return Error e
                 | Ok listing ->
+                    let! agentsMd, skills =
+                        Telemetry.span
+                            config.Tracer
+                            "repo.read_files"
+                            []
+                            (async {
+                                let! agentsMd = agentsMdOf repo
+                                let! skills = skillsOf repo
+                                return agentsMd, skills
+                            })
                     do!
                         Telemetry.span
                             config.Tracer
@@ -708,8 +895,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                                       Repo = repo
                                       Branch = listing.Branch
                                       Actor = caller.Actor
-                                      AgentsMd = agentsMdOf repo
-                                      Skills = skillsOf repo }))
+                                      AgentsMd = agentsMd
+                                      Skills = skills }))
                     return Ok { Recorded.Answer = listing; Recorded.RecordedAs = Some messageId }
             }
 
@@ -742,6 +929,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                             // would leave it here and invisible for good. Record it as the
                             // clone would have.
                             let messageId = mintMessageId ()
+                            let! agentsMd = agentsMdOf repo
+                            let! skills = skillsOf repo
                             do! append caller.Actor (SessionEvent.RepoAdded { MessageId = messageId; Repo = repo; Actor = caller.Actor })
                             do!
                                 append
@@ -751,8 +940,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                                           Repo = repo
                                           Branch = listing.Branch
                                           Actor = caller.Actor
-                                          AgentsMd = agentsMdOf repo
-                                          Skills = skillsOf repo })
+                                          AgentsMd = agentsMd
+                                          Skills = skills })
                             return Ok { Recorded.Answer = listing; Recorded.RecordedAs = Some messageId }
                     | Error e ->
                         // The one bad state the rename cannot prevent, because it predates
@@ -766,6 +955,11 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                                     "%s is already checked out here, but git cannot read that checkout: %s. An interrupted clone leaves a checkout like this. Use remove_repo on it, then add it again."
                                     (RepoRef.value repo)
                                     e)
+                elif Fs.lexists (pathOf repo) then
+                    // Something is at the checkout's path that `present` will not call a
+                    // checkout. A clone would fail at the rename, and git must not be asked
+                    // about it.
+                    return Error (notACheckout repo)
                 else
                     let key = RepoRef.value repo
                     let pending =
@@ -816,11 +1010,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         let fetchRepo (caller: RepoCaller) (repo: RepoRef) : Async<Result<string, string>> =
             requirePresent repo (fun () ->
                 async {
-                    let! token = config.ResolveToken caller.Credential
-                    match! runOk confined token [ "-C"; pathOf repo; "fetch"; "--prune"; "--no-recurse-submodules"; "origin" ] with
-                    | Error e ->
-                        if token.IsSome then do! config.OnNetworkFailure caller.Credential e
-                        return Error e
+                    match! runOk confined (Some (lenderFor caller)) [ "-C"; pathOf repo; "fetch"; "--prune"; "--no-recurse-submodules"; "origin" ] with
+                    | Error e -> return Error e
                     | Ok run ->
                         // Fetch narrates on stderr; an up-to-date fetch says nothing.
                         let said = (run.Stderr + run.Stdout).Trim ()
@@ -881,7 +1072,10 @@ let create (config: ReposConfig) : Result<ReposService, string> =
           FetchRepo = fetchRepo
           RepoStatus = inspect (fun path -> [ "-C"; path; "status"; "--porcelain=v1"; "--branch" ])
           RepoLog = inspect (fun path -> [ "-C"; path; "log"; "--oneline"; "-30" ])
-          RepoDiff = inspect (fun path -> [ "-C"; path; "diff" ])
+          // A diff driver is a program the config names, and the config is writable by every
+          // work sandbox. Both flags turn every driver off, whatever the config says.
+          RepoDiff = inspect (fun path -> [ "-C"; path; "diff"; "--no-ext-diff"; "--no-textconv" ])
+          ReadCommitted = readCommitted
           RemoveRepo = removeRepo })
 
 /// The agent-facing capability set for one turn: events attribute the AGENT (it is

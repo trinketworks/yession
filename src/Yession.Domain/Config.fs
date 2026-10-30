@@ -50,8 +50,8 @@ type SandboxDecl =
       ///
       /// `None` is not "confined" — it is the repo saying nothing, and what that means is the
       /// BACKEND's answer, not this file's. Nesting the container's own keys under one
-      /// optional block is what makes `cmd` unwritable on a sandbox that has no container to
-      /// run it: there is no flat `cmd` to mistype.
+      /// optional block is what makes `command` unwritable on a sandbox that has no container to
+      /// run it: there is no flat `command` to mistype.
       Container : ContainerSpec option
       /// Relative to THIS repo's checkout.
       WorkingDirectory : string option
@@ -90,8 +90,8 @@ type SandboxDecl =
       /// One command to run in this sandbox before anything else does — the repo's chance
       /// to make the environment ready rather than describe it and hope.
       ///
-      /// NOT `container.cmd`, which is the container's own process and carries a service's
-      /// semantics: a `cmd` that exits takes the sandbox down with it, so setup written
+      /// NOT `container.command`, which is the container's own process and carries a service's
+      /// semantics: a `command` that exits takes the sandbox down with it, so setup written
       /// there would end the thing it was preparing. This runs INSIDE a sandbox that is
       /// already up, as a recorded block like any other, and finishing is what it is for.
       ///
@@ -255,7 +255,7 @@ module Declarations =
         | Unreadable (reason, lastRead) ->
             Some (
                 sprintf
-                    "this session could not read its checkouts' yession.yaml: %s.%s add_repo, switch_branch or remove_repo reads them again, and so does a relaunch"
+                    "this session could not read its checkouts' yession.yaml: %s.%s add_repo, switch_branch or remove_repo reads them again. A relaunch also reads them"
                     reason
                     (match lastRead with
                      | Some _ -> " What it knows comes from the last read that succeeded."

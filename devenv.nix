@@ -280,6 +280,8 @@ ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
   # actionlint over .github/workflows — release.yml is otherwise only validated when it runs,
   # which is on master, after a merge.
   scripts.lint.exec = ''exec dotnet fsi tasks.fsx lint'';
+  # npm's advisories against the production tree, less audit-exceptions.json: a pr.yaml step.
+  scripts.audit.exec = ''exec dotnet fsi tasks.fsx audit'';
   # lint and check at once, each line marked with its side: pr.yaml's `test` job.
   scripts."pr-gate".exec = ''exec dotnet fsi tasks.fsx pr-gate "$@"'';
   # Measuring, judging and recording, deliberately three: the release records without judging,
@@ -288,6 +290,9 @@ ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
   scripts."bench-guard".exec = ''exec dotnet fsi tasks.fsx bench-guard'';
   scripts."bench-publish".exec = ''exec dotnet fsi tasks.fsx bench-publish "$@"'';
   scripts.version.exec = ''exec dotnet fsi tasks.fsx version'';
+  # The camera: one picture or a film of a page. `frames --harness replies --still` photographs a
+  # conversation that has content (tasks.fsx, `frames`).
+  scripts.frames.exec = ''exec dotnet fsi tasks.fsx frames "$@"'';
   # Local package (compile + bundle + smoke + pack). For the release tarball as a Nix output,
   # use `devenv build outputs.npm`. Usage: package [1.2.3] — with no argument tasks.fsx computes
   # the version from the commit history, so there is no default to duplicate here.

@@ -29,6 +29,28 @@ The last section holds trust boundaries as sharp as the first section's.
 
 ## Security & trust
 
+- **A Manager route that changes state trusts a request that names no origin.** The
+  request-origin rule (`ManagerUi.requestOrigin`, [§5 rule 24](technical-design.md#5-architectural-invariants))
+  accepts `Sec-Fetch-Site: same-origin` or `none`, or, without it, an `Origin` whose host and
+  port are the request's `Host`. Its third branch accepts a request with neither header.
+  - Why: a browser sends at least one of the two on every POST, so such a request is no
+    browser's, and the identity header already names its sender (automation, the tests).
+  - Open: a browser old enough to send neither is treated as that client. No supported browser
+    is.
+- **The pages' Content-Security-Policy allows inline styles.** The Manager's documents and the
+  session shell carry one policy (`Ssr.ContentPolicy`): scripts from this origin or with the
+  response's nonce, no framing (`frame-ancestors 'none'`, the one framing defence), forms to
+  this origin only.
+  - The session shell's policy also has `'wasm-unsafe-eval'`, for asciinema-player's terminal
+    emulator (WebAssembly). It admits compiling WebAssembly, not `eval`. The Manager's
+    documents compile none and do not have it.
+  - `style-src 'unsafe-inline'` stays for the `style="..."` attributes the session templates
+    write (`View.fs`). A policy cannot allow an attribute by nonce. An injected style can
+    restyle a page, not run script.
+  - The session shell is revalidated by ETag, and a 304 carries no policy, so a kept shell
+    keeps the nonce it was first sent with. A nonce is a secret of one response, so this costs
+    nothing while the shell's markup holds no injected script.
+
 - **A lent token rotates per command, and whether that earns its keep is open.** A declaration's
   `${github.token}` (`EnvironmentVariableRef.Lent`) is a stand-in. Each command borrows it for
   the act the command runs as, and gives it back when the next command starts.
@@ -131,9 +153,34 @@ The last section holds trust boundaries as sharp as the first section's.
   every session, so the boundary is the same. Authors stay `PeerRef`, so event ATTRIBUTION does
   not change. [deployment.md](deployment.md#what---auth-localhost-costs-here) gives both exits
   (`--secrets ephemeral`, `--auth trusted-headers`).
-- **No transport encryption guarantees beyond WebRTC/DTLS.** Everything binds 127.0.0.1, or a
-  unix socket under `trusted-headers`. Loopback HTTP is the RFC 8252 pattern. Nothing here is
-  LAN-safe without the operator's proxy in front.
+- **Under `--auth trusted-headers` every member is an operator of every session.** The rule
+  establishes who the caller is. Nothing decides what they may do.
+  - Holds: identity is per human, and credential custody is per human. A turn and a lent token
+    run on the acting person's own credential (`Authority.credential`), so no member's turn
+    spends another's account.
+  - Does not hold: session ownership and membership. The Manager answers every attributed user
+    (`gated`, `app/ManagerUi.fs`), so any member creates, launches, stops and archives any
+    session, and declares MCP servers for all. `/authorize` (`authorize`,
+    `src/Yession.Oidc/Provider.fs`) issues a code for any registered client to any attributed
+    user, so any member joins any session, reads its log and terminals, drives its agent, and
+    types into its sandboxes.
+  - Two places cross the credential boundary. A repository's `setup:` block runs under
+    whoever triggered the fold that started its sandbox (`Authority.configuredBy` in
+    `RepoSandboxes.foldOnce`, built by `Commands.startWorkSandboxCall`). A webhook
+    delivery goes to every session whose filter matches (`deliver`, `app/WebhookRelay.fs`).
+  - Open: a session owner, a member list the owner edits, and a policy row for the Manager
+    verbs and `/authorize`. Nothing is built.
+    [deployment.md](deployment.md#what-a-tailnet-member-can-do) tells operators the model as
+    it is.
+- **No transport encryption guarantees beyond WebRTC/DTLS.** The Manager and every session bind
+  127.0.0.1, or a unix socket under `trusted-headers`. Loopback HTTP is the RFC 8252 pattern.
+  Two listeners bind wider, because a sandbox has to reach them: the git gateway and the
+  credential proxy. Each binds where a sandbox reaches this host (`Interop.Doors`). On Linux
+  that is 127.0.0.1, 127.0.0.2, and a native Docker daemon's session network gateway. On macOS
+  it is 127.0.0.1 and every other address this host has, link-local aside, so a LAN or a
+  tailnet reaches them there. A capability minted per sandbox admits a request. The headers of
+  `app/GitGateway.fs` and `app/CredentialProxy.fs` say why. Nothing here is LAN-safe without
+  the operator's proxy in front.
 - **The Manager and Process read plaintext**, per the stated Phase 1–2 threat model. The design
   allows command-to-container encryption, but no code does it yet.
 - **The authentication strategy gates the management UI** (Plan 07). A `Denied` outcome is a 401
@@ -148,8 +195,8 @@ The last section holds trust boundaries as sharp as the first section's.
   allowlist, which the credential-leak regression test pins. An operator must choose it
   deliberately. `=docker` is the full-userland option for the WorkSandbox.
   - **A Linux host without the confinement tools cannot start a session.** srt needs bubblewrap,
-    socat and ripgrep. The Nix installable names all three. An `npm i -g yession` on a bare box
-    does not have them. The session then fails when it creates its sandbox, and does not start
+    socat and ripgrep. The Nix installable names all three. An npm install of a release on a bare
+    box does not have them. The session then fails when it creates its sandbox, and does not start
     unconfined. That is the intended trade: install the tools or choose `host` deliberately.
   - **srt reports a probe it could not RUN as a tool that is not there**, so a bad minute makes
     srt refuse every sandbox in a run. Yession checks the refusal against this process's own
@@ -246,29 +293,32 @@ The last section holds trust boundaries as sharp as the first section's.
   is BY DESIGN not an agent backend: a container per session boot is the opposite of the
   sub-second start the agent needs.
   - **The default is `host`, and unlike the WorkSandbox's that is a shortfall, not a decision.**
-    `YESSION_SESSION_AGENT_BACKEND=srt` is the answer this wants, but it does not work yet. The
-    comment above `agentBackend` in `app/SessionMain.fs` gives the history (#364, the 90s
-    stall) and the cause: the **Bun** `claude` binary ignores `HTTP_PROXY`, so its API egress
-    goes DIRECT into srt's `--unshare-net`. What the live tier measured beyond that:
-    - A `verify.yml` dispatch with `=srt` teed the CLI's stdio and its `DEBUG=1` log. The CLI
-      comes up FULLY (MCP server connected, tools listed, credential accepted, `init` emitted).
-      Then every request to `api.anthropic.com` fails in about 3ms with a transport-level
-      `Connection error.` (no HTTP status), and srt's proxy logs ZERO connections.
-    - Claude Code's proxy support goes through undici's
-      `setGlobalDispatcher(EnvHttpProxyAgent)`, which Bun's native `fetch` ignores. The
-      WorkSandbox's git and node honour the proxy: every `Srt` suite is green.
-    - **Not the cause**, each checked:
-      - the async spawn seam (the `Srt` suite drives it)
-      - the read scope (`process.execPath` allows `/nix/store` back)
-      - the policy env (srt bakes the proxy env into the wrapped argv: bwrap `--setenv` on
-        Linux, an `env VAR=…` prefix on macOS)
-      - a missing CA bundle (srt runs a plain authenticated CONNECT proxy, with no MITM CA)
-    - **Why it is not a small fix.** Each srt sandbox now runs its `SandboxManager` in its own
-      process (`SrtSandbox.HostWire`), so the agent's network policy could change alone. What
-      remains is the binary: only the Bun one ships (the SDK's per-platform optional deps). On
-      Node, undici's dispatcher governs `fetch` and the proxy works, but that means a large
-      dependency packaged under Nix. Until then the agent CLI has only its env allowlist and
-      scratch HOME, the same standing as `host` everywhere else.
+    `YESSION_SESSION_AGENT_BACKEND=srt` is the answer this wants. #364 made it the default, the
+    release gate's live turn then stalled for 90 seconds, and the default went back. The gate
+    now passes under `=srt`. The default stays `host` until a macOS run under `=srt` is
+    measured: the deployment in [deployment.md](deployment.md) is macOS, and every run so far
+    is Linux.
+    - What #373 recorded: the CLI came up FULLY (MCP server connected, tools listed, credential
+      accepted, `init` emitted), then every request to `api.anthropic.com` failed in about 3ms
+      with a transport-level `Connection error.`, and srt's proxy logged ZERO connections.
+    - **The Bun CLI honours the proxy.** #373 read the stall as Bun's `fetch` ignoring undici's
+      dispatcher. That reading is wrong. The vendored `claude` (nixpkgs 2.1.283), run outside
+      srt against two loopback listeners, sends `CONNECT api.anthropic.com:443` to
+      `HTTPS_PROXY` and to `https_proxy`, with `Proxy-Authorization: Basic` from a credential
+      in the URL. With `ANTHROPIC_BASE_URL` at the second listener, its requests go through
+      the proxy when one is set and direct when none is.
+    - **The gate passes under `=srt` on master.** A `verify.yml` dispatch with only
+      `YESSION_SESSION_AGENT_BACKEND: srt` added (`LiveAgent Ports Native Srt`, the live
+      `add_repo` case) was green, and the clone landed in 7.6s (run 40490505787). Three changes
+      since #373 can each have cleared the stall, and none was measured alone: the nixpkgs pin
+      move (#980, a newer CLI), srt 0.0.67 to 0.0.77 (#989), and a separate srt manager per
+      sandbox (#1005).
+    - **srt 0.0.77 names its proxy `localhost`, and its relay listens on IPv4 alone.** Every
+      proxy variable is `http://<user>:<token>@localhost:3128`, and the relay inside the
+      network namespace is `socat TCP-LISTEN:3128`. With `::1 localhost` in `/etc/hosts`,
+      some of the CLI's calls fail with `connect ECONNREFUSED ::1:3128`; its API call still
+      got through on the box that measured it. srt 0.0.80 listens on both families, which
+      fixes this upstream.
   - The SDK's spawn seam is SYNCHRONOUS and srt's wrap is not. So the srt tier gives the SDK a
     stand-in process whose streams are live at once, and joins the real child to them when the
     wrap resolves. The `Srt` suite drives it end to end (stdin in, stdout out, exit code).
@@ -389,9 +439,9 @@ The last section holds trust boundaries as sharp as the first section's.
   Supervision and secrets custody cross the boundary as a secret-scoped control RPC (environments
   are session-owned via the sandbox seam). The htmx management UI creates, launches, resumes and
   stops sessions. But **children die with the Manager**: no daemonising and no orphan adoption,
-  so a Manager restart stops every running session. `GET /sessions/{id}/open` launches a stopped
-  session and lands on its address (Plan 11), and the client offers that route when its session
-  has gone.
+  so a Manager restart stops every running session. `GET /sessions/{id}/open` answers a stopped
+  session with the opening screen, which launches it by POST and lands on its address (Plan 11),
+  and the client offers that route when its session has gone.
 - **The hook relay takes a session's word on what it may receive.** The Manager verifies a
   DELIVERY (it comes from the internet) and trusts a SUBSCRIPTION (it comes over the
   authenticated control channel from a child the Manager spawned)
@@ -914,16 +964,47 @@ After the fixes land, one pass rewrites it to what still reproduces.
     macOS answer for srt is the box's own hostname. Where the box does not resolve its own name,
     a confined git gets a proxy error that names the host. A `Provision` carries the host it
     needs as a `Domains` entry, and the composition widens a filtering backend's allowlist by it.
-  - **Under `YESSION_SESSION_AGENT_BACKEND=host` the git verbs run unconfined**, the operator's
-    explicitly lax choice. The per-invocation hardening (`hardenedEnv` in `app/Repos.fs`) still
-    applies. The filesystem and egress boundaries do not.
+  - **The git verbs run in a sandbox of their own, `srt` by default**
+    (`YESSION_SESSION_GIT_BACKEND`). They used to take the agent backend, which stays `host`
+    until a macOS run under srt is measured (the agent CLI entry above), so in every deployment
+    that kept the default they ran unconfined. **Under `YESSION_SESSION_GIT_BACKEND=host` the
+    git verbs run unconfined**, the operator's explicitly lax choice. The per-invocation
+    hardening (`hardenedEnv` in `app/Repos.fs`) still
+    applies. The filesystem and egress boundaries do not. A proxy that a `.git/config` names is
+    off there (`NO_PROXY=*`). No git process holds a credential (clone and fetch go through
+    the git gateway on a loan), so what a planted proxy or `insteadOf` can still reach is the
+    loan, which the gateway answers only for the git sandbox's route while the verb runs.
   - **Every srt sandbox may write a checkout's `.git/config`** (`AllowGitConfig` in
     `app/Sandboxes.fs` says why, and that scoping it to the git sandbox is not done yet). So the
-    WorkSandbox and the agent can plant a `core.fsmonitor`, an alias, or a pager that runs when
-    git next runs in that checkout. Inside the session, that is the shared-trust boundary above,
-    and the verbs are immune because the per-invocation `GIT_CONFIG_*` hardening wins over repo
-    config. A human who runs git in the checkout on their own host is NOT immune. `.git/hooks`
-    stays denied.
+    WorkSandbox and the agent can plant config that git reads when it next runs in that
+    checkout. The verbs are NOT immune to it. The per-invocation `GIT_CONFIG_*` hardening wins
+    over repo config only for the keys it sets: hooks, fsmonitor, the ext transport, credential
+    helpers and symlinks. Flags and env turn off what they can: diff drivers and textconv
+    (`--no-ext-diff --no-textconv` on `repo_diff`), and under `host` a configured proxy.
+    `.git/hooks` stays denied. A human who runs git in the checkout on their own host is not
+    covered by any of it.
+    - **One exec vector is left: `filter.<driver>.smudge` runs on `switch_branch`.** No flag
+      and no env variable switches a filter off. Under srt it runs with the git sandbox's reach,
+      which the sandbox that wrote the config already had. Under `host` it runs as the operator,
+      unconfined. `YESSION_SESSION_GIT_BACKEND=host` is choosing that: every work sandbox can
+      then run a program as the operator on the next `switch_branch`.
+    - **`core.worktree` in a `.git/config` no longer moves a verb's work tree.** It could move
+      it to any directory the git sandbox can reach: `repo_status` listed that directory's
+      files, and `switch_branch` wrote into it, which under `host` is the operator's whole
+      filesystem. Every verb in a checkout now runs with `GIT_DIR`, `GIT_WORK_TREE` and
+      `GIT_COMMON_DIR` pinned to that checkout (`checkoutPins` in `app/Repos.fs`), and env
+      outranks config. The pin closes a `.git/commondir` file the same way.
+  - **The session's git checks a committed symlink out as a plain file** (`core.symlinks=false`
+    in `hardenedEnv`). The file holds the link text. A link in the checkout would be a path the
+    repository chose, and the session and every sandbox read the checkout through calls that
+    follow links. The cost: a repository that commits symlinks has plain files in its checkout,
+    and a build that needs the links does not work there.
+  - **A checkout whose `.git` is not a directory is not in the session.** A work sandbox can
+    write the repos directory, so it can put a symlink named `.git` (or a symlinked checkout or
+    owner directory) in place of the real one, pointed at another repository on the host.
+    `present` in `app/Repos.fs` asks `lstat` about all three, and every verb refuses such a
+    checkout. Under srt the git sandbox could not follow such a link out of the repos directory
+    anyway. Under `host` it could.
   - **The clone verb runs with no filesystem confinement.** The comment on
     `FilesystemConfinement` in `src/Yession.Domain/Sandbox.fs` says why, lists the names, and
     says when to undo it. For that one command, git can read and write whatever the session's
@@ -942,10 +1023,15 @@ After the fixes land, one pass rewrites it to what still reproduces.
     both said something" has a total answer: the keys are (repo, name) pairs and the repos are
     disjoint, so the union is disjoint by construction. **That is the rule for every future key:
     a key belongs in `yession.yaml` only if its scope is a sandbox.** Left out, deliberately:
+    - **The file is read from `HEAD`, never from the working tree.** Whoever can push to the
+      repo authors the file (technical-design §4), so an edit that nobody has committed
+      declares nothing. Commit it, and the next fold (any verb that changes a checkout, or
+      a boot) reads it. `AGENTS.md` and `.agents/skills/*/SKILL.md` are read the same way,
+      when the clone lands. A symlink at `HEAD` is no file for any of the three (rule 20).
     - **No inter-sandbox networking.** A `db:` sandbox's process is reachable from inside that
       sandbox only. A compose-like shared network is a design of its own.
-    - **A `command` (`cmd`), an `entrypoint`, the limits (`memory`, `oom-score-adj`,
-      `pids-limit`, `cgroup-parent`) and a `dialect` are docker-only.** They live in or beside
+    - **A `command`, an `entrypoint`, the limits (`mem_limit`, `oom_score_adj`,
+      `pids_limit`, `cgroup_parent`) and a `dialect` are docker-only.** They live in or beside
       the `container:` block, so under `srt` or `host` there is nowhere to write one. The
       exception is `dialect`, which a sandbox with no container refuses because it reads as if
       it would apply.
@@ -963,14 +1049,14 @@ After the fixes land, one pass rewrites it to what still reproduces.
       - The gate's commands, `setup:` and the session's own execs do not read the counters.
       - The Docker tier pins case (a) with a 64m container. Nothing tests case (b) for real: it
         needs the whole VM to run out of memory.
-    - **No operator ceiling on a container's memory.** Yession checks a repo's `memory:` against
+    - **No operator ceiling on a container's memory.** Yession checks a repo's `mem_limit:` against
       what the daemon has, not a share the operator chose. Six sessions that each declare most of
       the VM all pass.
-    - **A `cgroup-parent` is the repo's to name, and the host's to make.** Nothing in yession
+    - **A `cgroup_parent` is the repo's to name, and the host's to make.** Nothing in yession
       creates the parent cgroup or limits it
       ([technical-design.md §4](technical-design.md#4-repo-local-configuration) gives the
       spelling per driver and what happens when the parent is missing). Yession checks a
-      `memory:` against the daemon's total, not the parent's limit.
+      `mem_limit:` against the daemon's total, not the parent's limit.
     - **No `${VAR}` in an entrypoint.** compose interpolates from the host's environment at parse
       time, the wrong environment here. Nothing needs it yet. The string form splits into words
       and nothing else. A value that needs expansion belongs in an actual `sh -c`.
@@ -1091,8 +1177,9 @@ After the fixes land, one pass rewrites it to what still reproduces.
 ## Delivery & operations
 
 - **Node is a required runtime.** Yession ships as one npm package with two bins
-  (`yession-manager`, `yession-session`). `npm i -g yession-*.tgz` pulls the platform-native deps
-  through npm's optional dependencies (`node-datachannel`'s addon AND the SDK's native `claude`),
+  (`yession-manager`, `yession-session`). `npm ci --omit=dev` in the extracted tarball
+  (docs/deployment.md, "Installing a release") pulls the platform-native deps through npm's
+  optional dependencies (`node-datachannel`'s addon AND the SDK's native `claude`),
   so after install the agent works offline. No self-contained binary exists anymore: a machine
   without Node ≥24 cannot run Yession from npm. (The Nix installable wraps `nodejs_24`, at the
   cost of needing Nix.)
@@ -1104,7 +1191,7 @@ After the fixes land, one pass rewrites it to what still reproduces.
   an 8 GiB Colima VM. A `dotnet` or `node` run by hand, another repository's build, or a `dev`
   watch takes no slot, and can still push the pool into the kernel's OOM killer, which picks the
   largest process in ANY session. The slot is admission, not a limit. A per-container memory
-  limit (#1312) bounds one container. The pool cgroup (`cgroup-parent: yession`) keeps the
+  limit (#1312) bounds one container. The pool cgroup (`cgroup_parent: yession`) keeps the
   daemon out of reach, where the host makes it
   ([technical-design.md §4](technical-design.md#4-repo-local-configuration)).
 - **The composition E2E and install smoke run on Linux/CI.** Other platforms' npm resolution

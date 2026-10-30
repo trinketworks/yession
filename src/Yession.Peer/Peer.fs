@@ -174,14 +174,14 @@ module Harness =
                 let missing = conditions |> List.filter (fun (_, holds) -> not (holds model)) |> List.map fst
                 return
                     failwithf
-                        "%s — still not true: %s%s"
+                        "%s. These conditions are still not true: %s%s"
                         timedOut.Message
                         (match missing with
                          | [] -> "nothing (every condition holds now; it came true after the deadline)"
                          | some -> String.concat "; " some)
                         (match showing model with
                          | "" -> ""
-                         | shown -> " — " + shown)
+                         | shown -> ". The model: " + shown)
         }
 
 

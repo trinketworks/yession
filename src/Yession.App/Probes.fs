@@ -157,6 +157,15 @@ module Probes =
           EncodeAnswer = List.map Encode.string >> Encode.list
           DecodeAnswer = Decode.list Decode.string }
 
+    /// Raise an error nothing handles, with this message, from a timer: the way an error in
+    /// the page's own code reaches the page. Answers once it is set to go.
+    let unhandled : Probe<string, bool> =
+        { Name = "__probeUnhandled"
+          EncodeAsk = Encode.string
+          DecodeAsk = Decode.string
+          EncodeAnswer = Encode.bool
+          DecodeAnswer = Decode.bool }
+
     /// Where an element is scrolled to and how far it could be — its own scroll box, as
     /// `scrollTop`/`scrollLeft` and the scroll and client extents report them.
     [<RequireQualifiedAccess>]
@@ -698,6 +707,15 @@ module Probes =
     /// where it is, its title, its connection and degraded tokens, the start of its
     /// conversation, where the keyboard is, and what this client KEPT, store by store and
     /// address by address with the start of each body.
+    /// Every refusal this page's Content-Security-Policy has made since the probes were
+    /// installed, before the page's own first script: `<directive> <what was refused>`.
+    let violations : Probe<int, string list> =
+        { Name = "__probeViolations"
+          EncodeAsk = Encode.int
+          DecodeAsk = Decode.int
+          EncodeAnswer = List.map Encode.string >> Encode.list
+          DecodeAnswer = Decode.list Decode.string }
+
     let pageState : Probe<int, string list> =
         { Name = "__probePageState"
           EncodeAsk = Encode.int

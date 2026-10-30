@@ -177,7 +177,7 @@ let private rowSays (view: ProcessManager.SessionView) : (Attention * string * s
 /// and it is a token rather than an opacity so the mark and the focus ring keep theirs.
 let private nameText (view: ProcessManager.SessionView) : TemplateResult =
     match view.Record.ArchivedAt, view.Status with
-    | Some _, _ -> html $"""<span class="{Style.bodyDim}">{view.Record.DisplayName}</span>"""
+    | Some _, _ -> html $"""<span class="{Style.bodyDim} {Style.recordRowNameText}">{view.Record.DisplayName}</span>"""
     | None, status ->
         let face =
             match status with
@@ -186,8 +186,12 @@ let private nameText (view: ProcessManager.SessionView) : TemplateResult =
             | ProcessManager.Launching
             | ProcessManager.LaunchFailed _
             | ProcessManager.Exited _ -> Style.recordLinkQuiet
+        // Two flex children (`Style.recordRowName`, on the span this renders into), not one
+        // span wrapping both: the name is `recordRowNameText` and truncates, the mark is
+        // `recordLinkMark` and does not, so a row too narrow for both clips the name and
+        // never the mark that says the link leaves.
         html
-            $"""<span class="{face}">{view.Record.DisplayName}<span class="{Style.recordLinkMark}">{Icon.leavesSm}</span></span>"""
+            $"""<span class="{face} {Style.recordRowNameText}">{view.Record.DisplayName}</span><span class="{Style.recordLinkMark}">{Icon.leavesSm}</span>"""
 
 /// The row's verbs, on the line its unfolding ends with: Stop while the session runs, Start
 /// where it can be started without being opened, and — where the session is not already
@@ -266,7 +270,8 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
 ///
 /// The mark is a press. It UNFOLDS the row, under the name: one line per thing the row says
 /// (`rowSays`), each mark under the row's mark and each word on the name's rail, and then
-/// the verbs. The server always renders a row folded; which row is open is the page's
+/// the verbs. The first line's mark IS the row's mark, riding down to it on a faint track
+/// (`Style.recordMarkRider`), so what the mark ranked first is never drawn twice. The server always renders a row folded; which row is open is the page's
 /// own state (`ManagerPage.fs`), carried across every frame the rows stream swaps in.
 ///
 /// The id is stated ONCE. An unnamed session's name IS its id (`SessionRecord.isNamed`), so
@@ -292,14 +297,16 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
         | None ->
             let openUrl = ManagerRoute.path (ManagerRoute.OpenSession view.Record.SessionId)
             html $"""<a class="{Style.recordRowLink}" href="{openUrl}" target="_blank" data-open>{line}</a>"""
-    let saidLine (attention: Attention, word: string, facet: string option) =
+    // The first line's mark is the row's own, which rides down to it (`Style.recordMarkRider`);
+    // its seat in the line stays, empty, so the word keeps the name's rail.
+    let saidLine (index: int) (attention: Attention, word: string, facet: string option) =
         let word =
             match facet with
             | Some facet ->
                 html $"""<span class="{Style.cls [ Style.recordDetailWord; Style.attentionInk attention ]}" {Dom.Manager.standing}="{facet}">{word}</span>"""
             | None ->
                 html $"""<span class="{Style.cls [ Style.recordDetailWord; Style.attentionInk attention ]}">{word}</span>"""
-        html $"""{Icon.attention attention}{word}"""
+        if index = 0 then html $"""<span></span>{word}""" else html $"""{Icon.attention attention}{word}"""
     let detailId = sprintf "row-detail-%s" id
     // The mark's name says the session and what it ranked first: the press is the one thing
     // a screen reader meets on a folded row besides the name.
@@ -308,14 +315,14 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
         <tr class="{Style.tableRow}" data-session="{id}">
           <td class="{Style.recordMarkCell} {Col.mark}">
             <button type="button" class="{Style.recordMarkPress}" data-row-mark="{id}" aria-expanded="false"
-                    aria-controls="{detailId}" aria-label="{markName}">{Icon.attention attention}</button>
+                    aria-controls="{detailId}" aria-label="{markName}"><span class="{Style.recordMarkSeat}"></span><span class="{Style.recordMarkTrack}"></span><span class="{Style.recordMarkRider}">{Icon.attention attention}</span></button>
           </td>
           <td class="{Style.tableCell}" title="{name}">
             {nameLine}
             <div class="{Style.recordDetail}" id="{detailId}" data-row-detail>
               <div class="{Style.recordDetailInner}">
                 <div class="{Style.recordDetailLines}">
-                  {says |> List.map saidLine}
+                  {says |> List.mapi saidLine}
                   <div class="{Style.recordDetailVerbs}">{actions view}</div>
                 </div>
               </div>
@@ -784,6 +791,19 @@ let private respond (res: ServerResponse) (status: int) (contentType: string) (b
 
 let private html (res: ServerResponse) (body: string) = respond res 200 "text/html; charset=utf-8" body
 
+/// A whole DOCUMENT, as against a fragment the page's script swaps in: the Manager page, the
+/// opening screen, a problem page. Each is sent with a nonce of its own and the policy that
+/// names it (`Ssr.ContentPolicy`), and rendered with that nonce, so an inline script on it
+/// runs only because this response put it there.
+let private document (res: ServerResponse) (status: int) (render: string -> string) =
+    let nonce = Ssr.ContentPolicy.nonce ()
+    res.writeHead (
+        status,
+        [ ResponseHeader.ContentType "text/html; charset=utf-8"
+          ResponseHeader.CacheControl "no-store"
+          Ssr.ContentPolicy.header Ssr.ContentPolicy.Document.ManagerDocument nonce ])
+    res.``end`` (render nonce)
+
 /// POST-redirect-GET. `303` rather than `302` so the browser is required to follow it with a
 /// GET: what the caller lands on is a resource, not a resubmission of the form waiting to be
 /// re-fired by a reload.
@@ -907,7 +927,7 @@ let problemPage (title: string) (detail: string) : string =
 
 /// A refusal a BROWSER is holding: the status it deserves, and a page that says so.
 let private problem (res: ServerResponse) (status: int) (title: string) (detail: string) =
-    respond res status "text/html; charset=utf-8" (problemPage title detail)
+    document res status (fun _ -> problemPage title detail)
 
 /// The `/sessions/{id}/open` landing page (Plan 11).
 ///
@@ -924,9 +944,12 @@ let private problem (res: ServerResponse) (status: int) (title: string) (detail:
 /// from one that is about to work, which is the failure mode this whole feature is supposed
 /// to remove rather than add.
 ///
-/// Sent BEFORE the launch it covers has finished, or even got far: a page that waited for
-/// the spawn left the browser with no document to paint for as long as a boot takes. So it
-/// polls through the launch too, and the launch's failure is one of the answers it reads.
+/// Sent BEFORE the launch it covers has started: a page that waited for the spawn left the
+/// browser with no document to paint for as long as a boot takes. The open route changes
+/// nothing (a GET that an `<img>` on any website can cause must not start a session), so the
+/// screen's program asks for the launch, `POST /sessions/{id}/launch`, under the Manager's
+/// request-origin rule (`requestOrigin`), and polls readiness once it is answered. A refused
+/// launch is shown where a refused readiness is.
 ///
 /// It hands the browser to the session's SIGN-IN entry (`/login`), not its shell. Every
 /// session this page can name was launched by this Manager, so every one of them gates its
@@ -977,6 +1000,7 @@ let private openingProgram =
   const shownAt = performance.now()
   const screen = document.querySelector('[data-opening-ready]')
   const ready = screen.getAttribute('data-opening-ready')
+  const launch = screen.getAttribute('data-opening-launch')
   const shell = screen.getAttribute('data-opening-shell')
   const status = document.getElementById('status')
   const giveUp = (why) => {
@@ -1042,7 +1066,26 @@ let private openingProgram =
     }
     setTimeout(poll, 500)
   }
-  kept().then((yes) => yes ? location.replace(shell) : poll())
+  // The launch is this screen's to ask for: the open route that sent it changes nothing,
+  // because a GET any page can cause must not start a session. A refusal (an archived
+  // session, a launch that failed) goes where a readiness refusal goes. A kept shell does
+  // not wait for the answer: `keepalive` delivers the request as the browser leaves.
+  async function launched () {
+    try {
+      const answer = await fetch(launch, { method: 'POST', cache: 'no-store' })
+      if (answer.ok) return true
+      giveUp('The session could not start: ' + await answer.text())
+    } catch (e) {
+      giveUp('The session could not start: the session manager did not answer.')
+    }
+    return false
+  }
+  kept().then(async (yes) => {
+    if (yes) {
+      fetch(launch, { method: 'POST', cache: 'no-store', keepalive: true }).catch(() => {})
+      location.replace(shell)
+    } else if (await launched()) poll()
+  })
 """
 
 /// What the screen looks like: the mark's intro at 224px (`Brand.intro`, one SVG, SMIL),
@@ -1058,8 +1101,9 @@ let private openingProgram =
 /// does not hold a slow one, which keeps polling, and breathing, until the bound says why it
 /// gave up.
 ///
-/// Everything the program needs is an attribute on the screen: the readiness route on `<main>`
-/// (`Dom.Manager.openingReady`), the status word it changes (`openingWord`), and the classes
+/// Everything the program needs is an attribute on the screen: the launch route and the
+/// readiness route on `<main>` (`Dom.Manager.openingLaunch`, `openingReady`), the status word
+/// it changes (`openingWord`), and the classes
 /// the status line wears when the screen gives up (`openingFailed`). Nothing is spliced into
 /// the program, so there is nothing to escape but attributes. The session's address is not on
 /// the screen at all: this page is sent before the launch it covers has a port, so the way out
@@ -1070,7 +1114,9 @@ let private openingProgram =
 /// (`PublicAccess.stableSessionAddress`). A browser that keeps a copy of that shell is sent
 /// there at once and skips the wait (`openingProgram`). Where it is `None` the screen has no
 /// such attribute, and every browser waits.
-let openingPage (sessionId: SessionId) (target: string) (readyUrl: string) (shell: string option) : string =
+///
+/// `nonce` is the response's (`Ssr.ContentPolicy`), and the program's `<script>` carries it.
+let openingPage (nonce: string) (sessionId: SessionId) (target: string) (launchUrl: string) (readyUrl: string) (shell: string option) : string =
     let shellAttr =
         match shell with
         | Some url -> sprintf " %s=\"%s\"" Dom.Manager.openingShell (Ssr.escapeAttr url)
@@ -1078,15 +1124,17 @@ let openingPage (sessionId: SessionId) (target: string) (readyUrl: string) (shel
     screenPage
         "Opening session…"
         (sprintf
-            """<main class="%s" %s="%s"%s>
+            """<main class="%s" %s="%s" %s="%s"%s>
 <div class="%s" data-mark-intro aria-hidden="true">%s</div>
 <div class="%s" data-mark-static aria-hidden="true">%s</div>
 <p class="%s">yession</p>
 <p id="status" role="status" class="%s %s" %s="%s"><span class="%s"></span><span %s>starting</span><span class="%s">%s</span></p>
 <p class="%s"><a id="target" class="%s" href="%s">Open it directly</a> · <a class="%s" href="%s">Back to the session manager</a></p>
 </main>
-<script>%s</script>"""
+<script nonce="%s">%s</script>"""
             Style.startScreen
+            Dom.Manager.openingLaunch
+            (Ssr.escapeAttr launchUrl)
             Dom.Manager.openingReady
             (Ssr.escapeAttr readyUrl)
             shellAttr
@@ -1108,7 +1156,39 @@ let openingPage (sessionId: SessionId) (target: string) (readyUrl: string) (shel
             (Ssr.escapeAttr target)
             Style.pageWayBack
             (ManagerRoute.path ManagerRoute.Home)
+            (Ssr.escapeAttr nonce)
             openingProgram)
+
+/// Did a request that changes state come from the Manager's own pages?
+///
+/// The identity header says WHO a request is for, and nothing about who CAUSED it: a tailnet
+/// member's browser carries that identity on a form another website submits, and on an image
+/// it loads. So every route but a read asks where the request came from. ONE rule, here, for
+/// every such route; a form token beside it would be a second mechanism for one requirement.
+///
+/// - `GET` and `HEAD` change nothing, and pass.
+/// - `Sec-Fetch-Site` present: `same-origin` (this Manager's own page) and `none` (the person
+///   typed it or followed a bookmark) are accepted. Every other value is refused.
+/// - `Sec-Fetch-Site` absent and `Origin` present: accepted when the host and port in `Origin`
+///   are the request's own `Host`. Refused otherwise, and `Origin: null` is a refusal.
+/// - Both absent: accepted. A browser sends at least one of the two on every POST, so a
+///   request with neither is no browser's, and the identity header already names its sender.
+let requestOrigin (method: string) (fetchSite: string option) (origin: string option) (host: string option) : Result<unit, string> =
+    if method = "GET" || method = "HEAD" then Ok ()
+    else
+        match fetchSite, origin with
+        | Some ("same-origin" | "none"), _ -> Ok ()
+        | Some site, _ -> Error (sprintf "a request from another site (Sec-Fetch-Site: %s) cannot change this Manager" site)
+        | None, Some origin ->
+            let own =
+                host
+                |> Option.exists (fun host ->
+                    try
+                        let asked = Node.Api.URL.Create origin
+                        asked.host = (Node.Api.URL.Create (asked.protocol + "//" + host)).host
+                    with _ -> false)
+            if own then Ok () else Error (sprintf "a request from %s cannot change this Manager" origin)
+        | None, None -> Ok ()
 
 /// Handle a management-UI request against the Manager. Returns false for paths that
 /// are not the UI's (the composing server falls through — e.g. to the control routes).
@@ -1133,8 +1213,8 @@ let tryHandle
         | Some view -> sessionRow view
         | None -> ""
     // A refusal over an ARCHIVED session is not a server fault — it is a conflict with
-    // durable state the caller can resolve, which matters most for `/open`, the URL a session
-    // client's reconnect card points at. This picks the STATUS CODE and nothing else: the
+    // durable state the caller can resolve, which matters most for the launch the opening
+    // screen sends from `/open`, the URL a session client's reconnect card points at. This picks the STATUS CODE and nothing else: the
     // refusal itself is `ManagerState.launchable`'s, and its words are what gets sent, so the
     // rule and the code it is reported under cannot drift apart.
     let refusalStatus (sessionId: SessionId) =
@@ -1163,7 +1243,7 @@ let tryHandle
     let handle (route: ManagerRoute) : unit =
         match route with
         | ManagerRoute.Home ->
-            html res (page cssUrl managerProgramUrl pm.Public query (pm.Sessions ()) (pm.McpServers ()) pm.HookEndpoints)
+            document res 200 (fun _ -> page cssUrl managerProgramUrl pm.Public query (pm.Sessions ()) (pm.McpServers ()) pm.HookEndpoints)
         | ManagerRoute.Asset (build, file) ->
             // Everything static this build ships, served by path and by nothing else — the
             // same service the Session runs, over this process's own set. The Manager
@@ -1250,9 +1330,9 @@ let tryHandle
             // browser keeps no reconciliation logic. Stopped and exited rows are in the
             // published views, which is why the page renders them and the registry does not.
             Sse.stream req res (sessionsTable query) pm.SubscribeSessions |> ignore
-        // No control on the page posts here any more — opening a session launches it
-        // (`OpenSession`, below) — but the verb is still the Manager's HTTP API for starting
-        // one WITHOUT a browser to hand over, which is what the composition suite drives.
+        // The one way a session is started: a row's Start posts here, and so does the opening
+        // screen (`openingProgram`) that `OpenSession` answers for a stopped session. A POST,
+        // so the request-origin rule (`gated`) stands in front of every launch.
         | ManagerRoute.Session (sessionId, SessionVerb.Launch) ->
             sessionAction sessionId (fun sessionId ->
                 async {
@@ -1278,8 +1358,9 @@ let tryHandle
         // The stable way back into a session (Plan 11). A session's own address changes
         // whenever it is relaunched, and under idle reaping that is routine rather than
         // rare — so THIS is the URL to bookmark and the one the session client's
-        // reconnect offer points at. Launch it if it is stopped, then hand the browser
-        // to wherever this deployment says the session lives.
+        // reconnect offer points at. It changes NOTHING: a GET is what an `<img>` on any
+        // website can cause, so a stopped session is answered with the opening screen, and
+        // the screen's program asks for the launch by POST (`openingPage`).
         //
         // The opening screen is only for the launch. It exists to cover two things
         // arriving — the session process coming up and the front door's mapping to it
@@ -1297,27 +1378,26 @@ let tryHandle
                 // reconnected on its own; asking for the port it already
                 // has is not a relaunch, and there is nothing to wait for.
                 | ProcessManager.Running (port, _, _) -> seeOther res (signIn sessionId port)
-                // Answered BEFORE the launch is: the screen goes out now and the spawn runs
-                // behind it. Awaiting the launch first held the browser on a navigation
-                // with no document for as long as a boot takes — which Chromium hides by
-                // keeping the last page painted, and an installed app on iOS shows as a
-                // white screen between two black ones. The launch's outcome is the
-                // session's status from here on, which is what the screen's poll reads.
+                // Answered BEFORE any launch: awaiting one first held the browser on a
+                // navigation with no document for as long as a boot takes — which Chromium
+                // hides by keeping the last page painted, and an installed app on iOS shows
+                // as a white screen between two black ones. The screen asks for the launch,
+                // and a refusal (an archived session) is the launch route's to give.
                 | ProcessManager.NotRunning
                 | ProcessManager.Launching
                 | ProcessManager.LaunchFailed _
                 | ProcessManager.Exited _ ->
-                    match pm.Start sessionId with
-                    | Error reason -> problem res (refusalStatus sessionId) "Cannot open this session" reason
-                    | Ok () ->
-                        html
-                            res
-                            (openingPage
-                                sessionId
-                                (ManagerRoute.path (ManagerRoute.OpenSession sessionId))
-                                (ManagerRoute.path (ManagerRoute.SessionReady sessionId))
-                                (PublicAccess.stableSessionAddress sessionId pm.Public
-                                 |> Option.map (fun address -> address.Url + "/")))
+                    let shell =
+                        PublicAccess.stableSessionAddress sessionId pm.Public
+                        |> Option.map (fun address -> address.Url + "/")
+                    document res 200 (fun nonce ->
+                        openingPage
+                            nonce
+                            sessionId
+                            (ManagerRoute.path (ManagerRoute.OpenSession sessionId))
+                            (ManagerRoute.path (ManagerRoute.Session (sessionId, SessionVerb.Launch)))
+                            (ManagerRoute.path (ManagerRoute.SessionReady sessionId))
+                            shell)
         // Does this deployment's front door reach the session yet? The question the
         // opening page above is really asking, answered HERE because here is the only
         // place it CAN be answered: a browser can read the status of a same-origin
@@ -1364,13 +1444,18 @@ let tryHandle
                                     (sprintf "%s answered %d" address.Url status)
                         })
     // Behind the identity gate either way: a malformed id is answered by the Manager, but
-    // only to someone the Manager would answer at all.
+    // only to someone the Manager would answer at all. And behind the request-origin rule
+    // (`requestOrigin`), so a route that changes state answers only the Manager's own pages.
     let gated (answer: unit -> unit) =
         Async.StartImmediate (
             async {
                 match! identify req with
                 | Denied reason -> respond res 401 "text/plain" reason
-                | Attributed _ | Unattributed _ -> answer ()
+                | Attributed _ | Unattributed _ ->
+                    let header = Interop.headerOf req
+                    match requestOrigin req.``method`` (header "sec-fetch-site") (header "origin") (header "host") with
+                    | Error reason -> respond res 403 "text/plain" reason
+                    | Ok () -> answer ()
             })
         true
     // A refusal a BROWSER is holding gets a page; everything else gets the line its reader

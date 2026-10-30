@@ -49,7 +49,7 @@ module Style =
     //   `underline` — the single exception, and it is a shape not a third width: a heading
     //            that edits in place (the session title), where a rectangle drawn round
     //            28px type reads as a box rather than a field. It has exactly one wearer
-    //            (`titleInput`), which is what keeps it a shape; a second would make it a
+    //            (`titleWrap`, round `titleInput`), which is what keeps it a shape; a second would make it a
     //            variant, and principle 5 does not admit one.
     //
     // Two rules keep the states honest, and they are opposites on purpose:
@@ -73,7 +73,7 @@ module Style =
         /// exists to stop.
         let clear = "border-transparent"
         /// The one SHAPE in this vocabulary rather than a width: the bottom edge alone, for the
-        /// session title (`titleInput`) — a heading that edits in place, where a rectangle drawn
+        /// session title (`titleWrap`, round `titleInput`) — a heading that edits in place, where a rectangle drawn
         /// round 28px type reads as a box rather than a field. `border-0` first, so the shape is
         /// stated and not inherited from whatever the UA gives an `<input>`.
         ///
@@ -109,6 +109,10 @@ module Style =
         /// The only stroke whose tone is off the neutral ramp, and the reason `acrylic` below
         /// composes a name from here rather than writing its own `border-*`.
         let acrylicTop = "border-t border-acrylic-edge"
+        /// The same rim on the BOTTOM, for a band pinned to the top of a scroller: what it
+        /// covers scrolls up under its lower edge. Worn only while pinned (`stuck:`), on the
+        /// band's ground (`before:`), because that is the only time anything is under it.
+        let acrylicBottomPinned = "stuck:before:border-b stuck:before:border-acrylic-edge"
 
         /// The region divider: a hairline on ONE side, separating two surfaces rather than
         /// enclosing a control. Named per side because which side it is on is structural,
@@ -231,7 +235,7 @@ module Style =
     /// full stop that was its one colour is the mark's job now (assets/logo/lockup.svg).
     let wordmark = "font-normal text-wordmark tracking-wordmark text-ink"
     /// The mark and the wordmark on one line, the lockup's own proportions scaled to the
-    /// band: the mark 56px to the word's 32 (the lockup file draws 64 to 32, which the 88px
+    /// band: the mark 56px to the word's 32 (the lockup file draws 64 to 32, which the
     /// band has no room for), its foot 15px below the word's line box so the x-height band
     /// sits where the lockup puts it — on the mark's optical middle, a little above its own.
     let lockup = "flex items-end gap-2"
@@ -653,19 +657,37 @@ module Style =
     /// names reads as a list of names; blue and underlined under the pointer, because
     /// blue is what interactive means here. Underline (not colour) at rest would say the
     /// same thing, but on every row at once — the same noise in a quieter register.
+    ///
+    /// The SAME look while the tap that opened it is still landing — `group-aria-busy/open:`,
+    /// reading the hold the outer link carries (`recordRowLink`, `ManagerPage.fs`'s click
+    /// handler), because a touch has no hover and this is the only pointer this control can
+    /// give one. Not a second look: held wears exactly the hover one, same as Create's own
+    /// press wears its own hover-equivalent fill.
     let recordLink =
-        cls [ body; "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"; focusRing ]
+        cls [ body
+              "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"
+              "group-aria-busy/open:text-blue group-aria-busy/open:underline"
+              focusRing ]
 
     /// The same link on a record that is not live (`bodyDim`): still the way in — opening a
     /// stopped session is what starts it — but a step back from the ones already running.
     let recordLinkQuiet =
-        cls [ bodyDim; "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"; focusRing ]
+        cls [ bodyDim
+              "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"
+              "group-aria-busy/open:text-blue group-aria-busy/open:underline"
+              focusRing ]
 
-    /// The mark that says a record link LEAVES (the session serves its own origin). Faint:
-    /// it is a signpost, not a second status. The gap and the ink are all this carries —
-    /// `Icon.leavesSm` is the mark, and a drawn mark brings its own box and its own place on
-    /// the line, so the `text-code` that used to size a text glyph here sized nothing.
-    let recordLinkMark = "text-ink-faint ml-1"
+    /// The mark that says a record link LEAVES (the session serves its own origin). Fainter
+    /// than the faintest ink (`opacity-70` over `ink-faint`, safe because this is decorative
+    /// — `aria-hidden`, and never the only way a reader learns the link leaves): it is a
+    /// signpost, not a second status. `inline-flex` so the idle nudge below has a box a
+    /// transform actually applies to (a bare inline element ignores `transform`). The nudge
+    /// itself — a 1px lift toward the corner the mark points at, and a rest, slow and mostly
+    /// still — is `animate-leave-nudge` (app/tokens.css; the keyframe and why it moves this
+    /// little are in app/tailwind.css). `Icon.leavesSm` is the mark; the gap and the ink are
+    /// all this carries otherwise.
+    let recordLinkMark =
+        cls [ "inline-flex ml-1 text-ink-faint opacity-70"; "animate-leave-nudge motion-reduce:animate-none" ]
 
     /// The hit area for a listed record's whole cell — the state word beside the name
     /// included, not just the name's own glyphs. `block` so the link's box is the cell's full
@@ -673,11 +695,29 @@ module Style =
     /// (`recordLink` / `recordLinkQuiet`, worn by a span inside), so hovering the state word
     /// does not blue it — only the name was ever styled to look like a link, this just widens what you
     /// can press to get it.
-    let recordRowLink = cls [ "block no-underline"; focusRing ]
+    ///
+    /// `group/open`, named for the hold a tap puts on it (`ManagerPage.fs`'s click handler
+    /// sets `aria-busy` on exactly this element) rather than `data-press`'s tilt: that tilt is
+    /// sized for an 80px-wide button (app/tailwind.css), and this hit area is a whole row
+    /// wide, so the same geometry here would read as the row keeling over rather than a
+    /// button going in. The name span inside reads the hold instead (`recordLink`'s
+    /// `group-aria-busy/open:`), and `aria-busy:cursor-progress` says the same thing the
+    /// pointer does on every other held control.
+    let recordRowLink = cls [ "group/open block no-underline aria-busy:cursor-progress"; focusRing ]
 
-    /// A listed record's name, clipped rather than wrapped: a row that changes height when a
-    /// session is renamed is a list you cannot keep your place in.
-    let recordRowName = "block truncate"
+    /// A listed record's name and its leaves mark (`recordLinkMark`), as two flex children
+    /// rather than one truncating block: on a narrow row (a phone) something has to give, and
+    /// it must be the NAME, never the mark that says the link leaves — that is exactly the
+    /// fact a reader on a thumb's-width row most needs, and a single truncating block let the
+    /// browser clip it away first since it sat last. `min-w-0` so this box can itself shrink
+    /// inside whatever fixed-width cell holds it.
+    let recordRowName = "flex items-baseline min-w-0"
+
+    /// The name's own box inside `recordRowName`: `flex-1` takes what the mark beside it
+    /// leaves, `min-w-0` lets that shrink below its content's width, and `truncate` is what
+    /// clips there — a row that changes height when a session is renamed is a list you
+    /// cannot keep your place in, so this still clips rather than wraps.
+    let recordRowNameText = "flex-1 min-w-0 truncate"
 
     /// The roster's mark column (`ManagerUi.Col.mark`): the row's attention mark, at every
     /// width, as the session page wears its worst standing under the chevron. The column is
@@ -695,7 +735,36 @@ module Style =
     /// It unfolds the row (`aria-expanded`). No ground of its own: a ground would hang 12px
     /// into the gutter, off the rail every other edge on the page keeps, and the unfolded
     /// lines under it already say the row is open.
-    let recordMarkPress = cls [ "-ml-3 w-11 h-11 pl-3 flex items-center bg-transparent border-0 cursor-pointer"; focusRing ]
+    let recordMarkPress = cls [ "relative -ml-3 w-11 h-11 pl-3 flex items-center bg-transparent border-0 cursor-pointer"; focusRing ]
+
+    /// The row's mark, which RIDES when the row unfolds: down a track to the first unfolded
+    /// line, which is the one it ranks first, so that line says its word with no mark of its
+    /// own rather than repeating the one above it (`--spacing-mark-slide`). A wrapper, so the
+    /// mark's own motion (`markOrbit` and its siblings) runs on undisturbed while it travels.
+    let recordMarkRider =
+        cls [ "relative flex transition-[translate]"; Motion.pace
+              "[[data-expanded]_&]:translate-y-(--spacing-mark-slide)" ]
+
+    /// What the mark leaves behind as it rides: a line from its seat to where it stops, drawn
+    /// down with it (scaled from the top, at the same pace). The weight and ink of a causal
+    /// link's rail (`causeRail`): one pixel of `edge`, because it joins two things the way
+    /// those do, and a track that read as heavy as the mark competed with it. Centred on the
+    /// mark's 12px box: the box sits 12px into the press, so its centre is 18px in — the
+    /// pixel straddles 18, which a 2x screen draws as two whole device pixels — and the
+    /// press's own middle down.
+    let recordMarkTrack =
+        cls [ "absolute left-[17.5px] top-1/2 w-px h-(--spacing-mark-slide) bg-edge origin-top scale-y-0"
+              "transition-[scale]"; Motion.pace
+              "[[data-expanded]_&]:scale-y-100" ]
+
+    /// The track's start: a 3px point on the mark's seat, centred on the same 18px, so the
+    /// line begins round rather than squared without the point outweighing the line. Its own
+    /// element, not the line's `::before`, so the line's scale does not squash it; it fades in
+    /// where the mark leaves rather than travelling.
+    let recordMarkSeat =
+        cls [ "absolute left-[16.5px] top-1/2 -mt-[1.5px] size-[3px] rounded-full bg-edge opacity-0"
+              "transition-[opacity]"; Motion.pace
+              "[[data-expanded]_&]:opacity-100" ]
 
     /// What a row unfolds to, under its name: each thing it says, then its verbs. Folded at
     /// rest — `visibility` takes the verbs out of the tab order with it — and unfolded by
@@ -1426,12 +1495,12 @@ module Style =
     ///
     /// BREAKS the second half of that rule, and says so here rather than pretending: on a
     /// phone the band is `spacing-band-phone` and this head is still `spacing-band`, so a
-    /// drawer open over the conversation shows two hairlines 32px apart. It cannot take the
+    /// drawer open over the conversation shows two hairlines 28px apart. It cannot take the
     /// phone band as it stands — the head holds the lockup, whose mark is 56px with its foot
     /// 15px below the wordmark's line box, and no bottom padding seats 71px of object inside
-    /// 56px of band. The fix is a phone step on `lockup`/`lockupMark`/`wordmark` (Typography),
+    /// 60px of band. The fix is a phone step on `lockup`/`lockupMark`/`wordmark` (Typography),
     /// after which this is one `phone:h-band-phone` and a smaller `pb`.
-    let sideHead = "h-band shrink-0 flex items-end justify-between pb-5 " + Stroke.dividerBottom
+    let sideHead = "h-band shrink-0 flex items-end justify-between pb-band-foot " + Stroke.dividerBottom
     /// A group in the column: its head, then its rows. There is one of these and not two —
     /// a `sideSectionFirst` stood beside it, byte for byte the same value, left over from when
     /// the first group carried the rule the head now owns. A second name for one way of
@@ -1451,7 +1520,21 @@ module Style =
     /// A standing's mark in the column's status block (`standingsSection`): centred in the
     /// AVATAR's 20px column, so the marks stack on the axis the roster's avatars do and every
     /// word in the block starts on the rail the names below it start on.
-    let standingMarkSeat = "w-5 shrink-0 self-center grid place-items-center"
+    ///
+    /// Vertically, placed by the font rather than by eye (the Space rule `agentMark` already
+    /// answers to): the attention mark stays a fixed 12px, because its shape needs the room
+    /// (`attentionMark`'s comment), but the small circle inside that box has to read as
+    /// CENTRED on the word beside it, which means the x-height band, not the row's own
+    /// line-box. `self-center` centred it on the latter — the row's full `leading-5`, which a
+    /// font typically carries more of above the x-height than below it — and so the mark read
+    /// high of the word every time, a pixel further off wherever a surface set the row's
+    /// type at another size. Left on `items-baseline` (the row's default: no `self-*` here),
+    /// the mark's own box starts flush on the baseline like a word does, and is carried up by
+    /// half of what is left once the x-height is subtracted from the box's fixed height — so
+    /// the shift is a formula in the two things that decide it (the box and the font), never a
+    /// constant, and reads true at a size this file has not tried yet.
+    let standingMarkSeat =
+        "w-5 shrink-0 grid place-items-center translate-y-[calc((0.75rem_-_1ex)/2)]"
     /// A standing that GOES somewhere (the pull requests' line opens their rows in settings):
     /// the roster row's own shape, pressable. A thumb's height on a phone, centred there
     /// because a baseline row in a 44px box parks its words at the top of it.
@@ -1729,11 +1812,12 @@ module Style =
     /// title between them, on one line, because that is what they are. Stacked, the 28/32
     /// heading over its id spent 80px of an 844px screen (10%) restating the tab you are on;
     /// the title steps down a size (`titleInput`) and the id keeps hanging out of flow under
-    /// it (`titleId`), which seats the whole band in 56px.
+    /// it (`titleId`), which seats the whole band in 60px.
     ///
-    /// `pb-[11px]` leaves the row 44px over the band's 1px rule, which is what every control
+    /// `pb-[15px]` leaves the row 44px over the band's 1px rule, which is what every control
     /// in it is on a phone: the chevrons, the edge tab and the title's own box are thumb-sized
-    /// and fill the row exactly, and the id hangs into the 11px under it.
+    /// and fill the row exactly, and the id hangs into the 15px under it. It was 11px in a
+    /// 56px band, which left the id's ink under 6px off the hairline.
     ///
     /// On a wide screen the stack stays: the header and the sidebar wordmark share one bottom edge
     /// (`h-band`, `items-end`), and that shared baseline is the whole reason the band exists.
@@ -1742,8 +1826,8 @@ module Style =
     /// (docs/visual-design.md, Space: the band is `spacing-band`, and on a phone it is
     /// `spacing-band-phone`). The phone one was the literal `h-14`, which is the same 56px
     /// said in a second place, and a second place is where two heads come to disagree: the
-    /// column's own head is still 88px under a thumb, so the two hairlines a drawer shows at
-    /// once sit 32px apart (see `sideHead`).
+    /// column's own head is still the full `spacing-band` under a thumb, so the two hairlines a
+    /// drawer shows at once sit 32px apart (see `sideHead`).
     ///
     /// The left padding is the timeline's own plus `--column-gutter` (`mainColumn`), so the
     /// title stands in exactly as far as the conversation does: with the pane shut and the
@@ -1752,13 +1836,13 @@ module Style =
     /// the band's right-hand group is the way to the pane, and it stays at the edge the pane
     /// opens from.
     let header =
-        "relative h-band shrink-0 flex items-end gap-4 pl-[calc(var(--column-gutter)+2rem)] pr-8 pb-5 "
-        + "phone:h-band-phone phone:items-center phone:gap-2 phone:px-4 phone:pb-[11px] "
+        "relative h-band shrink-0 flex items-end gap-4 pl-[calc(var(--column-gutter)+2rem)] pr-8 pb-band-foot "
+        + "phone:h-band-phone phone:items-center phone:gap-2 phone:px-4 phone:pb-[15px] "
         + Stroke.dividerBottom
 
     /// A slow catch-up's progress, drawn ON the header's bottom rule: the rule is the one
     /// line every screen has under the title, and a bar growing along it says "loading, this
-    /// far" without taking a pixel of room from the band — which on a phone is 56px and
+    /// far" without taking a pixel of room from the band — which on a phone is 60px and
     /// geometry-pinned. Two pixels tall over the one-pixel rule, so it reads as a bar and not
     /// as the rule changing colour. Its width moves once per paced render (`Render`, every
     /// half second while a client stays behind), and the transition carries it between.
@@ -1768,12 +1852,12 @@ module Style =
 
     /// The header's right-hand group: the way back to the terminals. The session's standings
     /// are the sidebar's (`standingsSection`), and the band only wears the worst of them,
-    /// under the chevron that opens it (`navReopenMark`). The door is a mark, not words
-    /// (`View.contentReopen`), so it stands on the title's LINE as the sidebar's chevron does
-    /// across the band (`navReopen`): `pb-2` lifts the 14px mark's middle onto the title's
-    /// (measured live at 1440: mark and chevron both at y=52, the title's middle 52.5; the
-    /// words' `pb-[1px]` left it 6.5px low). On a phone the group centres on the title's line.
-    let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-2 phone:items-center phone:gap-3 phone:pb-0"
+    /// under the chevron that opens it (`navReopenMark`). On a wide screen the door carries
+    /// words ("2 terminals", `View.contentReopen`), and `pb-[1px]` stands them on the title's
+    /// baseline (measured live at 1440: both at y=63; `pb-2` left the words 7px high). The
+    /// mark beside them then rises onto the title's x-height on its own (`terminalReopen`).
+    /// On a phone the group centres on the title's line.
+    let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-[1px] phone:items-center phone:gap-3 phone:pb-0"
     let headerStatus = "shrink-0"
 
     /// The nav column's own mount of the connection report. Hidden on a phone, where the bar
@@ -1974,7 +2058,15 @@ module Style =
     /// title's text and the timeline's caret both start at x=48.
     /// `phone:flex-1` is what makes the phone's band a row: the title takes the space the
     /// two chevrons leave rather than sizing to an input's default 20 characters.
-    let titleWrap = "relative flex flex-col min-w-0 ml-8 phone:ml-3 phone:flex-1"
+    ///
+    /// The wrap, not the field, wears the title's rule (`titleInput` says why, and why not on a
+    /// phone). The field pays its 8px padding back with `-mx-2`, so the wrap's box is the
+    /// text's own extent: the rule starts at the first glyph and ends at the last. The field's
+    /// box still reaches 8px past it, so `wide:mr-2` keeps the band's gap between that box and
+    /// the terminals' door (measured live with a title the band cannot hold).
+    let titleWrap =
+        cls [ "relative wide:top-[2px] flex flex-col min-w-0 ml-8 wide:mr-2 phone:ml-3 phone:flex-1"
+              Stroke.underline; Stroke.rim; "phone:border-b-0" ]
 
     /// The title itself: the heading, worn by a text input — and it says SO AT REST, with the
     /// one shape the `Stroke` vocabulary keeps for it (`Stroke.underline` in `Stroke.rim`).
@@ -1984,7 +2076,9 @@ module Style =
     /// (`hover:bg-surface-2`). That argument is the one principle 4 refuses: what a thing is —
     /// here, that it edits — is visible at rest, because a thumb has no hover and a reader has
     /// no tooltip. A heading nobody hovers is a heading nobody learns is a field. So the rule
-    /// is back, and `Stroke.underline` has its wearer again.
+    /// is back, and `Stroke.underline` has its wearer again. The wrap round this field wears
+    /// it (`titleWrap`), so the rule is the text's width and not the padded box's, and the
+    /// field itself is bare (`bareBox`).
     ///
     /// What does NOT come back is the DASH. It was `border-dotted border-ink-faint` over this
     /// same `border-0 border-b`, and the dash had a name in the vocabulary (`Stroke.dotted`,
@@ -2006,7 +2100,7 @@ module Style =
     /// (S1-7) still open for a thumb. It does not close here because the band has no room: the
     /// rule belongs under the title's 24px line, and the 44px the floor asks of the field is
     /// what puts its bottom edge 20px further down. Moving it would mean moving the id out of
-    /// the field's box, and a 56px band has nowhere to put it.
+    /// the field's box, and a 60px band has nowhere to put it.
     ///
     /// ONE tone, and no hover or focus tone of its own, which is the opposite of what a `ring`
     /// does — because here the rule answers a different question from the fill. The rule says
@@ -2019,16 +2113,28 @@ module Style =
     /// only: a phone's band seats the id 2px under the title's line box, and vertical padding
     /// put the fill and its ring through it.
     ///
+    /// As wide as its text, not as wide as an input's default 20 characters: the rule under
+    /// "session" ran 300px, twice the word, and began 8px before it in the padding below.
+    /// `field-sizing:content` sizes the box to the value, or to the placeholder while there
+    /// is none, so an empty title still wears a rule as long as "session". It sizes the height
+    /// too, and a placeholder's line is taller than the value's (38px against 32, measured
+    /// live), so `wide:h-8` holds the box to the heading's line. The wrap is that
+    /// wide, and the field stretches across it, so a long title the band cannot hold shrinks
+    /// the wrap (`min-w-0`) and truncates as before. On a phone the wrap takes the row
+    /// (`titleWrap`) and `phone:w-full` keeps the field the box it was, the thumb's target
+    /// across it, clear of the terminals' door.
+    ///
     /// `focusRing` is what a keyboard sees. The fill alone is a real focus signal for a
     /// pointer, but it is a tone step on a dark ground; the ring is the product's own
     /// vocabulary and the UI baseline's floor (AGENTS.md), so the two ride together.
     ///
-    /// `md:top-[2px]` is optical: a 28/32 line box holds its baseline 2px higher over the
-    /// shared bottom edge than the wordmark's 32/36 does, so the input steps down to put both
-    /// on one line (measured live). A phone has no cross-column baseline to meet and no room
+    /// The wrap's `wide:top-[2px]` (`titleWrap`) is optical, and it moves this field and its
+    /// rule together: a 28/32 line box holds its baseline 2px higher over the shared bottom
+    /// edge than the wordmark's 32/36 does, so the title steps down to put both on one line
+    /// (measured live). A phone has no cross-column baseline to meet and no room
     /// for 28px in a 56px row, so it takes the pivot step (19/24) and no nudge.
     ///
-    /// And on a phone the field is a thumb's height, which a 24px line in a 56px band does
+    /// And on a phone the field is a thumb's height, which a 24px line in a 60px band does
     /// not leave room for — unless the box takes in the id under it. So it does: 44px tall,
     /// its last 20 of them padding (`pb-5`) that the id hangs in (`titleId`), and the same 20
     /// paid back to the flow (`-mb-5`), so the row lays out the 24px line it always did. The
@@ -2037,11 +2143,10 @@ module Style =
     /// `Render.placeInputCursor`'s marker subtracts the padding and the border off the live box,
     /// so a collaborator's caret stays the height of the line.
     let titleInput =
-        cls [ "w-full min-w-0 bg-transparent px-2 -mx-2 py-0 phone:h-11 phone:pb-5 phone:-mb-5"
-              Stroke.underline; Stroke.rim; "phone:border-b-0"
+        cls [ bareBox; "[field-sizing:content] wide:h-8 phone:w-full min-w-0 bg-transparent px-2 -mx-2 py-0 phone:h-11 phone:pb-5 phone:-mb-5"
               "hover:bg-surface-2 focus:bg-surface-2 transition-colors"; focusRing
               "font-extralight text-heading phone:text-pivot tracking-[-0.01em] lowercase text-ink"
-              "placeholder:text-ink-faint truncate relative wide:top-[2px]" ]
+              "placeholder:text-ink-faint truncate relative" ]
 
     /// The session id, shown small and dim under the title as a stable secondary identifier.
     /// It hangs OUT OF FLOW below the title, into the band's bottom padding: in flow it added
@@ -2055,7 +2160,10 @@ module Style =
     /// through to the field could only ever edit the title, never select the id.
     /// Its `mt-1` and its line are `--spacing-id-drop`, which the chevron's mark lands on
     /// (`navReopenMark`): change one and change the other.
-    let titleId = "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full left-0 right-0 select-text"
+    /// On a wide screen the wrap carries the title's 2px optical drop and its 1px rule
+    /// (`titleWrap`), which together put the padding box's bottom 1px lower than the line the
+    /// id hung from when the field wore both. `wide:top-[calc(100%-1px)]` pays it back.
+    let titleId = "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full wide:top-[calc(100%-1px)] left-0 right-0 select-text"
 
     /// A collaborator's selection highlight in the title: an absolutely-positioned span the
     /// browser places and sizes against the input's own box by measurement (the translucent
@@ -2083,9 +2191,10 @@ module Style =
     /// with the conversation centred it stays beside the title rather than at the window's
     /// edge, which is where #1521 left it (measured at 1280: chevron at x=15, title at 306).
     /// And it stands on the title's LINE, as it does on a phone: the title's middle is 35px
-    /// over the band's padding foot (`pb-5`, the field's 1px rule, half its 32px line, less
-    /// the field's 2px `top` nudge), and 30px, with the 6px `-m-1.5` takes back, puts the
-    /// glyph's middle on it (measured live at 1280 and 1600: glyph and title both at y=86).
+    /// over the band's floor (`pb-band-foot`, the field's 1px rule, half its 32px line, less
+    /// the field's 2px `top` nudge), and the foot and 10px, with the 6px `-m-1.5` takes back,
+    /// puts the glyph's middle on it (measured live at 1280 and 1600: glyph and title both at
+    /// y=86). It is placed from the foot's token so the two cannot part when the band grows.
     /// It sat on `bottom-4.5` once, 12px under the title's middle.
     ///
     /// Across, it stands on the AVATAR's column: the glyph and the mark under it centred on the
@@ -2098,8 +2207,19 @@ module Style =
     /// padding and half the avatar, 26px from the edge: the 44px target starts 4px in
     /// (`-ml-3` against the band's 16px) and pays the other side back (`-mr-5`) so the title
     /// does not move. `-mx-4` centred it at 22px, 4px left of every avatar under it.
+    ///
+    /// Down, the glyph points at the middle stroke of the title's lowercase `e`, not at the
+    /// middle of its line box: a lowercase title's ink is its x-height, and the line's middle
+    /// is above it. Noto Sans ExtraLight holds that stroke 0.28em over the baseline, which
+    /// lands 3.2px under the line's middle at 28/32 and 1.7px under it at 19/24 (measured
+    /// live at 390, 1024 and 1440 by scanning a drawn `e`). Only the GLYPH drops
+    /// (`*:first`, the button's first child; not `[&>svg]`, because a `>` in a class string
+    /// ends the tag for the tests that read classes off the render, and not `[&_svg]`,
+    /// because the mark is an svg too), so the box, and the mark placed from it (`navReopenMark`), stay on the
+    /// id's line. The terminals' mark across the band drops the same way (`terminalReopen`).
     let navReopen =
-        "absolute left-[calc(var(--column-gutter)+var(--spacing-rail)+0.625rem-7px)] bottom-[30px] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
+        "absolute left-[calc(var(--column-gutter)+var(--spacing-rail)+0.625rem-7px)] bottom-[calc(var(--spacing-band-foot)+10px)] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
+        + "*:first:translate-y-[3px] phone:*:first:translate-y-[1.5px] "
         + "phone:relative phone:inset-auto phone:grid phone:[.nav-alt_&]:hidden phone:-ml-3 phone:-mr-5"
 
     /// The session's worst standing, under the reopen chevron: the column it opens is where
@@ -2115,7 +2235,7 @@ module Style =
     /// - A phone centres both on one line, so the title line's middle is the 44px target's
     ///   middle, and the id's is 12px (half the 24px `text-pivot` line) and the drop under it.
     ///   The glyph is centred in the target, so the target's middle is the glyph's.
-    /// - A wide screen bottoms the title on the band's `pb-5` (20px) and lifts the box with
+    /// - A wide screen bottoms the title on the band's `pb-band-foot` and lifts the box with
     ///   its glyph onto the title's middle (`navReopen`), which leaves the id's middle, the
     ///   drop under the title's foot, the drop and 4px under the box's. The 14px glyph
     ///   overflows the 24px box's 12px of content to the right, so its middle is 13px in (the
@@ -2200,7 +2320,10 @@ module Style =
     /// `overscroll-behavior: none` (app/tailwind.css) holds still. The pixel is the `::after`
     /// — absolutely placed just under the box (`relative` makes the box its containing
     /// block), so it adds scroll without entering the flex column the `::before` fills, and
-    /// sits inside a long conversation's content where it adds nothing. `overscroll-y-contain`
+    /// sits inside a long conversation's content where it adds nothing. It takes no presses:
+    /// inside that content it lies across whichever item happens to be one box-height down,
+    /// and a press there landed on the scroller instead (at 1440x900, the middle of the sixth
+    /// item under the launch card). `overscroll-y-contain`
     /// keeps the bounce in here rather than chaining it to the page. The pixel means "at the
     /// end" cannot be `scrollTop + clientHeight = scrollHeight` with no slack: see
     /// `Tail.atEnd` (app/browser/Tail.fs), whose 4px slack is what absorbs it.
@@ -2218,7 +2341,7 @@ module Style =
         "relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain "
         + "mx-[calc(var(--column-gutter)*-1)] px-[calc(var(--column-gutter)+2rem)] pb-6 flex flex-col gap-6 "
         + "[scrollbar-width:thin] [scrollbar-color:var(--color-edge)_transparent] "
-        + "after:absolute after:inset-x-0 after:top-full after:h-px "
+        + "after:absolute after:inset-x-0 after:top-full after:h-px after:pointer-events-none "
         + "before:grow [&>*:first-child]:mt-0 too-short:invisible "
         + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:before:-mb-1 break-words "
         + focusRingInset
@@ -2287,8 +2410,30 @@ module Style =
     /// the screen and the name still stands on the line. Without it the band stopped at the
     /// column's padding while every item under it ran 16px past, so a scrolled item's own
     /// trailing control showed in that strip, beside the author line pinned over it.
+    ///
+    /// PINNED, it is a BAND, not a label left floating. It was the name on 28px of black flush
+    /// against the header's rule, with the ground ending 8px under the name: at 1440x900 the
+    /// name sat 10px under the rule and the next line was sliced across its glyphs right
+    /// beneath it, so the pinned line read as a stray label over a cut. Now the ground holds
+    /// the name in the middle of the band — `pt-2` over it to match the `pb-2` under it, and
+    /// `-mt-2` so in flow the name stands where it did and the pad spends the gap above — and,
+    /// while it is stuck, that ground is the `acrylic` with its rim on the lower edge
+    /// (`Stroke.acrylicBottomPinned`): what scrolls under it is blurred out of reading rather
+    /// than cut, and the band's end is an edge the reader can see. At rest nothing is under
+    /// it, so it is the column's own black and every author line in the conversation stays
+    /// as it was. A browser without the `stuck` query keeps the black band.
+    ///
+    /// The ground is the band's `::before`, not its own background, because a scroll-state
+    /// container's query styles what is IN it and never the container itself. The blur and
+    /// tint are `acrylic`'s, spelled out under the variant, because Tailwind writes only the
+    /// classes a `.fs` file spells as a literal.
     let messageGroupHead =
-        "sticky top-0 z-10 bg-bg flex items-center gap-3 pb-2 -mb-1 max-md:-mx-4 max-md:px-4"
+        cls [ "sticky top-0 z-10 flex items-center gap-3 pt-2 -mt-2 pb-2 -mb-1 max-md:-mx-4 max-md:px-4"
+              "[container-type:scroll-state] before:absolute before:inset-0 before:-z-10 before:bg-bg"
+              "stuck:before:bg-acrylic stuck:before:backdrop-blur-acrylic stuck:before:backdrop-saturate-150"
+              "reduced-transparency:stuck:before:bg-panel reduced-transparency:stuck:before:backdrop-blur-none"
+              "reduced-transparency:stuck:before:backdrop-saturate-100"
+              Stroke.acrylicBottomPinned ]
 
     /// Catching up, drawn as the author line that will take its place (`View.chat`): its dot
     /// centred in the box an avatar fills, so the words stand where a name will.
@@ -2369,8 +2514,18 @@ module Style =
     /// stands on the column the speakers' avatars do — centred in the whole 2rem gutter it
     /// sat six pixels right of them, a second rail beside the one the eye already had. Named
     /// into the gutter, so a row drawn above the title (an act's cause) cannot push it over.
+    ///
+    /// `items-center` centres the chevron on `1lh` — the row's own `leading-5`, 20px — but
+    /// the title beside it sets its OWN line box (`text-small`, 16px) and sits at the TOP of
+    /// that taller cell, not its middle, so the two centres are not the same point. Measured
+    /// against the real title (the compiled title's crossbar on "used") rather than guessed:
+    /// the chevron's point sat 0.7px below where the title's own ink sits, at every size this
+    /// mark is drawn at (`box14`, the one size `fold` ever uses) — a constant nudge, not a
+    /// font-metric formula, because the gap is between a GLYPH'S drawn crossbar and the box
+    /// it rides in, which CSS has no unit for (the pattern `Icon.checkSm` and kin already use
+    /// for the same reason).
     let fold =
-        cls [ "col-start-1 justify-self-start w-5 h-[1lh] flex items-center justify-center cursor-pointer bg-transparent border-0 p-0"
+        cls [ "col-start-1 justify-self-start w-5 h-[1lh] flex items-center justify-center -translate-y-[0.7px] cursor-pointer bg-transparent border-0 p-0"
               "text-ink-faint hover:text-ink transition-colors"; focusRing ]
     let foldMark = cls [ "block"; Motion.turn ]
     let foldMarkOpen = cls [ foldMark; Motion.turned ]
@@ -2973,21 +3128,30 @@ module Style =
     /// not do is move the words it leads. `pr-3` then stands the glyph on the avatars' 20px
     /// column, where every other mark this margin carries stands (`fold`, `replyRefMark`).
     let chatChipPrompt = "-ml-rail -mr-2 w-rail pr-3 flex justify-center"
-    /// Which terminal a queued command waits in. The same voice as `chatChipWho`, but it
-    /// TRUNCATES, and is held to half the row: an agent's terminal is titled `[sandbox]
-    /// reason…`, sixty characters of caps, and a name that will not shrink is wider than a
-    /// phone's column on its own — it took the whole conversation sideways with it.
-    let chatChipSubject = caps + " text-ink-faint truncate min-w-0 max-w-[50%]"
+    /// Which terminal a queued command waits in, by its name: MONO, because a terminal an agent
+    /// opens is named for what it runs (`dotnet fsi tasks.fsx build 2>&1 | tee build.log`), and
+    /// mono is the terminal's face. It wore the caps voice, which is for short labels: a
+    /// command in tracked capitals is the wall of text the doctrine warns of, and it read as
+    /// chrome rather than as the name it is (docs/visual-design.md, Type).
+    ///
+    /// It takes the ROOM THE COMMAND LEAVES (`flex-1` on a zero basis), down to a floor that
+    /// still shows a name's first word. It was held to half the row instead, which cut a
+    /// 1440px chip's name at `… | t…` with half the row standing empty beside a short
+    /// command: the cut fell on exactly the part that tells two such terminals apart. And it
+    /// TRUNCATES, because a name that will not shrink is wider than a phone's column on its
+    /// own and takes the whole conversation sideways with it.
+    let chatChipSubject = "font-terminal text-code-sm text-ink-faint truncate flex-1 min-w-24"
+    /// The `in` that joins a queued command to the terminal it waits in, in the act's prose
+    /// voice: two mono runs side by side read as one command line.
+    let chatChipIn = "font-ui font-light text-small text-ink-faint shrink-0"
     /// The command itself: mono, truncated to one line. A chip that wrapped to three would
     /// stop being a chip.
     ///
-    /// `flex-auto` and not `flex-1`, which is the same grow on a basis of ZERO: a zero basis
-    /// has nothing to give up, so the command was cut from its first character while the
-    /// terminal's caps name beside it kept every one of its own up to the cap — the command,
-    /// which is the content of the line, truncating before the chrome naming where it waits.
-    /// On its content's basis the two give way in proportion to what each is asking for, and
-    /// the name's cap is then a guarantee rather than the only thing holding it back.
-    let chatChipCommand = "font-terminal text-code-sm text-ink-dim truncate min-w-0 flex-auto"
+    /// On its CONTENT'S basis and never growing: the command is the content of the line, so it
+    /// keeps every character it has room for, and the terminal's name beside it gives way
+    /// first (`chatChipSubject`). It was `flex-1`, a zero basis, which has nothing to give up:
+    /// the command was cut from its first character while the name kept all of its own.
+    let chatChipCommand = "font-terminal text-code-sm text-ink-dim truncate min-w-0 flex-initial"
     /// A ran command's line: "ran" and what ran, truncated together as one sentence.
     let chatChipLine = "truncate min-w-0 flex-1"
     /// What ran, when its author described it: prose a step brighter than its verb
@@ -3478,12 +3642,26 @@ module Style =
     // Inline code keeps the paragraph's line box (no leading of its own), so only the size
     // is set — 13px, the small step, but written bare to leave line-height inherited.
     let proseCode = "font-terminal text-[13px] bg-surface-2 text-ink px-1 py-0.5"
-    /// A fenced block WRAPS, as the terminal's own output does — it does not scroll inside
-    /// itself. The `overflow-x-auto` it used to carry was the second answer to a question the
-    /// column already answers: with the timeline's `break-words` reaching in here, no line can
-    /// exceed the block, so the scroll container never had anything to scroll and only hid
-    /// which rule was doing the work.
-    let prosePre = "font-terminal text-code leading-5 bg-surface-2 text-ink p-3 [&:not(:first-child)]:mt-2 whitespace-pre-wrap"
+    /// A fenced block. Outlined, not filled: the composer goes `bg-surface-2` while focused,
+    /// the top step of the ramp, so a filled block had no lighter step to stand on there and
+    /// vanished. The timeline wears the same outline so the two draw one code block.
+    let private proseFence =
+        Stroke.ring + " " + Stroke.hair + " font-terminal text-code leading-5 text-ink p-3 [&:not(:first-child)]:mt-2"
+    /// The block being written WRAPS: it is in the composer's editor, which needs
+    /// `white-space: pre-wrap` (`[data-rich-body]` in app/tailwind.css), and a line being typed
+    /// stays in view.
+    let prosePre = proseFence + " whitespace-pre-wrap"
+    /// The block being read keeps its lines and SCROLLS sideways, as a table does
+    /// (`proseTableWrap`). A fence's line break is its meaning: a shell line wrapped at the
+    /// reading column's 38rem — the measure prose is held to, about 68 characters of the body
+    /// face (`readingColumn`) — read as four commands where there was one. So the column stays
+    /// at the measure, which is the reading column's to set, and the one thing in it whose
+    /// shape cannot reflow goes the way the doctrine already has for that: it holds more than
+    /// fits and says so with a control, the scrollbar (docs/visual-design.md, Colour: a
+    /// surface that holds more than fits says so with a control or a rule). The bar is
+    /// `timeline`'s: thin, `edge`, on a clear track.
+    let proseFenceRead =
+        proseFence + " whitespace-pre overflow-x-auto [scrollbar-width:thin] [scrollbar-color:var(--color-edge)_transparent]"
     let proseQuote = Stroke.lead + " " + Stroke.hair + " pl-3 text-ink-dim [&:not(:first-child)]:mt-2"
     /// The one hyperlink face: prose links and the references that lead somewhere
     /// (`entityLink`) compose the same words, so a link is a link wherever it stands.
@@ -3554,9 +3732,11 @@ module Style =
     /// (docs/visual-design.md, Phone and wide) — and it is not one inset but a family, every
     /// full-bleed `-mx-4` in the conversation measured against it. The two answers have to
     /// agree, so this one follows the column rather than asking the shell's question beside
-    /// it.
+    /// it. On a wide screen the strip stands in the dock (`dock`), whose edge is already the
+    /// ground's edge a message stands on, so the gutter there is no padding at all: the mark
+    /// takes the avatars' column at the edge and the word lands on the rail after it.
     let composerTray =
-        cls [ "shrink-0 flex items-center h-8 phone:h-touch pl-8 pr-4 max-md:pl-4 bg-panel"
+        cls [ "shrink-0 flex items-center h-8 phone:h-touch pl-8 pr-4 max-md:pl-4 wide:pl-0 wide:pr-rail bg-panel"
               "transition-[translate,opacity] starting:translate-y-1 starting:opacity-0"; Motion.pace ]
 
     /// The label voice (`caps`), not Send's step up: these are controls for the timeline
@@ -3607,6 +3787,18 @@ module Style =
     // from the ground by their tone. They used to be lead-edged cards inside a padded strip —
     // a third rectangle vocabulary two centimetres from the band that already had the answer.
 
+    /// The dock itself: the queue, the tray and the composer, held as one block so one rule
+    /// sets all three edges.
+    ///
+    /// On a phone it runs edge to edge, as every ground in the conversation above it does.
+    /// On a wide screen it stands where a message's ground does: one rail in from the column
+    /// on each side (`timeline`'s `2rem`) and no wider than the measure (`readingColumn`), so
+    /// the composer is the transcript column's width on the transcript's rail, not a band
+    /// wider than what it writes into. And it stands off the screen's bottom edge by the
+    /// timeline's own foot (`pb-6`), so it reads as the column's last object, not as chrome
+    /// fixed to the window.
+    let dock = "shrink-0 flex flex-col wide:mx-rail wide:mb-6 wide:max-w-measure"
+
     let queue = "shrink-0 flex flex-col gap-0.5 pt-4"
 
     /// The same band holding nothing. Padding is what a band spends on the rows inside it, and
@@ -3616,7 +3808,7 @@ module Style =
     let queueEmpty = "shrink-0"
     /// On the composer's own gutter (`draftInput` spends px-4), because the head belongs to
     /// the dock it heads, not to the timeline above it.
-    let queueHead = "flex items-baseline gap-3 pb-2 px-4"
+    let queueHead = "flex items-baseline gap-3 pb-2 px-4 wide:px-rail"
     /// Green, AT REST: "still editable" is a fact about the whole queue, said once at its
     /// head — the rows beneath no longer repeat it per entry.
     let queueCount = caps + " text-green"
@@ -3635,7 +3827,7 @@ module Style =
     /// new cost: the queued message is set at `touchType`'s 16px there, so it was already
     /// two lines tall inside a host held to one.
     let queueItem =
-        cls [ "group flex items-center gap-3 min-h-10 py-2 px-4 bg-surface transition-colors"; rowLift ]
+        cls [ "group flex items-center gap-3 min-h-10 py-2 px-4 wide:px-rail bg-surface transition-colors"; rowLift ]
 
     /// `focus-within`, not `focus`: the caret lands in the editor MOUNTED INSIDE this host,
     /// so `focus:` on the host never fires and the brightening never happened.
@@ -3740,24 +3932,15 @@ module Style =
               "motion-reduce:transition-none"
               if active then "scale-x-100" else "scale-x-0" ]
 
-    /// A ROW, since the actions moved into it: the box was 56px of which 40 was a strip under
-    /// the text holding a 93px bordered rectangle that said Send and then drew an arrow saying
-    /// it again. The verb belongs at the trailing edge of the line you just wrote, which is
-    /// where it now is — the same shape the terminal's command line takes, so a person moving
-    /// between the two columns meets one object twice instead of two conventions.
+    /// A COLUMN, on every screen: the line you write, then the verbs under it
+    /// (`draftActionsRow`). It was a row on a wide screen — the picker, the line and Send
+    /// abreast — and a column only on a phone. One arrangement now, the phone's, because the
+    /// two said the same thing two ways (docs/visual-design.md, principle 5), and the row left
+    /// the line whatever width the picker and the attach did not take: the words started a
+    /// third of the way across the box, off the rail every message above them starts on.
     ///
-    /// Carries no fill and no edge of its own any more: the band it sits in is the surface.
-    ///
-    /// `phone:flex-col`, added since: on a phone the row becomes a column, the verbs
-    /// (`draftActionsRow`, below) drop under the text instead of squeezing it, and the text
-    /// gets the width back. On a wide screen the row shape stands as written above.
-    ///
-    /// The question is `phone:`, not `max-md:`, and the comment above this one used to say
-    /// "on a phone" while asking about width. A phone turned sideways is 844 wide, so it was
-    /// given the wide screen's row while `draftInput` inside it was already drawing a phone's
-    /// paddings — one composer answering two different questions about the same screen
-    /// (docs/visual-design.md, Phone and wide).
-    let draftBox = "relative flex items-end phone:flex-col phone:items-stretch"
+    /// Carries no fill and no edge of its own: the band it sits in is the surface.
+    let draftBox = "relative flex flex-col items-stretch"
 
     /// Chrome-less by construction (`fieldBare`): the band carries the tone and the rule, and
     /// the focus signal is the gradient growing across it.
@@ -3806,7 +3989,7 @@ module Style =
               // gradient, and 44px is the thumb's height. The extra 4px is spent above, so the
               // line still ends where Send's box does. A desktop keeps `py-2`, the 40px the
               // terminal's command band beside it agrees with (`terminalCommand`).
-              "text-body text-ink px-4 py-2 phone:pt-3"; touchType ]
+              "text-body text-ink px-4 wide:px-rail py-2 phone:pt-3"; touchType ]
 
     /// The writing side of the box: whose message it is, then the message. A column only
     /// because someone else's draft says so above the words; your own — the case that is
@@ -3830,14 +4013,13 @@ module Style =
     /// were 32px squares and needed 4px under them to reach that centre — the correction went
     /// out with the glyphs (`btnComposerBox`, above, is the line's own height).
     ///
-    /// On a phone this row leaves the line entirely, but no longer owns a full line of its
-    /// own: it shares one with the model picker (`draftActionsRow`, below) rather than
+    /// This row leaves the line entirely, but does not own a full line of its own: it shares one with the model picker (`draftActionsRow`, below) rather than
     /// stacking under it as a second line — `phone:w-full phone:justify-end` used to push its
     /// buttons to the far edge of a line THIS row had entirely to itself; now the picker is
     /// the other half of that line, so sizing to its own content and letting the row's
     /// `justify-between` do the push is what keeps it at the trailing edge without claiming
-    /// width the picker needs. It sits BELOW the text (`draftBox`'s `phone:flex-col` puts it
-    /// there in document order).
+    /// width the picker needs. It sits BELOW the text (`draftBox`'s column puts it there in
+    /// document order).
     ///
     /// And it STANDS. It used to come and go with the draft — clear and deaf to presses while
     /// there was nothing to send — so on a phone at rest the composer offered a model, an
@@ -3880,7 +4062,7 @@ module Style =
     /// span beside Send — usually empty, and an empty box's synthesized baseline is its
     /// bottom edge, so Send's word sat five pixels under the picker's. Aligning this box's
     /// own items puts Send's word in the group, which is the baseline the row then reads.
-    let draftCommit = "shrink-0 flex items-center phone:items-baseline gap-1 pr-1"
+    let draftCommit = "shrink-0 flex items-baseline gap-1 pr-1 wide:pr-5"
 
     /// The model picker's own row-mate, standing beside `draftCommit` rather than inside it:
     /// choosing a model has nothing to do with whether there is a draft to send or a turn to
@@ -3894,26 +4076,16 @@ module Style =
     /// reach, because the bug was never the popup's. Both halves are moot now that nothing
     /// about this row comes or goes, and the separation is kept because the two controls are
     /// still two different claims on the line.
-    /// `shrink-0` matches `draftCommit`'s own, so the two sit side by side on a wide screen
-    /// without either claiming space the other needs.
+    /// `shrink-0` matches `draftCommit`'s own, so the two sit side by side without either
+    /// claiming space the other needs.
     ///
-    /// `wide:order-first`: on a wide screen, `draftBox`'s row (`draftBody`, this, the commit
-    /// row, in that document order) otherwise lands the picker pressed up against Send at the
-    /// row's trailing edge — the two controls that most need telling apart end up the two
-    /// closest together. Reordering it to the LEAD edge (the original proposal's own layout:
-    /// model beside the future `+`, Send alone at the trailing edge) puts a sentence's worth
-    /// of text between them instead. `wide:` only: on a phone `draftBox` is already a column
-    /// (`phone:flex-col`), where `order` would lift the picker above the text entirely rather
-    /// than sideways past it — a bigger move than asked for, and the one place this row
-    /// already read correctly (the picker stands flush to ITS row's own leading edge, the
-    /// shared row's `justify-between` pushing Send to the opposite one).
-    /// `pl-4` matches `draftInput`'s own left gutter, on EVERY screen, not just a wide one —
-    /// on a phone `draftBox`'s `phone:items-stretch` stretches this row to the full width same
+    /// `pl-4` matches `draftInput`'s own left gutter: `draftBox`'s `items-stretch` stretches this row to the full width same
     /// as `draftInput` above it, and nothing else gives it a left inset: unlike `draftCommit`,
     /// whose gutter comes free from its buttons' own `px-3`, this row is the model control
     /// alone, so the row itself has to carry it. Without it the picker sits flush against the
-    /// viewport edge, outside the gutter every other line in the composer keeps.
-    let draftLead = "shrink-0 flex items-center gap-4 pl-4 wide:order-first"
+    /// viewport edge, outside the gutter every other line in the composer keeps. A wide screen
+    /// puts every line in the composer on the column's rail (`wide:pl-rail`), as `draftInput`.
+    let draftLead = "shrink-0 flex items-center gap-4 pl-4 wide:pl-rail"
     /// The composer's way to attach a file, beside the model picker on `draftLead`: the
     /// picker's own voice (`modelSelectFace`) and height (`modelSelectWrap`), so the row reads
     /// as one set of controls rather than a label beside a word of the message. It is the
@@ -3924,45 +4096,24 @@ module Style =
 
     /// The files on the open draft, under its words: one line of them that wraps, in the
     /// input's own gutter.
-    let draftFiles = "flex flex-wrap gap-x-4 gap-y-1 px-4 pb-2"
+    let draftFiles = "flex flex-wrap gap-x-4 gap-y-1 px-4 wide:px-rail pb-2"
     /// One file: its name, then what it weighs or where it has got to, then its verbs.
     let draftFile = "min-w-0 inline-flex items-center gap-2"
     let draftFileName = "min-w-0 max-w-[16rem] truncate font-ui font-light text-small text-ink"
     let draftFileSize = "shrink-0 font-ui font-light text-small text-ink-faint tabular-nums"
 
-    /// The picker (`draftLead`) and Send's row (`draftCommit`) ride together as ONE line on a
-    /// phone, not two: `draftBox`'s `phone:flex-col` makes every direct child its own row, and
-    /// the two used to be siblings there, so "Provider's default" sat on a line by itself with
-    /// SEND stacked on a second line under it — readable, but not the "dock at the bottom" the
-    /// picker and Send were both asked for. Wrapping them in one element makes them ONE child
-    /// of that column, hence one row.
+    /// The picker (`draftLead`) and Send's row (`draftCommit`) ride together as ONE line under
+    /// the text, on every screen: the picker at the leading edge, Send pushed to the trailing
+    /// one (`justify-between`), a sentence's width between the two controls that most need
+    /// telling apart. One wrapper, so `draftBox`'s column takes the pair as one row rather
+    /// than stacking "Provider's default" over SEND.
     ///
-    /// `wide:contents`: on a wide screen this wrapper must get entirely out of the way rather
-    /// than become a fourth flex item — `draftBox` there is a plain row of `draftBody`,
-    /// `draftLead` (reordered to the front by its own `wide:order-first`) and the commit row
-    /// as three direct siblings, and `draftLead`'s reordering only makes sense among THOSE
-    /// three. A wrapper that stayed a real box would turn that into `draftBody` beside a
-    /// two-item box, and reordering inside the box could no longer put the picker ahead of
-    /// `draftBody` — exactly what `draftLead`'s own `wide:order-first` is for. `display:
-    /// contents` removes the wrapper's own box without touching its children: they rejoin
-    /// `draftBox`'s flex context directly, so a wide screen is unchanged by this wrapper
-    /// existing.
-    ///
-    /// `phone:justify-between` is what used to be the commit row's own `justify-end` on a line
-    /// it had to itself: with the picker as the row's other half now, pushing Send to the
-    /// trailing edge is this shared row's job, not the commit box's.
-    ///
-    /// `phone:items-baseline`: the picker speaks the 11px caps label and Send the 13px one,
-    /// so centring the two boxes put their words on two lines, a pixel and a half apart.
-    /// The doctrine aligns a row on its text baseline (Space), and so does this one.
-    ///
-    /// The pair is the shell's own breakpoint and not a width. It was `max-md:`/`md:`, and a
-    /// phone turned sideways is 844 wide: it took the wide screen's single row while the
-    /// composer's line above it was already wearing `phone:` paddings, which is the exact
-    /// mismatch the pair exists to stop (docs/visual-design.md, Phone and wide).
-    let draftActionsRow = "phone:flex phone:items-baseline phone:w-full phone:justify-between wide:contents"
+    /// `items-baseline`: the picker speaks the 11px caps label and Send the 13px one, so
+    /// centring the two boxes put their words on two lines, a pixel and a half apart. The
+    /// doctrine aligns a row on its text baseline (Space), and so does this one.
+    let draftActionsRow = "flex items-baseline w-full justify-between"
 
-    let draftAuthor = "pl-4 pt-2 " + caps + " text-ink-faint truncate"
+    let draftAuthor = "pl-4 wide:pl-rail pt-2 " + caps + " text-ink-faint truncate"
 
     // A draft nobody has open here: one line of it, so the composer reads as "what is being
     // written" rather than a stack of boxes. Clicking it opens it (and closes whatever was).
@@ -3972,7 +4123,7 @@ module Style =
     // subject is whose words these are, so the edge should say it rather than repeat a
     // generic hover tint.
     let draftSummary =
-        cls [ "group w-full items-center gap-3 h-8 pl-4 pr-2 text-left cursor-pointer"
+        cls [ "group w-full items-center gap-3 h-8 pl-4 wide:pl-rail pr-2 text-left cursor-pointer"
               rowBase; rowLift; focusRing ]
 
     let draftSummaryName = "shrink-0 " + caps + " text-ink-faint"
@@ -4012,7 +4163,7 @@ module Style =
     // come back, and the thing you were reading never moves. Its open state is one bit on the
     // root <html> element (`settings-open`, drawn from the model's `Column.Face`).
 
-    /// The settings face's header band: the same 88px rhythm as the nav and the main header, so
+    /// The settings face's header band: the same band rhythm as the nav and the main header, so
     /// the three baselines still align when the column changes face — the nav's head, hairline
     /// and all, so the band's rule does not come and go as the faces turn.
     let settingsHead = sideHead
@@ -4153,7 +4304,7 @@ module Style =
     /// pins its FIRST row to the token, so it needs no second row to land on the band.
     ///
     /// `items-stretch`, not the chat header's own `items-end` + `pb-5` (`phone:items-center` +
-    /// `phone:pb-[11px]`) copied at first, because that alignment is the header's TEXT settling
+    /// `phone:pb-[15px]`) copied at first, because that alignment is the header's TEXT settling
     /// short of the hairline with room a title doesn't need to fill. A tab is not text: a
     /// `h-touch` chip centred or end-anchored in the now-taller row left its own fill — the
     /// thing that is supposed to say which tab the page belongs to (`pivotItemOn`'s `bg-panel`)
@@ -4856,9 +5007,9 @@ module Style =
     /// terminal beside a chat column, both idle, read as two different-sized objects. The
     /// padding spends what the row would have, on a phone only, so the two bars land at one
     /// height — `h-11` command line (44) + `pb-[3.8125rem]` (61 = the row's 45 + the shared
-    /// `pb-4`'s 16) = 105, `composer`'s own total there. Desktop needs nothing extra:
-    /// `draftActionsRow` is `wide:contents` there, adding no row and no height, so the shared
-    /// `pb-4` alone already matches (`h-10` + 16 = 56, both bands).
+    /// `pb-4`'s 16) = 105, `composer`'s own total there. A wide screen spends nothing extra:
+    /// there the message composer stands off the bottom edge in its dock (`dock`), so the two
+    /// bands share no bottom edge to agree on.
     let terminalComposer = composerBand + " pb-4 phone:pb-[3.8125rem]"
 
     /// A row in the band that is not the command line — the lease bar, the cannot-run
@@ -4953,7 +5104,18 @@ module Style =
     /// leaning the way the column travels. Rendered from the model rather than hidden by a
     /// variant: whether the control exists is a fact about the model, and a button that is
     /// merely invisible is still in the tab order.
-    let terminalReopen = navChevronBack + " shrink-0"
+    ///
+    /// Its glyph sits on the title's x-height, so the two marks either side of the title
+    /// point at one stroke (`navReopen`). On a phone it drops by the chevron's own amount. On
+    /// a wide screen the button stands its words on the title's baseline (`headerAside`), which
+    /// leaves the glyph's middle below the stroke, so it rises instead.
+    let terminalReopen =
+        navChevronBack + " shrink-0 *:first:-translate-y-[3px] phone:*:first:translate-y-[1.5px]"
+    /// Its face says what it opens on a wide screen ("2 terminals", `View.contentReopen`), and
+    /// only the count on a phone, whose band has no room for the words. Exactly one of the two
+    /// is drawn at any size, by the one pair of variants that split the screens.
+    let terminalReopenWords = "phone:hidden"
+    let terminalReopenBare = "wide:hidden"
 
     // --- ANSI styling ---------------------------------------------------------------------------
     // Turning a parsed `AnsiStyle` into what a span wears. Split in two on purpose:
@@ -5156,7 +5318,7 @@ module Style =
     /// layout question rather than a reading column's (docs/visual-design.md, Phone and wide).
     let pageBand =
         cls [ "h-band phone:h-band-phone shrink-0 sticky top-0 z-ground bg-bg"
-              "flex items-end pb-5 phone:items-center phone:pb-0"
+              "flex items-end pb-band-foot phone:items-center phone:pb-0"
               Stroke.dividerBottom ]
 
     /// The lockup in that band. On a phone the band is one thumb-sized row, which cannot hold

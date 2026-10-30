@@ -11,6 +11,48 @@ whatever sits in front of it. The integrations are worked examples that satisfy 
 
 ---
 
+## Checking a release
+
+Each GitHub release carries `SHA256SUMS` beside its assets. The tarball and `SHA256SUMS` also
+carry signed build provenance: which workflow, on which commit of this repository, made them.
+Download the assets into one directory, then check them before you install the tarball:
+
+```sh
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify yession-<version>.tgz --repo trinketworks/yession
+gh attestation verify SHA256SUMS --repo trinketworks/yession
+```
+
+`sha256sum -c` proves that the downloads match the list. `gh attestation verify` proves that
+this repository's release workflow made them. If either fails, do not install the tarball.
+
+---
+
+## Installing a release
+
+The npm package is a release asset, `yession-<version>.tgz`. It carries `npm-shrinkwrap.json`,
+which pins every production dependency to the version the release was tested with. Install it
+like this:
+
+```sh
+mkdir -p ~/.local/share/yession
+tar -xzf yession-<version>.tgz --strip-components=1 -C ~/.local/share/yession
+(cd ~/.local/share/yession && npm ci --omit=dev)
+npm i -g ~/.local/share/yession
+```
+
+The directory is the install. `npm i -g` links the two commands to it, so do not delete the
+directory. To upgrade, delete the directory, then run the same steps with the new tarball.
+
+Do not run `npm i -g yession-<version>.tgz`. npm honours a dependency's shrinkwrap only when
+the package came from a registry, so an install by path or URL resolves the version ranges
+again and gets dependency versions no release was tested with. `npm ci` in the extracted
+directory reads the shrinkwrap as its own lockfile.
+
+A fix in a dependency therefore reaches you in a Yession release, not by reinstalling.
+
+---
+
 ## Options and variables
 
 The Manager takes what it **decides** as an option. What it **passes down** stays in the
@@ -34,11 +76,26 @@ examples use the prefix too (`YESSION_PROXY_PORT`, `YESSION_SERIAL_PORT`).
 | an option | you, the operator, for this Manager | `--port`, `--idle-timeout`, `--data-dir` |
 | `YESSION_MANAGER_URL` / `YESSION_SESSION_URL` | you, and every session reads them too | see §Addressing |
 | `YESSION_BIN_*` | you or the package. It names an executable a session runs | `YESSION_BIN_GIT`, `YESSION_BIN_BWRAP` |
-| `YESSION_SESSION_*` | you. It is per-session policy, today set once per host | `YESSION_SESSION_WORK_BACKEND`, `YESSION_SESSION_RESOURCES` |
+| `YESSION_SESSION_*` | you. It is per-session policy, today set once per host | `YESSION_SESSION_WORK_BACKEND`, `YESSION_SESSION_GIT_BACKEND`, `YESSION_SESSION_RESOURCES` |
 | `YESSION_LAUNCH` | nobody — the Manager mints it per launch | — |
 
 The Manager **refuses** a variable that moved onto the command line. The boot stops and names
 the option to write instead. `app/Retirements.fs` lists the retired names and says why.
+
+A session runs three sandbox families, and each has its own backend variable. Each is parsed
+at boot and fails closed: a value it does not know stops the session.
+
+| variable | runs | values | default |
+|---|---|---|---|
+| `YESSION_SESSION_WORK_BACKEND` | the agent's terminals, blocks and `setup:` | `host`, `srt`, `docker` | `srt` |
+| `YESSION_SESSION_AGENT_BACKEND` | the `claude` CLI | `host`, `srt` | `host` |
+| `YESSION_SESSION_GIT_BACKEND` | the session's own git verbs: clone, fetch, switch, status, log, diff | `host`, `srt` | `srt` |
+
+The git verbs work on checkouts that every work sandbox can write, `.git/config` included. Under
+`srt` a program that config names runs with the git sandbox's reach: the repos directory, and
+the git gateway as its only egress. `YESSION_SESSION_GIT_BACKEND=host` runs the verbs as you,
+unconfined, so a work sandbox can then run a program as you through a checkout's
+`filter.<driver>.smudge` (docs/GAPS.md). Choose it only where srt cannot run.
 
 `YESSION_LAUNCH` is the launch's control secret. It grants custody of the session's secrets
 and the right to register as an OIDC client. Setting it by hand impersonates a session. It
@@ -399,8 +456,11 @@ them. A session declares a filter over paths, and the Manager matches it
 ([ADR](decisions/2026-08-29-the-manager-relays-hooks-it-cannot-read.md)).
 
 ```sh
-yession-manager --webhook github --webhook linear
+yession-manager --webhook github --webhook 'linear=linear-signature:hex'
 ```
+
+Linear signs in its own `linear-signature` header, in hex, with no prefix. Its endpoint
+therefore carries a signature override (see below). GitHub uses the default.
 
 The Manager serves each endpoint at `<YESSION_MANAGER_URL>/hooks/<name>`, so this needs a
 fronted deployment. The manager page shows each endpoint's address and signing secret. The
@@ -546,6 +606,32 @@ Two bounds answer different questions:
   this Manager process.
 - **`--auth trusted-headers`** — lose the sharing: each human owns their own credential.
 
+##### What a tailnet member can do
+
+Under `trusted-headers`, identity is per human and sessions are shared by every member. The
+rule establishes who is calling. Nothing then decides what that person may do, so every
+authenticated member is an operator of every session. A member can:
+
+- create, launch, stop and archive any session,
+- join any session, read its whole event log and its terminals, drive its agent, and type
+  into its sandboxes,
+- declare MCP servers, which every session they name connects to.
+
+What stays the member's own is their credential. A turn and a lent token run on the credential
+of the person who acted, so no member's turn spends another's Claude or GitHub account.
+
+Two places cross that boundary:
+
+- **A repository's `setup:` block** runs under the authority of whoever triggered the fold
+  that started its sandbox: the person who added the repository, approved what its
+  `yession.yaml` asks for, or otherwise ran a repo verb (`Authority.configuredBy` in
+  `RepoSandboxes.foldOnce`, built by `Commands.startWorkSandboxCall`).
+- **A webhook delivery** reaches every session whose filter matches, so one member's session
+  reads another member's pull-request traffic.
+
+So the deployment is for one team that shares its work. A per-session owner is not
+implemented ([GAPS.md](GAPS.md#security--trust)).
+
 #### Addressing
 
 Make one `serve` mapping, once, to your proxy, and set both URLs to the tailnet origin
@@ -627,8 +713,12 @@ let
   resources = pkgs.writeText "yession-resources.yaml" ''
     version: 1
     resources:
+      # `maintain:` keeps the shared store bounded (§Keeping the warm store bounded).
       nix-container-store:
-        volume: { name: yession-nix, at: /nix }
+        volume:
+          name: yession-nix
+          at: /nix
+          maintain: { pin: /nix/var/yession/pin, every: 10m }
       # For a repo's CONTAINER sandboxes: the gateway, and the credential proxy's URL,
       # trust bundle (every root, so replacing the image's loses nothing) and a token
       # lent per command.

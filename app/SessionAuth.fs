@@ -42,8 +42,9 @@ type Auth =
 
 /// `mount` is the path this session is served under (`""` at an origin root): the
 /// auth cookie is scoped to it, so a path-mounted session's cookie is not sent to its
-/// siblings on the same host.
-let create (sessionId: SessionId) (mount: string) : Auth =
+/// siblings on the same host. `scheme` says whether the cookie is `Secure`
+/// (`Cookies.schemeFor`).
+let create (sessionId: SessionId) (mount: string) (scheme: CookieScheme) : Auth =
     let cookieName = Cookies.sessionCookieName sessionId
     let nowUnix () = System.DateTimeOffset.UtcNow.ToUnixTimeSeconds ()
     let pendingLogins = PendingLogins (nowUnix)
@@ -136,7 +137,7 @@ let create (sessionId: SessionId) (mount: string) : Auth =
                                         { Subject = claims.sub
                                           DisplayName = displayName
                                           Attribution = attribution }
-                                return Ok (Cookies.set cookieName mount cookieValue)
+                                return Ok (Cookies.set scheme cookieName mount cookieValue)
                         with e ->
                             return Error (401, sprintf "authorization failed: %s" e.Message)
             }

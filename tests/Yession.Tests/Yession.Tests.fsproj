@@ -105,13 +105,16 @@
     <Compile Include="ZodBindings.fs" />
     <Compile Include="Telemetry.fs" />
     <Compile Include="TelemetryE2E.fs" />
+    <!-- Before the browser suites, which start servers through it. `tasks.fsx` loads it too
+         (for the frames verb, harness mode). -->
+    <Compile Include="Loopback.fs" />
     <Compile Include="BrowserWait.fs" />
     <Compile Include="PageScript.fs" />
     <Compile Include="BrowserProbe.fs" />
     <Compile Include="BrowserHarness.fs" />
     <Compile Include="BrowserShims.fs" />
     <Compile Include="Browser.fs" />
-    <!-- After Browser.fs: it shares that fixture (serveStatic, chromiumPath, watching). -->
+    <!-- After Browser.fs: it shares that fixture (chromiumPath, watching). -->
     <Compile Include="Bench.fs" />
     <Compile Include="E2E.fs" />
     <Compile Include="Client.fs" />

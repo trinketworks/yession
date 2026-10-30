@@ -1,7 +1,19 @@
 namespace Yession.Domain.Access
 
 open Yession.Domain
+open Yession.Domain.Link
 open System
+
+/// The schemes a browser may send a session's auth cookie over.
+[<RequireQualifiedAccess>]
+type CookieScheme =
+    /// `Secure`: the session is served over https, so the cookie never rides plain HTTP. A
+    /// browser drops a `Secure` cookie set over http, so this is only right where the session's
+    /// own address is https.
+    | HttpsOnly
+    /// No `Secure`: the session is served over plain HTTP, which is loopback (`--auth
+    /// localhost`) or a deployment that fronts its sessions at an `http://` template.
+    | AnyScheme
 
 /// Pure HTTP authorization primitives: cookie and form parsing for the session's
 /// auth-gated surfaces. Deliberately small — the protocol itself (JWT, PKCE, discovery,
@@ -26,6 +38,16 @@ module Cookies =
         header
         |> Option.bind (fun h -> parse h |> List.tryPick (fun (k, v) -> if k = name then Some v else None))
 
+    /// Which schemes this deployment's session cookies may ride: `Secure` exactly where the
+    /// sessions are served over https. Read off the session template rather than the
+    /// Manager's origin, because the session's own response sets the cookie, and a browser
+    /// keeps a `Secure` cookie only from an https response.
+    let schemeFor (access: PublicAccess) : CookieScheme =
+        if (PublicAccess.sessions access |> SessionTemplate.value).StartsWith "https://" then
+            CookieScheme.HttpsOnly
+        else
+            CookieScheme.AnyScheme
+
     /// A `Set-Cookie:` value for an HttpOnly session cookie, scoped to the path the
     /// session is served under (`""` at an origin root ⇒ `Path=/`). No `Max-Age`/`Expires`:
     /// the cookie lives with the browser session, matching the server side (auth state is
@@ -35,9 +57,13 @@ module Cookies =
     /// cookie is no longer sent to its siblings. At an origin root the behaviour is
     /// unchanged, and the id in the cookie's NAME still carries the separation cookies
     /// cannot get from a port.
-    let set (name: string) (mount: string) (value: string) : string =
+    let set (scheme: CookieScheme) (name: string) (mount: string) (value: string) : string =
         let path = if mount = "" then "/" else mount + "/"
-        sprintf "%s=%s; Path=%s; HttpOnly; SameSite=Lax" name value path
+        let secure =
+            match scheme with
+            | CookieScheme.HttpsOnly -> "; Secure"
+            | CookieScheme.AnyScheme -> ""
+        sprintf "%s=%s; Path=%s; HttpOnly; SameSite=Lax%s" name value path secure
 
     /// The session's auth-cookie name. Cookies on 127.0.0.1 are NOT port-scoped — the
     /// Manager and every Session share one browser cookie jar — so each session's

@@ -39,7 +39,10 @@ let private expect =
 /// What the Manager minted for this launch, decoded ONCE. Blank means nobody launched us —
 /// `Launch.unlaunched`, a bare `yession-session` — and a malformed envelope fails the boot
 /// rather than booting under a fabricated identity.
-let private launch = Launch.parse (Interop.envOr Launch.Variable "") |> expect
+///
+/// TAKEN, not read: the envelope carries the launch's control secret, and every child this
+/// process spawns with its own environment (the srt host helper among them) would inherit it.
+let private launch = Launch.parse (Interop.takeEnv Launch.Variable "") |> expect
 
 let private sessionId = launch.Session
 let private port = launch.Port
@@ -149,22 +152,31 @@ let private grantsFor (uses: ResourceName list) (wants: ResourceName list) : Res
 // The default is `host`, which is NOT the WorkSandbox's answer and is not what this ought
 // to be. It is what the srt agent path has actually been proven to do: #364 made this
 // `srt`, and the release gate's live turn then stalled its full 90s having streamed
-// nothing. The live tier since settled why (docs/GAPS.md): the vendored `claude` is a Bun
-// binary whose API egress does not honour `HTTP_PROXY`, so under srt's `--unshare-net` it
-// connects DIRECT to the API, fails instantly, and retries to the deadline. srt confines
-// the COMMANDS the agent runs (the WorkSandbox), not the agent CLI itself, so `host` stays
-// the default until either the CLI runs on Node or the agent gets its own Session.
+// nothing. The live tier has since passed under `=srt` (docs/GAPS.md, the agent CLI entry,
+// has the measurements; the Bun CLI does honour the proxy). The default stays `host` until a
+// macOS run under `=srt` is measured, because the deployment it serves is macOS.
 let private agentBackend =
     match SandboxBackend.parseAgent (Interop.envOr "YESSION_SESSION_AGENT_BACKEND" "host") with
     | Ok backend -> backend
     | Error e -> failwithf "agent sandbox: %s" e
 
+// The git sandbox's backend (`YESSION_SESSION_GIT_BACKEND`): where the session's own git
+// verbs run — clone, fetch, switch, status, log and diff. host or srt, default srt
+// (`SandboxBackend.parseGit` says why), parsed here at boot and fail closed like the two
+// above. It is not the agent backend, which stays `host` until a macOS run under srt is
+// measured (docs/GAPS.md, the agent CLI entry, has the measurements). That reason is the
+// CLI's, not git's: git honours srt's proxy (the `Srt` suite drives it).
+let private gitBackend =
+    match SandboxBackend.parseGit (match Interop.envOr "YESSION_SESSION_GIT_BACKEND" "" with "" -> None | raw -> Some raw) with
+    | Ok backend -> backend
+    | Error e -> failwithf "git sandbox: %s" e
+
 // srt's own configuration — the confinement tools and how far the nesting can go — is
-// parsed here too, whenever either sandbox will use it. It would otherwise first be read
+// parsed here too, whenever any sandbox will use it. It would otherwise first be read
 // where the sandbox is created: for the WorkSandbox that is the agent's first
 // `ensure_environment`, minutes into a session, which is no place to discover a typo.
 do
-    if agentBackend = SrtBackend || workBackend = SrtBackend then
+    if agentBackend = SrtBackend || workBackend = SrtBackend || gitBackend = SrtBackend then
         match Sandboxes.SrtSandbox.toolsFrom (Sandboxes.ambientEnv ()) with
         | Ok _ -> ()
         | Error e -> failwithf "sandbox: %s" e
@@ -415,7 +427,7 @@ let private managerOrigin =
 // User authorization: with a Manager, this session is an OIDC client of it; the RP
 // configuration completes after listen (the redirect URI needs the bound port).
 let private auth =
-    controlChannel |> Option.map (fun _ -> SessionAuth.create sessionId sessionMount)
+    controlChannel |> Option.map (fun _ -> SessionAuth.create sessionId sessionMount (Cookies.schemeFor publicAccess))
 
 // Telemetry: this session is a direct OTel emitter — one OTel log record per completed turn.
 // Destination (stdout / a collector / both / off) comes from the standard OTEL_* env the
@@ -569,7 +581,7 @@ let private publishStatus () =
     match reportStatus with
     | Some report ->
         let prs = PrWatches.summaryOf (prWatchers.Rows ()) |> Option.toList
-        Async.StartImmediate (report (Option.toList agentStanding @ prs))
+        Async.StartImmediate (report (Standings.AgentStatus.withWatched prs agentStanding))
     | None -> ()
 
 /// Whether every Claude credential this session knows of wants somebody to sign in again,
@@ -957,12 +969,22 @@ Async.StartImmediate (
         // second read of the same variable is a second default, and the two would disagree
         // the first time one moved.
         let githubApi = Interop.envOr "YESSION_GITHUB_API_URL" "https://api.github.com"
-        // The repo manager (Plan 14), over the same log and the agent backend's sandbox
-        // family. A backend that cannot host it fails the boot — the same fail-closed
-        // stance as the WorkSandbox composition above.
+        // The git gateway: how every git in this session reaches github.com without holding a
+        // credential — a work sandbox's, and the repo manager's own clone and fetch, so it
+        // starts before the repo manager does (`GitGateway`, rule 21).
+        let doors = Sandboxes.hostDoorsHere ()
+        let! gitGateway = GitGateway.start doors "https://github.com" (fun fault -> eprintfn "[session %s] git gateway: %s" (SessionId.value sessionId) fault)
+        // The repo manager (Plan 14), over the same log, in the git sandbox (`gitBackend`). A
+        // backend that cannot host it fails the boot — the same fail-closed stance as the
+        // WorkSandbox composition above. Its route to the gateway is the one a
+        // work sandbox on its backend would get; a backend with none cannot host it.
+        let gitRouteHost =
+            match Sandboxes.hostAddressHere (Interop.hostname ()) gitBackend with
+            | Some host -> host
+            | None -> failwithf "repos: a %s git sandbox has no route to this session's git gateway" (SandboxBackend.describe gitBackend)
         do
             match Repos.create
-                    { Backend = agentBackend
+                    { Backend = gitBackend
                       Network = dockerNetwork
                       ReposDir = reposDir
                       StartsAt =
@@ -972,8 +994,10 @@ Async.StartImmediate (
                                 (ShellProfileProjection.workingDirectory SandboxRef.defaultRef (terminals.Profiles ()))
                       ExtraReadPaths = []
                       Git = Repos.gitExecutable (Sandboxes.ambientEnv ())
-                      AllowedDomains = [ "github.com" ]
-                      AllowProtocol = "https"
+                      AllowedDomains =
+                        Sandboxes.hostRouteHere (Interop.ownAddresses ()) gitBackend gitRouteHost gitGateway.Port
+                      AllowProtocol = "http"
+                      Route = Repos.GitRoute.through gitGateway gitRouteHost
                       CloneUrl = RepoRef.cloneUrl
                       ResolveToken = resolveGitHubToken
                       Canonical =
@@ -1258,8 +1282,8 @@ Async.StartImmediate (
         // never holds a value worth printing.
         // Both listen where this session's sandboxes reach this host (`hostDoorsHere`), and on
         // its Docker network's gateway once a native daemon makes one (`network` below).
-        let doors = Sandboxes.hostDoorsHere ()
-        let! gitGateway = GitGateway.start doors "https://github.com" (fun fault -> eprintfn "[session %s] git gateway: %s" (SessionId.value sessionId) fault)
+        // The git gateway itself started before the repo manager, whose clone and fetch go
+        // through it too.
         // The same idea for the API: a block's `gh` holds a stand-in, and the proxy swaps in
         // the credential of that block's act on the way to api.github.com.
         let! credentialProxy =
@@ -1339,7 +1363,7 @@ Async.StartImmediate (
                                                 "github cannot be forwarded by git into a %s sandbox: its git would have no route to this session's gateway"
                                                 (SandboxBackend.describe backend))
                                     | Some host ->
-                                        let cap = gitGateway.Grant sandbox
+                                        let cap = gitGateway.Grant (GitGateway.Routed.Sandbox sandbox)
                                         Ok
                                             { WorkSandboxes.Provision.empty with
                                                 GitConfig = GitGateway.gitConfig host gitGateway.Port cap
@@ -1383,8 +1407,8 @@ Async.StartImmediate (
                                         | Some host ->
                                             let secret =
                                                 gitGateway.Lend
-                                                    sandbox
-                                                    terminal
+                                                    (GitGateway.Routed.Sandbox sandbox)
+                                                    (GitGateway.Borrower.Terminal terminal)
                                                     { Owner = owner
                                                       Resolve = fun () -> resolveGitHubToken owner
                                                       Refused = fun () -> reportGitHubNetworkFailure owner "the git gateway was answered 401"
@@ -1427,7 +1451,7 @@ Async.StartImmediate (
                         }
                 Retire =
                     fun terminal ->
-                        gitGateway.Retire terminal
+                        gitGateway.Retire (GitGateway.Borrower.Terminal terminal)
                         credentialProxy.Retire terminal } ]
         let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials (CredentialProxy.provider credentialProxy sandboxBackend gatewayHostFor))) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity agentReport telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
@@ -1462,7 +1486,6 @@ Async.StartImmediate (
         terminalCommands <- host.TerminalCommands
         repoSandboxes <-
             RepoSandboxes.create
-                reposDir
                 (fun () -> reposService)
                 (fun () -> workSandboxes)
                 host.RunGated

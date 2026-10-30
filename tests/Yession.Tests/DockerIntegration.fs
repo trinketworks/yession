@@ -547,11 +547,11 @@ let tests =
                 do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
                 let! gateway = GitGateway.start (Sandboxes.hostDoorsHere ()) (sprintf "http://127.0.0.1:%d" (serverPort upstream)) ignore
                 try
-                    let cap = gateway.Grant SandboxRef.defaultRef
+                    let cap = gateway.Grant (GitGateway.Routed.Sandbox SandboxRef.defaultRef)
                     let secret =
                         gateway.Lend
-                            SandboxRef.defaultRef
-                            (TerminalId.create "term-docker" |> expect)
+                            (GitGateway.Routed.Sandbox SandboxRef.defaultRef)
+                            (GitGateway.Borrower.Terminal (TerminalId.create "term-docker" |> expect))
                             { Owner = CredentialFor.Deployment
                               Resolve = fun () -> async { return Some "tok" }
                               Refused = fun () -> async { () }

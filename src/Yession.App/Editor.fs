@@ -95,9 +95,43 @@ module Editor =
                     (tr.addMark(start, start + inner.Length, markCreate mark)).removeStoredMark mark)
         makeInputRule (regex pattern) handler
 
+    /// The class each block draws with — the same `Style.prose*` the timeline's `RichText`
+    /// puts on the same node, so what a quote looks like while it is typed is what it looks
+    /// like once it is sent.
+    let private blockClass (node: Node) : string option =
+        match nodeTypeName node with
+        | "paragraph" -> Some Style.proseP
+        | "heading" ->
+            match headingLevel node with
+            | 1 -> Some Style.proseH1
+            | 2 -> Some Style.proseH2
+            | 3 -> Some Style.proseH3
+            | _ -> Some Style.proseH4
+        | "blockquote" -> Some Style.proseQuote
+        | "code_block" -> Some Style.prosePre
+        | "bullet_list" -> Some Style.proseUl
+        | "ordered_list" -> Some Style.proseOl
+        | "list_item" -> Some Style.proseLi
+        | "horizontal_rule" -> Some Style.proseHr
+        | _ -> None
+
+    let private markClass (mark: Mark) : string option =
+        match mark.``type``.name with
+        | "strong" -> Some Style.proseStrong
+        | "code" -> Some Style.proseCode
+        | "link" -> Some Style.proseLink
+        | _ -> None
+
+    /// What an editable body edits over: the markdown schema, drawn with the timeline's classes.
+    /// A read-only body (the one-line draft summary) keeps the bare schema, because its host
+    /// flattens what it shows to a line and a heading's size or a quote's rule would break it.
+    let private composerSchema : Schema = classedSchema schema blockClass markClass
+
+    let private composerParser : MarkdownParser = mdParserFor composerSchema
+
     /// Markdown-typing input rules (block via prosemirror-inputrules helpers, inline via
     /// `markRule`). Each is guarded on the schema actually having the node/mark.
-    let private markdownInputRules () : Plugin =
+    let private markdownInputRules (schema: Schema) : Plugin =
         let n = nodeType schema
         let m = markType schema
         let rules = ResizeArray<InputRule> ()
@@ -108,7 +142,6 @@ module Editor =
         n "ordered_list"
         |> Option.iter (fun t -> rules.Add (wrappingInputRuleAttrs (regex "^(\\d+)\\.\\s$") t orderedListAttrs orderedListJoin))
         n "bullet_list" |> Option.iter (fun t -> rules.Add (wrappingInputRule (regex "^\\s*([-+*])\\s$") t))
-        n "code_block" |> Option.iter (fun t -> rules.Add (textblockTypeInputRule (regex "^```$") t))
         n "heading" |> Option.iter (fun t -> rules.Add (textblockTypeInputRuleAttrs (regex "^(#{1,6})\\s$") t headingAttrs))
         m "strong" |> Option.iter (fun t -> rules.Add (markRule "(?:\\*\\*|__)([^*_]+)(?:\\*\\*|__)$" t))
         m "em" |> Option.iter (fun t -> rules.Add (markRule "(?:^|[^*_])(?:\\*|_)([^*_]+)(?:\\*|_)$" t))
@@ -123,13 +156,45 @@ module Editor =
     ///
     /// Chained after `exitCode` so the same keystroke steps OUT of a code block, whose `text*`
     /// content cannot hold a break at all.
-    let private lineBreak () : Command option =
+    let private lineBreak (schema: Schema) : Command option =
         nodeType schema "hard_break"
         |> Option.map (fun br ->
             chain
                 exitCode
                 (editCommand (fun state ->
                     trScrollIntoView ((state.tr).replaceSelectionWith (nodeCreate br, false)))))
+
+    /// The language a fence line names — `fsharp` for ```` ```fsharp ````, `""` for a bare
+    /// ```` ``` ```` — and nothing for a line that is not a fence.
+    let private fenceLanguage (line: string) : string option =
+        let fence = System.Text.RegularExpressions.Regex.Match (line, "^```([^`\\s]*)$")
+        if fence.Success then Some fence.Groups.[1].Value else None
+
+    /// Enter at the end of a fence line opens a code block in the language it names, as
+    /// Markdown reads a fence. A rule on the third backtick could not: it fired before a
+    /// language could be typed.
+    let private openFence (codeBlock: NodeType) : Command =
+        tryEditCommand (fun state ->
+            let at = caretBlock state
+            if at.blockType <> "paragraph" || not at.atEnd then None
+            else
+                fenceLanguage at.text
+                |> Option.map (fun language ->
+                    let tr = (state.tr).delete (at.contentStart, at.contentEnd)
+                    trSetBlockType tr at.contentStart at.contentStart codeBlock (NodeAttrs.codeBlock language)))
+
+    /// Enter on an empty last line of a code block leaves it for a paragraph below, taking the
+    /// empty line with it. Otherwise a code block at the end of a draft held the caret, with
+    /// only Shift-Enter to get out.
+    let private leaveCodeBlock (paragraph: NodeType) : Command =
+        tryEditCommand (fun state ->
+            let at = caretBlock state
+            if at.blockType <> "code_block" || not at.atEnd || not (at.text.EndsWith "\n") then None
+            else
+                // One character shorter once the newline is gone.
+                let below = at.after - 1
+                let tr = ((state.tr).delete (at.contentEnd - 1, at.contentEnd)).insert (below, nodeCreate paragraph)
+                Some (trScrollIntoView (tr.setSelection (caretAt (trDoc tr) (below + 1)))))
 
     /// Base editing keys + list handling + Yjs-aware undo/redo, and Enter's jobs.
     ///
@@ -138,7 +203,9 @@ module Editor =
     /// no modifier to reach for, and a person who presses it is writing, not asking to send
     /// half a thought. Sending is a deliberate second key or the visible Send control:
     ///
-    ///   Enter        — a new PARAGRAPH. Plain prose, the same as a plain textarea.
+    ///   Enter        — a new PARAGRAPH. Plain prose, the same as a plain textarea. After a
+    ///                  fence line (```` ```lang ````) it opens a code block; on the empty
+    ///                  last line of one it leaves it.
     ///   Mod-Enter    — SEND, in a COMPOSER: Ctrl-Enter or Cmd-Enter, reachable without
     ///                  letting go of the line just written, and never fired by a return key
     ///                  alone.
@@ -150,14 +217,20 @@ module Editor =
     ///
     /// A body with nothing to send (a queued message being edited in place) passes `None` for
     /// `onSubmit` and binds no send key: an action that does not exist gets no shortcut.
-    let private editorKeymap (onSubmit: (unit -> unit) option) : KeyBindings =
+    let private editorKeymap (schema: Schema) (onSubmit: (unit -> unit) option) : KeyBindings =
         // What a plain Enter always meant in prose: split the list item when in one, else
         // whatever ProseMirror's own Enter does.
         let listItem = nodeType schema "list_item"
-        let newParagraph =
+        let prose =
             match listItem with
             | Some li -> chain (splitListItem li) baseKeymap.Enter
             | None -> baseKeymap.Enter
+        // Ahead of that, the two places Enter means Markdown: a fence line, and the empty line
+        // that closes a code block.
+        let newParagraph =
+            match nodeType schema "code_block", nodeType schema "paragraph" with
+            | Some code, Some paragraph -> chain (openFence code) (chain (leaveCodeBlock paragraph) prose)
+            | _ -> prose
         KeyBindings.ofList [
             Chord.withMod (Key.Char 'z'), yUndo
             Chord.withMod (Key.Char 'y'), yRedo
@@ -177,10 +250,14 @@ module Editor =
                 Chord.withMod (Key.Char '['), liftListItem li
                 Chord.withMod (Key.Char ']'), sinkListItem li
             | None -> ()
-            match lineBreak () with
+            match lineBreak schema with
             | Some command -> Chord.withShift Key.Enter, command
             | None -> ()
             Chord.plain Key.Enter, newParagraph
+            // Ahead of the base keymap's Backspace: right after `> ` or `# ` became a block,
+            // Backspace gives back the characters typed, so a rule nobody meant is one key to
+            // undo. Anywhere else it declines and Backspace deletes as always.
+            Chord.plain Key.Backspace, undoInputRule
             match onSubmit with
             | Some submit -> Chord.withMod Key.Enter, effectCommand submit
             | None -> () ]
@@ -388,6 +465,7 @@ module Editor =
                         spoken.remove ())))))
 
     let private plugins
+        (schema: Schema)
         (fragment: Y.XmlFragment)
         (report: ((string * string) option -> unit) option)
         (onSubmit: (unit -> unit) option)
@@ -398,13 +476,13 @@ module Editor =
             ResizeArray<Plugin> [
                 ySyncPlugin fragment
                 yUndoPlugin ()
-                markdownInputRules ()
+                markdownInputRules schema
                 // Ahead of the keymaps, so Tab completes an address rather than indenting a
                 // list item while there is one to complete.
                 match addressable with
                 | Some names -> addressPlugin names
                 | None -> ()
-                keymap (editorKeymap onSubmit)
+                keymap (editorKeymap schema onSubmit)
                 keymap baseKeymap
                 presenceDecorationsPlugin () ]
         report |> Option.iter (fun r -> ps.Add (presenceReportPlugin r))
@@ -413,14 +491,14 @@ module Editor =
 
     /// Plain-text (Markdown) paste -> parsed as Markdown; HTML paste falls through to
     /// ProseMirror's normal clipboard handling.
-    let private handlePaste =
+    let private handlePaste (parser: MarkdownParser) =
         System.Func<EditorView, Browser.Types.ClipboardEvent, bool>(fun view event ->
             if clipboard event "text/html" |> Option.exists (fun html -> html <> "") then false
             else
                 match clipboard event "text/plain" with
                 | None | Some "" -> false
                 | Some text ->
-                    let doc = mdParser.parse text
+                    let doc = parser.parse text
                     if isNull (box doc) then false
                     else
                         view.dispatch ((view.state.tr).replaceSelectionWith (doc, false))
@@ -506,12 +584,13 @@ module Editor =
         // Nothing to prompt in a body you cannot type in, on the same rule that drops the
         // send binding there: a read-only editor is a rendering, not an invitation.
         let prompt = if readOnly then "" else placeholder
-        let state = createState schema (plugins fragment report submit prompt addressing)
+        let schema, parser = if readOnly then schema, mdParser else composerSchema, composerParser
+        let state = createState schema (plugins schema fragment report submit prompt addressing)
         let view =
             createView host (jsOptions<EditorProps> (fun props ->
                 props.state <- state
                 props.editable <- System.Func<EditorState, bool>(fun _ -> not readOnly)
-                props.handlePaste <- handlePaste
+                props.handlePaste <- handlePaste parser
                 props.handleScrollToSelection <- scrollCaretIntoScrollers))
         { Dispose = fun () -> view.destroy ()
           PushPresences =

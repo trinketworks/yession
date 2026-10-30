@@ -96,6 +96,7 @@ let private representativeModel : ClientModel =
       // A representative client is one that kept what it was given; the case that cannot
       // keep anything is the exception, and says so where it matters.
       LocalCopy = LocalCopy.Kept None
+      PageFault = None
       Synced =
         // Draft/queue bodies are rich-text `Y.XmlFragment`s mounted by the browser editor,
         // not fields on the model — so the SSR fixture carries only the slot's identity; the
@@ -846,6 +847,44 @@ let private uiChecklistTests =
             Expect.isFalse (html.Contains Dom.Hooks.githubSignInRequired) "and nothing asks for a sign-in"
             Expect.isFalse (html.Contains Dom.Hooks.signInRequired) "so no prompt over the timeline either"
 
+        // Connecting the scope the selector already names makes no sense while a credential
+        // is sitting there: the only remedy for THAT scope is the disconnect already on its
+        // row, and that row already carries the status and the X, so the control under the
+        // selector says nothing at all rather than repeating it in prose.
+        testCase "the connect controls hide for a scope that already has a credential" <| fun () ->
+            let connected =
+                representativeModel
+                |> withGitHubPanel (fun panel ->
+                    { panel with MineCredential = Some { Kind = OAuthConnection; SignInRequired = None } })
+            let html = Support.render connected
+            Expect.isFalse (html.Contains "data-github-scope") "the selector itself is gone (mine, the default, already has a credential)"
+            Expect.isFalse (html.Contains "data-github-connect>") "and offers no second way to connect it"
+            Expect.isFalse (html.Contains "data-github-token ") "nor its token fallback"
+
+        // The other scope is untouched, so switching to it must still offer to connect —
+        // this is about the scope the selector names, not about the panel as a whole.
+        testCase "a scope the selector does not name still offers to connect" <| fun () ->
+            let connectedMine =
+                representativeModel
+                |> withGitHubPanel (fun panel ->
+                    { panel with MineCredential = Some { Kind = OAuthConnection; SignInRequired = None } })
+            let choosingSession =
+                { connectedMine with GitHub = { connectedMine.GitHub with Scope = "session" } }
+            let html = Support.render choosingSession
+            Expect.stringContains html "data-github-connect>" "session has no credential yet, so it can be connected"
+            Expect.isFalse (html.Contains "data-github-already-connected") "and nothing says otherwise"
+
+        // Signing in is the way in; the pasted token is the fallback for where that flow
+        // cannot reach. It sits behind its own disclosure rather than beside the button that
+        // starts the flow, so the panel's default shape offers one way in, not two.
+        testCase "the pasted-token fallback sits behind its own disclosure, below the connect button" <| fun () ->
+            let html = Support.render representativeModel
+            Expect.stringContains html "data-github-token-form" "the token fallback is a disclosure of its own"
+            Expect.stringContains html Dom.Text.useTokenInstead "named for what it opens"
+            let connectAt = html.IndexOf "data-github-connect>"
+            let formAt = html.IndexOf "data-github-token-form"
+            Expect.isTrue (connectAt >= 0 && formAt > connectAt) "the connect button leads, the fallback follows"
+
         // --- the device code, and getting it to github.com --------------------------------
         // The code is useless where it is rendered: it has to reach a form in another tab,
         // and on a phone that is a paste or it is eight characters carried in somebody's
@@ -1117,6 +1156,13 @@ let private uiChecklistTests =
             Expect.isTrue
                 (denied.Contains "HTTPS")
                 "and names the remedy, which is the operator's and is one flag"
+
+        testCase "a client that could not read its own store says so, with the reason" <| fun () ->
+            // Availability: a page running without what this device kept says so, rather
+            // than looking like a session with no history.
+            let unread = Support.render { representativeModel with LocalCopy = LocalCopy.Unread "the saved history did not answer in 5 seconds" }
+            Expect.isTrue (unread.Contains "data-history-store") "the page says it runs without its copy"
+            Expect.isTrue (unread.Contains "did not answer in 5 seconds") "and why"
 
         testCase "live mode: the lease bar names the holder and offers the steal" <| fun () ->
             let html = Support.render leasedTerminalModel
@@ -2317,6 +2363,38 @@ let private uiChecklistTests =
                 ((ruleOf "msg-1" (Support.render named)).Contains "Where it was settled")
                 "a name that says more than the message does belongs on the rule"
 
+        // A pull request's own milestone opens a chapter BY NATURE (`AutoChapters`), which
+        // never gets an entry in the doc and so wears its guess for good
+        // (`AutoChapters.fs`, "written to be kept"). That guess ("Merged PR #…") is never
+        // the sentence the merge card itself prints, so the rule's usual dedup — leave a
+        // guess unsaid because the message repeats it — does not apply here, and hiding it
+        // anyway would be the chapter's only name, gone.
+        testCase "a rule over a chapter a pull request opened by itself wears its guess" <| fun () ->
+            let pr = PrRef.create (RepoRef.create "octo/hello" |> expect) 12 |> expect
+            let merged : ConversationItem =
+                { MessageId = MessageId.create "msg-1" |> expect
+                  Author = PeerRef ada
+                  Content =
+                    ItemContent.Act (
+                        Act.PrTransitioned
+                            { MessageId = MessageId.create "msg-1" |> expect
+                              Pr = pr
+                              Transition = PrTransition.Merged
+                              State = PrMerged
+                              Checks = ChecksGreen
+                              Watcher = Principal.Peer ada
+                              OccurredAt = None
+                              Title = Some "Add feature" })
+                  Status = Complete
+                  Offset = EventOffset.create 1L |> expect
+                  Woke = None; CausedBy = None }
+            let model =
+                { representativeModel with
+                    Conversation = { representativeModel.Conversation with Recent = List.rev [ merged ] } }
+            Expect.isTrue
+                ((ruleOf "msg-1" (Support.render model)).Contains "Merged PR #12 Add feature")
+                "nobody will ever name this chapter, so its only name had better be on the rule"
+
         testCase "the contents still name a chapter nobody named by its guess" <| fun () ->
             let html = Support.render (withChapters [ "msg-1" ])
             let start = html.IndexOf (Dom.attr Dom.Hooks.chapterEntry "msg-1")
@@ -3024,6 +3102,25 @@ module private Holes =
 
     let sequence (parts: string seq) = html $"""<p>{parts}</p>"""
 
+    // One hole in each context the renderer tells apart (`Ssr`'s scanner).
+    let headOfValue (value: string) = html $"""<p title="{value}">t</p>"""
+
+    let afterTextInValue (value: string) = html $"""<p title="Stop {value}">t</p>"""
+
+    let singleQuotedValue (value: string) = html $"""<p title='Stop {value}'>t</p>"""
+
+    let unquotedValue (value: string) = html $"""<p title={value}>t</p>"""
+
+    let betweenTags (value: string) = html $"""<p>{value}</p>"""
+
+    let afterClosedValue (value: string) = html $"""<p title="a">{value}</p>"""
+
+    let afterQuoteInText (value: string) = html $"""<p>say "{value}</p>"""
+
+    let valueAfterComment (value: string) = html $"""<!-- the column's rail --><p title="{value}">t</p>"""
+
+    let textAfterComment (value: string) = html $"""<!-- the column's rail --><p>{value}</p>"""
+
 // The renderer's sequence arm (`Ssr.renderValue`), which every surface reaches through and no
 // view test can tell apart from the markup around it. A view builds its sequences with
 // `List.map`, so the list shape is the only one the suite was exercising by accident — while
@@ -3066,6 +3163,72 @@ let private templateHoleTests =
                 "an element is rendered, never interpolated raw"
     ]
 
+// What a hole is escaped for is decided by where it sits (`Ssr`'s scanner). `'` is the one
+// character the two escapers part on, so each case below says which escaper ran; `"` is the
+// character that closed an attribute when the scanner was a test of a part's last characters.
+let private hostile = "a\"'<b>&"
+
+let private asValue = "a&quot;&#39;&lt;b&gt;&amp;"
+
+let private asText = "a&quot;'&lt;b&gt;&amp;"
+
+let private holeContextTests =
+    testList "Hole contexts" [
+        testCase "a hole at the head of a quoted value is escaped as a value" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.headOfValue hostile))
+                (sprintf "<p title=\"%s\">t</p>" asValue)
+                "the value's own quote cannot close it"
+
+        testCase "a hole after text in a quoted value is escaped as a value" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.afterTextInValue hostile))
+                (sprintf "<p title=\"Stop %s\">t</p>" asValue)
+                "a hole in the middle of a value is still in the value"
+
+        testCase "a hole in a single-quoted value is escaped as a value" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.singleQuotedValue hostile))
+                (sprintf "<p title='Stop %s'>t</p>" asValue)
+                "the other quote cannot close it either"
+
+        testCase "a hole in an unquoted value is quoted by the renderer" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.unquotedValue hostile))
+                (sprintf "<p title=\"%s\">t</p>" asValue)
+                "a space cannot end a value the renderer quoted"
+
+        testCase "a hole between tags is escaped as text" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.betweenTags hostile))
+                (sprintf "<p>%s</p>" asText)
+                "text"
+
+        testCase "a hole after a closed value is escaped as text" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.afterClosedValue hostile))
+                (sprintf "<p title=\"a\">%s</p>" asText)
+                "the value's closing quote and the tag's end are both seen"
+
+        testCase "a quote in text before a hole leaves the hole in text" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.afterQuoteInText hostile))
+                (sprintf "<p>say \"%s</p>" asText)
+                "a quote between tags opens nothing"
+
+        testCase "an apostrophe in a comment leaves a later value hole a value" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.valueAfterComment hostile))
+                (sprintf "<!-- the column's rail --><p title=\"%s\">t</p>" asValue)
+                "a comment's prose opens no value"
+
+        testCase "an apostrophe in a comment leaves a later text hole text" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.textAfterComment hostile))
+                (sprintf "<!-- the column's rail --><p>%s</p>" asText)
+                "a comment's prose opens no value"
+    ]
+
 // The bootstrap shell itself (`Ssr.page`), which had no Node-tier coverage. What matters
 // here is the manager meta tag's ABSENCE rule: the client's offer is gated on the value
 // being present, so a shell that emitted an empty one would turn a structural guarantee
@@ -3077,7 +3240,7 @@ let private shellTests =
         let assets = AssetBuild "testbuild001"
 
         let pageWith (managerOrigin: string option) (ephemeralStorage: bool) =
-            Yession.Host.Ssr.page sessionId "" managerOrigin ephemeralStorage assets representativeModel
+            Yession.Host.Ssr.page "test-nonce" sessionId "" managerOrigin ephemeralStorage assets representativeModel
 
         let page (managerOrigin: string option) = pageWith managerOrigin false
 
@@ -3127,7 +3290,7 @@ let private shellTests =
                 "and the first paint shows it"
 
         testCase "a model with no build says nothing about one" <| fun () ->
-            let html = Yession.Host.Ssr.page sessionId "" None false assets { representativeModel with Build = None }
+            let html = Yession.Host.Ssr.page "test-nonce" sessionId "" None false assets { representativeModel with Build = None }
             Expect.isFalse (html.Contains Dom.buildMetaName) "no tag, not an empty one"
             Expect.isFalse (html.Contains Dom.Hooks.build) "and no footer guessing at one"
 
@@ -3136,7 +3299,7 @@ let private shellTests =
         // the first render shuts a column the first paint showed open. What is pinned is
         // agreement: the shell root says what the model says, in both directions.
         let shellWith (terminalsOpen: bool) =
-            Yession.Host.Ssr.page sessionId "" None false assets { representativeModel with TerminalsOpen = terminalsOpen }
+            Yession.Host.Ssr.page "test-nonce" sessionId "" None false assets { representativeModel with TerminalsOpen = terminalsOpen }
 
         let rootOf (html: string) =
             let start = html.IndexOf "<html"
@@ -3845,12 +4008,12 @@ let private chromeTests =
         /// with, and the page a provider's redirect lands on.
         let pages =
             [ "the session's shell",
-              Yession.Host.Ssr.page sessionId "" None false (AssetBuild "chrome-floor") representativeModel
+              Yession.Host.Ssr.page "test-nonce" sessionId "" None false (AssetBuild "chrome-floor") representativeModel
               "the Manager's page", managerPage
               "the page /open answers a refusal with",
               Yession.Host.ManagerUi.problemPage "Cannot open this session" "It is archived."
               "the screen /open shows while a session launches",
-              Yession.Host.ManagerUi.openingPage sessionId "/sessions/demo-session/open" "/sessions/demo-session/ready" (Some "https://example.com/s/demo-session/")
+              Yession.Host.ManagerUi.openingPage "test-nonce" sessionId "/sessions/demo-session/open" "/sessions/demo-session/launch" "/sessions/demo-session/ready" (Some "https://example.com/s/demo-session/")
               "the page a provider's redirect lands on",
               snd (Yession.Host.ProcessManager.connectionsCallbackResponse "Connected" "Close this tab and return to your session.") ]
 
@@ -4364,5 +4527,6 @@ let tests =
         semanticsTests
         reconnectOfferTests
         templateHoleTests
+        holeContextTests
         shellTests
     ]

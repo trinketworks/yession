@@ -31,7 +31,7 @@ open Thoth.Json.Net
 /// randomly in the browser, so the server-rendered placeholder is left blank. The page
 /// embeds the serving session's id, so the browser can key its local doc store by
 /// session before (and without) any connection.
-let private bootstrapHtml (sessionId: SessionId) (mount: string) (managerOrigin: string option) (ephemeralStorage: bool) (assets: AssetBuild) =
+let private bootstrapHtml (sessionId: SessionId) (mount: string) (managerOrigin: string option) (ephemeralStorage: bool) (assets: AssetBuild) (nonce: string) =
     let placeholderPeer =
         match PeerId.create "browser" with
         | Ok peerId -> { PeerId = peerId; DisplayName = "" }
@@ -39,7 +39,7 @@ let private bootstrapHtml (sessionId: SessionId) (mount: string) (managerOrigin:
     // Seed the serving session id so the secondary identifier renders on first paint (the
     // browser re-learns it from `PeerAccepted` once connected), and this process's build so
     // the sidebar's foot says which Yession is serving.
-    Ssr.page sessionId mount managerOrigin ephemeralStorage assets
+    Ssr.page nonce sessionId mount managerOrigin ephemeralStorage assets
         { ClientModel.init placeholderPeer with Session = Some sessionId; Build = Some Version.current }
 
 let private encodeUriComponent (value: string) : string = Fable.Core.JS.encodeURIComponent value
@@ -130,8 +130,9 @@ let start
     let bootstrapHtml = bootstrapHtml sessionId mount managerOrigin ephemeralStorage assets.Build
     // The shell is a pure function of the session id, the mount, the Manager origin, and the
     // assets it names — all fixed at boot — so its validator is too, and a reload costs a 304
-    // instead of the whole document.
-    let shellEtag = sprintf "\"%s\"" (contentDigest (Some bootstrapHtml))
+    // instead of the whole document. Taken over the shell WITHOUT a nonce: each 200 carries a
+    // fresh one (`Ssr.ContentPolicy`), and the document is otherwise the same bytes.
+    let shellEtag = sprintf "\"%s\"" (contentDigest (Some (bootstrapHtml "")))
     // The worker, computed once with the page for the same reason the page is: it is a pure
     // function of this build and this mount, and a per-request render could only drift from
     // the document that registers it. The program is the set's own (`AssetFile.service-worker`)
@@ -372,16 +373,23 @@ let start
             // The document that NAMES the fingerprinted assets, so it is the one thing that
             // must never be served stale — a cached shell pins the whole UI to the build it
             // was rendered against. Revalidated every time; the ETag makes that a 304.
+            //
+            // A 304 carries NO policy. The browser keeps the document it holds, with the nonce
+            // that document was sent with, and a 304's headers replace the stored ones: a fresh
+            // policy on it would name a nonce the kept document does not carry, and its one
+            // inline script would be refused.
             if headerOf req "if-none-match" = Some shellEtag then
                 res.writeHead (304, [ ResponseHeader.CacheControl CachePolicy.shell; ResponseHeader.ETag shellEtag ])
                 res.``end`` ""
             else
+                let nonce = Ssr.ContentPolicy.nonce ()
                 res.writeHead (
                     200,
                     [ ResponseHeader.ContentType "text/html; charset=utf-8"
                       ResponseHeader.CacheControl CachePolicy.shell
-                      ResponseHeader.ETag shellEtag ])
-                res.``end`` bootstrapHtml
+                      ResponseHeader.ETag shellEtag
+                      Ssr.ContentPolicy.header Ssr.ContentPolicy.Document.SessionShell nonce ])
+                res.``end`` (bootstrapHtml nonce)
         | Some (Asset (build, path)) ->
             // Whatever this build left in its asset directory — the bundle, the stylesheet, a
             // typeface, something added after this line was written. A `build` that is not

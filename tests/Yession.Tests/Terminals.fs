@@ -4627,7 +4627,8 @@ let private latch () : (unit -> unit) * Async<unit> =
 /// where a RELATIVE path acquires its meaning.
 let private validatedPath (exec: SandboxExec) : string option =
     match exec.Arguments with
-    | [ "-c"; body; "sh"; path ] when body.Contains "cd \"$1\"" -> Some path
+    // `pwd` prints the directory without the `./` its `PathOperand` put in front.
+    | [ "-c"; body; "sh"; path ] when body.Contains "cd -- \"$1\"" -> Some (if path.StartsWith "./" then path.Substring 2 else path)
     | _ -> None
 
 /// This fixture's sandbox opens in `/ws`, so that is what a relative path resolves against —
@@ -5753,9 +5754,10 @@ let private shellProfileTests =
                 // terminal silently ignore the profile.
                 let log = newLog ()
                 // The profile probe asks the sandbox to `cd` there and say where it landed;
-                // everything else this fixture runs says nothing.
+                // everything else this fixture runs says nothing. The probe's argument is
+                // the checkout as a `PathOperand`.
                 let environment, spawned =
-                    scriptedEnvironment (fun arg -> (if arg = checkout then [ Stdout, probeAnswer checkoutAt ] else []), 0)
+                    scriptedEnvironment (fun arg -> (if arg = PathOperand.value (PathOperand.ofPath checkout) then [ Stdout, probeAnswer checkoutAt ] else []), 0)
                 let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
                 let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
                 let! set = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)

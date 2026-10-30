@@ -742,7 +742,7 @@ let create
     /// One bare spawn inside the sandbox: `script` under the shell with `args` as its positional
     /// parameters, and both streams back whole. Nothing here reads a file's CONTENT, so there is
     /// no output cap to get right — the outputs are a byte count and a complaint.
-    let run (sandbox: SandboxRef) (reason: string) (script: string) (args: string list) : Async<Result<int * string * string, string>> =
+    let run (sandbox: SandboxRef) (reason: string) (script: string) (args: ScriptArg list) : Async<Result<int * string * string, string>> =
         async {
             match! (environmentFor sandbox).Ensure None reason with
             | EnvironmentUnavailable reason -> return Error reason
@@ -752,7 +752,7 @@ let create
                 let! spawned =
                     (environmentFor sandbox).Spawn
                         { Executable = shell.Executable
-                          Arguments = shell.Arguments @ [ script; "sh" ] @ args
+                          Arguments = shell.Arguments @ [ script; "sh" ] @ List.map ScriptArg.render args
                           Env = Map.empty
                           WorkingDirectory = workingDirectoryFor sandbox
                           Via = Direct }
@@ -772,11 +772,11 @@ let create
 
     /// How big the file the caller named is, asked BEFORE anything is copied: a refusal that
     /// arrives after 100 MB has been written is a refusal that already cost what it was for.
-    let weigh (sandbox: SandboxRef) (path: string) : Async<Result<int64, string>> =
+    let weigh (sandbox: SandboxRef) (path: PathOperand) : Async<Result<int64, string>> =
         async {
-            match! run sandbox "an artifact was shared" weighScript [ path ] with
+            match! run sandbox "an artifact was shared" weighScript [ ScriptArg.Path path ] with
             | Error reason -> return Error reason
-            | Ok answer -> return weighed sandbox path answer
+            | Ok answer -> return weighed sandbox (PathOperand.given path) answer
         }
 
     /// The bytes, copied by the SANDBOX into the store — which it can do because the store is
@@ -788,24 +788,31 @@ let create
     /// for the bytes can say where they were sent when they are not there. Nobody else builds
     /// that string: a refusal naming a second spelling of it would be a refusal about a path
     /// nothing wrote.
-    let copyIn (sandbox: SandboxRef) (source: string) (ref: ArtifactRef) : Async<Result<string, string>> =
+    let copyIn (sandbox: SandboxRef) (source: PathOperand) (ref: ArtifactRef) : Async<Result<string, string>> =
         async {
             let target = sprintf "%s/%s/%s.part" (artifactsPathIn sandbox) (ArtifactRef.name ref) (ArtifactRef.leaf ref)
-            match! run sandbox "an artifact was shared" "mkdir -p -- \"$(dirname -- \"$2\")\" && cp -- \"$1\" \"$2\"" [ source; target ] with
+            match!
+                run
+                    sandbox
+                    "an artifact was shared"
+                    "mkdir -p -- \"$(dirname -- \"$2\")\" && cp -- \"$1\" \"$2\""
+                    [ ScriptArg.Path source; ScriptArg.Path (PathOperand.ofPath target) ]
+            with
             | Error reason -> return Error reason
             | Ok (0, _, _) -> return Ok target
             | Ok (_, _, err) ->
                 let said = err.Trim ()
-                return Error (if said = "" then sprintf "copying %s into the artifacts store failed" source else said)
+                return Error (if said = "" then sprintf "copying %s into the artifacts store failed" (PathOperand.given source) else said)
         }
 
     let share (actor: ActorRef) (sandbox: SandboxRef) (source: string) (named: string option) : Async<Result<ArtifactShared, string>> =
         async {
             let name = named |> Option.defaultValue (nameOfPath source)
+            let operand = PathOperand.ofPath source
             match nextVersion artifactsDir name actor with
             | Error e -> return Error e
             | Ok ref ->
-                match! weigh sandbox source with
+                match! weigh sandbox operand with
                 | Error reason -> return Error reason
                 | Ok bytes when bytes > ArtifactRef.cap ->
                     return
@@ -816,7 +823,7 @@ let create
                                 (ContentSize.render bytes)
                                 capSaid)
                 | Ok _ ->
-                    match! copyIn sandbox source ref with
+                    match! copyIn sandbox operand ref with
                     | Error reason -> return Error reason
                     | Ok target ->
                         let part = partOf artifactsDir ref

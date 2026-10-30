@@ -788,7 +788,7 @@ let provide
     | SrtBackend ->
         Error (
             sprintf
-                "sandbox '%s' is confined by srt, which takes a connection by git alone. The credential proxy is for a container sandbox."
+                "sandbox '%s' is confined by srt. srt takes a connection by git alone. The credential proxy is for a container sandbox."
                 (SandboxRef.render sandbox)
         )
     | HostBackend

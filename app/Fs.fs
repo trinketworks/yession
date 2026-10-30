@@ -16,6 +16,19 @@ let private constants : {| X_OK : int |} = jsNative
 
 let exists (path: string) : bool = fs.existsSync (U2.Case1 path)
 
+/// Is `path` a directory itself, and not a symlink to one or a file? `lstat`, so a link
+/// answers about the link and not about where it points.
+let isOwnDirectory (path: string) : bool =
+    try (fs.lstatSync (U2.Case1 path)).isDirectory () with _ -> false
+
+/// Is there anything at `path` at all, a dangling symlink included? `exists` follows a link
+/// and answers about its target.
+let lexists (path: string) : bool =
+    try
+        fs.lstatSync (U2.Case1 path) |> ignore
+        true
+    with _ -> false
+
 /// Can THIS process execute that path? Not the same question as `exists` — a path can be
 /// there and unrunnable — and it is the question a named tool has to answer before its
 /// absence is blamed for anything.

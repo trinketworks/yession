@@ -31,6 +31,10 @@ open Yession.App
 // by, so `check` admits exactly the boxes its suite can launch one on.
 #load "src/Fable.NodeExtras/ChromiumExecutable.fs"
 
+// The server that the browser suite serves its harness page with (`tests/Yession.Tests/Loopback.fs`),
+// loaded for `frames --harness`. The camera then photographs the page as the suite serves it.
+#load "tests/Yession.Tests/Loopback.fs"
+
 let repoRoot = Path.GetFullPath __SOURCE_DIRECTORY__
 let dist = Path.Combine (repoRoot, "dist")
 let pkg = Path.Combine (dist, "npm")
@@ -648,7 +652,7 @@ let private packageJson (version: string) =
   "bin": {
 %s
   },
-  "files": ["bin/", "manager.js", "session.js", "SandboxHost.js", "assets/", "README.md"],
+  "files": ["bin/", "manager.js", "session.js", "SandboxHost.js", "assets/", "README.md", "npm-shrinkwrap.json"],
   "engines": { "node": ">=24.14" },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "%s",
@@ -1180,8 +1184,63 @@ let bootSmoke (ready: string) (command: string) (arguments: string -> string lis
 
 // --- package: restore + stage + boot smoke + npm pack ----------------------------------------
 
+/// Each package an npm lockfile pins, `node_modules/…` path to version. The root entry (`""`) is
+/// the project itself and is left out.
+let private lockedVersions (lockfile: string) : Map<string, string> =
+    use doc = Text.Json.JsonDocument.Parse (File.ReadAllText lockfile)
+    [ for entry in doc.RootElement.GetProperty("packages").EnumerateObject () do
+        if entry.Name <> "" then
+            match entry.Value.TryGetProperty "version" with
+            | true, version -> yield entry.Name, version.GetString ()
+            | _ -> () ]
+    |> Map.ofList
+
+/// The shrinkwrap the tarball ships, beside the manifest in `dist/npm`.
+let private shrinkwrapOf (dir: string) = Path.Combine (dir, "npm-shrinkwrap.json")
+
+/// Pin the production tree the tarball installs to the one `check` ran: `dist/npm`'s manifest
+/// over the repository's own package-lock.json, pruned to what that manifest needs, as
+/// `npm-shrinkwrap.json`. Without it, an install resolves the manifest's `^` ranges afresh and
+/// picks versions CI never ran, with install scripts on.
+///
+/// Which is why the documented install is `npm ci --omit=dev` in the EXTRACTED tarball, then
+/// `npm i -g` of that directory (docs/deployment.md, "Installing a release"), and never
+/// `npm i -g <tarball>`. npm honours a dependency's shrinkwrap only when its manifest carries
+/// `_hasShrinkwrap`, which only a registry packument sets: pacote strips `_` fields from a
+/// tarball's own package.json, so a tarball installed by path or URL floats, shrinkwrap or not.
+/// `npm ci` in the extracted directory reads the shrinkwrap as the ROOT lockfile, which it
+/// honours. `install-smoke` installs the same way and holds the result to the shrinkwrap.
+///
+/// The cost is the point: a fix in a transitive dependency reaches an operator through a Yession
+/// release, never through reinstalling alone.
+///
+/// `--package-lock-only --offline`: npm reconciles the lock against the manifest and fetches
+/// nothing, so a manifest the lock cannot satisfy fails here rather than resolving a new version.
+/// npm writes the tree; nobody writes it by hand. Then every pinned version is held to the lock,
+/// so "the tree `check` ran" is checked rather than trusted to npm's reconciliation.
+///
+/// In `package`, not in `assemble`: the Nix build runs `stage` offline and ships its own
+/// `node_modules`, and has no use for a file only an npm install reads.
+let private shrinkwrap () =
+    let repoLock = Path.Combine (repoRoot, "package-lock.json")
+    File.Copy (repoLock, Path.Combine (pkg, "package-lock.json"), true)
+    runIn pkg "npm" [ "install"; "--package-lock-only"; "--ignore-scripts"; "--offline"; "--no-audit"; "--no-fund" ] |> ignore
+    runIn pkg "npm" [ "shrinkwrap"; "--offline" ] |> ignore
+    let pinnedHere = lockedVersions (shrinkwrapOf pkg)
+    let locked = lockedVersions repoLock
+    let drifted =
+        [ for KeyValue (path, version) in pinnedHere do
+            match Map.tryFind path locked with
+            | Some lockedVersion when lockedVersion = version -> ()
+            | Some lockedVersion -> yield sprintf "%s: %s, where package-lock.json has %s" path version lockedVersion
+            | None -> yield sprintf "%s: %s, which package-lock.json does not pin" path version ]
+    if not drifted.IsEmpty then
+        failwithf "package: npm-shrinkwrap.json does not match package-lock.json:\n  %s" (String.concat "\n  " drifted)
+    printfn "package: npm-shrinkwrap.json pins %d packages, each at package-lock.json's version" pinnedHere.Count
+
 let package (version: string) =
     stage version
+    shrinkwrap ()
     // Every shim the manifest offers runs, then the Manager's boots (it self-sets
     // YESSION_SPAWN_MAIN); externals resolve from the repo node_modules two levels up from
     // dist/npm.
@@ -1192,7 +1251,9 @@ let package (version: string) =
 
 // --- install-smoke: prove a clean npm install pulls the native deps and boots ----------------
 
-/// The install itself, into a directory of its own, retried.
+/// The install itself, as docs/deployment.md tells an operator to do it, retried: the tarball
+/// extracted into a directory of its own, `npm ci --omit=dev` there, and `npm i -g` of that
+/// directory into a scratch global prefix. Answers the install directory and the global `bin`.
 ///
 /// A clean install reaches two hosts this repository does not own: the registry, and the
 /// release assets a native addon's install script fetches its prebuilt binary from. The
@@ -1202,14 +1263,15 @@ let package (version: string) =
 /// arrive here as "the published package does not install". That took master red on two
 /// releases seven minutes apart, on a tarball that installed cleanly either side of them.
 ///
-/// So the FETCH is retried, which is what a person installing the package does, and each
-/// attempt gets a fresh prefix so a half-populated tree is never what the next one reads.
+/// So the FETCH (`npm ci`) is retried, which is what a person installing the package does, and
+/// each attempt gets a fresh directory so a half-populated tree is never what the next one reads.
+/// The global link fetches nothing, so it runs once, after.
 /// What the install was worth is still decided by the assertions below it rather than by
 /// this exit code: a package that resolves but carries no addon fails there, retries or no.
 ///
 /// A fetch can also STALL rather than fail, and a retry never sees that: the attempt simply does
 /// not end. So the attempts share one deadline, which a stalled one spends.
-let private installed (tgz: string) : string =
+let private installed (tgz: string) : string * string =
     let attempts = 3
     let pause (n: int) = TimeSpan.FromSeconds (10.0 * float n)
     // THE ATTEMPTS' BUDGET, made of the retry policy above so that it moves when that does.
@@ -1222,7 +1284,7 @@ let private installed (tgz: string) : string =
     // fit, which a budget sized for one would not let them. It sits far under `package:npm`'s
     // 25 minutes, whose steps before this one took at most 247s.
     let budget : Bound =
-        { Step = "install-smoke: npm install"
+        { Step = "install-smoke: npm ci"
           BudgetMs = attempts * 65_000 + ([ 1 .. attempts - 1 ] |> List.sumBy (fun n -> int (pause n).TotalMilliseconds))
           Basis =
             sprintf
@@ -1230,46 +1292,84 @@ let private installed (tgz: string) : string =
                 attempts
           Next =
             "A stalled install is a fetch that never answered: the registry, or the release assets a native addon's\n\
-             install script downloads. Run `install-smoke` again; each attempt starts on a fresh prefix. If it stalls\n\
-             again, watch which fetch hangs: `npm install --prefix \"$(mktemp -d)\" <the tgz> --loglevel http`." }
+             install script downloads. Run `install-smoke` again; each attempt starts on a fresh directory. If it\n\
+             stalls again, extract the tgz and watch which fetch hangs: `npm ci --omit=dev --loglevel http` in it." }
     let rec attempt (n: int) : string =
-        let prefix = Path.Combine (Path.GetTempPath (), "yession-install-" + Guid.NewGuid().ToString "N")
-        Directory.CreateDirectory prefix |> ignore
-        match runInherit repoRoot "npm" [ "install"; "--prefix"; prefix; tgz ] with
-        | 0 -> prefix
+        let root = Path.Combine (Path.GetTempPath (), "yession-install-" + Guid.NewGuid().ToString "N")
+        let dir = Path.Combine (root, "yession")
+        Directory.CreateDirectory dir |> ignore
+        runIn dir "tar" [ "-xzf"; tgz; "--strip-components=1" ] |> ignore
+        match runInherit dir "npm" [ "ci"; "--omit=dev" ] with
+        | 0 -> root
         | code ->
-            try Directory.Delete (prefix, true) with _ -> ()
+            try Directory.Delete (root, true) with _ -> ()
             if n = attempts then
-                failwithf "install-smoke: npm install failed on all %d attempts (last exit %d)" attempts code
+                failwithf "install-smoke: npm ci failed on all %d attempts (last exit %d)" attempts code
             let pause = pause n
             printfn
-                "install-smoke: npm install failed (exit %d) on attempt %d of %d; again in %.0fs, on a fresh prefix"
+                "install-smoke: npm ci failed (exit %d) on attempt %d of %d; again in %.0fs, in a fresh directory"
                 code n attempts pause.TotalSeconds
             Threading.Thread.Sleep pause
             attempt (n + 1)
-    bounded budget (fun () -> attempt 1)
+    let root = bounded budget (fun () -> attempt 1)
+    let dir = Path.Combine (root, "yession")
+    let globalPrefix = Path.Combine (root, "global")
+    run "npm" [ "install"; "--global"; "--prefix"; globalPrefix; dir ] |> ignore
+    dir, Path.Combine (globalPrefix, "bin")
+
+/// Every package the tarball's shrinkwrap pins is installed at that version, at the path it pins
+/// it under: `npm ci` lays the tree out exactly as the lockfile says. An optional package for
+/// another platform (the SDK's other `claude` binaries) is pinned and rightly absent; a required
+/// one that is absent is a failure.
+let private installedAsShrinkwrapped (dir: string) =
+    let shrinkwrap = shrinkwrapOf dir
+    if not (File.Exists shrinkwrap) then
+        failwith "install-smoke: the tarball carries no npm-shrinkwrap.json, so an install resolves a tree CI never ran"
+    use doc = Text.Json.JsonDocument.Parse (File.ReadAllText shrinkwrap)
+    let wrong =
+        [ for entry in doc.RootElement.GetProperty("packages").EnumerateObject () do
+            match entry.Name, entry.Value.TryGetProperty "version" with
+            | "", _ | _, (false, _) -> ()
+            | path, (true, pinned) ->
+                let optional =
+                    match entry.Value.TryGetProperty "optional" with
+                    | true, flag -> flag.ValueKind = Text.Json.JsonValueKind.True
+                    | _ -> false
+                let manifest = Path.Combine (dir, path, "package.json")
+                match File.Exists manifest with
+                | false when optional -> ()
+                | false -> yield sprintf "%s: pinned at %s, not installed" path (pinned.GetString ())
+                | true ->
+                    use installed = Text.Json.JsonDocument.Parse (File.ReadAllText manifest)
+                    let version = installed.RootElement.GetProperty("version").GetString ()
+                    if version <> pinned.GetString () then
+                        yield sprintf "%s: pinned at %s, installed at %s" path (pinned.GetString ()) version ]
+    if not wrong.IsEmpty then
+        failwithf "install-smoke: the installed tree is not the one the tarball's shrinkwrap pins:\n  %s" (String.concat "\n  " wrong)
+    printfn "install-smoke: the installed tree is the shrinkwrapped one"
 
 let installSmoke (tgz: string) =
     let tgz = Path.GetFullPath tgz // a bare dist/x.tgz looks like a GitHub owner/repo to npm.
-    let prefix = installed tgz
+    let dir, bin = installed tgz
+    installedAsShrinkwrapped dir
 
     // The SDK's native `claude` binary is an optional dep keyed by platform (…-linux-x64 etc.);
     // assert one such package resolved, without hard-coding the arch suffix.
-    let scope = Path.Combine (prefix, "node_modules/@anthropic-ai")
+    let scope = Path.Combine (dir, "node_modules/@anthropic-ai")
     let claudePulled =
         Directory.Exists scope
         && Directory.GetDirectories (scope, "claude-agent-sdk-*")
            |> Array.exists (fun d -> File.Exists (Path.Combine (d, "claude")))
     if not claudePulled then failwith "install-smoke: native claude binary was not pulled by npm"
 
-    let ndcRelease = Path.Combine (prefix, "node_modules/node-datachannel/build/Release")
+    let ndcRelease = Path.Combine (dir, "node_modules/node-datachannel/build/Release")
     if not (Directory.Exists ndcRelease && (Directory.GetFiles (ndcRelease, "*.node")).Length > 0) then
         failwith "install-smoke: node-datachannel addon was not built"
 
-    // Over what npm ACTUALLY linked into .bin, so a manifest that offers a command npm did not
-    // install is a failure here rather than a missing command on somebody's PATH.
-    versionSmoke "installed" (fun name -> Path.Combine (prefix, "node_modules/.bin/" + name), [])
-    bootSmoke managerReady "node" (fun dataDir -> [ Path.Combine (prefix, "node_modules/.bin/yession-manager") ] @ managerSmokeArgs dataDir)
+    // Over what npm ACTUALLY linked into the global bin, so a manifest that offers a command npm
+    // did not install is a failure here rather than a missing command on somebody's PATH.
+    versionSmoke "installed" (fun name -> Path.Combine (bin, name), [])
+    bootSmoke managerReady "node" (fun dataDir -> [ Path.Combine (bin, "yession-manager") ] @ managerSmokeArgs dataDir)
     printfn "install-smoke: native deps resolved and the installed package booted"
 
 // --- example: build a standalone example integration -----------------------------------------
@@ -2886,7 +2986,12 @@ let private fixtures =
       "YES016", "Yession.UncheckedCastFixture", [ "Product.fs" ]
       "YES016", "UncheckedCastInBindingFixture", [ "Binding.fs" ]
       "YES017", "Yession.ObjSignatureFixture", [ "Signatures.fs" ]
-      "YES017", "ObjSignatureInBindingFixture", [ "Binding.fs" ] ]
+      "YES017", "ObjSignatureInBindingFixture", [ "Binding.fs" ]
+      // Two for YES018, on the same line between product and binding (`Population.reach`): a
+      // Yession project, which must be reported, and one with nothing Yession in reach, which
+      // must stay silent over the same literals.
+      "YES018", "Yession.EmDashFixture", [ "Copy.fs" ]
+      "YES018", "EmDashInBindingFixture", [ "Binding.fs" ] ]
 
 let private fixtureProject name =
     Path.Combine ("analyzers", "fixtures", name, name + ".fsproj")
@@ -3260,6 +3365,91 @@ let lint () =
         // the refusal above says what to do next, and a stack trace would bury it.
         exit unfinishedExit
 
+// --- audit: the shipped npm tree against the advisory database ---------------------------------
+//
+// `npm audit --omit=dev` asks the registry which advisories cover the production tree that
+// package-lock.json locks. Every advisory it reports fails this verb, unless
+// `audit-exceptions.json` lists it: an advisory somebody has read and cannot close yet, with why
+// and since when. So a new advisory stops the next pull request rather than waiting for somebody
+// to run an audit by hand, and one that cannot be fixed stays written down beside the reason.
+//
+// An exception names the advisory's URL and the package's path in the lock, not its bare name.
+// One advisory can cover two copies of a package, and the path keeps an exception for a copy
+// nothing can move from also covering one that a bump would fix: the nested `zod` 3 under the
+// sandbox runtime, and the root `zod` 4 beside it.
+//
+// It is not part of `lint`. It reads the registry, and lint judges the source alone, so it gives
+// the same answer offline and on a commit that has not changed.
+
+/// One advisory `npm audit` reported against one copy of a package.
+type private Advisory =
+    { /// The package's path in package-lock.json, as `node_modules/<name>` or nested below one.
+      Package: string
+      Url: string
+      Severity: string
+      Title: string }
+
+let private auditExceptions = Path.Combine (repoRoot, "audit-exceptions.json")
+
+/// The advisories `audit-exceptions.json` lists, as (package, advisory URL). An entry with no
+/// reason or no date is refused: an exception nobody can judge again is one nobody removes.
+let private listedExceptions () : Set<string * string> =
+    use doc = Text.Json.JsonDocument.Parse (File.ReadAllText auditExceptions)
+    [ for entry in doc.RootElement.EnumerateArray () do
+          let field (name: string) =
+              match entry.TryGetProperty name with
+              | true, value when value.ValueKind = Text.Json.JsonValueKind.String && value.GetString () <> "" -> value.GetString ()
+              | _ -> failwithf "audit: an entry in audit-exceptions.json has no `%s`:\n%s" name (entry.GetRawText ())
+          let package, advisory = field "package", field "advisory"
+          field "reason" |> ignore
+          match DateOnly.TryParseExact (field "date", "yyyy-MM-dd") with
+          | true, _ -> ()
+          | _ -> failwithf "audit: the `date` of the exception for %s is not yyyy-MM-dd" advisory
+          package, advisory ]
+    |> Set.ofList
+
+/// What `npm audit` reports. It exits 1 when it finds an advisory, so the exit code says nothing
+/// here: the JSON does, and a failed lookup is a JSON with an `error` in it.
+let private reportedAdvisories () : Advisory list =
+    let psi = ProcessStartInfo "npm"
+    [ "audit"; "--omit=dev"; "--json" ] |> List.iter psi.ArgumentList.Add
+    psi.WorkingDirectory <- repoRoot
+    psi.RedirectStandardOutput <- true
+    use p = Process.Start psi
+    let output = p.StandardOutput.ReadToEndAsync ()
+    awaitExit p
+    use doc = Text.Json.JsonDocument.Parse output.Result
+    match doc.RootElement.TryGetProperty "error" with
+    | true, error -> failwithf "audit: npm audit could not answer (exit %d):\n%s" p.ExitCode (error.GetRawText ())
+    | _ -> ()
+    // A package's `via` holds its own advisories as objects, and the packages it inherits one
+    // from as names. The names are skipped: that advisory is reported again on the package it is in.
+    [ for vulnerability in doc.RootElement.GetProperty("vulnerabilities").EnumerateObject () do
+          for via in vulnerability.Value.GetProperty("via").EnumerateArray () do
+              if via.ValueKind = Text.Json.JsonValueKind.Object then
+                  for node in vulnerability.Value.GetProperty("nodes").EnumerateArray () do
+                      { Package = node.GetString ()
+                        Url = via.GetProperty("url").GetString ()
+                        Severity = via.GetProperty("severity").GetString ()
+                        Title = via.GetProperty("title").GetString () } ]
+    |> List.distinct
+
+let audit () =
+    let listed = listedExceptions ()
+    let unlisted =
+        reportedAdvisories ()
+        |> List.filter (fun advisory -> not (listed.Contains (advisory.Package, advisory.Url)))
+    for advisory in unlisted do
+        eprintfn "%-8s %s  %s\n         %s" advisory.Severity advisory.Package advisory.Url advisory.Title
+    if not unlisted.IsEmpty then
+        // An exit, not a `failwith`: the lines above are the finding, and a stack trace would bury them.
+        eprintfn
+            "audit: %d advisor%s against the production tree, not in audit-exceptions.json. Move the package out of the range (`npm update <name>`, or a bump in package.json); list it only when no release does, with the reason and the date."
+            unlisted.Length
+            (if unlisted.Length = 1 then "y" else "ies")
+        exit 1
+    printfn "audit: no advisory outside audit-exceptions.json"
+
 // --- pr-gate: lint and check at once ----------------------------------------------------------
 //
 // pr.yaml's `test` job ran `lint` and then `check`, and neither needs anything the other makes:
@@ -3496,17 +3686,49 @@ let probe (args: string list) =
 /// repository's resources profile (without one a session has no sandboxes at all, so a
 /// terminal cannot open) — and `booted` is what knows the bin is up rather than a port loop.
 /// They are said once, here, so a skill that wants a picture names a verb and not a recipe.
+///
+/// The other argument of this verb is `--harness <page>`. It photographs the browser harness
+/// (`app/browser/EditorHarness.fs`): the real `View.view` on a seeded model, with no session and
+/// no agent behind it. Use it to see a conversation that has content. A `--boot` session starts
+/// empty, and only a real agent can fill it. The verb builds `Target.Harness`, serves
+/// `tests/browser` with the browser suite's own server (`Loopback.serveStatic`), and gives the
+/// camera that address with `--page`. The pages:
+///
+///   lines         the model that the browser cases use: 16 short lines, chips, a burst of
+///                 commands, a queued command and terminals.
+///   replies       the same model, with 24 items in which a person and the agent take turns.
+///                 The agent replies with paragraphs, a list and a code block.
+///   replies=<n>   the same, with <n> items.
 let frames (args: string list) =
     let out = Path.Combine (repoRoot, "tools", "Yession.Frames", "out")
+    let harnessPage, cameraArgs =
+        match List.tryFindIndex ((=) "--harness") args with
+        | None -> None, args
+        | Some at ->
+            if List.contains "--boot" args then
+                failwith "frames: give --harness or --boot, not both. The harness has no Manager."
+            let page =
+                match List.tryItem (at + 1) args with
+                | Some "lines" -> "/"
+                | Some "replies" -> "/?replies=24"
+                | Some page when page.StartsWith "replies=" -> "/?" + page
+                | _ -> failwith "frames --harness: give lines, replies or replies=<n>"
+            Some page, List.take at args @ List.skip (at + 2) args
     withBuildSlot "frames" (fun () ->
         make [ Target.Tools; Target.Packages ]
-        fable (Path.Combine (repoRoot, "tools", "Yession.Frames", "Yession.Frames.fsproj")) out)
+        fable (Path.Combine (repoRoot, "tools", "Yession.Frames", "Yession.Frames.fsproj")) out
+        if harnessPage.IsSome then make [ Target.Harness ])
     let camera (args: string list) =
         match runInherit repoRoot "node" ([ Path.Combine (out, "Frames.js") ] @ args) with
         | 0 -> ()
         | code -> failwithf "frames: the camera failed (%s)" (diedOf code)
-    if not (List.contains "--boot" args) then camera args
-    else
+    match harnessPage with
+    | Some page ->
+        let server = Yession.Tests.Loopback.serveStatic (Path.Combine (repoRoot, Yession.Tests.Loopback.harnessRoot))
+        try camera ([ "--page"; server.At page ] @ cameraArgs)
+        finally server.Stop ()
+    | None when not (List.contains "--boot" args) -> camera args
+    | None ->
         withBuildSlot "frames" build
         withScratchDataDir (fun dataDir ->
             let manager, said =
@@ -3746,6 +3968,7 @@ let rec private verbs () : Verb list =
         Summary = "run a Node tier in the Colima VM, under strict Srt. Takes check's args"
         Run = vmCheck Colima }
       { Name = "lint"; Summary = "actionlint, then the F# analyzers"; Run = fun _ -> withBuildSlot "lint" lint }
+      { Name = "audit"; Summary = "fail on an npm advisory against the production tree not in audit-exceptions.json"; Run = fun _ -> audit () }
       { Name = "pr-gate"
         Summary = "run lint and check at once, each line marked with its side. Takes check's args"
         // No slot here: each side takes its own (the `pr-gate` section says why).
@@ -3785,7 +4008,7 @@ let rec private verbs () : Verb list =
             | [] -> failwith "example <name>   (see examples/)" }
       { Name = "probe"; Summary = "run the headless probe peer (tools/Yession.Probe). Args pass through"; Run = probe }
       { Name = "frames"
-        Summary = "photograph a page's frames (tools/Yession.Frames). [--boot] starts a scratch Manager"
+        Summary = "photograph a page's frames (tools/Yession.Frames). [--boot] starts a scratch Manager. [--harness lines|replies[=<n>]] serves the harness"
         Run = frames }
       { Name = "brand"; Summary = "regenerate src/Yession.App/Brand.fs from assets/logo"; Run = fun _ -> brand () }
       { Name = "crash-repro"

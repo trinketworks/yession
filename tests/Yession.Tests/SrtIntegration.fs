@@ -588,6 +588,148 @@ let siblings =
         })
     ]
 
+// --- [Sandbox]: what the agent's strings are to the programs the file tools run -------------
+
+/// A confined workspace that `arrange` filled, and the file verbs over it: the sandbox that
+/// ships, because the question is what ITS `find`, `grep` and `cat` make of an argument.
+let private withFiles (name: string) (arrange: string -> unit) (act: SessionFiles.SessionFiles -> string -> Async<unit>) : Async<unit> =
+    async {
+        let workspace = TestFiles.canonical (TestFiles.tempDir "yession-operands-")
+        arrange workspace
+        let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ())) (policyIn workspace []) name
+        do! act host.Files workspace
+        do! host.Stop ()
+    }
+
+let private holdingA (workspace: string) = TestFiles.write (workspace + "/a.txt") "a\n"
+
+let fileOperands =
+    testList "The file tools' operands" [
+
+        // `find "-delete" …` is `find . -delete …`: every file under where terminals start.
+        testCaseAsync "find_files under -delete answers that there is no such directory" (async {
+            do!
+                withFiles "operands-find-missing" holdingA (fun files _ ->
+                    async {
+                        match! files.Find SandboxRef.defaultRef "*.txt" (Some "-delete") with
+                        | Ok listed -> failwithf "a directory that is not there listed %A" listed
+                        | Error reason -> Expect.stringContains reason "No such file or directory" "find's own words for a missing start point"
+                    })
+        })
+
+        testCaseAsync "find_files under -delete deletes nothing" (async {
+            do!
+                withFiles "operands-find-delete" holdingA (fun files workspace ->
+                    async {
+                        let! _ = files.Find SandboxRef.defaultRef "*.txt" (Some "-delete")
+                        Expect.isTrue (TestFiles.exists (workspace + "/a.txt")) "a.txt is still there"
+                    })
+        })
+
+        testCaseAsync "find_files under a directory named -delete lists what is in it" (async {
+            let arrange workspace =
+                TestFiles.ensureDir (workspace + "/-delete")
+                TestFiles.write (workspace + "/-delete/b.txt") "b\n"
+            do!
+                withFiles "operands-find-dash-dir" arrange (fun files _ ->
+                    async {
+                        let! listed = files.Find SandboxRef.defaultRef "*.txt" (Some "-delete")
+                        Expect.equal listed (Ok "-delete/b.txt") "the path as the agent wrote it, not ./-delete/b.txt"
+                    })
+        })
+
+        testCaseAsync "find_files with no path answers paths under ./, sorted, one per line" (async {
+            let arrange workspace =
+                holdingA workspace
+                TestFiles.ensureDir (workspace + "/src")
+                TestFiles.write (workspace + "/src/c.txt") "c\n"
+                TestFiles.write (workspace + "/src/d.fs") "d\n"
+            do!
+                withFiles "operands-find-default" arrange (fun files _ ->
+                    async {
+                        let! listed = files.Find SandboxRef.defaultRef "*.txt" None
+                        Expect.equal listed (Ok "./a.txt\n./src/c.txt") "the shape it had before the start point was typed"
+                    })
+        })
+
+        // `cat -- -` reads stdin, which a housekeeping spawn closes empty.
+        testCaseAsync "read_file of a file named - answers the file" (async {
+            do!
+                withFiles "operands-read-dash" (fun workspace -> TestFiles.write (workspace + "/-") "dash\n") (fun files _ ->
+                    async {
+                        let! read = files.Read SandboxRef.defaultRef "-"
+                        Expect.equal read (Ok (FileContent.Text "dash\n")) "the file's content, not stdin's"
+                    })
+        })
+
+        testCaseAsync "search_files for -r matches a line that holds -r" (async {
+            do!
+                withFiles "operands-search-pattern" (fun workspace -> TestFiles.write (workspace + "/flags.txt") "rm -r x\n") (fun files _ ->
+                    async {
+                        let! hits = files.Search SandboxRef.defaultRef "-r" None None
+                        Expect.equal hits (Ok "./flags.txt:1:rm -r x\n") "the pattern is a pattern, not grep's -r"
+                    })
+        })
+
+        testCaseAsync "search_files under -delete answers an error" (async {
+            do!
+                withFiles "operands-search-missing" holdingA (fun files _ ->
+                    async {
+                        let! hits = files.Search SandboxRef.defaultRef "a" (Some "-delete") None
+                        Expect.isError hits "there is no directory named -delete"
+                    })
+        })
+
+        testCaseAsync "search_files under -delete deletes nothing" (async {
+            do!
+                withFiles "operands-search-delete" holdingA (fun files workspace ->
+                    async {
+                        let! _ = files.Search SandboxRef.defaultRef "a" (Some "-delete") None
+                        Expect.isTrue (TestFiles.exists (workspace + "/a.txt")) "a.txt is still there"
+                    })
+        })
+
+        // `cd -- -` is `cd "$OLDPWD"`. This sandbox has an `OLDPWD`, so a `-` read that way
+        // would land there, and set a profile or fail on what `cd -` prints.
+        testCaseAsync "set_shell_profile to - is refused as a missing directory" (async {
+            let workspace = TestFiles.canonical (TestFiles.tempDir "yession-operands-")
+            let policy = policyIn workspace []
+            let policy = { policy with Env = policy.Env |> Map.add "OLDPWD" workspace }
+            let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ())) policy "operands-cd-dash"
+            let agent = Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))
+            let! set = host.Terminals.SetProfile agent None SandboxRef.defaultRef (Some "-")
+            do! host.Stop ()
+            match set with
+            | Ok directory -> failwithf "a directory that is not there was set as %s" directory
+            | Error reason -> Expect.stringContains reason "there is no directory -" "refused as a directory that is not there"
+        })
+
+        // The copy is `cp -- "$1" "$2"` and the weighing `wc -c < "$1"`, both with the path
+        // as a `PathOperand`: `./-` is the file, wherever a program reads `-` as stdin.
+        testCaseAsync "share_artifact of a file named - shares the file" (async {
+            let workspace = TestFiles.canonical (TestFiles.tempDir "yession-operands-")
+            TestFiles.write (workspace + "/-") "dash\n"
+            let artifactsDir = workspace + "/artifacts"
+            TestFiles.ensureDir artifactsDir
+            let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ())) (policyIn workspace []) "operands-share-dash"
+            let artifacts =
+                Artifacts.create
+                    host.Log
+                    artifactsDir
+                    (workspace + "/staged")
+                    ignore
+                    (fun _ -> host.Environment)
+                    (fun _ -> artifactsDir)
+                    (fun _ -> Some workspace)
+                    TerminalShell.posix
+            let! shared = artifacts.Share ActorRef.Agent SandboxRef.defaultRef "-" (Some "dash.txt")
+            do! host.Stop ()
+            match shared with
+            | Error reason -> failwithf "the share was refused: %s" reason
+            | Ok fact -> Expect.equal fact.Bytes 5L "the five bytes of the file named -"
+        })
+    ]
+
 // --- [Srt, Pty]: a terminal under srt, as a person drives one -------------------------------
 
 /// A shell on a pty in an srt sandbox — the shell production opens, an interactive POSIX

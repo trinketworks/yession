@@ -767,6 +767,13 @@ module Dom =
         let connectingStatus = "connecting"
         /// The same, for a page that had its session and lost it.
         let reconnectingStatus = "reconnecting"
+        /// Behind a connect's disclosure, before an error nothing handled (`PageFault`): what it
+        /// may have done, and what undoes it.
+        let pageFaultLead = "An error on this page may have stopped it connecting. Reloading starts it again."
+        /// The error itself, behind the disclosure; its frames follow it.
+        let pageFaultWhy (name: string) (message: string) = if message = "" then name else name + ": " + message
+        /// Load this page again, which is what starts its way to the session again.
+        let reload = "Reload"
         /// Why it is still trying, behind the disclosure: the last attempt's fault and how many
         /// have failed, in the shape the history feed's retries already use.
         let retryingWhy (reason: string) (failures: int) = sprintf "%s · attempt %d" reason failures
@@ -791,6 +798,10 @@ module Dom =
         /// The agent's standing says the same state with the same word, on the Manager's
         /// roster and in this page's header.
         let signInAgainStatus = Yession.Domain.Standings.AgentStatus.signInAgain
+        /// What opens the pasted-token fallback, behind its own disclosure: signing in is
+        /// the way in, and the token is the exception for where that flow does not reach, so
+        /// it should not sit at the same weight as the button that starts the flow.
+        let useTokenInstead = "use a token instead"
         /// What a dead credential COSTS, on the prompt over the timeline. The button beside
         /// it already says what to do; this says why doing it matters, which is the half a
         /// status word and a button cannot carry between them.
@@ -825,6 +836,10 @@ module Dom =
         let historyNotKeptWhy =
             "It is served over plain HTTP. A browser withholds storage of this kind outside a secure "
             + "context. Serving it over HTTPS restores it."
+        let historyUnread = "This device's copy of the session could not be read. This page runs without it."
+        let historyUnreadWhy =
+            "The conversation comes from the session instead. What arrives may not be kept on "
+            + "this device until the page is opened again."
         /// What the composer's keys do, shown in the composer while you are in it. Enter
         /// stays a prose key, same as a plain textarea, because a phone's return key has no
         /// modifier to reach for; sending is the explicit second key beside it, reachable
@@ -1328,9 +1343,12 @@ module Dom =
         let mcpWithdraw = "data-mcp-withdraw"
         let mcpAudience = "data-mcp-audience"
         /// The opening screen's hooks. Its program is inline and literal
-        /// (`ManagerUi.openingProgram`), so it names these four by VALUE: rename one here and
+        /// (`ManagerUi.openingProgram`), so it names these five by VALUE: rename one here and
         /// rename it there.
         ///
+        /// The launch address (`POST /sessions/{id}/launch`), on the screen that sends it. The
+        /// open route itself changes nothing, so the screen is what asks for the launch.
+        let openingLaunch = "data-opening-launch"
         /// The readiness address (`/sessions/{id}/ready`), on the screen it polls for —
         /// spelled by the server, like every other address its pages carry.
         let openingReady = "data-opening-ready"

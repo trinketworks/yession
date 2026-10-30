@@ -61,17 +61,50 @@ jobs:
         shard: ${{ fromJSON(inputs.shards) }}
         arch: ${{ fromJSON(inputs.arches) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v30
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
       # Pull only: the dependencies come from the cache, and a repro result is nothing to keep.
-      - uses: cachix/cachix-action@v17
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         continue-on-error: true
         with:
           name: yession
           skipPush: true
+      # The next step splices these values into a Nix expression, and an expression is code. Only
+      # a person with write access can dispatch this workflow, but a quote in a free-text input
+      # would still end the string it sits in and run whatever followed. So each value must
+      # match the shape it is documented to have, or the job stops here.
+      - name: Check the inputs
+        env:
+          LAYER: ${{ inputs.layer }}
+          SDK: ${{ inputs.sdk }}
+          ROUNDS: ${{ inputs.rounds }}
+          WORKERS: ${{ inputs.workers }}
+          SECONDS_: ${{ inputs.seconds }}
+          HEAP_MB: ${{ inputs.heap_mb }}
+          CHILD_ENV: ${{ inputs.env }}
+          SHARD: ${{ matrix.shard }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          bad=0
+          check() {
+            if ! [[ "$2" =~ $3 ]]; then
+              echo "::error::input $1 does not match $3"
+              bad=1
+            fi
+          }
+          check layer "$LAYER" '^(regex|fable)$'
+          check sdk "$SDK" '^(source|bin)$'
+          check rounds "$ROUNDS" '^[0-9]+$'
+          check workers "$WORKERS" '^[0-9]+$'
+          check seconds "$SECONDS_" '^[0-9]+$'
+          check heap_mb "$HEAP_MB" '^[0-9]+$'
+          check env "$CHILD_ENV" '^([A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_.:/-]*( |$))*$'
+          check shards "$SHARD" '^[0-9]+$'
+          check arches "$ARCH" '^(x86_64|aarch64)-linux$'
+          exit "$bad"
       # The shard is passed through so that no two jobs could ever share a store path, which
       # also makes a re-run of one job a fresh build rather than a cache hit.
       - name: Run the repro in the build sandbox

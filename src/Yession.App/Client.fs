@@ -589,6 +589,42 @@ module Client =
                             return Ok page
                 }
 
+        /// The contiguous run in one terminal's kept answers, from line 0: its records, the
+        /// header if it was among them, and one past the last line folded (`0` for none).
+        ///
+        /// Outside `replay`'s `async` for the reason `EventFetch.contiguous` gives: a `for` in
+        /// an `async` block is one nested `Bind` per element, and a long transcript was enough
+        /// of them to overflow iOS Safari's stack.
+        let private contiguous (kept: ResizeArray<int * string>) =
+            let ordered = kept |> Seq.sortBy fst |> List.ofSeq
+            // One past the last line folded. `0` before anything, because line 0 is
+            // the header and a first answer always carries it.
+            let mutable expected = 0
+            let mutable stop = false
+            // The whole contiguous run, as ONE page — see `TerminalPageMsg` for why a
+            // message per record froze a phone. Per kept ANSWER is not enough: a
+            // terminal somebody watched live keeps one answer per record (each live
+            // record fetches from the read position, and the answer is that one
+            // line under its own address), so a walk that folded per answer was the
+            // same storm under another name — measured at 402 pages for 404 records.
+            let records = ResizeArray<int * TranscriptRecord> ()
+            let mutable header = None
+            for (first, body) in ordered do
+                if not stop then
+                    if first > expected then stop <- true
+                    else
+                        match decodeLines first body with
+                        // A recording that will not decode is not history, it is
+                        // a guess — and unlike the event log there is no feed
+                        // health to report it on, because a terminal's history
+                        // failing costs that terminal and nothing else.
+                        | Error _ -> stop <- true
+                        | Ok page ->
+                            records.AddRange page.Records
+                            header <- (match page.Header with Some h -> Some h | None -> header)
+                            expected <- max expected page.NextSeq
+            List.ofSeq records, header, expected
+
         /// Fold what this client has already been given for every terminal it kept anything
         /// for, oldest first, before anything asks the network.
         ///
@@ -623,35 +659,9 @@ module Client =
                         match! cache.Read url with
                         | None -> ()
                         | Some answer -> kept.Add answer
-                    let ordered = kept |> Seq.sortBy fst |> List.ofSeq
-                    // One past the last line folded. `0` before anything, because line 0 is
-                    // the header and a first answer always carries it.
-                    let mutable expected = 0
-                    let mutable stop = false
-                    // The whole contiguous run, as ONE page — see `TerminalPageMsg` for why a
-                    // message per record froze a phone. Per kept ANSWER is not enough: a
-                    // terminal somebody watched live keeps one answer per record (each live
-                    // record fetches from the read position, and the answer is that one
-                    // line under its own address), so a walk that folded per answer was the
-                    // same storm under another name — measured at 402 pages for 404 records.
-                    let records = ResizeArray<int * TranscriptRecord> ()
-                    let mutable header = None
-                    for (first, body) in ordered do
-                        if not stop then
-                            if first > expected then stop <- true
-                            else
-                                match decodeLines first body with
-                                // A recording that will not decode is not history, it is
-                                // a guess — and unlike the event log there is no feed
-                                // health to report it on, because a terminal's history
-                                // failing costs that terminal and nothing else.
-                                | Error _ -> stop <- true
-                                | Ok page ->
-                                    records.AddRange page.Records
-                                    header <- (match page.Header with Some h -> Some h | None -> header)
-                                    expected <- max expected page.NextSeq
+                    let records, header, expected = contiguous kept
                     if expected > 0 then
-                        dispatch (TerminalPageMsg (terminal, List.ofSeq records, header, expected))
+                        dispatch (TerminalPageMsg (terminal, records, header, expected))
             }
 
     /// How a connection consumes the event log (Step 07).
@@ -929,6 +939,44 @@ module Client =
                                 return Ok page
                 }
 
+        /// The contiguous run in what was kept, each event once, from offset 0: its events, the
+        /// last offset folded, and where the kept history resumes past a gap, if it does.
+        ///
+        /// Outside `replay`'s `async` on purpose. A `for` written inside an `async` block is
+        /// the builder's `For`, one `Bind` per element, and a body that never waits completes
+        /// each one on the stack of the last: thousands of kept events were thousands of
+        /// nested frames, which overflowed iOS Safari's stack before Fable's trampoline (every
+        /// 2000 binds) reset it, and the page stopped at "Connecting". Here it is a loop.
+        let private contiguous (kept: ResizeArray<int64 * EventEnvelope<SessionEvent> list>) =
+            let ordered = kept |> Seq.sortBy fst |> List.ofSeq
+            // The run, each event once: two answers that overlap (two tabs fetching one
+            // range) both hold the events where they meet, and a page that carried an
+            // event twice would fold it twice.
+            let page = ResizeArray<EventEnvelope<SessionEvent>> ()
+            let mutable folded : EventOffset option = None
+            let mutable gap : EventOffset option = None
+            for (first, envelopes) in ordered do
+                if gap.IsNone then
+                    let expected =
+                        match folded with
+                        | Some o -> EventOffset.value o + 1L
+                        | None -> 0L
+                    if first > expected then
+                        // Where the kept history resumes. Everything between the cursor —
+                        // which is `expected - 1`, exactly where the fill has to start —
+                        // and this offset is not on this device.
+                        gap <- Some (List.head envelopes).Offset
+                    else
+                        for envelope in envelopes do
+                            let fresh =
+                                match folded with
+                                | Some o -> EventOffset.value envelope.Offset > EventOffset.value o
+                                | None -> true
+                            if fresh then
+                                page.Add envelope
+                                folded <- Some envelope.Offset
+            List.ofSeq page, folded, gap
+
         /// Fold what this client has already been given, oldest first, before anything asks
         /// the network — and before the client even knows whether it may connect.
         ///
@@ -982,38 +1030,12 @@ module Client =
                         match decodeLines body with
                         | Error _ | Ok [] -> ()
                         | Ok envelopes -> kept.Add (EventOffset.value (List.head envelopes).Offset, envelopes)
-                let ordered = kept |> Seq.sortBy fst |> List.ofSeq
-                // The run, each event once: two answers that overlap (two tabs fetching one
-                // range) both hold the events where they meet, and a page that carried an
-                // event twice would fold it twice.
-                let page = ResizeArray<EventEnvelope<SessionEvent>> ()
-                let mutable folded : EventOffset option = None
-                let mutable gap : EventOffset option = None
-                for (first, envelopes) in ordered do
-                    if gap.IsNone then
-                        let expected =
-                            match folded with
-                            | Some o -> EventOffset.value o + 1L
-                            | None -> 0L
-                        if first > expected then
-                            // Where the kept history resumes. Everything between the cursor —
-                            // which is `expected - 1`, exactly where the fill has to start —
-                            // and this offset is not on this device.
-                            gap <- Some (List.head envelopes).Offset
-                        else
-                            for envelope in envelopes do
-                                let fresh =
-                                    match folded with
-                                    | Some o -> EventOffset.value envelope.Offset > EventOffset.value o
-                                    | None -> true
-                                if fresh then
-                                    page.Add envelope
-                                    folded <- Some envelope.Offset
+                let page, folded, gap = contiguous kept
                 // One answer, whatever the store held — nothing included, because that the
                 // store has answered is itself what a page with nothing kept is waiting on.
                 dispatch (
                     LocalHistoryMsg (
-                        { Events = List.ofSeq page
+                        { Events = page
                           LastOffset = folded
                           // The end of what is KEPT, never a claim about the log: the cursor
                           // decides that, and it has not been asked yet.
@@ -1078,6 +1100,108 @@ module Client =
                 dispatch ConnectingMsg
                 do! EventFetch.replay history dispatch
                 do! TranscriptFetch.replay transcripts dispatch
+            }
+
+        /// How long one step of the local open may take before the page goes on without it.
+        ///
+        /// Every step reads this device's own storage, which answers in milliseconds or not
+        /// at all: an IndexedDB open that fails never settles y-indexeddb's `synced`, and
+        /// iOS can leave a store wedged after the page was suspended. Nothing past the open
+        /// asks the session (`/me` comes after it), so a step that never settled was a page
+        /// at "Connecting" for good, with nothing on the wire to say why. Five seconds is
+        /// past a long replay on a phone and short of a person giving up on the page.
+        let limit = System.TimeSpan.FromSeconds 5.0
+
+        /// The steps of the local open, as the platform performs them. A browser opens
+        /// IndexedDB and the Cache API; a test passes steps that hang or throw.
+        type Steps =
+            { /// The saved collaborative document, loaded into the live one.
+              Doc : Async<unit>
+              History : Async<HistoryCache>
+              Transcripts : Async<TranscriptCaches> }
+
+        /// The stores the page goes on with. A store whose step failed is the one that keeps
+        /// nothing, so a wedged store is never asked again in this page load: a network read
+        /// that kept its answer in it would hang where the open did.
+        type Opened = { History : HistoryCache; Transcripts : TranscriptCaches }
+
+        /// The errors a browser's own storage raises, by their `DOMException` name: what
+        /// IndexedDB and the Cache API throw or reject with when the store is closed, lost,
+        /// full, refused or gone. iOS Safari's "Connection to Indexed Database server lost" is
+        /// an `UnknownError`; a store its connection closed under is `InvalidStateError`; a
+        /// store with no room is `QuotaExceededError`; storage the browser will not give this
+        /// page (private browsing, blocked site data) is `SecurityError`.
+        let storageErrors : Set<string> =
+            set
+                [ "AbortError"
+                  "InvalidStateError"
+                  "NotFoundError"
+                  "QuotaExceededError"
+                  "SecurityError"
+                  "TransactionInactiveError"
+                  "UnknownError"
+                  "VersionError" ]
+
+        /// The reason a step of the local open gives for `error`, when `error` is one a store
+        /// raises (`storageErrors`); `None` for anything else. `nameOf` reads an error's
+        /// `DOMException` name, which only the platform can.
+        let expected (nameOf: exn -> string option) (error: exn) : string option =
+            nameOf error
+            |> Option.filter storageErrors.Contains
+            |> Option.map (fun name -> sprintf "%s: %s" name error.Message)
+
+        let private bounded
+            (sleep: System.TimeSpan -> Async<unit>)
+            (limit: System.TimeSpan)
+            (expected: exn -> string option)
+            (what: string)
+            (step: Async<'a>)
+            : Async<Result<'a, string>> =
+            let attempt () = async { let! value = step in return Ok value }
+            Resilience.Policy.deadline
+                sleep
+                limit
+                (sprintf "%s did not answer in %g seconds" what limit.TotalSeconds)
+                (expected >> Option.map (sprintf "%s failed: %s" what))
+                attempt
+                ()
+
+        /// Open this client's own store and replay what it kept, each step bounded by
+        /// `limit` (`Resilience.Policy.deadline`). A step that runs over, or throws what a
+        /// store throws (`expected`), is not retried: a store that did not answer once will
+        /// not answer sooner for being asked again. The page goes on without that store,
+        /// says why (`LocalStoreFaultMsg`), and returns to what it does with or without one:
+        /// asking the session. A step that throws anything else is a defect in the page, not
+        /// a fault in the store, and is raised on, to whatever reports errors nothing handled.
+        let run
+            (sleep: System.TimeSpan -> Async<unit>)
+            (limit: System.TimeSpan)
+            (expected: exn -> string option)
+            (steps: Steps)
+            (dispatch: ClientMsg -> unit)
+            : Async<Opened> =
+            let bounded what step = bounded sleep limit expected what step
+            async {
+                let faults = ResizeArray<string> ()
+                let settled (fallback: 'a) (outcome: Result<'a, string>) : 'a =
+                    match outcome with
+                    | Ok value -> value
+                    | Error fault ->
+                        faults.Add fault
+                        fallback
+                let! doc = bounded "the saved document" steps.Doc
+                settled () doc
+                let! history = bounded "the saved history" steps.History
+                let history = settled HistoryCache.none history
+                let! transcripts = bounded "the saved terminals" steps.Transcripts
+                let transcripts = settled TranscriptCaches.none transcripts
+                dispatch ConnectingMsg
+                let! events = bounded "replaying the saved history" (EventFetch.replay history dispatch)
+                let history = events |> Result.map (fun () -> history) |> settled HistoryCache.none
+                let! screens = bounded "replaying the saved terminals" (TranscriptFetch.replay transcripts dispatch)
+                let transcripts = screens |> Result.map (fun () -> transcripts) |> settled TranscriptCaches.none
+                if faults.Count > 0 then dispatch (LocalStoreFaultMsg (String.concat ". " faults))
+                return { History = history; Transcripts = transcripts }
             }
 
     /// Opening the session transport. The browser's WebRTC handshake is a promise that used

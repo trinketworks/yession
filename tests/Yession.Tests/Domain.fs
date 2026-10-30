@@ -346,6 +346,21 @@ let private frameSerializationTests =
                 let roundTripped = Codec.toString codec frame |> Codec.fromString codec |> expect
                 Expect.equal roundTripped frame "frame round-trip"
 
+        // A surrogate pair straddles the first cut, which a cut by length alone splits.
+        testCase "a frame cut into pieces is the frame once they are put back together" <| fun () ->
+            let text = String.replicate (FramePieces.length - 1) "a" + String.replicate 40_000 "🦀"
+            let take = FramePieces.assembler ()
+            let wholes = FramePieces.split text |> List.choose take
+            Expect.equal wholes [ text ] "one whole frame, as sent"
+
+        testCase "no piece of a long frame is longer than a piece may be" <| fun () ->
+            let longest = FramePieces.split (String.replicate 100_000 "y") |> List.map String.length |> List.max
+            Expect.isTrue (longest <= FramePieces.length + 1) "the piece and its mark fit"
+
+        testCase "a frame that fits one message goes as it is" <| fun () ->
+            let text = """{"State":["StateSync","short"]}"""
+            Expect.equal (FramePieces.split text) [ text ] "unchanged"
+
         testCase "PeerJoined and PeerLeft events round-trip through the envelope codec" <| fun () ->
             let joined = { sampleEnvelope with Event = PeerJoined { PeerId = peerId; DisplayName = "Ada"; User = None } }
             let left = { sampleEnvelope with Event = PeerLeft { PeerId = peerId } }
@@ -2048,6 +2063,30 @@ let private prWatchTests =
                 ("working", Standings.Moving)
                 "a running turn proves an agent is there"
 
+        testCase "an idle agent is nobody's turn while what it watches is under way" <| fun () ->
+            let at facet word attention : Standings.Standing = { Facet = facet; Word = word; Attention = attention }
+            let waiting = at Standings.AgentStatus.facet "waiting" Standings.Wanted
+            let working = at Standings.AgentStatus.facet "working" Standings.Moving
+            let armed = at "prs" "2 PRs · 1 armed" Standings.Moving
+            let fine = at "prs" "#42 open" Standings.Rest
+            let conflicted = at "prs" "#42 conflicted" Standings.Wrong
+            let settled = Standings.AgentStatus.withWatched [ armed ] (Some waiting)
+            Expect.equal settled [ { waiting with Attention = Standings.Rest }; armed ] "waiting on the checks, at rest, agent first"
+            Expect.equal (Standings.Standing.worst settled) (Some armed) "the one shown alone is the work under way"
+            Expect.equal
+                (Standings.AgentStatus.withWatched [ fine ] (Some waiting))
+                [ waiting; fine ]
+                "with nothing under way, idle is still their turn"
+            Expect.equal
+                (Standings.AgentStatus.withWatched [ conflicted ] (Some waiting))
+                [ waiting; conflicted ]
+                "a wrong thing settles nothing"
+            Expect.equal
+                (Standings.AgentStatus.withWatched [ armed ] (Some working))
+                [ working; armed ]
+                "an agent at work is left as it is"
+            Expect.equal (Standings.AgentStatus.withWatched [ armed ] None) [ armed ] "no agent standing yet, none invented"
+
         testCase "a watch cannot be built on the deployment's own credential" <| fun () ->
             // The rule lives on the event, where every construction goes through it: the
             // verb refuses before it looks, and the decoder refuses a stored line that says
@@ -2548,7 +2587,7 @@ let private configTests =
                     { "version": 2,
                       "sandboxes": {
                         "dev": {
-                          "container": { "image": "node:24", "cmd": "npm start" },
+                          "container": { "image": "node:24", "command": "npm start" },
                           "workdir": "./app",
                           "env": { "NODE_ENV": "development" },
                           "uses": [ "npm" ],
@@ -2629,18 +2668,6 @@ let private configTests =
             | Ok _ -> failwith "no words is not an entrypoint"
             | Error reason -> Expect.stringContains reason "empty" "it says so"
 
-        // compose's spelling for the container's own process, beside the older `cmd` — one
-        // key by two names, and never both.
-        testCase "a container's command is `command`, or `cmd` by its older name, not both" <| fun () ->
-            let parsed (container: string) =
-                ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", %s } } } }""" container)
-            let command (file: ConfigFile) =
-                (file.Sandboxes |> Map.find (sandboxName "dev")).Container |> Option.get |> fun c -> c.Command
-            Expect.equal (parsed """ "command": "./serve" """ |> expect |> command) (Some "./serve") "compose's word"
-            Expect.equal (parsed """ "cmd": "./serve" """ |> expect |> command) (Some "./serve") "the older word still reads"
-            match parsed """ "cmd": "./serve", "command": "./other" """ with
-            | Ok _ -> failwith "two spellings of one key cannot both be honoured"
-            | Error reason -> Expect.stringContains reason "two names for one key" "and the refusal says they are one key"
 
         // Which shell a terminal in the container opens, by dialect, when the repo would
         // rather say than have the backend look. Only a container has a shell to choose.
@@ -2669,7 +2696,7 @@ let private configTests =
         // thing here; a number YAML read without a unit is bytes.
         testCase "a container's memory is read as compose writes a size, or as bytes" <| fun () ->
             let memory (value: string) =
-                ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "memory": %s } } } }""" value)
+                ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "mem_limit": %s } } } }""" value)
                 |> expect
                 |> fun file -> (file.Sandboxes |> Map.find (sandboxName "dev")).Container |> Option.get |> fun c -> c.Memory
                 |> Option.map ContainerMemory.bytes
@@ -2680,7 +2707,7 @@ let private configTests =
 
         testCase "a memory that is not a size, or is under docker's minimum, is refused, saying why" <| fun () ->
             let parsed (value: string) =
-                ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "memory": %s } } } }""" value)
+                ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "mem_limit": %s } } } }""" value)
             match parsed "\"4 gigs\"" with
             | Ok _ -> failwith "'gigs' is not a unit"
             | Error reason -> Expect.stringContains reason "is not a size" "it says what a size is"
@@ -2690,7 +2717,7 @@ let private configTests =
 
         testCase "memory survives the round trip the command gate rides" <| fun () ->
             let dev =
-                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "memory": "3584m" } } } }"""
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "mem_limit": "3584m" } } } }"""
                 |> expect
                 |> fun file -> file.Sandboxes |> Map.find (sandboxName "dev")
             let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
@@ -2715,42 +2742,124 @@ let private configTests =
             | Error reason -> Expect.stringContains reason "16g" "the refusal names what was declared"
 
         // The other limits on the container block, read and refused like `memory:`.
-        testCase "a container's oom-score-adj, pids-limit and cgroup-parent are read from its block" <| fun () ->
+        testCase "a container's oom_score_adj, pids_limit and cgroup_parent are read from its block" <| fun () ->
             let container =
-                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "oom-score-adj": 800, "pids-limit": 512, "cgroup-parent": "/yession" } } } }"""
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "oom_score_adj": 800, "pids_limit": 512, "cgroup_parent": "/yession" } } } }"""
                 |> expect
                 |> fun file -> (file.Sandboxes |> Map.find (sandboxName "dev")).Container |> Option.get
-            Expect.equal (container.OomScoreAdj |> Option.map OomScoreAdj.value) (Some 800) "oom-score-adj as written"
-            Expect.equal (container.PidsLimit |> Option.map PidsLimit.value) (Some 512) "pids-limit as written"
-            Expect.equal (container.CgroupParent |> Option.map CgroupParent.value) (Some "/yession") "cgroup-parent as written"
+            Expect.equal (container.OomScoreAdj |> Option.map OomScoreAdj.value) (Some 800) "oom_score_adj as written"
+            Expect.equal (container.PidsLimit |> Option.map PidsLimit.value) (Some 512) "pids_limit as written"
+            Expect.equal (container.CgroupParent |> Option.map CgroupParent.value) (Some "/yession") "cgroup_parent as written"
 
-        testCase "an oom-score-adj below zero, a pids-limit that is no limit, and a blank cgroup-parent are refused, saying why" <| fun () ->
+        testCase "an oom_score_adj below zero, a pids_limit that is no limit, and a blank cgroup_parent are refused, saying why" <| fun () ->
             let refusal (field: string) =
                 match ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", %s } } } }""" field) with
                 | Ok _ -> failwithf "%s was accepted" field
                 | Error reason -> reason
-            Expect.stringContains (refusal "\"oom-score-adj\": -500") "not from 0 to 1000" "a sandbox cannot rank itself with the daemon"
-            Expect.stringContains (refusal "\"oom-score-adj\": 1001") "not from 0 to 1000" "nor past the kernel's range"
-            Expect.stringContains (refusal "\"pids-limit\": 0") "is not a limit" "docker reads 0 as no limit"
-            Expect.stringContains (refusal "\"cgroup-parent\": \" \"") "cannot be blank" "a blank parent"
-            Expect.stringContains (refusal "\"cgroup-parent\": \"/yession/../docker\"") "cannot climb" "a parent with a climb"
+            Expect.stringContains (refusal "\"oom_score_adj\": -500") "not from 0 to 1000" "a sandbox cannot rank itself with the daemon"
+            Expect.stringContains (refusal "\"oom_score_adj\": 1001") "not from 0 to 1000" "nor past the kernel's range"
+            Expect.stringContains (refusal "\"pids_limit\": 0") "is not a limit" "docker reads 0 as no limit"
+            Expect.stringContains (refusal "\"cgroup_parent\": \" \"") "cannot be blank" "a blank parent"
+            Expect.stringContains (refusal "\"cgroup_parent\": \"/yession/../docker\"") "cannot climb" "a parent with a climb"
 
         testCase "the container limits survive the round trip the command gate rides" <| fun () ->
             let dev =
-                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "oom-score-adj": 700, "pids-limit": 1024, "cgroup-parent": "yession.slice" } } } }"""
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "oom_score_adj": 700, "pids_limit": 1024, "cgroup_parent": "yession.slice" } } } }"""
+                |> expect
+                |> fun file -> file.Sandboxes |> Map.find (sandboxName "dev")
+            let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
+            Expect.equal back.Container dev.Container "what `encode` writes, `parseSandbox` reads back whole"
+
+        // The container block is a compose service fragment: compose's names, and only those.
+        testList "the container block reads compose's keys" [
+            let containerOf (fields: string) : Result<ContainerSpec, string> =
+                ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", %s } } } }""" fields)
+                |> Result.map (fun file -> (file.Sandboxes |> Map.find (sandboxName "dev")).Container |> Option.get)
+            let refusal (fields: string) =
+                match containerOf fields with
+                | Ok _ -> failwithf "%s was accepted" fields
+                | Error reason -> reason
+
+            testCase "mem_limit is the memory ceiling" <| fun () ->
+                Expect.equal ((containerOf "\"mem_limit\": \"3g\"" |> expect).Memory) (Some (ContainerMemory.parse "3g" |> expect)) "compose's mem_limit"
+            testCase "pids_limit is the process bound" <| fun () ->
+                Expect.equal ((containerOf "\"pids_limit\": 512" |> expect).PidsLimit) (Some (PidsLimit.ofInt 512 |> expect)) "compose's pids_limit"
+            testCase "oom_score_adj is the OOM score" <| fun () ->
+                Expect.equal ((containerOf "\"oom_score_adj\": 800" |> expect).OomScoreAdj) (Some (OomScoreAdj.ofInt 800 |> expect)) "compose's oom_score_adj"
+            testCase "cgroup_parent is the parent cgroup" <| fun () ->
+                Expect.equal ((containerOf "\"cgroup_parent\": \"yession\"" |> expect).CgroupParent) (Some (CgroupParent.parse "yession" |> expect)) "compose's cgroup_parent"
+            testCase "command is the container's own process" <| fun () ->
+                Expect.equal ((containerOf "\"command\": \"./serve\"" |> expect).Command) (Some "./serve") "compose's command"
+
+            // A file written before the rename worked yesterday. Its author is told the word
+            // that replaced each key, not that the key was never a word.
+            for old, compose, value in
+                [ "memory", "mem_limit", "\"3g\""
+                  "pids-limit", "pids_limit", "512"
+                  "oom-score-adj", "oom_score_adj", "800"
+                  "cgroup-parent", "cgroup_parent", "\"yession\""
+                  "cmd", "command", "\"./serve\"" ] do
+                testCase (sprintf "the old key %s is refused, naming %s" old compose) <| fun () ->
+                    Expect.stringContains (refusal (sprintf "\"%s\": %s" old value)) (sprintf "`%s:`" compose) "the refusal names compose's key"
+
+            // A compose key copied in is a word with a meaning. The refusal says where that
+            // meaning lives here, or that it has none.
+            for key, value, instead in
+                [ "deploy", """{ "resources": { "limits": { "memory": "3g" } } }""", "mem_limit"
+                  "environment", """{ "A": "b" }""", "`env:`"
+                  "working_dir", "\"/w\"", "`workdir:`"
+                  "ports", """[ "8080:80" ]""", "reachable from inside that sandbox only"
+                  "network_mode", "\"host\"", "session's own network"
+                  "privileged", "true", "never runs privileged"
+                  "cap_add", """[ "SYS_ADMIN" ]""", "drops every capability"
+                  "depends_on", """[ "db" ]""", "starts on its own"
+                  "restart", "\"always\"", "as long as its `command`"
+                  "user", "\"1000\"", "the image names" ] do
+                testCase (sprintf "the compose key %s is refused, naming what to write instead" key) <| fun () ->
+                    Expect.stringContains (refusal (sprintf "\"%s\": %s" key value)) instead "the refusal says what this file offers"
+        ]
+
+        testList "a volume reads compose's short and long syntax" [
+            let mountsOf (volumes: string) : Result<ContainerMount list, string> =
+                ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "volumes": %s } } } }""" volumes)
+                |> Result.map (fun file -> ((file.Sandboxes |> Map.find (sandboxName "dev")).Container |> Option.get).Mounts)
+
+            testCase "source:target and the long syntax are one read-write mount" <| fun () ->
+                Expect.equal
+                    (mountsOf """[ "workspace:/w" ]""" |> expect)
+                    (mountsOf """[ { "type": "volume", "source": "workspace", "target": "/w" } ]""" |> expect)
+                    "the two syntaxes, one mount"
+            testCase "source:target:ro and read_only: true are one read-only mount" <| fun () ->
+                Expect.equal
+                    (mountsOf """[ "workspace:/w:ro" ]""" |> expect)
+                    (mountsOf """[ { "source": "workspace", "target": "/w", "read_only": true } ]""" |> expect)
+                    "the two syntaxes, one mount"
+            testCase "a short volume keeps the refusal of a source a repo may not name" <| fun () ->
+                match mountsOf """[ "/var/run/docker.sock:/s" ]""" with
+                | Ok _ -> failwith "a host path was mounted"
+                | Error reason -> Expect.stringContains reason "Write 'workspace'" "the same sentence as the long syntax"
+            testCase "the old mode key is refused, naming read_only" <| fun () ->
+                match mountsOf """[ { "source": "workspace", "target": "/w", "mode": "ro" } ]""" with
+                | Ok _ -> failwith "mode: ro was read"
+                | Error reason -> Expect.stringContains reason "`read_only: true`" "it names compose's key"
+        ]
+
+        testCase "a whole compose container block survives the round trip the command gate rides" <| fun () ->
+            let dev =
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "command": "./serve", "entrypoint": [ "env" ], "mem_limit": "3g", "oom_score_adj": 700, "pids_limit": 1024, "cgroup_parent": "yession", "volumes": [ "workspace:/w:ro", { "source": "workspace", "target": "/x" } ] } } } }"""
                 |> expect
                 |> fun file -> file.Sandboxes |> Map.find (sandboxName "dev")
             let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
             Expect.equal back.Container dev.Container "what `encode` writes, `parseSandbox` reads back whole"
 
         // What the docker backend creates a container with when the block names nothing.
-        testCase "a container that declares no oom-score-adj or pids-limit gets 500 and 4096" <| fun () ->
+        testCase "a container that declares no oom_score_adj or pids_limit gets 500 and 4096" <| fun () ->
             Expect.equal (OomScoreAdj.value (OomScoreAdj.forContainer None)) 500 "a victim before the daemon's own processes (0, -500, -999)"
             Expect.equal (PidsLimit.value (PidsLimit.forContainer None)) 4096 "never docker's default, which is no limit"
             let declared = OomScoreAdj.ofInt 900 |> expect
             Expect.equal (OomScoreAdj.forContainer (Some declared)) declared "a declaration is the value"
 
-        testCase "a cgroup-parent is checked against the daemon's cgroup driver" <| fun () ->
+        testCase "a cgroup_parent is checked against the daemon's cgroup driver" <| fun () ->
             let path = CgroupParent.parse "/yession" |> expect
             let slice = CgroupParent.parse "yession.slice" |> expect
             Expect.equal (CgroupParent.forDriver (Some path) "cgroupfs") (Ok (Some path)) "a path under cgroupfs"
@@ -2762,7 +2871,7 @@ let private configTests =
 
         // One file, two drivers: the operator's Colima VM uses cgroupfs and CI's docker
         // uses systemd. A bare name is the pool under both, spelled for each.
-        testCase "a bare cgroup-parent names the pool under either driver" <| fun () ->
+        testCase "a bare cgroup_parent names the pool under either driver" <| fun () ->
             let bare = CgroupParent.parse "yession" |> expect
             let spelled driver =
                 CgroupParent.forDriver (Some bare) driver |> expect |> Option.map CgroupParent.value
@@ -3203,8 +3312,8 @@ let private configTests =
                         "dev": {
                           "container":
                             { "image": "node:24",
-                              "cmd": "npm start",
-                              "volumes": [ { "source": "workspace", "target": "/w", "mode": "ro" } ] },
+                              "command": "npm start",
+                              "volumes": [ { "source": "workspace", "target": "/w", "read_only": true } ] },
                           "workdir": "app",
                           "env": { "NODE_ENV": "development", "DB": { "secret": "db-url" } },
                           "uses": [ "npm" ],
@@ -3239,13 +3348,13 @@ let private configTests =
                 "an empty declaration is the ask that names nothing in particular"
 
         testCase "a sandbox cannot ask for a process without a container to run it in" <| fun () ->
-            // The point of the runtime union. `cmd` is not a sandbox key at all — it lives
+            // The point of the runtime union. `command` is not a sandbox key at all — it lives
             // inside `container`, so "a confined sandbox with a process" is not a state the
             // file can express and not one any decoder has to refuse.
-            match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "cmd": "npm start" } } }""" with
+            match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "command": "npm start" } } }""" with
             | Ok _ -> failwith "expected a refusal"
             | Error e ->
-                Expect.isTrue (e.Contains "cmd") "it names the key that has no home here"
+                Expect.isTrue (e.Contains "command") "it names the key that has no home here"
                 Expect.isTrue (e.Contains "container") "and lists the one that does"
 
         testCase "a sandbox with no container block asks for no container" <| fun () ->

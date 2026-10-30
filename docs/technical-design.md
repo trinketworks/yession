@@ -102,7 +102,7 @@ declaration and not a change to the mechanism.
   and a `Verdict` are its policy: values that compose, print and test without an operation.
 - A Session has the mechanism to spawn and confine sandboxes (`CreateSandbox`,
   `SandboxBackend`). The operator's declarations are the policy: what a session may reach,
-  which connections and which MCP servers ([§3](#3-authority-model-phase-2)). A
+  which connections and which MCP servers ([§3](#3-authority-model)). A
   `yession.yaml` narrows that ceiling and never makes it wider
   ([§4](#4-repo-local-configuration)).
 
@@ -279,7 +279,7 @@ App
   - consumes read-only event pages by offset
   - renders projections from events and synced state
 
-Manager (Phase 2)
+Manager
   - launches Sessions
   - owns launch, identity, and secret custody
   - declares what a session may reach, and holds no environment authority itself
@@ -360,7 +360,7 @@ in the project of the component that owns the contract.
 
 ---
 
-## 3. Authority model (Phase 2)
+## 3. Authority model
 
 The Manager owns launch, identity, and secret custody, but not environment authority. A
 Session spawns its own sandboxes through the `CreateSandbox` seam and confines them, the
@@ -393,7 +393,9 @@ default), `localhost` or `trusted-headers`. [deployment.md](deployment.md#author
 what each one does. `localhost` matches this threat model. Under `trusted-headers`, the
 operator's authenticating proxy must be the only non-local path in, and it must strip the
 `x-yession-*` headers from client requests. Further schemes are strategy swaps, not
-redesigns.
+redesigns. Under `trusted-headers` the Manager authorizes every attributed user to every
+session: identity is per human, but a session has no owner
+([GAPS.md](GAPS.md#security--trust)).
 
 Secrets are Manager-owned authority:
 
@@ -446,8 +448,8 @@ sandboxes:
     container:
       image: node:24
       entrypoint: nix develop --command   # compose's word: what every piece of WORK runs behind
-      command: ./serve                    # compose's word for the container's own process (`cmd` still reads)
-      memory: 4g                          # optional: its memory ceiling, else 3/4 of the daemon's
+      command: ./serve                    # compose's word for the container's own process
+      mem_limit: 4g                       # optional: its memory ceiling, else 3/4 of the daemon's
     dialect: bash                         # optional: the shell a terminal opens, else detected
     workdir: ./packages/web
     env:
@@ -456,6 +458,10 @@ sandboxes:
     uses: [ npm-cache ]
     wants: [ github ]                     # the operator's `{ connection: { github: [git, api] } }`, where offered
 ```
+
+The `container:` block is a compose service fragment: compose's keys, with compose's
+meanings, so `docker compose config` can lint it. The decoder refuses, by name, each key that
+it does not take, and says what this file offers instead.
 
 ### Connections and references
 
@@ -546,20 +552,20 @@ reasoning.
 
 | key | when nothing is declared | what it does |
 |---|---|---|
-| `memory:` (`ContainerMemory`) | three quarters of what the daemon reports | The cgroup's `memory.max`, no swap beyond it, in compose's grammar (`4g`). The kernel kills inside the container that overran. A declaration above the daemon's total refuses the sandbox. |
-| `oom-score-adj:` (`OomScoreAdj`) | 500 | From 0 to 1000. The daemon's processes are below zero, so the global killer takes a sandbox process first. |
-| `pids-limit:` (`PidsLimit`) | 4096 | A fork bomb uses up its own container and not the host. |
-| `cgroup-parent:` (`CgroupParent`) | the daemon's own parent | Puts the container under a pool that the host's operator limits below the VM's total, so an OOM stays inside it. |
+| `mem_limit:` (`ContainerMemory`) | three quarters of what the daemon reports | The cgroup's `memory.max`, no swap beyond it, in compose's grammar (`4g`). The kernel kills inside the container that overran. A declaration above the daemon's total refuses the sandbox. |
+| `oom_score_adj:` (`OomScoreAdj`) | 500 | From 0 to 1000. The daemon's processes are below zero, so the global killer takes a sandbox process first. |
+| `pids_limit:` (`PidsLimit`) | 4096 | A fork bomb uses up its own container and not the host. |
+| `cgroup_parent:` (`CgroupParent`) | the daemon's own parent | Puts the container under a pool that the host's operator limits below the VM's total, so an OOM stays inside it. |
 
 Containers that each stay under their ceiling can still add up to more than the VM has. The
 OOM score and the parent cgroup cover that case.
 
-Write `cgroup-parent:` as a bare name (`yession`), so that daemons of both cgroup drivers can
+Write `cgroup_parent:` as a bare name (`yession`), so that daemons of both cgroup drivers can
 read one `yession.yaml`. The backend spells it for the driver (`CgroupParent.forDriver`). Under
 systemd the backend refuses a path. `CgroupParent` lists the spellings.
 
 Yession does not make the parent. Docker (cgroupfs) or systemd makes a missing one with no
-limit, and an OOM can again reach the daemon. [GAPS.md](GAPS.md#agent) ("A `cgroup-parent` is
+limit, and an OOM can again reach the daemon. [GAPS.md](GAPS.md#agent) ("A `cgroup_parent` is
 the repo's to name, and the host's to make") says how this repo's host makes it.
 
 ### Scope of the file
@@ -587,7 +593,10 @@ Three properties make the file safe to read from code a session just cloned:
 - **Whoever can push to the repo authors the file**, and that person is neither the operator
   nor anybody in the session. So the file's acts are `ActorRef.Configured`, and it owns no
   credential. The schema refuses what a repo may not name: the whole `YESSION_` prefix in
-  `env:`, a host path as a volume source, and a `workdir` outside the checkout.
+  `env:`, a host path as a volume source, and a `workdir` outside the checkout. So the session
+  reads the file from the checkout's `HEAD`, out of git's object store, and never from the
+  working tree. An edit in the working tree declares nothing until somebody commits it. A
+  `yession.yaml` that `HEAD` commits as a symlink is no file (rule 20).
 
 This repository's own `yession.yaml` is the schema's acceptance test: what yession needs to
 maintain yession measures whether the file can say anything real.
@@ -630,6 +639,25 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     session's own generic secrets. It never reads another principal's scope, the Manager's
     process environment, or a connection credential. The last is a type, not a check: the
     resolver holds only the store's generic partition (`SecretStore.SecretResolution`).
+20. A repository's file reaches the session only through git's object store, read in the git
+    sandbox (`ReposService.ReadCommitted`). The session process opens no path that a
+    repository names. A work sandbox can write the checkout, so a path in it can be a symlink
+    to anything the session's user can read, and a check before the open races the write.
+21. No git process holds a GitHub credential. git reaches github.com only through the git
+    gateway (`GitGateway`), which adds the credential of a loan on the way. A work sandbox's
+    git and the session's own clone and fetch take the same route.
+22. A string the agent supplied reaches a program only as an operand, never as an option. It
+    stands after `--` or as an option's own argument, and a path operand is a `PathOperand`,
+    which starts with `/` or `.`. A read-only tool never meets the gate, so this is what keeps
+    `find_files` from deleting with `-delete` (`ScriptArg`).
+23. A string from outside the process reaches HTML only through `Ssr`'s escapers, and the
+    hole's context in the template chooses the escaper (`Ssr`'s scanner). A display name, an
+    MCP server's name and a refusal's words are all from outside. The Manager page parses the
+    fragments it is sent inert, so the escaping is the one door.
+24. A Manager route that changes state accepts only a request whose `Sec-Fetch-Site` or
+    `Origin` names the Manager's own origin (`ManagerUi.requestOrigin`). A request with
+    neither is no browser's, and passes on its identity alone. A `GET` changes no state, so
+    `/sessions/{id}/open` answers a stopped session with a screen that asks for the launch.
 
 Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
 roots, keyed by `BodyKey`, that the app co-manages outside the encoded tree, and the structural

@@ -402,8 +402,8 @@ let private lentEnv (gateway: GitGateway.Gateway) (cap: string) (secret: string)
 
 /// A route with one block lent on it — the shape every case that expects an answer starts from.
 let private routeWith (gateway: GitGateway.Gateway) (name: string) (lend: Lend) : Map<string, string> =
-    let cap = gateway.Grant (sandbox name)
-    let secret = gateway.Lend (sandbox name) terminal (lenderOf lend)
+    let cap = gateway.Grant (GitGateway.Routed.Sandbox (sandbox name))
+    let secret = gateway.Lend (GitGateway.Routed.Sandbox (sandbox name)) (GitGateway.Borrower.Terminal terminal) (lenderOf lend)
     lentEnv gateway cap secret
 
 /// A gateway whose faults-after-answering go to `report` — the seam a case reads when
@@ -606,9 +606,9 @@ let private portsTests =
             do!
                 withGateway upstream.Origin (fun gateway ->
                     async {
-                        let first = gateway.Grant (sandbox "octo/hello:dev")
-                        let second = gateway.Grant (sandbox "octo/hello:dev")
-                        let secret = gateway.Lend (sandbox "octo/hello:dev") terminal (lenderOf (lending (Some "two")))
+                        let first = gateway.Grant (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev"))
+                        let second = gateway.Grant (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev"))
+                        let secret = gateway.Lend (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev")) (GitGateway.Borrower.Terminal terminal) (lenderOf (lending (Some "two")))
                         let! old = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (lentEnv gateway first secret)
                         Expect.isTrue (old.Status <> 0) "the old cap is dead, loan or no loan"
                         let! current = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (lentEnv gateway second secret)
@@ -626,7 +626,7 @@ let private portsTests =
             do!
                 withGateway upstream.Origin (fun gateway ->
                     async {
-                        let cap = gateway.Grant (sandbox "octo/hello:dev")
+                        let cap = gateway.Grant (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev"))
                         let! run = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (sandboxEnv gateway cap)
                         Expect.isTrue (run.Status <> 0) "it fails"
                         Expect.isTrue (run.Stderr.Contains "remote error:") (sprintf "on the remote-error channel: %s" run.Stderr)
@@ -645,8 +645,8 @@ let private portsTests =
             do!
                 withGateway upstream.Origin (fun gateway ->
                     async {
-                        let adas = gateway.Lend (sandbox "octo/hello:dev") terminal (lenderOf (lending (Some "adas")))
-                        let otherRoute = gateway.Grant (sandbox "octo/hello:gate")
+                        let adas = gateway.Lend (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev")) (GitGateway.Borrower.Terminal terminal) (lenderOf (lending (Some "adas")))
+                        let otherRoute = gateway.Grant (GitGateway.Routed.Sandbox (sandbox "octo/hello:gate"))
                         let! run = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (lentEnv gateway otherRoute adas)
                         Expect.isTrue (run.Status <> 0) "it fails"
                         Expect.equal upstream.Authorizations.Count 0 "and github.com was not asked"
@@ -663,7 +663,7 @@ let private portsTests =
                 withGateway upstream.Origin (fun gateway ->
                     async {
                         let env = routeWith gateway "octo/hello:dev" (lending (Some "tok"))
-                        gateway.Retire terminal
+                        gateway.Retire (GitGateway.Borrower.Terminal terminal)
                         let! run = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." env
                         Expect.isTrue (run.Status <> 0) "it fails"
                         Expect.isTrue (run.Stderr.Contains "remote error:") (sprintf "on the remote-error channel: %s" run.Stderr)
@@ -679,9 +679,9 @@ let private portsTests =
             do!
                 withGateway upstream.Origin (fun gateway ->
                     async {
-                        let cap = gateway.Grant (sandbox "octo/hello:dev")
-                        let first = gateway.Lend (sandbox "octo/hello:dev") terminal (lenderOf (lending (Some "one")))
-                        let second = gateway.Lend (sandbox "octo/hello:dev") terminal (lenderOf (lending (Some "two")))
+                        let cap = gateway.Grant (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev"))
+                        let first = gateway.Lend (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev")) (GitGateway.Borrower.Terminal terminal) (lenderOf (lending (Some "one")))
+                        let second = gateway.Lend (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev")) (GitGateway.Borrower.Terminal terminal) (lenderOf (lending (Some "two")))
                         let! old = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (lentEnv gateway cap first)
                         Expect.isTrue (old.Status <> 0) "the first block's loan is returned"
                         Expect.isTrue (old.Stderr.Contains "has been returned") (sprintf "and says so: %s" old.Stderr)
@@ -699,9 +699,9 @@ let private portsTests =
             do!
                 withGateway upstream.Origin (fun gateway ->
                     async {
-                        let cap = gateway.Grant (sandbox "octo/hello:dev")
-                        let adas = gateway.Lend (sandbox "octo/hello:dev") terminal (lenderOf (lending (Some "adas")))
-                        let bobs = gateway.Lend (sandbox "octo/hello:dev") terminalB (lenderOf (lending (Some "bobs")))
+                        let cap = gateway.Grant (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev"))
+                        let adas = gateway.Lend (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev")) (GitGateway.Borrower.Terminal terminal) (lenderOf (lending (Some "adas")))
+                        let bobs = gateway.Lend (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev")) (GitGateway.Borrower.Terminal terminalB) (lenderOf (lending (Some "bobs")))
                         let! fromA = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (lentEnv gateway cap adas)
                         Expect.equal fromA.Status 0 (sprintf "ada's block: %s" fromA.Stderr)
                         let! fromB = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (lentEnv gateway cap bobs)
@@ -997,8 +997,8 @@ let private pushTests =
                             async {
                                 let lend = lending (Some "ghu_lent")
                                 let lender = { lenderOf lend with Spent = fun _ -> async { failwith "the log is closed" } }
-                                let cap = gateway.Grant (sandbox "octo/hello:dev")
-                                let secret = gateway.Lend (sandbox "octo/hello:dev") terminal lender
+                                let cap = gateway.Grant (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev"))
+                                let secret = gateway.Lend (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev")) (GitGateway.Borrower.Terminal terminal) lender
                                 let! pushed = git [ "push"; "origin"; "main" ] work (lentEnv gateway cap secret)
                                 Expect.equal pushed.Status 0 (sprintf "the push succeeded: %s" pushed.Stderr)
                                 let! expected = gitOk [ "rev-parse"; "main" ] work
@@ -1040,8 +1040,8 @@ let private srtTests =
                             match Sandboxes.hostAddressHere (Interop.hostname ()) SrtBackend with
                             | Some host -> host
                             | None -> failwith "srt is a backend with a route to the host"
-                        let cap = gateway.Grant (sandbox "dev")
-                        let secret = gateway.Lend (sandbox "dev") terminal (lenderOf (lending (Some "ghu_lent")))
+                        let cap = gateway.Grant (GitGateway.Routed.Sandbox (sandbox "dev"))
+                        let secret = gateway.Lend (GitGateway.Routed.Sandbox (sandbox "dev")) (GitGateway.Borrower.Terminal terminal) (lenderOf (lending (Some "ghu_lent")))
                         // Canonical, because seatbelt matches the path as written and `/tmp`
                         // is a symlink here (the note in GitIntegration.fs).
                         let workspace =
@@ -1084,11 +1084,80 @@ let private srtTests =
         }
     ]
 
+// --- [Ports]: the session's own clone, through the gateway ------------------------------
+
+/// The repo manager on the host backend, with its clone and fetch routed through `gateway`
+/// at loopback, as a session composes it: github.com's real address, `http` the only protocol,
+/// and `token` what the gateway is lent. `failures` hears what the gateway's 401 reports.
+let private sessionRepos
+    (gateway: GitGateway.Gateway)
+    (token: string option)
+    (failures: ResizeArray<CredentialFor * string>)
+    : Repos.ReposService =
+    let root = TestFiles.tempDir "yession-gateway-repos-"
+    let reposDir = sprintf "%s/repos" root
+    TestFiles.ensureDir reposDir
+    Repos.create
+        { Backend = HostBackend
+          Network = DockerFixture.quietNetwork ()
+          ReposDir = reposDir
+          StartsAt = fun () -> None
+          ExtraReadPaths = []
+          Git = Repos.gitExecutable (Sandboxes.ambientEnv ())
+          AllowedDomains = []
+          AllowProtocol = "http"
+          Route = Repos.GitRoute.through gateway "127.0.0.1"
+          CloneUrl = RepoRef.cloneUrl
+          ResolveToken = fun _ -> async { return token }
+          Canonical = fun _ _ -> async { return None }
+          OnNetworkFailure = fun owner said -> async { failures.Add (owner, said) }
+          Tracer = Telemetry.Tracer.Off
+          Log = Yession.Session.InMemoryEventLog.create (SessionId.create "gateway-suite" |> expect) (fun () -> DateTimeOffset.UtcNow) }
+    |> expect
+
+let private hello = RepoRef.create "octo/hello" |> expect
+let private adder : Repos.RepoCaller = { Actor = ActorRef.Agent; Credential = CredentialFor.Person ada }
+
+/// `add_repo` against the stand-in upstream, answering `status`: what github.com saw, and what
+/// the gateway reported.
+let private addedAgainst (status: int) (token: string option) : Async<Upstream * (CredentialFor * string) list> =
+    async {
+        let! upstream = startUpstream ()
+        upstream.Answer.Value <- status
+        let failures = ResizeArray<CredentialFor * string> ()
+        do!
+            withGatewayAtReporting [ "127.0.0.1" ] upstream.Origin ignore (fun gateway ->
+                async {
+                    let! _ = (sessionRepos gateway token failures).AddRepo adder hello
+                    return ()
+                })
+        do! upstream.Close ()
+        return upstream, List.ofSeq failures
+    }
+
+let private sessionGitTests =
+    testList "the session's own clone, through the gateway" [
+        testCaseAsync "a clone reaches github.com with the caller's credential, as basic auth" <| async {
+            let! upstream, _ = addedAgainst 200 (Some "ghu_lent")
+            Expect.isTrue (upstream.Authorizations.Contains (Some (basic "ghu_lent"))) "the lent credential"
+        }
+
+        testCaseAsync "a clone github.com refuses with 401 is reported against the caller's credential" <| async {
+            let! _, failures = addedAgainst 401 (Some "ghu_expired")
+            Expect.equal (failures |> List.map fst) [ adder.Credential ] "reported once, against the credential's actor"
+        }
+
+        testCaseAsync "a clone with no credential to lend reports nobody's sign-in" <| async {
+            let! _, failures = addedAgainst 200 None
+            Expect.isEmpty failures "no credential was spent, so none can have been refused"
+        }
+    ]
+
 let tests =
     testList "The git gateway" [
         routeTests
         carryTests
         cgiTests
-        Tag.needs "The git gateway, driven by git" [ Tag.Ports ] (fun () -> testList "with a real git" [ doorTests; portsTests; pushTests ])
+        Tag.needs "The git gateway, driven by git" [ Tag.Ports ] (fun () -> testList "with a real git" [ doorTests; portsTests; pushTests; sessionGitTests ])
         Tag.needs "The git gateway, from srt" [ Tag.Srt ] (fun () -> srtTests)
     ]

@@ -13,7 +13,7 @@ open System
 ///     a VALUE: composable, printable, and testable without an operation to run it against.
 ///   * a `Verdict` — what one fault says about trying again, which is a decision with three
 ///     answers rather than two (see the type).
-///   * `Policy.guard` and `Policy.deadline` — decorators. Each takes an operation
+///   * `Policy.guard`, `Policy.deadline` and `Policy.caught` — decorators. Each takes an operation
 ///     `'a -> Async<Result<'b, 'e>>` and returns the SAME shape, so they compose with `|>`
 ///     in whatever order a resource wants and stay invisible to every caller downstream.
 ///
@@ -96,7 +96,44 @@ module Resilience =
         /// Real waiting — what the shipped composition passes for `Sleep`.
         let sleep (delay: TimeSpan) : Async<unit> = Async.Sleep (int delay.TotalMilliseconds)
 
-        /// Bound ONE attempt in time, reporting `timedOut` when it runs over.
+        /// Settle a throw the operation is EXPECTED to make as a fault: `thrown` names the
+        /// fault for each kind it expects, and answers `None` for anything else, which is
+        /// raised on as it was.
+        ///
+        /// A thrown exception is the one way an operation of this shape can leave without
+        /// a `Result`, and nothing above it handles one. `guard` rules only on a settled
+        /// `Error`, so a throw skips the policy entirely, and a caller that matched on the
+        /// railway is resumed down its exception path instead. Every operation that was
+        /// bounded here had made itself total by hand first (an `Async.Catch` over a fetch,
+        /// a `try` around a decode), and an operation that had not was a crash where a
+        /// fault was meant to be. `deadline` composes this in, so a bounded operation's
+        /// expected throws are faults by construction. Use it alone where nothing needs a
+        /// time limit.
+        ///
+        /// Only the expected ones. A throw nobody foresaw is a defect, not a fault: settled
+        /// as one, it is retried, or the caller goes on without what it was for, and the
+        /// defect is never seen. Raised on, it reaches whatever reports errors nothing
+        /// handled.
+        ///
+        /// Cancellation is not caught. It is not an outcome of the operation: it is its
+        /// caller withdrawing, and `deadline` uses it to stop the loser of its race.
+        let caught
+            (thrown: exn -> 'error option)
+            (operation: 'a -> Async<Result<'b, 'error>>)
+            : 'a -> Async<Result<'b, 'error>> =
+            fun input ->
+                async {
+                    match! operation input |> Async.Catch with
+                    | Choice1Of2 outcome -> return outcome
+                    | Choice2Of2 error ->
+                        match thrown error with
+                        | Some fault -> return Error fault
+                        | None -> return raise error
+                }
+
+        /// Bound ONE attempt in time, reporting `timedOut` when it runs over and `thrown`
+        /// when it throws as expected (`caught`): every way an attempt can end, short of a
+        /// defect, is a `Result`.
         ///
         /// An operation that never answers is not a failure any schedule can act on:
         /// `guard` only ever sees a settled `Error`, so a request that hangs is a policy
@@ -116,8 +153,10 @@ module Resilience =
             (sleep: TimeSpan -> Async<unit>)
             (limit: TimeSpan)
             (timedOut: 'error)
+            (thrown: exn -> 'error option)
             (operation: 'a -> Async<Result<'b, 'error>>)
             : 'a -> Async<Result<'b, 'error>> =
+            let operation = caught thrown operation
             fun input ->
                 Async.FromContinuations (fun (settle, fail, _) ->
                     let losing = new System.Threading.CancellationTokenSource ()
