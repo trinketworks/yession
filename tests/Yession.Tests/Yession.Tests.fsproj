@@ -37,6 +37,8 @@
     <Compile Include="Markup.fs" />
     <Compile Include="Version.fs" />
     <Compile Include="Domain.fs" />
+    <!-- The A2UI binding against the spec's own examples and schema cases. -->
+    <Compile Include="A2ui.fs" />
     <Compile Include="Entities.fs" />
     <Compile Include="Routes.fs" />
     <Compile Include="Assets.fs" />
@@ -208,6 +210,7 @@
     <ProjectReference Include="..\..\src\Fable.OpenTelemetry\Fable.OpenTelemetry.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Domain\Yession.Domain.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Codecs\Yession.Codecs.fsproj" />
+    <ProjectReference Include="..\..\src\A2ui\A2ui.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Manager\Yession.Manager.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Session\Yession.Session.fsproj" />
     <ProjectReference Include="..\..\src\Yession.App\Yession.App.fsproj" />

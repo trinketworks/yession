@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A2UI v0.9.1 (https://a2ui.org), bound in F#: the protocol's messages and the basic
+    catalog as types, and the codec that is the one door between them and JSON. Nothing in
+    it is ours, so it is not `Yession.*`, and it refers to nothing of ours: it sits beside
+    `Yession.Codecs` in the order, below the App and the Session that will both speak it.
+
+    The spec's own schemas and test cases pin it (`tests/Yession.Tests/A2ui.fs`, over the
+    copies in `tests/fixtures/a2ui`).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Types.fs" />
+    <Compile Include="Codec.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Thoth.Json" />
+    <PackageReference Include="Thoth.Json.Net" />
+  </ItemGroup>
+
+</Project>
