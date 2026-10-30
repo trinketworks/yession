@@ -825,19 +825,16 @@ module View =
     /// it says what a person could not have guessed — "the refresh token has expired" and
     /// "github rejected this credential" send them to the same button knowing different
     /// things about how they got here.
-    let private credentialReason (hook: string) (scopeChoice: string) (credential: CredentialRow) : TemplateResult =
-        match credential.SignInRequired with
-        | None -> Lit.nothing
-        | Some reason ->
-            // The row above already says the consequence, in the words the prompt over the
-            // timeline uses: this credential needs signing in again. So the provider's own
-            // sentence is the mechanism here, and it folds away like every other one — the
-            // hook stays on it, so a test still reads the fault off the scope it was found on.
-            html $"""
-                <details class="{Style.detailNote}" {hook}="{scopeChoice}" data-detail="credential">
-                  <summary class="{Style.detailSummary}">{Dom.Text.details}</summary>
-                  <span class="{Style.detailBody}">{reason}</span>
-                </details>"""
+    ///
+    /// The row above already says the consequence, in the words the prompt over the timeline
+    /// uses: this credential needs signing in again. So the provider's own sentence is the
+    /// mechanism here, and it folds away like every other one. This is the disclosure's
+    /// INSIDE: each row writes its own `<details>`, because the hook a test reads the fault
+    /// off differs by provider, and an attribute's name cannot be a hole (YES020).
+    let private credentialReason (reason: string) : TemplateResult =
+        html $"""
+            <summary class="{Style.detailSummary}">{Dom.Text.details}</summary>
+            <span class="{Style.detailBody}">{reason}</span>"""
 
     /// The Claude connection panel (Plan 08), living in the settings drawer: status per
     /// sign-in scope, the OAuth flow (approve on claude.ai → paste the shown code), and
@@ -846,9 +843,14 @@ module View =
         let connectedRow (label: string) (scopeChoice: string) (credential: CredentialRow option) =
             match credential with
             | Some credential ->
+                let why =
+                    match credential.SignInRequired with
+                    | None -> Lit.nothing
+                    | Some reason ->
+                        html $"""<details class="{Style.detailNote}" data-claude-signin-required="{scopeChoice}" data-detail="credential">{credentialReason reason}</details>"""
                 html $"""
                     <div class="{Style.sideRow}" data-claude-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.cls [ Style.btnIconBareDanger; "self-center" ]}" aria-label="Disconnect" data-claude-disconnect="{scopeChoice}" @click={Ev(fun _ -> dispatch (ClaudePressedMsg (ClaudePress.Disconnect scopeChoice)))}>{Icon.close}</button></div>
-                    {credentialReason Dom.Hooks.claudeSignInRequired scopeChoice credential}"""
+                    {why}"""
             | None -> html $""""""
         let controls =
             // A command of ours in flight outranks the flow: the controls that would send a
@@ -930,9 +932,14 @@ module View =
         let connectedRow (label: string) (scopeChoice: string) (credential: CredentialRow option) =
             match credential with
             | Some credential ->
+                let why =
+                    match credential.SignInRequired with
+                    | None -> Lit.nothing
+                    | Some reason ->
+                        html $"""<details class="{Style.detailNote}" data-github-signin-required="{scopeChoice}" data-detail="credential">{credentialReason reason}</details>"""
                 html $"""
                     <div class="{Style.sideRow}" data-github-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.cls [ Style.btnIconBareDanger; "self-center" ]}" aria-label="Disconnect GitHub" data-github-disconnect="{scopeChoice}" @click={Ev(fun _ -> dispatch (GitHubPressedMsg (GitHubPress.Disconnect scopeChoice)))}>{Icon.close}</button></div>
-                    {credentialReason Dom.Hooks.githubSignInRequired scopeChoice credential}"""
+                    {why}"""
             | None -> html $""""""
         let controls =
             // As Claude's, for its reason.

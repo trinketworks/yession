@@ -67,6 +67,68 @@ module private Renderable =
             | _ -> false
         else false
 
+/// Where a Lit template hole is allowed to sit.
+///
+/// Lit binds a hole in child content, or as an attribute's VALUE (`a={x}`, `a="b {x}"`,
+/// `@click={f}`, `?disabled={b}`). A hole anywhere else inside a tag (an attribute's NAME,
+/// `<details {hook}="v">`) is not a part Lit knows. The production build does not throw: it
+/// counts one part fewer than there are values, and every value after the hole lands one part
+/// late. The settings drawer's expired credential rendered its `<summary>` with no class and the
+/// class string as its text, because `credentialReason` wrote its hook's name as a hole.
+///
+/// A hole ALONE between a tag's spaces is an element part, a directive's place (`Glide`'s refs),
+/// and is admitted for anything but a string, which there is an attribute name without its `=`.
+///
+/// Nothing on the CLR sees it. The suite renders a template to a string by substitution, which
+/// puts the name exactly where it was meant to go; only Lit's own parse of the static strings
+/// goes wrong, and only in a browser. The format string is in the typed tree, so the position of
+/// every hole is decidable here.
+module private Position =
+
+    /// Where a hole inside a tag sits, when it is not an attribute's value.
+    type Misplaced =
+        /// Part of a name: next to a name's characters, or before `=`, or the tag's own name.
+        /// Never a part Lit binds.
+        | Named
+        /// Alone between spaces, where Lit binds an ELEMENT part: right for a directive (a
+        /// `ref`), and an attribute's name in all but form for a string.
+        | Alone
+
+    /// The holes of a `FormattableString` format, by index, that sit inside a tag and are
+    /// not an attribute's value (outside quotes, and not straight after `=`), or that name
+    /// the tag. `{{` and `}}` are the format's escaped braces. A `<` opens a tag only before
+    /// a letter, `/` or `!`, as the HTML tokenizer reads it, so `a < b` in text is text.
+    let misplaced (format: string) : (int * Misplaced) list =
+        let n = format.Length
+        let ends (c: char) = System.Char.IsWhiteSpace c || c = '>' || c = '/'
+        let rec go i inTag (quote: char option) (prev: char) acc =
+            if i >= n then List.rev acc
+            else
+                let c = format[i]
+                if c = '{' && i + 1 < n && format[i + 1] = '{' then go (i + 2) inTag quote '{' acc
+                elif c = '}' && i + 1 < n && format[i + 1] = '}' then go (i + 2) inTag quote '}' acc
+                elif c = '{' then
+                    let close = format.IndexOf ('}', i)
+                    let index = int (format.Substring (i + 1, close - i - 1))
+                    let next = if close + 1 < n then format[close + 1] else '>'
+                    let found =
+                        if not inTag then (if prev = '<' then Some Named else None)
+                        elif quote.IsSome || prev = '=' then None
+                        elif System.Char.IsWhiteSpace prev && ends next then Some Alone
+                        else Some Named
+                    go (close + 1) inTag quote '}' (match found with Some m -> (index, m) :: acc | None -> acc)
+                elif not inTag then
+                    let opens = c = '<' && i + 1 < n && (System.Char.IsLetter format[i + 1] || format[i + 1] = '/' || format[i + 1] = '!')
+                    go (i + 1) opens None c acc
+                else
+                    match quote with
+                    | Some q when c = q -> go (i + 1) true None c acc
+                    | Some _ -> go (i + 1) true quote c acc
+                    | None when c = '"' || c = '\'' -> go (i + 1) true (Some c) c acc
+                    | None when c = '>' -> go (i + 1) false None c acc
+                    | None -> go (i + 1) true None c acc
+        go 0 false None ' ' []
+
 let private hole (e: FSharpExpr) =
     match e with
     | FSharpExprPatterns.Call (_, mfv, _, [ held ], [ arg ]) when mfv.DisplayName = "box" -> Some (arg.Range, held)
@@ -78,10 +140,15 @@ let private isTemplateFormat (mfv: FSharpMemberOrFunctionOrValue) =
        |> Option.bind (fun e -> e.TryFullName)
        |> Option.contains "System.Runtime.CompilerServices.FormattableStringFactory"
 
+/// Every template in a body: its format, when the compiler left it a constant, and its holes.
 let rec private walk report (e: FSharpExpr) =
     match e with
-    | FSharpExprPatterns.Call (_, mfv, _, _, [ _; FSharpExprPatterns.NewArray (_, holes) ]) when isTemplateFormat mfv ->
-        holes |> List.iter (hole >> Option.iter report)
+    | FSharpExprPatterns.Call (_, mfv, _, _, [ format; FSharpExprPatterns.NewArray (_, holes) ]) when isTemplateFormat mfv ->
+        let format =
+            match format with
+            | FSharpExprPatterns.Const ((:? string as f), _) -> Some f
+            | _ -> None
+        report (format, holes)
     | _ -> ()
 
     for sub in e.ImmediateSubExpressions do
@@ -106,9 +173,10 @@ let templateHole: Analyzer<CliContext> =
             match ctx.TypedTree with
             | Some tree ->
                 declarations
-                    (fun (range, held) ->
-                        if not (Renderable.isRenderable held) then
-                            offenders.Add (range, held))
+                    (fun (_, holes) ->
+                        for (range, held) in List.choose hole holes do
+                            if not (Renderable.isRenderable held) then
+                                offenders.Add (range, held))
                     tree.Declarations
             | None -> ()
 
@@ -119,6 +187,42 @@ let templateHole: Analyzer<CliContext> =
                         $"this template hole renders %s{held.Format FSharpDisplayContext.Empty}, which Lit stringifies "
                         + "however it happens to stringify. Render it to a string here."
                       Code = Code
+                      Severity = Severity.Error
+                      Range = range
+                      Fixes = [] } ]
+        }
+
+[<Literal>]
+let PositionCode = "YES020"
+
+[<CliAnalyzer("TemplateHolePosition", "A Lit template hole is content or an attribute value", "")>]
+let templateHolePosition: Analyzer<CliContext> =
+    fun ctx ->
+        async {
+            let offenders = ResizeArray ()
+
+            match ctx.TypedTree with
+            | Some tree ->
+                declarations
+                    (fun (format, holes) ->
+                        let holes = List.toArray holes
+                        for index, misplaced in format |> Option.map Position.misplaced |> Option.defaultValue [] do
+                            match Array.tryItem index holes |> Option.bind hole with
+                            | Some (range, held) ->
+                                let isString = held.StripAbbreviations().HasTypeDefinition && held.StripAbbreviations().TypeDefinition.TryFullName = Some "System.String"
+                                if misplaced = Position.Named || isString then offenders.Add range
+                            | None -> ())
+                    tree.Declarations
+            | None -> ()
+
+            return
+                [ for range in offenders ->
+                    { Type = "TemplateHolePosition"
+                      Message =
+                        "this template hole sits inside a tag but is not an attribute's value. Lit binds no part "
+                        + "there, and in a production build every later value lands one part late. Write the "
+                        + "attribute's name literally and put only its value in the hole."
+                      Code = PositionCode
                       Severity = Severity.Error
                       Range = range
                       Fixes = [] } ]

@@ -124,7 +124,7 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
         let standings =
             Standing.byConcern view.Standings
             |> List.map (fun s ->
-                html $"""<span> · </span><span class="{Style.attentionInk s.Attention}" {Dom.Manager.standing}="{s.Facet}">{s.Word}</span>""")
+                html $"""<span> · </span><span class="{Style.attentionInk s.Attention}" data-session-standing="{s.Facet}">{s.Word}</span>""")
         line Style.statusOk Style.statusDotLiveLead Dom.Manager.statusRunning "running" (html $"""{standings}""")
     | None, ProcessManager.Launching ->
         line Style.statusWait Style.statusDotBeat Dom.Manager.statusStarting "starting" nothing
@@ -303,7 +303,7 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
         let word =
             match facet with
             | Some facet ->
-                html $"""<span class="{Style.cls [ Style.recordDetailWord; Style.attentionInk attention ]}" {Dom.Manager.standing}="{facet}">{word}</span>"""
+                html $"""<span class="{Style.cls [ Style.recordDetailWord; Style.attentionInk attention ]}" data-session-standing="{facet}">{word}</span>"""
             | None ->
                 html $"""<span class="{Style.cls [ Style.recordDetailWord; Style.attentionInk attention ]}">{word}</span>"""
         if index = 0 then html $"""<span></span>{word}""" else html $"""{Icon.attention attention}{word}"""

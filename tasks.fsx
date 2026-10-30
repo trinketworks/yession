@@ -2992,7 +2992,8 @@ let private fixtures =
       // must stay silent over the same literals.
       "YES018", "Yession.EmDashFixture", [ "Copy.fs" ]
       "YES018", "EmDashInBindingFixture", [ "Binding.fs" ]
-      "YES019", "SyncLoopFixture", [ "Loops.fs" ] ]
+      "YES019", "SyncLoopFixture", [ "Loops.fs" ]
+      "YES020", "TemplateHolePositionFixture", [ "Positions.fs" ] ]
 
 let private fixtureProject name =
     Path.Combine ("analyzers", "fixtures", name, name + ".fsproj")
