@@ -23,6 +23,9 @@ let aQuotedBrace (s: string) = html $"""<b title="{{ {s} }}">x</b>"""
 
 let textAngle (s: string) = html $"""<b>1 < 2 {s}</b>"""
 
+/// An element part, where Lit puts a directive: `Glide`'s refs stand here.
+let aDirective (r: TemplateResult) = html $"""<b class="c" {r}>x</b>"""
+
 let afterATag (s: string) = html $"""<b class="c">x</b> {s}"""
 
 // Rejected: a hole where Lit's parse binds no part.
@@ -32,3 +35,5 @@ let aName (hook: string) (v: string) = html $"""<b {hook}="{v}">x</b>""" // YES0
 let aBareName (hook: string) = html $"""<b class="c" {hook}>x</b>""" // YES020
 
 let aTag (tag: string) = html $"""<{tag}>x</b>""" // YES020
+
+let aNamePrefix (s: string) = html $"""<b data-{s}="v">x</b>""" // YES020

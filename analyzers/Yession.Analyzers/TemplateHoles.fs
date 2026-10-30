@@ -76,18 +76,31 @@ module private Renderable =
 /// late. The settings drawer's expired credential rendered its `<summary>` with no class and the
 /// class string as its text, because `credentialReason` wrote its hook's name as a hole.
 ///
+/// A hole ALONE between a tag's spaces is an element part, a directive's place (`Glide`'s refs),
+/// and is admitted for anything but a string, which there is an attribute name without its `=`.
+///
 /// Nothing on the CLR sees it. The suite renders a template to a string by substitution, which
 /// puts the name exactly where it was meant to go; only Lit's own parse of the static strings
 /// goes wrong, and only in a browser. The format string is in the typed tree, so the position of
 /// every hole is decidable here.
 module private Position =
 
-    /// The holes of a `FormattableString` format, by index, that sit inside a tag and are not an
-    /// attribute's value (outside quotes, and not straight after `=`), or that name the tag.
-    /// `{{` and `}}` are the format's escaped braces. A `<` opens a tag only before a letter, `/` or `!`, as the HTML
-    /// tokenizer reads it, so `a < b` in text is text.
-    let misplaced (format: string) : int list =
+    /// Where a hole inside a tag sits, when it is not an attribute's value.
+    type Misplaced =
+        /// Part of a name: next to a name's characters, or before `=`, or the tag's own name.
+        /// Never a part Lit binds.
+        | Named
+        /// Alone between spaces, where Lit binds an ELEMENT part: right for a directive (a
+        /// `ref`), and an attribute's name in all but form for a string.
+        | Alone
+
+    /// The holes of a `FormattableString` format, by index, that sit inside a tag and are
+    /// not an attribute's value (outside quotes, and not straight after `=`), or that name
+    /// the tag. `{{` and `}}` are the format's escaped braces. A `<` opens a tag only before
+    /// a letter, `/` or `!`, as the HTML tokenizer reads it, so `a < b` in text is text.
+    let misplaced (format: string) : (int * Misplaced) list =
         let n = format.Length
+        let ends (c: char) = System.Char.IsWhiteSpace c || c = '>' || c = '/'
         let rec go i inTag (quote: char option) (prev: char) acc =
             if i >= n then List.rev acc
             else
@@ -97,8 +110,13 @@ module private Position =
                 elif c = '{' then
                     let close = format.IndexOf ('}', i)
                     let index = int (format.Substring (i + 1, close - i - 1))
-                    let bad = (inTag && quote.IsNone && prev <> '=') || (not inTag && prev = '<')
-                    go (close + 1) inTag quote '}' (if bad then index :: acc else acc)
+                    let next = if close + 1 < n then format[close + 1] else '>'
+                    let found =
+                        if not inTag then (if prev = '<' then Some Named else None)
+                        elif quote.IsSome || prev = '=' then None
+                        elif System.Char.IsWhiteSpace prev && ends next then Some Alone
+                        else Some Named
+                    go (close + 1) inTag quote '}' (match found with Some m -> (index, m) :: acc | None -> acc)
                 elif not inTag then
                     let opens = c = '<' && i + 1 < n && (System.Char.IsLetter format[i + 1] || format[i + 1] = '/' || format[i + 1] = '!')
                     go (i + 1) opens None c acc
@@ -188,8 +206,12 @@ let templateHolePosition: Analyzer<CliContext> =
                 declarations
                     (fun (format, holes) ->
                         let holes = List.toArray holes
-                        for index in format |> Option.map Position.misplaced |> Option.defaultValue [] do
-                            if index < holes.Length then offenders.Add holes[index].Range)
+                        for index, misplaced in format |> Option.map Position.misplaced |> Option.defaultValue [] do
+                            match Array.tryItem index holes |> Option.bind hole with
+                            | Some (range, held) ->
+                                let isString = held.StripAbbreviations().HasTypeDefinition && held.StripAbbreviations().TypeDefinition.TryFullName = Some "System.String"
+                                if misplaced = Position.Named || isString then offenders.Add range
+                            | None -> ())
                     tree.Declarations
             | None -> ()
 
