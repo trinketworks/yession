@@ -161,8 +161,10 @@ type SandboxPolicy =
 /// starts fall on the two sides of that line. What a person or agent runs (a terminal's
 /// shell, a block, `setup:`) is work and runs behind it; what the session runs to keep
 /// house (the start-up checks, `git` by path, a `test -d` for a profile) needs no
-/// toolchain and must not pay for one, and runs bare. Carried on the exec rather than
-/// decided by the backend, because the exec is the only thing that knows which it is.
+/// toolchain and must not pay for one, and runs bare. Work also raises its own OOM score
+/// above the container's (`OomScoreAdj`), so a kill for memory takes work, not the
+/// processes that keep the container up. Carried on the exec rather than decided by the
+/// backend, because the exec is the only thing that knows which it is.
 type ProcessEntry =
     /// Behind the entrypoint when one is declared; bare when none is.
     | Entrypoint

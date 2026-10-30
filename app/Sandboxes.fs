@@ -1542,12 +1542,23 @@ module DockerSandbox =
     /// escaped and reopened.
     let private shellQuote (word: string) : string = "'" + word.Replace ("'", "'\\''") + "'"
 
-    /// The argv a process actually runs as: behind the container's entrypoint when the
-    /// exec is work and one is declared, bare otherwise (`ProcessEntry`).
-    let private argvFor (entrypoint: string list option) (exec: SandboxExec) : string list =
-        match exec.Via, entrypoint with
-        | Entrypoint, Some prefix -> prefix @ (exec.Executable :: exec.Arguments)
-        | _ -> exec.Executable :: exec.Arguments
+    /// The argv a process actually runs as (`ProcessEntry`). Housekeeping runs bare, at
+    /// the container's own OOM score. Work first raises its own score to `work`, then runs
+    /// behind the container's entrypoint when one is declared: the entrypoint is work too,
+    /// and everything it starts inherits the score (`OomScoreAdj`). Raising needs no
+    /// capability. A write the kernel refuses stops the work, saying why on stderr, rather
+    /// than run it ranked with the processes that keep the container up. The raise is an
+    /// `sh -c`, so work needs `sh` in the image, as the start command already does.
+    let private argvFor (entrypoint: string list option) (work: OomScoreAdj) (exec: SandboxExec) : string list =
+        match exec.Via with
+        | Direct -> exec.Executable :: exec.Arguments
+        | Entrypoint ->
+            [ "sh"
+              "-c"
+              sprintf "echo %d > /proc/self/oom_score_adj && exec \"$@\"" (OomScoreAdj.value work)
+              "sh" ]
+            @ (entrypoint |> Option.defaultValue [])
+            @ (exec.Executable :: exec.Arguments)
 
     /// What the start command prints once its fixes are in — the line `awaitStarted`
     /// waits for before the first exec.
@@ -1741,6 +1752,7 @@ module DockerSandbox =
                     // The declaration, under a name the docker object below does not shadow.
                     let declared = container
                     let entrypoint = container.Entrypoint
+                    let work = OomScoreAdj.forWork container.OomScoreAdj
                     let client = DK.create ()
                     // The memory ceiling, decided before anything is pulled or built: the
                     // default is a share of what THIS daemon has, which only the daemon can
@@ -1892,11 +1904,10 @@ module DockerSandbox =
                                             // overrun moved, not contained.
                                             host.Memory <- float (ContainerMemory.bytes memory)
                                             host.MemorySwap <- float (ContainerMemory.bytes memory)
-                                            // When the host as a whole runs out, a
-                                            // sandbox process is the kernel's victim
-                                            // before the daemon's own (`OomScoreAdj`).
-                                            host.OomScoreAdj <-
-                                                OomScoreAdj.value (OomScoreAdj.forContainer declared.OomScoreAdj)
+                                            // The container's own processes at 0: above
+                                            // the daemon's own, below the work, which
+                                            // raises itself (`argvFor`, `OomScoreAdj`).
+                                            host.OomScoreAdj <- OomScoreAdj.value OomScoreAdj.container
                                             // A bound on processes, so a fork bomb uses
                                             // up this container, not the host (`PidsLimit`).
                                             host.PidsLimit <-
@@ -1970,7 +1981,7 @@ module DockerSandbox =
                                 try
                                     let execOpts =
                                         jsOptions<DK.ExecOptions> (fun o ->
-                                            o.Cmd <- List.toArray (argvFor entrypoint exec)
+                                            o.Cmd <- List.toArray (argvFor entrypoint work exec)
                                             o.AttachStdin <- true
                                             o.AttachStdout <- true
                                             o.AttachStderr <- true
@@ -2036,7 +2047,7 @@ module DockerSandbox =
                                 try
                                     let execOpts =
                                         jsOptions<DK.ExecOptions> (fun o ->
-                                            o.Cmd <- List.toArray (argvFor entrypoint exec)
+                                            o.Cmd <- List.toArray (argvFor entrypoint work exec)
                                             o.AttachStdin <- true
                                             o.AttachStdout <- true
                                             o.AttachStderr <- true

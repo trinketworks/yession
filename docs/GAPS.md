@@ -1047,6 +1047,15 @@ After the fixes land, one pass rewrites it to what still reproduces.
       - Two blocks that run at once in one container share the counters. A block that another
         cause killed with 137, while a sibling was OOM-killed, reads as a memory kill.
       - The gate's commands, `setup:` and the session's own execs do not read the counters.
+      - One overrun kills two processes: the one that overran, and a moment later one more.
+        Work runs at the declared `oom_score_adj` and everything else in the container at
+        0, so the second is always work: a sibling block, or the overrun's own shell. The
+        container and the read of the counters are not chosen while work is running. A
+        block that the second kill hit reads as killed for memory, which it was.
+      - The container's main process runs at 0, a declared `command` included. Work can
+        write its own score back down to 0, never below.
+      - Work sets its score through `sh -c`, so a work exec needs `sh` in the image. Before,
+        it ran the entrypoint and the work directly.
       - The Docker tier pins case (a) with a 64m container. Nothing tests case (b) for real: it
         needs the whole VM to run out of memory.
     - **No operator ceiling on a container's memory.** Yession checks a repo's `memory:` against

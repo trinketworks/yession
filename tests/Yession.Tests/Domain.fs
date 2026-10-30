@@ -2789,12 +2789,13 @@ let private configTests =
             let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
             Expect.equal back.Container dev.Container "what `encode` writes, `parseSandbox` reads back whole"
 
-        // What the docker backend creates a container with when the block names nothing.
+        // What the docker backend runs work at, and creates a container with, when the
+        // block names nothing.
         testCase "a container that declares no oom-score-adj or pids-limit gets 500 and 4096" <| fun () ->
-            Expect.equal (OomScoreAdj.value (OomScoreAdj.forContainer None)) 500 "a victim before the daemon's own processes (0, -500, -999)"
+            Expect.equal (OomScoreAdj.value (OomScoreAdj.forWork None)) 500 "a victim before the daemon's own processes (0, -500, -999)"
             Expect.equal (PidsLimit.value (PidsLimit.forContainer None)) 4096 "never docker's default, which is no limit"
             let declared = OomScoreAdj.ofInt 900 |> expect
-            Expect.equal (OomScoreAdj.forContainer (Some declared)) declared "a declaration is the value"
+            Expect.equal (OomScoreAdj.forWork (Some declared)) declared "a declaration is the value"
 
         testCase "a cgroup-parent is checked against the daemon's cgroup driver" <| fun () ->
             let path = CgroupParent.parse "/yession" |> expect
