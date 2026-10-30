@@ -2048,10 +2048,10 @@ let private uiChecklistTests =
             Expect.isFalse (none.Contains "data-pr-strip") "and a session watching nothing says nothing"
 
         // The attention mark ranks by SHAPE (docs/visual-design.md, Attention): each face is
-        // told apart without its colour. Working and Pending are the one pair that share a
-        // face, because both are work under way; the ink alone says whose. What is pinned is
-        // what each face draws inside the shared ring, so two levels collapsing into one
-        // shape goes red here.
+        // told apart without its colour. Working alone wears the agent's diamond; Pending
+        // keeps the arc a machine's work always had. What is pinned is what each face draws,
+        // so two levels collapsing into one shape goes red here, and so does the agent's
+        // diamond losing its own motion.
         testCase "each attention level draws its own face, and only work under way keeps moving" <| fun () ->
             let levels =
                 [ Standings.Rest; Standings.Absent; Standings.Pending; Standings.Working; Standings.Wanted; Standings.Wrong ]
@@ -2059,12 +2059,11 @@ let private uiChecklistTests =
             // The face, with the box and ink stripped: what is left is the shape alone.
             let shape (html: string) = html.Substring (html.IndexOf "viewBox")
             let faces = levels |> List.map (drawn >> shape)
-            Expect.equal (List.length (List.distinct faces)) 5 "six levels, five shapes"
-            Expect.equal (shape (drawn Standings.Working)) (shape (drawn Standings.Pending)) "the agent's work and a machine's share the arc"
+            Expect.equal (List.length (List.distinct faces)) 6 "six levels, six shapes"
             Expect.notEqual
                 (Yession.App.Style.attentionInk Standings.Working)
                 (Yession.App.Style.attentionInk Standings.Pending)
-                "and are told apart by ink"
+                "whoever's work it is, the ink still says so too"
             for level in levels do
                 let html = drawn level
                 Expect.stringContains
@@ -2073,8 +2072,12 @@ let private uiChecklistTests =
                     "each spells its level for a test"
                 Expect.equal
                     (html.Contains Yession.App.Style.markOrbit)
-                    (level = Standings.Pending || level = Standings.Working)
-                    (sprintf "%s goes round only if it is under way" (Standings.Attention.name level))
+                    (level = Standings.Pending)
+                    (sprintf "%s goes round only if it is a machine's wait" (Standings.Attention.name level))
+                Expect.equal
+                    (html.Contains Yession.App.Style.markBeat)
+                    (level = Standings.Working)
+                    (sprintf "%s beats only if it is the agent's own" (Standings.Attention.name level))
             // The ones that ask arrive once; the ones that do not, do not.
             let arrives level =
                 let html = drawn level
