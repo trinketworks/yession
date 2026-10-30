@@ -1074,8 +1074,10 @@ module Dom =
         /// something is the pivot's `+`, and this answers what exists.
         let nothingOpenedYet = "No terminals yet"
         /// The `all` page's verb for sending a file in, and what it says to a screen reader.
-        let upload = "upload"
+        let upload = "upload files"
         let uploadNamed = "Upload a file to the artifacts"
+        /// What the sheet says where a file being dragged over it will land.
+        let dropToUpload = "drop to upload"
         /// A file on its way: how much of it has gone.
         let uploadSending (sent: string) (total: string) = sprintf "sending %s of %s" sent total
         let retryUpload (name: string) = sprintf "Send %s again" name

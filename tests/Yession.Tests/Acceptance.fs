@@ -231,6 +231,7 @@ let private representativeModel : ClientModel =
       Switcher = false
       ListHeld = Set.empty
       ClosedShown = false
+      FilesOver = false
       Now = None
       Refused = None
       Stolen = None

@@ -66,20 +66,21 @@ sandboxes:
       # and ~4 min of substitution cold, and it was once a `setup:` line whose whole
       # purpose was to be run behind this entrypoint before there was one.
       entrypoint: nix develop --impure --command
-      # 3 GiB, not the default of three quarters of the daemon's memory. Three quarters
-      # is room for one build, and the VM must also hold the other sessions' containers,
-      # and two builds (`TASKS_BUILD_SLOTS` is 2). A build that needs more than 3 GiB
-      # is killed in its own container, which is the point. Measured
-      # with six MSBuild nodes: a build's `memory.peak` was 3.6-4.2 GB, but that
-      # includes page cache, which the kernel reclaims at the ceiling before it kills.
-      # The largest single process killed was a dotnet at 1.84 GB.
+      # 5 GiB, not the default of three quarters of the daemon's memory. Three quarters
+      # leaves too little for the other sessions' containers. A build that needs more
+      # than 5 GiB is killed in its own container, which is the point. 3 GiB was too
+      # little: `check` runs two Fable compiles beside the test suite's .NET build, and
+      # every `check` at 3 GiB had Fable killed. Measured with six MSBuild nodes: a
+      # build's `memory.peak` was 3.6-4.2 GB, but that includes page cache, which the
+      # kernel reclaims at the ceiling before it kills. The largest single process
+      # killed was a dotnet at 1.84 GB.
       #
       # `oom_score_adj` (500) and `pids_limit` (4096) are not written here: the backend's
       # standard values are the ones this repo wants.
       #
       # The pool cgroup that holds every session's containers is the operator's to name
       # (`cgroup_parent` in the operator profile, docs/deployment.md), not this file's.
-      mem_limit: 3g
+      mem_limit: 5g
     # Wishes, not needs. `github` is the operator's GitHub connection, so `git push` works
     # from a terminal where one is offered. Where the operator offers a warm nix store
     # volume under `nix-container-store`, the container mounts it and the first build
@@ -122,12 +123,12 @@ sandboxes:
       # unauthenticated; nothing here refuses.
       GH_REPO: trinketworks/yession
       # How many heavy builds (`check`, `build`, `compile`, `lint`, …) may run at once across
-      # EVERY sandbox on this docker daemon; the rest wait, and say who they wait for. Two,
-      # because two 3 GiB builds fit the ~7 GiB pool (the operator's `cgroup_parent`) of the 8 GiB
-      # VM. A third does not, and the OOM killer then takes any session's build. The lock
+      # EVERY sandbox on this docker daemon; the rest wait, and say who they wait for. One,
+      # because one 5 GiB build fits the ~7 GiB pool (the operator's `cgroup_parent`) of the
+      # 8 GiB VM. A second does not, and the OOM killer then takes any session's build. The lock
       # is on the shared `/nix` volume, so it does nothing where the operator offers no
       # `nix-container-store`. See `withBuildSlot` in tasks.fsx.
-      TASKS_BUILD_SLOTS: "2"
+      TASKS_BUILD_SLOTS: "1"
 
   # `verify` is minutes long. A second sandbox on the same configuration means the gate
   # runs beside interactive work instead of holding the shell.
@@ -138,7 +139,7 @@ sandboxes:
     container:
       image: nixos/nix
       entrypoint: nix develop --impure --command
-      mem_limit: 3g   # as in `dev`
+      mem_limit: 5g   # as in `dev`
     wants: [ github, nix-container-store ]
 
     # The same reasons as `dev`; `like:` does not exist yet, so both are written twice.
@@ -150,4 +151,4 @@ sandboxes:
         build-users-group =
         sandbox = false
       CONTAINER_DEVENV_DOTFILE: /root/.devenv   # as in `dev`: one per container
-      TASKS_BUILD_SLOTS: "2"                    # as in `dev`: the same slots, shared
+      TASKS_BUILD_SLOTS: "1"                    # as in `dev`: the same slots, shared
