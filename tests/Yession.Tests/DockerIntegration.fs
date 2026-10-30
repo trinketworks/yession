@@ -168,6 +168,31 @@ let tests =
                 do! sandbox.Dispose ()
             })
 
+            // PROBE (not for merge): what the counters and the exec path say around the kill.
+            testCaseAsync "PROBE own limit reads" (async {
+                let client = DK.create ()
+                let! info = client.info () |> Interop.awaitPromise
+                printfn "PROBE daemon: version=%s kernel=%s driver=%s cgroupVersion=%s os=%s"
+                    (string info?ServerVersion) (string info?KernelVersion) info.CgroupDriver (string info?CgroupVersion) (string info?OperatingSystem)
+                for i in 1 .. 8 do
+                    let spec = alpineSpec |> withContainer (fun c -> { c with Memory = Some (ContainerMemory.parse "64m" |> expect) })
+                    let! _, sandbox = startOrFail spec
+                    let inOne =
+                        "cat /sys/fs/cgroup/memory.events | tr '\\n' ' '; echo; (head -c 512m /dev/zero | tail); echo rc=$?; "
+                        + "cat /sys/fs/cgroup/memory.events | tr '\\n' ' '; echo; echo current=$(cat /sys/fs/cgroup/memory.current) peak=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null); "
+                        + "cat /proc/self/cgroup"
+                    let! run, out, err = runInSandbox sandbox "sh" [ "-c"; inOne ] Map.empty None
+                    printfn "PROBE %d control %A out=%s err=%s" i run (out.Replace ("\n", " | ")) err
+                    let! overrun, _, err = runInSandbox sandbox "sh" [ "-c"; "head -c 512m /dev/zero | tail" ] Map.empty None
+                    printfn "PROBE %d watched overrun=%A err=%s" i overrun err
+                    let started = DateTime.UtcNow
+                    for _ in 1 .. 6 do
+                        let! r, o, e = runInSandbox sandbox "cat" [ "/sys/fs/cgroup/memory.events" ] Map.empty None
+                        printfn "PROBE %d   +%.0fms cat=%A out=%s err=%s" i (DateTime.UtcNow - started).TotalMilliseconds r (o.Replace ("\n", " ")) e
+                        do! Async.Sleep 100
+                    do! sandbox.Dispose ()
+            })
+
             // The OOM score and the process bound, read where the kernel keeps them: a
             // process's own `oom_score_adj` (an exec has the container's, which is the
             // point — the work runs in execs) and the container's cgroup `pids.max`.

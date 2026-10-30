@@ -1654,7 +1654,7 @@ module DockerSandbox =
                         match MemoryEvents.parse (said.ToString ()) with
                         | Some counters -> return Ok counters
                         | None -> return Error (sprintf "%s said %A" MemoryEvents.path (said.ToString ()))
-                    | ended -> return Error (sprintf "cat ended %A: %s" ended (complained.ToString().Trim ()))
+                    | ended -> return Error (sprintf "cat ended %A: stderr %A stdout %A" ended (complained.ToString()) (said.ToString ()))
             with ex -> return Error ex.Message
         }
 
