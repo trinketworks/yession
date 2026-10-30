@@ -595,9 +595,9 @@ let private sandboxPolicyTests =
 
         testCase "a read volume mounts read-only" <| fun () ->
             let policy = { Support.emptyPolicy with Volumes = [ "warm", "/nix", ResourceMountMode.Read ] }
-            Expect.contains
-                (Sandboxes.DockerSandbox.mountPlan "/ws" [] policy)
-                { Source = NamedVolume "warm"; Target = "/nix"; Mode = ReadOnly }
+            Expect.isTrue
+                (Sandboxes.DockerSandbox.mountPlan "/ws" [] policy
+                 |> List.contains { Source = NamedVolume "warm"; Target = "/nix"; Mode = ReadOnly })
                 "the sandbox cannot write what each other session builds from"
 
         testCase "a workspace already provided by any mount gets no volume over it" <| fun () ->
