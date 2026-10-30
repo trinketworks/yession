@@ -566,7 +566,7 @@ let private sandboxPolicyTests =
                     DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) Map.empty Map.empty None None None
                     [ Mount { From = "/host/cache"; At = "/cache"; Mode = ResourceMountMode.Write }
                       Socket "/run/thing.sock"
-                      Volume ("warm", "/nix") ]
+                      Volume ("warm", "/nix", ResourceMountMode.Write) ]
                     Set.empty
                     EnvironmentSpec.defaults
                 |> expect
@@ -575,7 +575,7 @@ let private sandboxPolicyTests =
             Expect.isTrue (List.contains "/cache" policy.WritePaths) "a mount is checked where it was mounted"
             Expect.isFalse (List.contains "/host/cache" policy.WritePaths) "never where the host keeps it"
             Expect.isTrue (List.contains "/nix" policy.WritePaths) "a volume's target is a write place"
-            Expect.equal policy.Volumes [ "warm", "/nix" ] "and the volume itself is held, name and target"
+            Expect.equal policy.Volumes [ "warm", "/nix", ResourceMountMode.Write ] "and the volume itself is held, name and target"
             Expect.equal (policy.Binds |> List.map (fun b -> b.At)) [ "/cache" ] "the bind rides verbatim"
 
         testCase "the container's mounts carry its grants beside what it declared" <| fun () ->
@@ -583,7 +583,7 @@ let private sandboxPolicyTests =
                 { Support.emptyPolicy with
                     Binds = [ { From = "/host/cache"; At = "/cache"; Mode = ResourceMountMode.Read } ]
                     Sockets = [ "/run/thing.sock" ]
-                    Volumes = [ "warm", "/nix" ] }
+                    Volumes = [ "warm", "/nix", ResourceMountMode.Write ] }
             let mounts = Sandboxes.DockerSandbox.mountPlan "/ws" [] policy
             Expect.equal
                 mounts
@@ -592,6 +592,13 @@ let private sandboxPolicyTests =
                   { Source = HostPath "/run/thing.sock"; Target = "/run/thing.sock"; Mode = ReadWrite }
                   { Source = NamedVolume "warm"; Target = "/nix"; Mode = ReadWrite } ]
                 "workspace, then declared, then binds, sockets and volumes"
+
+        testCase "a read volume mounts read-only" <| fun () ->
+            let policy = { Support.emptyPolicy with Volumes = [ "warm", "/nix", ResourceMountMode.Read ] }
+            Expect.isTrue
+                (Sandboxes.DockerSandbox.mountPlan "/ws" [] policy
+                 |> List.contains { Source = NamedVolume "warm"; Target = "/nix"; Mode = ReadOnly })
+                "the sandbox cannot write what each other session builds from"
 
         testCase "a workspace already provided by any mount gets no volume over it" <| fun () ->
             // The checkout case: the workdir sits under the /repos bind, and a workspace
@@ -606,7 +613,7 @@ let private sandboxPolicyTests =
             match
                 Sandboxes.policyFor
                     SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
-                    [ Volume ("warm", "/nix") ]
+                    [ Volume ("warm", "/nix", ResourceMountMode.Write) ]
                     Set.empty
                     EnvironmentSpec.defaults
             with
@@ -621,8 +628,8 @@ let private sandboxPolicyTests =
             let policy =
                 Sandboxes.policyFor
                     SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
-                    [ Volume ("warm", "/nix") ]
-                    (Set.ofList [ Volume ("warm", "/nix") ])
+                    [ Volume ("warm", "/nix", ResourceMountMode.Write) ]
+                    (Set.ofList [ Volume ("warm", "/nix", ResourceMountMode.Write) ])
                     EnvironmentSpec.defaults
                 |> expect
             Expect.equal policy.Volumes [] "the want is absent, not half-held"

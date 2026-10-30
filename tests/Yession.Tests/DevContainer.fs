@@ -240,7 +240,7 @@ let tests =
                 let volume = DockerFixture.name ()
                 do! createLabelledVolume (DK.create ()) volume
                 do!
-                    withDev [ Volume (volume, "/nix") ] copiedConfig (fun sandbox -> async {
+                    withDev [ Volume (volume, "/nix", ResourceMountMode.Write) ] copiedConfig (fun sandbox -> async {
                         let! run, out, _ =
                             runInSandbox sandbox "sh"
                                 [ "-c"; "grep -c ' /nix ' /proc/mounts && ls /nix/store | wc -l" ] Map.empty None
@@ -308,9 +308,9 @@ let tests =
                 let mutable failure = None
                 try
                     do!
-                        withDev [ Volume (volume, "/nix") ] withExamples (fun first -> async {
+                        withDev [ Volume (volume, "/nix", ResourceMountMode.Write) ] withExamples (fun first -> async {
                             do!
-                                withDev [ Volume (volume, "/nix") ] withExamples (fun second -> async {
+                                withDev [ Volume (volume, "/nix", ResourceMountMode.Write) ] withExamples (fun second -> async {
                                     let! a = rootOne first "a"
                                     let! b = rootOne second "b"
                                     let! run, garbage, _ =

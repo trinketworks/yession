@@ -2968,19 +2968,19 @@ let private configTests =
                     """{ "version": 1,
                          "resources": {
                            "tools": { "mount": { "from": "/opt/tools" } },
-                           "warm-store": { "volume": { "name": "warm", "at": "/nix" } } } }"""
+                           "warm-store": { "volume": { "name": "warm", "at": "/nix", "mode": "write" } } } }"""
                 |> expect
             let name raw = ResourceName.create raw |> expect
             let leaves, optional =
                 ResourceProfile.grants profile.Resources [] [ name "tools" ] [ name "warm-store" ] |> expect
-            Expect.isTrue (leaves |> List.contains (Volume ("warm", "/nix"))) "the offered want is held"
-            Expect.equal optional (Set.ofList [ Volume ("warm", "/nix") ]) "and only the want's leaf is droppable"
+            Expect.isTrue (leaves |> List.contains (Volume ("warm", "/nix", ResourceMountMode.Write))) "the offered want is held"
+            Expect.equal optional (Set.ofList [ Volume ("warm", "/nix", ResourceMountMode.Write) ]) "and only the want's leaf is droppable"
 
         testCase "a leaf both used and wanted is not droppable" <| fun () ->
             let profile =
                 OperatorProfile.parse
                     """{ "version": 1,
-                         "resources": { "warm-store": { "volume": { "name": "warm", "at": "/nix" } } } }"""
+                         "resources": { "warm-store": { "volume": { "name": "warm", "at": "/nix", "mode": "write" } } } }"""
                 |> expect
             let name raw = ResourceName.create raw |> expect
             let _, optional =

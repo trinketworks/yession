@@ -57,7 +57,7 @@ let private leafShapesFor (i: int) (mode: ResourceMountMode) : ResourceLeaf list
           Socket (sprintf "/run/%d.sock" i)
           Endpoint (sprintf "h%d.example.com" i)
           Variable (sprintf "V%d" i, VariableValue.Text (sprintf "value-%d" i))
-          Volume (sprintf "vol%d" i, sprintf "/vol/%d" i)
+          Volume (sprintf "vol%d" i, sprintf "/vol/%d" i, (if mode = ResourceMountMode.Read then mode else ResourceMountMode.Write))
           Exec (sprintf "/bin/tool%d" i)
           Connection (sprintf "conn%d" i, ConnectionRoute.Git) ]
     for shape in shapes do
@@ -187,6 +187,12 @@ let rec private expand (declarations: (ResourceName * ResourceDecl) list) (name:
     | Some (_, ResourceDecl.Composition children) -> children |> List.collect (expand declarations)
 
 let private check (name: string) (body: unit -> Property<unit>) = testCase name <| fun () -> Property.check (body ())
+
+/// One resource `r`, declared as `leaf` (a JSON object), resolved.
+let private unmarked (leaf: string) : ResourceClosure =
+    let profile =
+        OperatorProfile.parse (sprintf """{ "version": 1, "resources": { "r": %s } }""" leaf) |> expect
+    ResourceProfile.resolve profile.Resources [ ResourceName.create "r" |> expect ] |> expect
 
 /// Two resources that each load and cannot hold together: one target, two modes.
 let private alternatives =
@@ -396,7 +402,8 @@ let tests =
                 let oracle =
                     selection
                     |> List.collect (expand declarations)
-                    |> List.exists (fun (_, sensitivity) -> sensitivity = Sensitivity.Sensitive)
+                    |> List.exists (fun (leaf, sensitivity) ->
+                        sensitivity = Sensitivity.Sensitive || ResourceLeaf.floor leaf = Sensitivity.Sensitive)
                 Expect.equal (ResourceClosure.isSensitive closure) oracle "the naive walk and the closure agree"
             }
 
@@ -435,6 +442,51 @@ let tests =
                     (ResourceProfile.resolve profile [ both ] |> expect |> ResourceClosure.isSensitive)
                     "the louder mark wins, whichever order the routes are folded in"
             }
+
+        // --- the floor: what a kind is, whatever its declaration says ---------------------
+        //
+        // A connection is spent as the person a sandbox's commands run for, so it asks them,
+        // whatever the profile says (invariant 25). A volume and a socket are the operator's:
+        // asking the session user about them asks somebody who is not the one harmed.
+
+        testCase "a connection leaf with no sensitive key is sensitive" <| fun () ->
+            Expect.isTrue
+                (unmarked """{ "connection": { "github": [ "git" ] } }""" |> ResourceClosure.isSensitive)
+                "its kind's floor raises it"
+
+        yield! [ "volume", """{ "volume": { "name": "warm", "at": "/nix", "mode": "write" } }"""
+                 "socket", """{ "socket": "/run/docker.sock" }"""
+                 "mount", """{ "mount": { "from": "/nix" } }"""
+                 "endpoint", """{ "endpoint": "cache.nixos.org" }"""
+                 "variable", """{ "env": { "CI": "1" } }"""
+                 "exec", """{ "exec": "/usr/bin/git" }""" ]
+               |> List.map (fun (kind, leaf) ->
+                   testCase (sprintf "a %s leaf with no sensitive key is ordinary" kind) <| fun () ->
+                       Expect.isFalse (unmarked leaf |> ResourceClosure.isSensitive) "nothing raises it")
+
+        testCase "a composite over a connection leaf is sensitive" <| fun () ->
+            let profile =
+                OperatorProfile.parse """
+                    { "version": 1,
+                      "resources": { "gh": { "connection": { "github": [ "git" ] } },
+                                     "friendly": [ "gh" ] } }"""
+                |> expect
+            Expect.isTrue
+                (ResourceProfile.resolve profile.Resources [ ResourceName.create "friendly" |> expect ]
+                 |> expect
+                 |> ResourceClosure.isSensitive)
+                "the friendly name reaches a connection"
+
+        testCase "sensitive: true raises a mount leaf" <| fun () ->
+            Expect.isTrue
+                (unmarked """{ "mount": { "from": "/nix" }, "sensitive": true }""" |> ResourceClosure.isSensitive)
+                "the operator's mark raises an ordinary kind"
+
+        testCase "sensitive: false does not lower a connection leaf" <| fun () ->
+            Expect.isTrue
+                (unmarked """{ "connection": { "github": [ "git" ] }, "sensitive": false }"""
+                 |> ResourceClosure.isSensitive)
+                "no key lowers a sensitivity"
 
         // --- the syntax an operator writes ---------------------------------------------------
         //
@@ -486,10 +538,10 @@ let tests =
         testCase "a volume resource decodes with its name and target" <| fun () ->
             let profile =
                 OperatorProfile.parse
-                    """{ "version": 1, "resources": { "warm-store": { "volume": { "name": "yession-nix", "at": "/nix" } } } }"""
+                    """{ "version": 1, "resources": { "warm-store": { "volume": { "name": "yession-nix", "at": "/nix", "mode": "write" } } } }"""
                 |> expect
             match ResourceProfile.resolve profile.Resources [ ResourceName.create "warm-store" |> expect ] |> expect |> ResourceClosure.leaves |> Set.toList with
-            | [ Volume (name, at) ] ->
+            | [ Volume (name, at, _) ] ->
                 Expect.equal name "yession-nix" "docker's name for it"
                 Expect.equal at "/nix" "and where the operator says it belongs"
             | other -> failwithf "expected one volume, got %A" other
@@ -499,25 +551,59 @@ let tests =
         testCase "a volume's maintain decodes onto the profile by volume name, leaving the leaf as it was" <| fun () ->
             let profile =
                 OperatorProfile.parse
-                    """{ "version": 1, "resources": { "warm-store": { "volume": { "name": "yession-nix", "at": "/nix", "maintain": { "pin": "/nix/var/yession/pin", "every": "10m" } } } } }"""
+                    """{ "version": 1, "resources": { "warm-store": { "volume": { "name": "yession-nix", "at": "/nix", "mode": "write", "maintain": { "pin": "/nix/var/yession/pin", "every": "10m" } } } } }"""
                 |> expect
             Expect.equal
                 (Map.tryFind "yession-nix" profile.Maintenance)
                 (Some { Pin = "/nix/var/yession/pin"; Every = TimeSpan.FromMinutes 10.0 })
                 "the pin and its interval, under docker's name for the volume"
             match ResourceProfile.resolve profile.Resources [ ResourceName.create "warm-store" |> expect ] |> expect |> ResourceClosure.leaves |> Set.toList with
-            | [ Volume (name, at) ] -> Expect.equal (name, at) ("yession-nix", "/nix") "the grant is the plain volume"
+            | [ Volume (name, at, _) ] -> Expect.equal (name, at) ("yession-nix", "/nix") "the grant is the plain volume"
             | other -> failwithf "expected one volume, got %A" other
 
         testCase "a volume with no maintain is not maintained" <| fun () ->
             let profile =
-                OperatorProfile.parse """{ "version": 1, "resources": { "v": { "volume": { "name": "x", "at": "/x" } } } }"""
+                OperatorProfile.parse """{ "version": 1, "resources": { "v": { "volume": { "name": "x", "at": "/x", "mode": "write" } } } }"""
                 |> expect
             Expect.isEmpty profile.Maintenance "nothing is run in a sandbox the operator did not ask for"
 
+        // Whether a repository may write what every other session builds from is the
+        // operator's decision, so the profile makes them write it down.
+        testCase "a volume with no mode is refused, naming the modes a volume has" <| fun () ->
+            match OperatorProfile.parse """{ "version": 1, "resources": { "v": { "volume": { "name": "x", "at": "/x" } } } }""" with
+            | Ok _ -> failwith "a volume with no mode decoded"
+            | Error e ->
+                Expect.isTrue
+                    (e.Contains "mode: read" && e.Contains "mode: write")
+                    (sprintf "the refusal names read and write, said: %s" e)
+
+        testCase "a volume with mode: read decodes read" <| fun () ->
+            match unmarked """{ "volume": { "name": "x", "at": "/x", "mode": "read" } }""" |> ResourceClosure.leaves |> Set.toList with
+            | [ Volume (_, _, mode) ] -> Expect.equal mode ResourceMountMode.Read "the operator's word"
+            | other -> failwithf "expected one volume, got %A" other
+
+        testCase "an overlay volume is refused, naming the modes a volume has" <| fun () ->
+            match
+                OperatorProfile.parse
+                    """{ "version": 1, "resources": { "v": { "volume": { "name": "x", "at": "/x", "mode": "overlay" } } } }"""
+            with
+            | Ok _ -> failwith "an overlay volume decoded"
+            | Error e ->
+                Expect.isTrue
+                    (e.Contains "read" && e.Contains "write")
+                    (sprintf "the refusal names read and write, said: %s" e)
+
+        // A lease is written into the volume, so a pin in a sandbox that cannot write it
+        // fails every time it runs.
+        testCase "a read volume cannot be maintained" <| fun () ->
+            Expect.isError
+                (OperatorProfile.parse
+                    """{ "version": 1, "resources": { "v": { "volume": { "name": "x", "at": "/x", "mode": "read", "maintain": { "pin": "/p", "every": "10m" } } } } }""")
+                "its lease has nowhere to be written"
+
         testCase "maintain refuses what it cannot run: a relative pin, a unitless or zero interval, an unknown key" <| fun () ->
             let withMaintain (m: string) =
-                OperatorProfile.parse (sprintf """{ "version": 1, "resources": { "v": { "volume": { "name": "x", "at": "/x", "maintain": %s } } } }""" m)
+                OperatorProfile.parse (sprintf """{ "version": 1, "resources": { "v": { "volume": { "name": "x", "at": "/x", "mode": "write", "maintain": %s } } } }""" m)
             Expect.isError (withMaintain """{ "pin": "pin.sh", "every": "10m" }""") "relative to whatever the container's working directory is"
             Expect.isError (withMaintain """{ "pin": "/p", "every": "10" }""") "ten what: a unit is always written"
             Expect.isError (withMaintain """{ "pin": "/p", "every": "0m" }""") "a pin run continuously"
@@ -530,7 +616,7 @@ let tests =
             let two (a: string) (b: string) =
                 OperatorProfile.parse (
                     sprintf
-                        """{ "version": 1, "resources": { "a": { "volume": { "name": "x", "at": "/x", "maintain": %s } }, "b": { "volume": { "name": "x", "at": "/x", "maintain": %s } } } }"""
+                        """{ "version": 1, "resources": { "a": { "volume": { "name": "x", "at": "/x", "mode": "write", "maintain": %s } }, "b": { "volume": { "name": "x", "at": "/x", "mode": "write", "maintain": %s } } } }"""
                         a b)
             Expect.isError
                 (two """{ "pin": "/p", "every": "10m" }""" """{ "pin": "/q", "every": "10m" }""")
@@ -542,7 +628,7 @@ let tests =
 
         testCase "a volume with no target is refused" <| fun () ->
             Expect.isError
-                (OperatorProfile.parse """{ "version": 1, "resources": { "v": { "volume": { "name": "x" } } } }""")
+                (OperatorProfile.parse """{ "version": 1, "resources": { "v": { "volume": { "name": "x", "mode": "write" } } } }""")
                 "the operator is the one author who knows where it belongs"
 
         testCase "a resource that grants nothing is refused, not decoded as an empty one" <| fun () ->
@@ -775,7 +861,7 @@ let tests =
                    Mount { From = "/w"; At = "/w"; Mode = ResourceMountMode.Write }
                    Socket "/run/docker.sock"
                    Endpoint "registry.npmjs.org"
-                   Volume ("yession-nix", "/nix")
+                   Volume ("yession-nix", "/nix", ResourceMountMode.Write)
                    Variable ("CI", VariableValue.Text "1")
                    Exec "/usr/bin/git" ]
                  |> List.map ResourceLeaf.describe)
@@ -784,7 +870,7 @@ let tests =
                   "path:/w:rw"
                   "sock:/run/docker.sock"
                   "net:registry.npmjs.org"
-                  "vol:yession-nix>/nix"
+                  "vol:yession-nix>/nix:rw"
                   "env:CI=1"
                   "exec:/usr/bin/git" ]
                 "the notation"
@@ -813,7 +899,7 @@ let tests =
                 [ Mount { From = "/nix"; At = "/nix"; Mode = ResourceMountMode.Read }
                   Socket "/run/docker.sock"
                   Endpoint "registry.npmjs.org"
-                  Volume ("yession-nix", "/nix")
+                  Volume ("yession-nix", "/nix", ResourceMountMode.Write)
                   Variable ("CI", VariableValue.Text "1")
                   Exec "/usr/bin/git" ] do
                 let written = ResourceLeaf.describe leaf
@@ -1108,6 +1194,40 @@ let tests =
         // This is the bit that decides whether anybody is asked at all, so a host that
         // coarsened the grant quietly clearing it would skip the prompt for the widest
         // version of the very grant the mark exists for.
+        // The approval prompt is what a person consents to, so a volume's line says
+        // whether the sandbox may write the store every other session builds from.
+        testCase "the approval line for a volume shows its mode" <| fun () ->
+            let asked =
+                RepoSandboxes.capabilitiesOn
+                    (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux)
+                    (fun _ _ -> Ok (unmarked """{ "volume": { "name": "warm", "at": "/nix", "mode": "read" } }"""))
+                    ([], [ ResourceName.create "r" |> expect ])
+                |> expect
+            Expect.equal asked.Granted [ "vol:warm>/nix:ro" ] "the mode, on the line a person reads"
+
+        // Only a sensitive set waits for a person (`RepoSandboxes.create`), and the shipped
+        // profile marks nothing: a repository's `wants: [ github ]` lent a credential with
+        // nobody asked.
+        testCase "a grant set holding an unmarked connection waits for approval" <| fun () ->
+            let asked =
+                RepoSandboxes.capabilitiesOn
+                    (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux)
+                    (fun _ _ -> Ok (unmarked """{ "connection": { "github": [ "git" ] } }"""))
+                    ([], [ ResourceName.create "r" |> expect ])
+                |> expect
+            Expect.isTrue asked.Sensitive "somebody is asked"
+
+        // The other half: a shared volume is the operator's decision, made in the profile,
+        // and the session user is not the one to ask about it.
+        testCase "a grant set holding an unmarked volume does not ask the session user" <| fun () ->
+            let asked =
+                RepoSandboxes.capabilitiesOn
+                    (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux)
+                    (fun _ _ -> Ok (unmarked """{ "volume": { "name": "warm", "at": "/nix", "mode": "write" } }"""))
+                    ([], [ ResourceName.create "r" |> expect ])
+                |> expect
+            Expect.isFalse asked.Sensitive "the operator already decided"
+
         testCase "a host that widens a sensitive grant leaves it sensitive" <| fun () ->
             let profile =
                 OperatorProfile.parse """

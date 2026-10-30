@@ -34,10 +34,10 @@ type Lease =
       Maintenance : VolumeMaintenance }
 
 /// The leases a sandbox's granted volumes call for — only the maintained ones.
-let leasesFor (maintenance: Map<string, VolumeMaintenance>) (objectName: string) (volumes: (string * string) list) : Lease list =
+let leasesFor (maintenance: Map<string, VolumeMaintenance>) (objectName: string) (volumes: (string * string * ResourceMountMode) list) : Lease list =
     volumes
     |> List.distinct
-    |> List.choose (fun (volume, at) ->
+    |> List.choose (fun (volume, at, _) ->
         maintenance
         |> Map.tryFind volume
         |> Option.map (fun m -> { Volume = volume; Dir = leaseDir at objectName; Maintenance = m }))

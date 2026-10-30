@@ -636,7 +636,7 @@ type GrantedLeaves =
       Sockets : string list
       Env : Map<string, string>
       Binds : ResourceMount list
-      Volumes : (string * string) list }
+      Volumes : (string * string * ResourceMountMode) list }
 
 let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
     let rec fold (acc: GrantedLeaves) remaining =
@@ -693,7 +693,7 @@ let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
             // Only the container backend can hold one — everywhere else the realisation
             // withheld it before this fold ran — so this channel is filled exactly where
             // it can be consumed.
-            | Volume (name, at) -> fold { acc with Volumes = (name, at) :: acc.Volumes } rest
+            | Volume (name, at, mode) -> fold { acc with Volumes = (name, at, mode) :: acc.Volumes } rest
             // A connection is provisioned by the credential source that forwards it — a
             // route and a per-block loan (`WorkSandboxes`) — and puts nothing into the
             // policy of its own.
@@ -798,8 +798,12 @@ let policyFor
                 granted'.Binds
                 |> List.filter (fun b -> (b.Mode = ResourceMountMode.Read) = mode)
                 |> List.map (fun b -> b.At)
-            (at true) @ granted'.Sockets,
-            (at false) @ granted'.Sockets @ (granted'.Volumes |> List.map snd)
+            let volumesAt mode =
+                granted'.Volumes
+                |> List.filter (fun (_, _, m) -> (m = ResourceMountMode.Read) = mode)
+                |> List.map (fun (_, at, _) -> at)
+            (at true) @ (volumesAt true) @ granted'.Sockets,
+            (at false) @ granted'.Sockets @ (volumesAt false)
     let grantedDomains = granted'.Domains
     let grantedSockets = granted'.Sockets
     let grantedEnv = granted'.Env
@@ -1506,7 +1510,11 @@ module DockerSandbox =
             @ (policy.Sockets
                |> List.distinct
                |> List.map (fun path -> { Source = HostPath path; Target = path; Mode = ReadWrite }))
-            @ (policy.Volumes |> List.map (fun (volume, at) -> { Source = NamedVolume volume; Target = at; Mode = ReadWrite }))
+            @ (policy.Volumes
+               |> List.map (fun (volume, at, mode) ->
+                   { Source = NamedVolume volume
+                     Target = at
+                     Mode = if mode = ResourceMountMode.Read then ReadOnly else ReadWrite }))
         let all = declared @ granted
         let workspaceProvided = all |> List.exists (fun m -> ContainerMount.provides m.Target workspaceTarget)
         (if workspaceProvided then []
