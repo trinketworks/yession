@@ -25,7 +25,7 @@ type AgentRuntimeState =
 
 type ProcessModel =
     { SessionId    : SessionId
-      Synced       : SyncedSessionState<Ylmish.Text>
+      Synced       : SyncedSessionState<Ylmish.Text, A2ui.Surface>
       EventLog     : EventLogState
       Peers        : Map<PeerId, PeerConnectionState>
       Conversation : ConversationProjection

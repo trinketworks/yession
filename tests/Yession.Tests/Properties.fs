@@ -357,7 +357,7 @@ let private genDraftSchedule : Gen<DraftOp list> =
 
 /// Drive the ops through one client program; return the (queueId, snapshot-at-send) pairs
 /// and the doc's decoded synced state after every op (post-send edits included).
-let private runDraftSchedule (ops: DraftOp list) : (string * string) list * PeerId * SyncedSessionState<Ylmish.Text> * Y.Doc =
+let private runDraftSchedule (ops: DraftOp list) : (string * string) list * PeerId * SyncedSessionState<Ylmish.Text, A2ui.Surface> * Y.Doc =
     let doc = Y.Doc.Create ()
     doc.clientID <- 1.0
     let owner = peerIdOf 0

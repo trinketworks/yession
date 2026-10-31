@@ -1141,18 +1141,6 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
 
 let private shellModel : ClientModel = shellModelOf Lines 16
 
-/// The model that the shell's page shows first. `/?replies=<n>` shows the `Replies`
-/// conversation with `n` items, so that a picture (`frames --harness replies`) shows the prose
-/// of a working session. Every other address shows `shellModel`, which the cases use.
-let private openingModel : ClientModel =
-    let asked = "?replies="
-    let search = Browser.Dom.window.location.search
-    if search.StartsWith asked then
-        match System.Int32.TryParse (search.Substring asked.Length) with
-        | true, items when items > 0 -> shellModelOf Replies items
-        | _ -> failwithf "%s: give a count above 0, for example ?replies=24" search
-    else shellModel
-
 /// The shell with an act whose sentence points at things — a sandbox, a connection — so
 /// the page holds a reference drawn INSIDE a line of words. What a rendered string cannot
 /// say about one is where it sits: a reference is part of the sentence, and only a browser
@@ -1212,6 +1200,66 @@ let private candidateRow (name: string) : Repos.RepoCandidate =
       DefaultBranch = "main"
       Private = false
       PushedAt = None }
+
+/// An agent's question, as an A2UI surface: some prose, a choice of several with one chosen, a
+/// field, and a submit whose check waits on the choice. What the camera photographs
+/// (`frames --harness surface`); nothing in the product writes a surface yet.
+let private harnessSurface : A2ui.Surface =
+    let plain id kind : A2ui.Component = { Id = id; Accessibility = None; Weight = None; Kind = kind }
+    let option value label : A2ui.ChoiceOption = { Label = A2ui.Literal label; Value = value }
+    let components =
+        [ plain "root" (A2ui.ComponentKind.Column (A2ui.Static [ "question"; "detail"; "choice"; "note"; "actions" ], None, None))
+          plain "question" (A2ui.ComponentKind.Text (A2ui.Literal "Which branches should I rebase onto master?", Some A2ui.TextVariant.H3))
+          plain "detail" (A2ui.ComponentKind.Text (A2ui.Literal "Three are behind. Pick any you want brought up to date.", None))
+          plain
+              "choice"
+              (A2ui.ComponentKind.ChoicePicker (
+                  None,
+                  Some A2ui.ChoiceVariant.MultipleSelection,
+                  [ option "feat/a2ui-surfaces" "feat/a2ui-surfaces"
+                    option "fix/layout-reads-head" "fix/layout-reads-head"
+                    option "agent/sheet-upload-row" "agent/sheet-upload-row" ],
+                  A2ui.Bound "/choice",
+                  None,
+                  None,
+                  []
+              ))
+          plain "note" (A2ui.ComponentKind.TextField (A2ui.Literal "Anything I should know?", Some (A2ui.Bound "/note"), None, None, []))
+          plain "actions" (A2ui.ComponentKind.Row (A2ui.Static [ "submit"; "skip" ], None, Some A2ui.Align.Center))
+          plain "submitLabel" (A2ui.ComponentKind.Text (A2ui.Literal "Rebase", None))
+          plain
+              "submit"
+              (A2ui.ComponentKind.Button (
+                  "submitLabel",
+                  Some A2ui.ButtonVariant.Primary,
+                  A2ui.Action.Event ("submit", [ "choice", A2ui.Bound "/choice" ]),
+                  [ { Condition = A2ui.Dynamic.Call { Function = A2ui.Required (A2ui.Bound "/choice"); ReturnType = None }
+                      Message = "Pick at least one branch." } ]
+              ))
+          plain "skipLabel" (A2ui.ComponentKind.Text (A2ui.Literal "Not now", None))
+          plain "skip" (A2ui.ComponentKind.Button ("skipLabel", None, A2ui.Action.Event ("skip", []), [])) ]
+    { CatalogId = A2ui.Codec.BasicCatalogId
+      Theme = None
+      SendDataModel = false
+      Components = components |> List.map (fun c -> c.Id, c) |> Map.ofList
+      DataModel = A2ui.JObject [ "choice", A2ui.JArray [ A2ui.JString "fix/layout-reads-head" ] ] }
+
+let private surfaceModel : ClientModel =
+    { shellModel with Synced = { shellModel.Synced with Surfaces = Map.ofList [ "ask", harnessSurface ] } }
+
+/// The model that the shell's page shows first. `/?replies=<n>` shows the `Replies`
+/// conversation with `n` items, so that a picture (`frames --harness replies`) shows the prose
+/// of a working session. `/?surface` shows `surfaceModel`. Every other address shows
+/// `shellModel`, which the cases use.
+let private openingModel : ClientModel =
+    let asked = "?replies="
+    let search = Browser.Dom.window.location.search
+    if search.StartsWith asked then
+        match System.Int32.TryParse (search.Substring asked.Length) with
+        | true, items when items > 0 -> shellModelOf Replies items
+        | _ -> failwithf "%s: give a count above 0, for example ?replies=24" search
+    elif search = "?surface" then surfaceModel
+    else shellModel
 
 let private launchModel : ClientModel =
     let peerId : PeerId = PeerId.create "ada" |> expect
@@ -2051,6 +2099,7 @@ do
           (fun () ->
               show (refusedWith true (paneOn (PaneMode.OnTerminal (TerminalMode.Reading harnessTerminal)) shellModel)))
           "launch", (fun () -> show launchModel)
+          "surface", (fun () -> show surfaceModel)
           "launch-looking", (fun () -> show launchLookingModel)
           "launch-over", (fun () -> show launchOverModel)
           "launch-branch", (fun () -> show launchBranchModel)

@@ -469,6 +469,16 @@ module Dom =
         /// inside a card is still the same chip, and a test that has to know whether it was
         /// grouped is a test of the grouping, not of the chip.
         let chatTaskCard = "data-chat-task-card"
+        /// An agent's A2UI surface in the dock, carrying its surface id.
+        let surface = "data-surface"
+        /// One component drawn on a surface, carrying the component's id. A template's
+        /// component is drawn once per item, so the id can repeat within one surface.
+        let surfaceComponent = "data-surface-component"
+        /// One option of a choice picker, carrying the option's value; `aria-checked` says
+        /// whether it is chosen.
+        let surfaceChoice = "data-surface-choice"
+        /// A component this renderer does not draw yet, carrying the catalog's name for it.
+        let surfaceUnsupported = "data-surface-unsupported"
         /// The call's outcome, in the SAME tokens a block's status uses (`running` / `ok` /
         /// `failed`) rather than a parallel vocabulary meaning the same three things.
         let chatToolStatus = "data-chat-tool-status"
@@ -658,6 +668,12 @@ module Dom =
         // once (the header's status and the sidebar's sync row).
         let catchingUp = "Catching up"
         let upToDate = "Up to date"
+
+        // An agent's surface: what it is called to a screen reader, and what it says in place
+        // of a component this app does not draw yet.
+        let agentSurface = "From the agent"
+        let surfaceUnsupported (kind: string) : string =
+            sprintf "The agent put a %s here, which this app does not show yet." kind
 
         // The chapter rule, and the menu a chapter is opened from.
         //

@@ -69,6 +69,8 @@
     <Compile Include="Keystroke.fs" />
     <Compile Include="Glide.fs" />
     <Compile Include="Arrival.fs" />
+    <!-- An agent's A2UI surface, drawn: below the view, which puts it in the dock. -->
+    <Compile Include="SurfaceView.fs" />
     <Compile Include="View.fs" />
     <Compile Include="Client.fs" />
   </ItemGroup>
@@ -92,6 +94,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Yession.Domain\Yession.Domain.fsproj" />
     <ProjectReference Include="..\Yession.Codecs\Yession.Codecs.fsproj" />
+    <ProjectReference Include="..\A2ui\A2ui.fsproj" />
   </ItemGroup>
 
 </Project>

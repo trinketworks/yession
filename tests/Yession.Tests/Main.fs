@@ -88,6 +88,7 @@ let all =
         Tag.needs "The proxy example" [ Tag.Ports; Tag.Native ] (fun () -> ProxyMap.tests)
         Tag.needs "Session" [] (fun () -> Session.tests)
         Tag.needs "Sync" [] (fun () -> Sync.tests)
+        Tag.needs "Agent surfaces" [] (fun () -> AgentSurfaces.tests)
         Tag.needs "TerminalPattern" [] (fun () -> TerminalPattern.tests)
         Tag.needs "Terminals" [] (fun () -> Terminals.tests)
         Tag.needs "Keystrokes" [] (fun () -> Keystrokes.tests)

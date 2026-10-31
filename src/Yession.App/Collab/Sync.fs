@@ -28,6 +28,12 @@ module CollabText =
           OfString = Text.ofString
           ToString = Text.toString }
 
+/// An A2UI surface as its doc entry holds it: the catalog it was drawn from, and every
+/// component as one JSON register. The data model is not here (`SurfaceDataKey`).
+type SurfaceEntry =
+    { Catalog : string
+      Components : string }
+
 /// The adaptive companion of `SyncedSessionState`, hand-written in place of Adaptify
 /// codegen (the model is small and Adaptify would add a build step). Drafts and queue
 /// entries are keyed by their app-minted ids so concurrent — even offline — creation is
@@ -43,7 +49,9 @@ type AdaptiveSyncedState =
       Model : cval<ModelId option>
       Chapters : cmap<string, ChapterMark<Text>>
       LaunchDismissed : cval<unit option>
-      Attachments : cmap<string, Attachment> }
+      Attachments : cmap<string, Attachment>
+      Surfaces : cmap<string, SurfaceEntry>
+      SurfaceData : cmap<string, string> }
 
 module SyncedStateSync =
 
@@ -64,34 +72,94 @@ module SyncedStateSync =
                 | Ok terminal, Ok author -> Some (terminal, author)
                 | _ -> None
 
-    let private draftsByKey (m: SyncedSessionState<Text>) : HashMap<string, DraftState> =
+    let private draftsByKey (m: SyncedSessionState<Text, A2ui.Surface>) : HashMap<string, DraftState> =
         m.Drafts |> Map.toSeq |> Seq.map (fun (k, v) -> PeerId.value k, v) |> HashMap.ofSeq
 
-    let private queueByKey (m: SyncedSessionState<Text>) : HashMap<string, QueuedMessage> =
+    let private queueByKey (m: SyncedSessionState<Text, A2ui.Surface>) : HashMap<string, QueuedMessage> =
         m.Queue |> Map.toSeq |> Seq.map (fun (k, v) -> QueueId.value k, v) |> HashMap.ofSeq
 
-    let private terminalDraftsByKey (m: SyncedSessionState<Text>) : HashMap<string, TerminalDraft> =
+    let private terminalDraftsByKey (m: SyncedSessionState<Text, A2ui.Surface>) : HashMap<string, TerminalDraft> =
         m.TerminalDrafts
         |> Map.toSeq
         |> Seq.map (fun ((terminal, author), v) -> TerminalDraftKey.make terminal author, v)
         |> HashMap.ofSeq
 
-    let private pendingByKey (m: SyncedSessionState<Text>) : HashMap<string, PendingAct> =
+    let private pendingByKey (m: SyncedSessionState<Text, A2ui.Surface>) : HashMap<string, PendingAct> =
         m.Pending |> Map.toSeq |> Seq.map (fun (k, v) -> QueueId.value k, v) |> HashMap.ofSeq
 
-    let private chaptersByKey (m: SyncedSessionState<Text>) : HashMap<string, ChapterMark<Text>> =
+    let private chaptersByKey (m: SyncedSessionState<Text, A2ui.Surface>) : HashMap<string, ChapterMark<Text>> =
         m.Chapters |> Map.toSeq |> Seq.map (fun (k, v) -> MessageId.value k, v) |> HashMap.ofSeq
 
     /// The dismissed launch question as a register that is either there or not — the shape
     /// `model` has, for its reason: presence is one key, so there is no half-written slot.
-    let private launchDismissedOf (m: SyncedSessionState<Text>) : unit option =
+    let private launchDismissedOf (m: SyncedSessionState<Text, A2ui.Surface>) : unit option =
         if m.LaunchDismissed then Some () else None
 
-    let private attachmentsByKey (m: SyncedSessionState<Text>) : HashMap<string, Attachment> =
+    let private attachmentsByKey (m: SyncedSessionState<Text, A2ui.Surface>) : HashMap<string, Attachment> =
         m.Attachments |> Map.toSeq |> Seq.map (fun (k, v) -> UploadId.value k, v) |> HashMap.ofSeq
 
+    /// The doc key of one top-level field of one surface's data model.
+    ///
+    /// The data model is a sibling root rather than a map inside the surface's entry, for two
+    /// reasons. Ylmish re-flushes a keyed-map item whole and never deletes a nested key the new
+    /// item lacks, so a field the agent removed would come back. And a root of its own is keyed
+    /// per FIELD, so two people answering different fields of one surface merge rather than
+    /// the later answer taking the whole model. One field is still last-writer-wins, which is
+    /// what a two-way binding writes: the whole value at its path.
+    ///
+    /// The field is escaped as a JSON pointer token, so it holds no `/` and the split from the
+    /// right is unambiguous whatever the agent called the surface.
+    module SurfaceDataKey =
+
+        let make (surface: string) (field: string) : string =
+            surface + "/" + field.Replace("~", "~0").Replace ("/", "~1")
+
+        let parse (key: string) : (string * string) option =
+            match key.LastIndexOf '/' with
+            | -1 -> None
+            | at -> Some (key.Substring (0, at), key.Substring(at + 1).Replace("~1", "/").Replace ("~0", "~"))
+
+    /// The surface's components as the one register that holds them: the spec's JSON, in id
+    /// order, so every writer of the same components writes the same text.
+    let componentsText (components: Map<string, A2ui.Component>) : string =
+#if FABLE_COMPILER
+        let list = Thoth.Json.Encode.list
+#else
+        let list = Thoth.Json.Net.Encode.list
+#endif
+        components |> Map.toList |> List.map snd |> A2ui.Codec.toString (List.map A2ui.Codec.encodeComponent >> list)
+
+    let private componentsOfText (text: string) : Result<A2ui.Component list, string> =
+#if FABLE_COMPILER
+        A2ui.Codec.fromString (Thoth.Json.Decode.list A2ui.Codec.componentDecoder) text
+#else
+        A2ui.Codec.fromString (Thoth.Json.Net.Decode.list A2ui.Codec.componentDecoder) text
+#endif
+
+    /// A data model's top-level fields, the last of a repeated name winning. A model whose
+    /// root is not an object has no fields: the spec's data model is an object, and a binding
+    /// path names a field of it.
+    let private dataFields (model: A2ui.Json) : (string * A2ui.Json) list =
+        match model with
+        | A2ui.JObject fields -> fields |> List.fold (fun acc (k, v) -> Map.add k v acc) Map.empty |> Map.toList
+        | _ -> []
+
+    let private surfacesByKey (m: SyncedSessionState<Text, A2ui.Surface>) : HashMap<string, SurfaceEntry> =
+        m.Surfaces
+        |> Map.toSeq
+        |> Seq.map (fun (id, s) -> id, { Catalog = s.CatalogId; Components = componentsText s.Components })
+        |> HashMap.ofSeq
+
+    let private surfaceDataByKey (m: SyncedSessionState<Text, A2ui.Surface>) : HashMap<string, string> =
+        m.Surfaces
+        |> Map.toSeq
+        |> Seq.collect (fun (id, s) ->
+            dataFields s.DataModel
+            |> List.map (fun (field, value) -> SurfaceDataKey.make id field, A2ui.Codec.toString A2ui.Codec.encodeJsonValue value))
+        |> HashMap.ofSeq
+
     /// `Create` for Ylmish's options: build the adaptive companion from a model.
-    let create (m: SyncedSessionState<Text>) : AdaptiveSyncedState =
+    let create (m: SyncedSessionState<Text, A2ui.Surface>) : AdaptiveSyncedState =
         { Drafts = cmap (draftsByKey m)
           Queue = cmap (queueByKey m)
           Title = cval m.Title
@@ -101,11 +169,13 @@ module SyncedStateSync =
           Model = cval m.Model
           Chapters = cmap (chaptersByKey m)
           LaunchDismissed = cval (launchDismissedOf m)
-          Attachments = cmap (attachmentsByKey m) }
+          Attachments = cmap (attachmentsByKey m)
+          Surfaces = cmap (surfacesByKey m)
+          SurfaceData = cmap (surfaceDataByKey m) }
 
     /// `Update` for Ylmish's options: fold the next model into the companion. Setting
     /// `cmap.Value` yields keyed deltas, so only changed entries re-encode.
-    let update (a: AdaptiveSyncedState) (m: SyncedSessionState<Text>) : unit =
+    let update (a: AdaptiveSyncedState) (m: SyncedSessionState<Text, A2ui.Surface>) : unit =
         a.Drafts.Value <- draftsByKey m
         a.Queue.Value <- queueByKey m
         a.Title.Value <- m.Title
@@ -116,6 +186,8 @@ module SyncedStateSync =
         a.Chapters.Value <- chaptersByKey m
         a.LaunchDismissed.Value <- launchDismissedOf m
         a.Attachments.Value <- attachmentsByKey m
+        a.Surfaces.Value <- surfacesByKey m
+        a.SurfaceData.Value <- surfaceDataByKey m
 
     /// Per-draft encoding: the map key *is* the author (one draft per client), so `author` is
     /// re-stated only because an empty object would write no Yjs key at all (Ylmish creates a
@@ -244,6 +316,13 @@ module SyncedStateSync =
               "bytes", Encode.float (AVal.constant (float a.Bytes))
               "uploader", Encode.string (AVal.constant (PeerId.value a.Uploader)) ]
 
+    /// A surface: the catalog it names, and its components as one register. Only the agent's
+    /// side writes either, so there is nothing for two writers to merge.
+    let private encodeSurface (s: SurfaceEntry) : Encoded =
+        Encode.object
+            [ "catalog", Encode.string (AVal.constant s.Catalog)
+              "components", Encode.string (AVal.constant s.Components) ]
+
     /// Which parts of the session sync, and how each merges. Everything else in the
     /// models — the conversation projection above all — is app-only by omission. Rich bodies
     /// are deliberately absent: they live as sibling `Y.XmlFragment` roots the app manages
@@ -265,7 +344,10 @@ module SyncedStateSync =
               // A flat register like `model`: the word says what happened to the question,
               // so a later answer of another kind is another word rather than another key.
               "launch", Encode.option (fun (_: aval<unit>) -> Encode.string (AVal.constant "dismissed")) a.LaunchDismissed
-              "attachments", Encode.map encodeAttachment (a.Attachments :> amap<_, _>) ]
+              "attachments", Encode.map encodeAttachment (a.Attachments :> amap<_, _>)
+              "surfaces", Encode.map encodeSurface (a.Surfaces :> amap<_, _>)
+              // One register per field, holding the field's value as JSON (`SurfaceDataKey`).
+              "surfaceData", Encode.map (fun (value: string) -> Encode.string (AVal.constant value)) (a.SurfaceData :> amap<_, _>) ]
 
     /// Every entry of a keyed map that decodes, and none that does not. An entry that fails is
     /// SKIPPED rather than failing the map around it, which is what plain `Decode.map` does: the
@@ -436,6 +518,44 @@ module SyncedStateSync =
                       Uploader = uploader }
             | _ -> acc)
 
+    let private decodeSurface<'m> : Decoder<'m, string * string> =
+        Decode.object {
+            let! catalog = Decode.object.required "catalog" Decode.string
+            let! components = Decode.object.required "components" Decode.string
+            return catalog, components
+        }
+
+    /// Same totality rule as every other entry: a surface whose components do not decode is
+    /// skipped, and so is a field that does not, or that belongs to no surface — what a write
+    /// racing the surface's deletion leaves behind.
+    let private surfacesToDomain
+        (entries: HashMap<string, string * string>)
+        (data: HashMap<string, string>)
+        : Map<string, A2ui.Surface> =
+        let fields =
+            data
+            |> HashMap.toSeq
+            |> Seq.choose (fun (key, text) ->
+                match SurfaceDataKey.parse key, A2ui.Codec.fromString A2ui.Codec.json text with
+                | Some (surface, field), Ok value -> Some (surface, (field, value))
+                | _ -> None)
+            |> Seq.groupBy fst
+            |> Seq.map (fun (surface, found) -> surface, found |> Seq.map snd |> Seq.sortBy fst |> List.ofSeq)
+            |> Map.ofSeq
+        (Map.empty, HashMap.toSeq entries)
+        ||> Seq.fold (fun acc (id, (catalog, components)) ->
+            match componentsOfText components with
+            | Ok components ->
+                acc
+                |> Map.add
+                    id
+                    { A2ui.Surface.CatalogId = catalog
+                      A2ui.Surface.Theme = None
+                      A2ui.Surface.SendDataModel = false
+                      A2ui.Surface.Components = components |> List.map (fun c -> c.Id, c) |> Map.ofList
+                      A2ui.Surface.DataModel = A2ui.JObject (Map.tryFind id fields |> Option.defaultValue []) }
+            | Error _ -> acc)
+
     /// A model register the smart constructor refuses reads back as ABSENT — the provider's
     /// default — rather than as a model nothing can run: the fallback is always something a
     /// turn can actually do.
@@ -546,7 +666,7 @@ module SyncedStateSync =
     /// Total over a doc a peer garbled, too: every slot goes through `slot` and every keyed
     /// map through `entries`, so what does not decode is absent rather than fatal. That is
     /// the browser's binding and the Session's `ofDoc` alike — one reader, one answer.
-    let decode<'m> : Decoder<'m, SyncedSessionState<Text>> =
+    let decode<'m> : Decoder<'m, SyncedSessionState<Text, A2ui.Surface>> =
         Decode.object {
             let! drafts = slot "drafts" (entries decodeDraft)
             let! queue = slot "queue" (entries decodeQueued)
@@ -558,6 +678,8 @@ module SyncedStateSync =
             let! chapters = slot "chapters" (entries decodeChapter)
             let! launch = slot "launch" Decode.string
             let! attachments = slot "attachments" (entries decodeAttachment)
+            let! surfaces = slot "surfaces" (entries decodeSurface)
+            let! surfaceData = slot "surfaceData" (entries Decode.string)
             return
                 { Drafts = drafts |> Option.map draftsToDomain |> Option.defaultValue Map.empty
                   Queue = queue |> Option.map queueToDomain |> Option.defaultValue Map.empty
@@ -572,7 +694,11 @@ module SyncedStateSync =
                   // a question still open, which is the answer that asks a person again
                   // rather than the one that hides the card from them for good.
                   LaunchDismissed = (launch = Some "dismissed")
-                  Attachments = attachments |> Option.map attachmentsToDomain |> Option.defaultValue Map.empty }
+                  Attachments = attachments |> Option.map attachmentsToDomain |> Option.defaultValue Map.empty
+                  Surfaces =
+                    surfacesToDomain
+                        (defaultArg surfaces HashMap.empty)
+                        (defaultArg surfaceData HashMap.empty) }
         }
 
     open Fable.Core
@@ -597,6 +723,8 @@ module SyncedStateSync =
         if doc.share.has "pending" then (doc.getMap "pending" : Yjs.Y.Map<obj>) |> ignore
         if doc.share.has "chapters" then (doc.getMap "chapters" : Yjs.Y.Map<obj>) |> ignore
         if doc.share.has "attachments" then (doc.getMap "attachments" : Yjs.Y.Map<obj>) |> ignore
+        if doc.share.has "surfaces" then (doc.getMap "surfaces" : Yjs.Y.Map<obj>) |> ignore
+        if doc.share.has "surfaceData" then (doc.getMap "surfaceData" : Yjs.Y.Map<obj>) |> ignore
 
     /// The live `Y.Text` a chapter's name IS, found by the message its chapter opens at —
     /// what a caret in that name is measured against (`FocusField.ChapterName`).
@@ -632,7 +760,7 @@ module SyncedStateSync =
     /// turns what does not decode into absence. An `Error` here is Ylmish breaking that
     /// contract, not a peer garbling the doc — the "Sync boundary" cases pin that every
     /// garbled shape still reads — so it fails loudly rather than reading as empty.
-    let ofDoc (doc: Yjs.Y.Doc) : SyncedSessionState<Text> =
+    let ofDoc (doc: Yjs.Y.Doc) : SyncedSessionState<Text, A2ui.Surface> =
         materializeRoots doc
         match Decode.run () decode doc with
         | Ok synced -> synced
