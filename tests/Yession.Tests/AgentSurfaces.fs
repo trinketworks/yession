@@ -9,6 +9,8 @@ module Yession.Tests.AgentSurfaces
 open Fable.Pyxpecto
 open Yjs
 open A2ui
+open Yession.Domain.Agent
+open Yession.Domain.Chat
 open Yession.Domain.Collab
 open Yession.App
 open Yession.App.Collab
@@ -292,10 +294,120 @@ let private toolTests =
         }
     ]
 
+let private ada = Yession.Domain.Principal.Peer (Yession.Domain.PeerId.create "ada" |> expect)
+let private messageId = Yession.Domain.MessageId.create "m1" |> expect
+
+/// What the session records when Ada presses `go` on the example's surface.
+let private answered : Yession.Domain.Surfaces.SurfaceActionTaken =
+    { MessageId = messageId
+      SurfaceId = "pick"
+      Component = "go"
+      Name = "submit"
+      Context = "{\"choice\":[\"main\"]}"
+      By = ada }
+
+let private pressTests =
+    testList "Press" [
+        testCase "a button whose checks fail sends nothing, and says why" <| fun () ->
+            Expect.equal
+                (Surfaces.press (Map.ofList [ "ask", choiceSurface [] ]) "ask" "submit" "")
+                (Error "Pick at least one branch.")
+                "the check's own message"
+
+        testCase "a ready button sends its event with the context read now" <| fun () ->
+            Expect.equal
+                (Surfaces.press (Map.ofList [ "ask", choiceSurface [ "choice", branches [ "dev" ] ] ]) "ask" "submit" "")
+                (Ok ("submit", [ "choice", branches [ "dev" ] ]))
+                "the name and what the picker holds"
+
+        testCase "something that is not a button is not pressed" <| fun () ->
+            Expect.isError (Surfaces.press (Map.ofList [ "ask", choiceSurface [] ]) "ask" "question" "") "a Text"
+
+        testCase "a button on a surface that is gone is not pressed" <| fun () ->
+            Expect.equal
+                (Surfaces.press Map.empty "ask" "submit" "")
+                (Error "there is no surface 'ask'")
+                "the surface named"
+
+        // A button stamped from a template reads its context under the item it was drawn for,
+        // which is how one surface lists several things to approve, each with its own button.
+        testCase "a button in a template reads relative paths under its item" <| fun () ->
+            let row =
+                plain "approve" (ComponentKind.Button ("label", None, Action.Event ("approve", [ "name", Bound "name" ]), []))
+            let surface =
+                surfaceOf [ row ] [ "items", JArray [ JObject [ "name", JString "a" ]; JObject [ "name", JString "b" ] ] ]
+            Expect.equal
+                (Surfaces.press (Map.ofList [ "list", surface ]) "list" "approve" "/items/1")
+                (Ok ("approve", [ "name", JString "b" ]))
+                "the second item's name"
+
+        testCaseAsync "the session records the answer as the doc holds it" <| async {
+            let doc = Y.Doc.Create ()
+            let! _ = show doc Yession.Session.SurfaceTool.example
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+            p.Dispatch (user (EditSurfaceMsg ("pick", "/choice", branches [ "main" ])))
+            Expect.equal
+                (Yession.Session.SurfaceTool.answer (surfacesIn doc) messageId ada "pick" "go" "")
+                (Ok answered)
+                "the example's button, carrying the choice as JSON"
+        }
+
+        testCase "an answer owes the agent a turn, as whoever pressed" <| fun () ->
+            Expect.equal
+                (AgentWake.pendingReason [ Yession.Domain.SessionEvent.SurfaceActionTaken answered ])
+                (Some (SurfaceAnswered "pick", ada))
+                "owed to Ada"
+
+        testCase "an answer is the agent's to read in the timeline" <| fun () ->
+            Expect.equal
+                (Act.sentence (Act.SurfaceActionTaken answered) |> Yession.Domain.Phrase.said)
+                "pressed submit on surface pick ({\"choice\":[\"main\"]})"
+                "what was pressed and what it carried"
+
+        testCase "an answer on the wire is the shape it will always be" <| fun () ->
+            let pinned =
+                """{"type":"surfaceActionTaken","payload":{"messageId":"m1","surfaceId":"pick","component":"go","name":"submit","context":"{\"choice\":[\"main\"]}","by":{"kind":"peer","peerId":"ada"}}}"""
+            Expect.equal
+                (Yession.Codecs.Codec.fromString Yession.App.Codecs.Events.sessionEvent pinned)
+                (Ok (Yession.Domain.SessionEvent.SurfaceActionTaken answered))
+                "the durable form decodes to the event"
+
+        testCase "a turn woken by an answer round-trips" <| fun () ->
+            let started =
+                Yession.Domain.SessionEvent.AgentTurnStarted
+                    { AgentTurnId = Yession.Domain.AgentTurnId.create "t1" |> expect
+                      Cause = TurnCause.Woke (SurfaceAnswered "pick") }
+            let codec = Yession.App.Codecs.Events.sessionEvent
+            Expect.equal
+                (Yession.Codecs.Codec.fromString codec (Yession.Codecs.Codec.toString codec started))
+                (Ok started)
+                "round-trip"
+
+        testCase "a press round-trips as a command" <| fun () ->
+            let codec = Yession.App.Codecs.Frames.session Yession.Codecs.Codec.string
+            let frame =
+                Yession.Domain.Link.Command (
+                    Yession.Domain.Link.Request (
+                        Yession.Domain.RequestId.fresh (),
+                        Yession.Domain.Link.PressSurfaceButton ("pick", "go", "/items/1")))
+            Expect.equal
+                (Yession.Codecs.Codec.fromString codec (Yession.Codecs.Codec.toString codec frame))
+                (Ok frame)
+                "round-trip"
+
+        testCase "pressing a ready button asks the session" <| fun () ->
+            let model = withSurface (choiceSurface [ "choice", branches [ "main" ] ])
+            Expect.equal
+                (ClientModel.update (PressSurfaceMsg ("ask", "submit", "")) model |> snd)
+                [ ClientEffect.PressSurface ("ask", "submit", "") ]
+                "one request, naming the button"
+    ]
+
 let tests =
     testList "Agent surfaces" [
         syncTests
         modelTests
         viewTests
         toolTests
+        pressTests
     ]

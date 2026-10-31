@@ -87,6 +87,17 @@ type SessionCommand =
     /// `RepoCloned` or `RepoCloneFailed`, never in this response — a clone is not something to
     /// hold a peer's command pump for.
     | AddRepo of repo: RepoRef * branch: string option
+    /// Press a button on a surface the agent showed (`show_surface`).
+    ///
+    /// The peer names the BUTTON, never what it says: the Session reads the button's event and
+    /// its context out of the doc it holds, and refuses while the button's checks fail. So the
+    /// answer recorded is the one everybody can see, not one a peer composed. `scope` is the
+    /// template item the button was drawn under (`/items/2`), or `""` at the surface's root,
+    /// which is where a relative path in its context is read.
+    ///
+    /// ACCEPTED means the answer is on the record (`SurfaceActionTaken`) and the agent owes a
+    /// turn for it; what the agent does with it reaches everyone the usual way.
+    | PressSurfaceButton of surfaceId: string * componentId: string * scope: string
 
 type SessionCommandResult =
     | CommandAccepted

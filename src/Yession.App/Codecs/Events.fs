@@ -122,6 +122,8 @@ module Events =
                 | IntegrationLost id ->
                     Encode.object [ "kind", Encode.string "integrationLost"; "terminalId", Codec.terminalId.Encode id ]
                 | PrChanged pr -> Encode.object [ "kind", Encode.string "prChanged"; "pr", Codec.prRef.Encode pr ]
+                | SurfaceAnswered surfaceId ->
+                    Encode.object [ "kind", Encode.string "surfaceAnswered"; "surfaceId", Encode.string surfaceId ]
                 | CutOff turn -> Encode.object [ "kind", Encode.string "cutOff"; "agentTurnId", Codec.agentTurnId.Encode turn ])
           Decode =
             Decode.field "kind" Decode.string
@@ -131,6 +133,7 @@ module Events =
                 | "integrationLost" -> Decode.field "terminalId" Codec.terminalId.Decode |> Decode.map IntegrationLost
                 | "prChanged" -> Decode.field "pr" Codec.prRef.Decode |> Decode.map PrChanged
                 | "cutOff" -> Decode.field "agentTurnId" Codec.agentTurnId.Decode |> Decode.map CutOff
+                | "surfaceAnswered" -> Decode.field "surfaceId" Decode.string |> Decode.map SurfaceAnswered
                 | other -> Decode.fail (sprintf "Unknown wake reason: %s" other)) }
 
     let private agentTurnStarted : Codec<AgentTurnStarted> =
@@ -1427,6 +1430,25 @@ module Events =
                   ArtifactShared.Digest = get.Required.Field "digest" (Codec.viaSmartCtor ContentDigest.create Decode.string)
                   ArtifactShared.Actor = get.Required.Field "actor" Codec.actor.Decode }) }
 
+    let private surfaceActionTaken : Codec<Yession.Domain.Surfaces.SurfaceActionTaken> =
+        { Encode =
+            fun (a: Yession.Domain.Surfaces.SurfaceActionTaken) ->
+                Encode.object
+                    [ "messageId", Codec.messageId.Encode a.MessageId
+                      "surfaceId", Encode.string a.SurfaceId
+                      "component", Encode.string a.Component
+                      "name", Encode.string a.Name
+                      "context", Encode.string a.Context
+                      "by", Codec.principal.Encode a.By ]
+          Decode =
+            Decode.object (fun get ->
+                { Yession.Domain.Surfaces.SurfaceActionTaken.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
+                  Yession.Domain.Surfaces.SurfaceActionTaken.SurfaceId = get.Required.Field "surfaceId" Decode.string
+                  Yession.Domain.Surfaces.SurfaceActionTaken.Component = get.Required.Field "component" Decode.string
+                  Yession.Domain.Surfaces.SurfaceActionTaken.Name = get.Required.Field "name" Decode.string
+                  Yession.Domain.Surfaces.SurfaceActionTaken.Context = get.Required.Field "context" Decode.string
+                  Yession.Domain.Surfaces.SurfaceActionTaken.By = get.Required.Field "by" Codec.principal.Decode }) }
+
     let private commandRefused : Codec<CommandRefused> =
         { Encode =
             fun (p: CommandRefused) ->
@@ -1668,6 +1690,8 @@ module Events =
                     Encode.object [ "type", Encode.string "tabOpened"; "payload", tabOpened.Encode p ]
                 | SessionEvent.TabClosed p ->
                     Encode.object [ "type", Encode.string "tabClosed"; "payload", tabClosed.Encode p ]
+                | SessionEvent.SurfaceActionTaken p ->
+                    Encode.object [ "type", Encode.string "surfaceActionTaken"; "payload", surfaceActionTaken.Encode p ]
                 | SessionEvent.CommandRefused p ->
                     Encode.object [ "type", Encode.string "commandRefused"; "payload", commandRefused.Encode p ]
                 | SessionEvent.GatedCommandFailed p ->
@@ -1759,6 +1783,8 @@ module Events =
                 | "tabClosed" -> Decode.field "payload" tabClosed.Decode |> Decode.map SessionEvent.TabClosed
                 | "artifactShared" ->
                     Decode.field "payload" artifactShared.Decode |> Decode.map SessionEvent.ArtifactShared
+                | "surfaceActionTaken" ->
+                    Decode.field "payload" surfaceActionTaken.Decode |> Decode.map SessionEvent.SurfaceActionTaken
                 | "commandRefused" -> Decode.field "payload" commandRefused.Decode |> Decode.map SessionEvent.CommandRefused
                 | "gatedCommandFailed" -> Decode.field "payload" gatedCommandFailed.Decode |> Decode.map SessionEvent.GatedCommandFailed
                 | "toolUseStarted" -> Decode.field "payload" toolUseStarted.Decode |> Decode.map ToolUseStarted

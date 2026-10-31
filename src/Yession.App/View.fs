@@ -2983,6 +2983,7 @@ module View =
                         | IntegrationLost _ -> Dom.Text.wokeIntegrationLost, Dom.Text.turnWokeIntegrationLost
                         | PrChanged _ -> Dom.Text.wokePrChanged, Dom.Text.turnWokePrChanged
                         | CutOff _ -> Dom.Text.wokeCutOff, Dom.Text.turnWokeCutOff
+                        | SurfaceAnswered _ -> Dom.Text.wokeSurfaceAnswered, Dom.Text.turnWokeSurfaceAnswered
                     html $"""<span class="{Style.statusFaint}" data-message-woke="{token}" title="{title}">{Dom.Text.turnWoke}</span>"""
             // A message still arriving says so with the CARET at the end of its body, and with
             // nothing else. `streaming` used to be a word on this line as well — one line

@@ -38,7 +38,7 @@ module SurfaceTool =
 
     let description =
         sprintf
-            "Show the people here a small interface and keep it current: a question with choices, or a short form. Give A2UI v0.9.1 messages, in order. createSurface makes a surface. Its catalogId is \"%s\". updateComponents adds or replaces components by id. One component must have the id \"root\". updateDataModel sets the value at a JSON pointer. Without `value` it removes that value. deleteSurface takes the surface down. Do that when its question is settled. Everyone here sees the same surface, above the composer. An input binds to the data model with {\"path\": \"/name\"}. What one person picks or types, everyone sees. This session draws only these components: %s. A message with any other component is refused. The call applies all of its messages or none of them. A refusal says which message failed and why. A multiple-choice question, with the choice required before the button is ready:\n%s"
+            "Show the people here a small interface and keep it current: a question with choices, or a short form. Give A2UI v0.9.1 messages, in order. createSurface makes a surface. Its catalogId is \"%s\". updateComponents adds or replaces components by id. One component must have the id \"root\". updateDataModel sets the value at a JSON pointer. Without `value` it removes that value. deleteSurface takes the surface down. Do that when its question is settled. Everyone here sees the same surface, above the composer. An input binds to the data model with {\"path\": \"/name\"}. What one person picks or types, everyone sees. When a person presses a Button whose action is an event, and its checks pass, you get a new turn: the conversation says who pressed it, the event name and its context. This session draws only these components: %s. A message with any other component is refused. The call applies all of its messages or none of them. A refusal says which message failed and why. A multiple-choice question, with the choice required before the button is ready:\n%s"
             A2ui.Codec.BasicCatalogId
             (String.concat ", " drawnNames)
             example
@@ -73,6 +73,26 @@ module SurfaceTool =
             match acc with
             | Error e -> Error e
             | Ok read -> judge index text |> Result.map (fun message -> read @ [ message ]))
+
+    /// What a person's press records, read from the surfaces as they stand: the button's event
+    /// and its context, or why it sends nothing (`A2ui.Surfaces.press`).
+    let answer
+        (surfaces: Map<string, A2ui.Surface>)
+        (messageId: Yession.Domain.MessageId)
+        (by: Yession.Domain.Principal)
+        (surfaceId: string)
+        (componentId: string)
+        (scope: string)
+        : Result<Yession.Domain.Surfaces.SurfaceActionTaken, string> =
+        A2ui.Surfaces.press surfaces surfaceId componentId scope
+        |> Result.map (fun (name, context) ->
+            { Yession.Domain.Surfaces.SurfaceActionTaken.MessageId = messageId
+              Yession.Domain.Surfaces.SurfaceActionTaken.SurfaceId = surfaceId
+              Yession.Domain.Surfaces.SurfaceActionTaken.Component = componentId
+              Yession.Domain.Surfaces.SurfaceActionTaken.Name = name
+              Yession.Domain.Surfaces.SurfaceActionTaken.Context =
+                A2ui.Codec.toString A2ui.Codec.encodeJsonValue (A2ui.JObject context)
+              Yession.Domain.Surfaces.SurfaceActionTaken.By = by })
 
     /// The tool, over whatever holds the surfaces.
     let tool
