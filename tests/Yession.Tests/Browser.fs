@@ -3936,9 +3936,10 @@ let editorTests =
 
         // One door. The pane has offered a `+` on its strip, "+ New terminal" at the foot of its
         // switcher, and an empty pane's own button — two of them on one screen at once, a
-        // reader left to work out they were one act. Now the sheet's New terminal is the
-        // only one: on screen exactly while the sheet is down, and nowhere else — more tabs
-        // than fit, the `all` page, an empty pane, and `all` over an empty pane. Counted by
+        // reader left to work out they were one act. Now the list's New terminal is the
+        // only one: on screen exactly while the list is — dropped as the sheet, or docked as
+        // an empty pane's body — and nowhere else. Counted at more tabs than fit, the `all`
+        // page, and an empty pane, which is the list docked. Counted by
         // what is painted at each control's centre, so one present but covered is not a door,
         // and one a reader can see is — which is the only count that means anything to them.
         //
@@ -3974,15 +3975,13 @@ let editorTests =
                     do! waitVisible "a closed tab's way to put it away" page "#shell [data-pane-tab-dismiss]"
                     do! awaitU (page.ClickAsync "#shell [data-pane-tab-dismiss]")
                     do! waitCount (sprintf "%d tabs left" left) page "#shell [data-terminal-closed-tab]" left
-                do! waitVisible "the empty pane's pointer to the sheet" page "#shell [data-pane-empty-hint]"
+                do! waitVisible "the list, docked in the empty pane" page "#shell [data-content-list]"
+                do! waitAbsent "no scrim over a docked list" page "#shell [data-pane-sheet-scrim]"
                 let! empty = doors "an empty pane"
-                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                do! waitVisible "the all page, over an empty pane" page "#shell [data-content-list]"
-                let! emptyListing = doors "the all page over an empty pane"
                 Expect.equal
-                    [ many; listing; empty; emptyListing ]
-                    [ "more tabs than fit: 0"; "the all page: 1"; "an empty pane: 0"; "the all page over an empty pane: 1" ]
-                    "one door, on the sheet"
+                    [ many; listing; empty ]
+                    [ "more tabs than fit: 0"; "the all page: 1"; "an empty pane: 1" ]
+                    "one door, on the list"
             }
 
         // A closed tab stays until it is put away (F2; desktop journey, finding 16): its × does
