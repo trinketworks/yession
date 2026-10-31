@@ -89,7 +89,7 @@ let private rowsUnder (root: Element) : Element list =
 
 /// Swap only the rows that changed, when that is all that changed: the same sessions in the
 /// same order, and everything around them as it was. A row that says nothing new stays the
-/// node it was, because its attention mark's motion lives on that node (`Style.markOrbit`):
+/// node it was, because its attention mark's motion lives on that node (`Style.statusSpinCw`):
 /// a whole-section swap on every frame restarted every orbit and replayed every arrival, on
 /// rows whose state had not moved. Anything else (a session added, gone or moved, a filter,
 /// a count) answers `false`, and the caller replaces the whole fragment as before.
