@@ -107,7 +107,9 @@ let private allowedScripts : (string * string) list =
 let private helperScripts (checkout: Checkout) : string list =
     checkout.Files
     |> List.filter (fun path -> not (path.StartsWith "examples/"))
-    |> List.filter (fun path -> path.EndsWith ".sh" || (text checkout path).StartsWith "#!")
+    // Two bytes, not the file: the population includes untracked files, so it is whatever
+    // somebody left in the checkout. A 3 GB core dump read whole OOM-killed the suite.
+    |> List.filter (fun path -> path.EndsWith ".sh" || TestFiles.readHead (checkout.Root + "/" + path) 2 = "#!")
 
 // --- lockfiles ---------------------------------------------------------------------------
 
