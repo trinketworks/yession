@@ -31,7 +31,6 @@
   --color-blue-up-1: color-mix(in oklab, var(--color-blue), var(--color-white) calc(var(--step-tone) * 1));    /* hover: the lit side */
   --color-blue-down-1: color-mix(in oklab, var(--color-blue), var(--color-black) calc(var(--step-tone) * 1));  /* the agent's own marks; paint, never text */
   --color-blue-down-5: color-mix(in oklab, var(--color-blue), var(--color-black) calc(var(--step-tone) * 5));  /* the agent avatar's ground; paint, never text */
-  --color-green-down-2: color-mix(in oklab, var(--color-green), var(--color-black) calc(var(--step-tone) * 2)); /* live's dim: the low of a live dot's beat, still 3:1 as a mark (Phase4 pins it) */
 
   /* Roles. A role picks a constant or a variant and never defines a colour, so one step
      retuned moves every role on it. The grounds climb one grey step each; the two rules sit
@@ -128,8 +127,8 @@
 
   /* --- Motion: named and timed here. The keyframes, and why each thing moves as it does, are in app/tailwind.css. --- */
   --animate-pulse2: pulse2 1.1s ease-in-out infinite;
-  --animate-beat-live: beat-live 1.1s ease-in-out infinite;
-  --animate-beat-wait: beat-wait 1.1s ease-in-out infinite;  /* a wait's dot, on the live one's tempo */
+  --animate-status-spin-cw: status-spin-cw 1.6s linear infinite;  /* still going: one arc of the spin mark */
+  --animate-status-spin-ccw: status-spin-ccw 1.6s linear infinite;  /* and the other, the same rate, the other way */
   --animate-mark-orbit: mark-orbit 1.6s linear infinite;  /* the attention mark's Moving: the arc goes round */
   --animate-mark-halo: mark-halo 3s cubic-bezier(0.2, 0.6, 0.3, 1) 0.9s 3 both;  /* Wanted: three breaths, after it has arrived */
   --animate-mark-close: mark-close 0.9s ease-in-out 1 both;  /* Wanted arriving: the arc closes to a ring */
