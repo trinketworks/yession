@@ -66,6 +66,18 @@ let append (path: string) (text: string) : unit = fs.appendFileSync (path, box t
 /// Read a whole file as text.
 let read (path: string) : string = fs.readFileSync (path, "utf8")
 
+/// At most the first `count` bytes of a file, as text. For a question about how a file
+/// starts, asked of files nobody chose: `read` holds the whole file, and a 3 GB core dump
+/// left untracked in a checkout once made a whole-file read OOM the Node suite.
+let readHead (path: string) (count: int) : string =
+    let fd = fs.openSync (U2.Case1 path, U2.Case1 "r")
+    try
+        let bytes = buffer.Buffer.alloc count
+        let read = fs.readSync (fd, bytes, 0., float count, 0.)
+        (bytes.slice (0, int read)).toString ()
+    finally
+        fs.closeSync fd
+
 /// A file's bytes as base64 — the shape a binary constant in the product carries.
 let readBase64 (path: string) : string = fs.readFileSync (path, "base64")
 
