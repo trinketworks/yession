@@ -1687,13 +1687,6 @@ module Style =
     /// Pending's arc going round its track: the one mark that never stops, because the work
     /// under it has not. Under reduced motion the arc holds still at three o'clock.
     let markOrbit = "origin-center [transform-box:fill-box] animate-mark-orbit motion-reduce:animate-none"
-    /// Working's own motion: a highlight running round the solid diamond's own edge, same
-    /// ink as the fill under it (`currentColor`, both) — never a second colour arriving, only
-    /// the edge seeming to give a little where the line passes each point. The fill itself
-    /// never moves: the attention mark's ink owes the surface 3:1 at every frame, the same
-    /// rule `markOrbit`'s arc keeps by staying at its ink and only turning. Reduced motion
-    /// holds the line still, at the diamond's top point.
-    let markRun = "animate-mark-run motion-reduce:animate-none"
     /// Wanted's halo: breathes out three times once the mark has arrived, then is gone, so a
     /// session left waiting an hour does not nag. Reduced motion draws no halo at all.
     let markHalo = "origin-center [transform-box:fill-box] animate-mark-halo motion-reduce:hidden"
@@ -2703,9 +2696,18 @@ module Style =
     /// that word (`Glide`). Drawn larger, not laid out larger (`.agent-think-start`), so the
     /// line it stands on is the line the first word will set and nothing moves when it does.
     let agentThinkingStart = agentThinking + " agent-think-start"
-    /// What it turns: the tip and the cube inside it, drawn by `View.thinkingCube`.
+    /// What it turns: the tip and the cube inside it, drawn by `Icon.cube`.
     let agentThinkingTip = "agent-think-tip"
     let agentThinkingCube = "agent-think-cube"
+
+    /// Working's attention mark (`Icon.attention`, `Icon.cube`): the very cube above, turning in
+    /// the attention mark's own 12px box (`.agent-think-mark` in app/tailwind.css) instead of
+    /// the line of text a thought stands on — the agent at work is one claim whether it is read
+    /// inline in the transcript or ranked beside a session's other standings, so it wears the
+    /// one mark rather than a shape of its own (the running stroke round a diamond this mark
+    /// used to draw, `markRun`, is retired with it). `block`, not inline: there is no baseline
+    /// to sit on here.
+    let attentionCube = agentThinking + " agent-think-mark block shrink-0"
 
     /// How many slots the thinking series has and how long each lasts — `think-tip` in
     /// `app/tailwind.css` is ten moves of two seconds. Kept beside `thinkFrom`, the one place

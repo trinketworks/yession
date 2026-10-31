@@ -16,7 +16,9 @@ open Yession.Domain.Content
 /// text), square caps — Metro's geometry, no curves, no fills. `aria-hidden` because every icon
 /// here sits inside a control that carries its own accessible name. The attention mark is the
 /// exception by kind, not by taste: it is a POINT, and the point is always round
-/// (docs/visual-design.md, Form).
+/// (docs/visual-design.md, Form) — Working alone excepted again, which is not an SVG at all but
+/// the agent's own cube (`cube`, `attention`'s Working case), the one mark this module shares
+/// with the transcript rather than drawing for itself.
 ///
 /// A mark is a BOX and a WEIGHT, and the two are not independent: see `Box` and `Weight`.
 module Icon =
@@ -292,27 +294,38 @@ module Icon =
         | ContentKind.Image _ -> imageSm
         | ContentKind.Download -> fileSm
 
+    /// What a cube turns: the tip and its six faces (`.agent-think` in `app/tailwind.css` says
+    /// how). The caller supplies the box it turns in and the motion it plays — the transcript's
+    /// own (`Style.agentThinking`, `.agentThinkingStart`) or the attention mark's own
+    /// (`Style.attentionCube`) — because what the mark is on is the caller's to say and so is
+    /// its hook. One cube, because the agent at work is one claim wherever it is read: moved
+    /// here from `View.thinkingCube` now that Working's attention mark needs the very same one.
+    let cube : TemplateResult =
+        html
+            $"""<span class="{Style.agentThinkingTip}"><span class="{Style.agentThinkingCube}"><i></i><i></i><i></i><i></i><i></i><i></i></span></span>"""
+
     /// How much something wants a person (docs/visual-design.md, Attention). A POINT, not an
-    /// icon, so it is round and may be filled. One rule ranks the five: attention is INK, and
-    /// each level carries more of it than the one below, so they read in order in greyscale
-    /// and under a blur. One 12-unit box, centre (6,6), and the chrome's 1.5px stroke:
+    /// icon, so it is round and may be filled — Working alone excepted, which is not drawn to
+    /// this rule at all. One rule ranks the five: attention is INK, and each level carries more
+    /// of it than the one below, so they read in order in greyscale and under a blur. One
+    /// 12-unit box, centre (6,6), and the chrome's 1.5px stroke:
     ///
     /// - Rest: a point, radius 1.75.
     /// - Absent: an empty ring, radius 4.25: a seat with nobody in it.
     /// - Pending: a quarter of that ring, going round a faint track of the rest of it — a
     ///   machine's work, needs nobody, so it keeps the shape a wait never gets to use for
     ///   itself (`Style.attentionInk`).
-    /// - Working: a solid diamond, the agent's own shape and nobody else's (`Style.agentAvatar`'s
-    ///   diamond seen flat, not turned in the hand as the transcript's cube is), a little
-    ///   larger than the other marks' radius because a plain fill reads smaller than a ring
-    ///   of the same reach. A line in the same ink runs once round its edge rather than the
-    ///   diamond going round itself — the agent at work is not a wait on a track, it is the
-    ///   mark's own edge that moves.
+    /// - Working: the agent's own cube (`cube` above), turning in place — the exact mark that
+    ///   turns inline in the transcript while the agent thinks, now ranked among a session's
+    ///   other standings too, because an agent at work is one claim however it is read. Not a
+    ///   point and not `currentColor`: it keeps its own blue always (`--color-agent`), the one
+    ///   exception the box and ink above do not reach.
     /// - Wanted: a disc, radius 4, with a halo that breathes out three times on arrival.
     /// - Wrong: a disc, radius 3, in a ring, radius 5.25: the most ink, the whole box.
     ///
     /// The rings start at twelve o'clock (`rotate(-90 6 6)`), so an arc or a ring drawing
-    /// round sets off from the top. Motion is `Style`'s (`markOrbit` and its siblings).
+    /// round sets off from the top. Motion is `Style`'s (`markOrbit` and its siblings) for the
+    /// rings, and the cube's own (`app/tailwind.css`'s `think-*` keyframes) for Working.
     /// `data-attention` spells the level for a test (`Attention.name`). `aria-hidden`: the word
     /// beside it, or the name of the control it sits in, says the state.
     let attention (level: Yession.Domain.Standings.Attention) =
@@ -330,7 +343,7 @@ module Icon =
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.35"></circle><g transform="rotate(-90 6 6)"><circle class="{Style.markOrbit}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 26.7"></circle></g></svg>"""
         | Yession.Domain.Standings.Working ->
             html
-                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M6 1.25 L10.75 6 L6 10.75 L1.25 6 Z" fill="currentColor"></path><path class="{Style.markRun}" d="M6 1.25 L10.75 6 L6 10.75 L1.25 6 Z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-dasharray="6.72 20.15"></path></svg>"""
+                $"""<span class="{Style.attentionCube}" data-attention="{name}" aria-hidden="true">{cube}</span>"""
         | Yession.Domain.Standings.Wanted ->
             html
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle class="{Style.markHalo}" cx="6" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="1"></circle><g transform="rotate(-90 6 6)"><circle class="{Style.markClose}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="26.7"></circle></g><circle class="{Style.markFill}" cx="6" cy="6" r="4" fill="currentColor"></circle></svg>"""

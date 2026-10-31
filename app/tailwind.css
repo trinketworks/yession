@@ -204,15 +204,6 @@
   from { transform: scale(0); }
   to { transform: scale(1); }
 }
-/* Working: a line traces the solid diamond's own edge, round at the diamond's four points —
-   the point it passes bulges a little wider than the fill under it, which is the "distorting"
-   read: not a different colour arriving (it is `currentColor` throughout, fill and line
-   alike), only the edge seeming to give as the line goes by. One lap, at `mark-orbit`'s rate,
-   because both say "still going". 6.72 of 26.87 is a quarter of the diamond's perimeter at
-   this size, the same proportion `mark-orbit`'s quarter arc keeps of the ring's. */
-@keyframes mark-run {
-  to { stroke-dashoffset: -26.87; }
-}
 @keyframes beat {
   0% { scale: 1; }
   45% { scale: 0.72; }
@@ -627,11 +618,22 @@ summary::-webkit-details-marker { display: none; }
 .agent-think {
   display: inline-block;
   position: relative;
-  width: calc(1ex + 0.06em);
-  height: calc(1ex + 0.06em);
+  --think-unit: calc(1ex + 0.06em);
+  width: var(--think-unit);
+  height: var(--think-unit);
   vertical-align: -0.03em;
   perspective: 8em;
-  --think-side: calc((1ex + 0.06em) * 0.70710678);
+  --think-side: calc(var(--think-unit) * 0.70710678);
+}
+/* Working's attention mark (`Icon.attention`, `Icon.cube`): the very same cube, turning in the
+   attention mark's own 12px box instead of the line of text a thought stands on — an agent at
+   work is one claim whether it is read inline or ranked beside a session's other standings.
+   `block`, because there is no baseline to sit on here; everything else about the turn (the
+   keyframes below, the Lambert veils) cares only about the box's own proportions, never its
+   absolute size, so the one override is the size itself. */
+.agent-think-mark {
+  --think-unit: 12px;
+  display: block;
 }
 .agent-think-tip {
   position: absolute;
