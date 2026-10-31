@@ -299,9 +299,10 @@ module Icon =
     ///
     /// - Rest: a point, radius 1.75.
     /// - Absent: an empty ring, radius 4.25: a seat with nobody in it.
-    /// - Pending: a quarter of that ring, going round a faint track of the rest of it — a
-    ///   machine's work, needs nobody, so it keeps the shape a wait never gets to use for
-    ///   itself (`Style.attentionInk`).
+    /// - Pending: the same two arcs passing each other round the ring that mark "still going"
+    ///   everywhere else (`Icon.spin`, `Style.statusSpinCw`/`statusSpinCcw`) — a machine's
+    ///   work, needs nobody, so it wears the one mark every other wait wears rather than a
+    ///   shape of its own (`Style.attentionInk`).
     /// - Working: a solid diamond, the agent's own shape and nobody else's (`Style.agentAvatar`'s
     ///   diamond seen flat, not turned in the hand as the transcript's cube is), a little
     ///   larger than the other marks' radius because a plain fill reads smaller than a ring
@@ -311,10 +312,13 @@ module Icon =
     /// - Wanted: a disc, radius 4, with a halo that breathes out three times on arrival.
     /// - Wrong: a disc, radius 3, in a ring, radius 5.25: the most ink, the whole box.
     ///
-    /// The rings start at twelve o'clock (`rotate(-90 6 6)`), so an arc or a ring drawing
-    /// round sets off from the top. Motion is `Style`'s (`markOrbit` and its siblings).
-    /// `data-attention` spells the level for a test (`Attention.name`). `aria-hidden`: the word
-    /// beside it, or the name of the control it sits in, says the state.
+    /// The rings that stand alone (Absent, Wanted, Wrong) start at twelve o'clock
+    /// (`rotate(-90 6 6)`), so drawing one round sets off from the top; Pending's two arcs are
+    /// the shared spin mark exactly as it is everywhere else, caps and all, so they keep that
+    /// mark's own rest position instead. Motion is `Style`'s (`markRun` and its siblings, and
+    /// `statusSpinCw`/`statusSpinCcw` for Pending). `data-attention` spells the level for a
+    /// test (`Attention.name`). `aria-hidden`: the word beside it, or the name of the control
+    /// it sits in, says the state.
     let attention (level: Yession.Domain.Standings.Attention) =
         let box = Style.attentionMark level
         let name = Yession.Domain.Standings.Attention.name level
@@ -327,7 +331,7 @@ module Icon =
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5"></circle></svg>"""
         | Yession.Domain.Standings.Pending ->
             html
-                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.35"></circle><g transform="rotate(-90 6 6)"><circle class="{Style.markOrbit}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 26.7"></circle></g></svg>"""
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle class="{Style.statusSpinCw}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 20.02"></circle><circle class="{Style.statusSpinCcw}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 20.02" stroke-dashoffset="13.35"></circle></svg>"""
         | Yession.Domain.Standings.Working ->
             html
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M6 1.25 L10.75 6 L6 10.75 L1.25 6 Z" fill="currentColor"></path><path class="{Style.markRun}" d="M6 1.25 L10.75 6 L6 10.75 L1.25 6 Z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-dasharray="6.72 20.15"></path></svg>"""
@@ -341,11 +345,12 @@ module Icon =
     /// Still going: two arcs passing each other, turning opposite ways round a 12-unit ring.
     /// One shape for every status that says "not settled yet" — a command live now and a wait
     /// under way alike (`Style.statusSpin`, which used to be two different beating dots,
-    /// `statusDotLive` and `statusDotBeat`). Always `ink-dim`: this mark answers "is it still
-    /// going", never "how much does it want a person", so it never reaches for the attention
-    /// mark's ink or its shapes (the diamond, the ring, the disc) — the word beside it, in the
-    /// status's own colour (`Style.statusOk`'s green, `Style.statusWait`'s dim ink), is what
-    /// still says whether what is going is live or a wait. Each arc a QUARTER of the ring,
+    /// `statusDotLive` and `statusDotBeat`), and Pending's own attention mark (`Icon.attention`)
+    /// wears the very same two circles, because a machine's work is the same "still going" as
+    /// any other — the one exception is the ink: a status stays `ink-dim` always, so the word
+    /// beside it (`Style.statusOk`'s green, `Style.statusWait`'s dim ink) is what still says
+    /// whether what is going is live or a wait, while Pending's copy takes whatever ink
+    /// `Style.attentionInk` gives its level. Each arc a QUARTER of the ring,
     /// opposite the other, so two gaps always show, standing still or turning: a half-ring arc
     /// apiece reads as one unbroken ring at rest (`motion-reduce`) and, worse, lands exactly on
     /// the other arc every quarter turn and reads, for that instant, as one stray arc rather

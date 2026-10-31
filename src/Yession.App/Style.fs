@@ -401,20 +401,22 @@ module Style =
     /// somewhere else to go, so it is the one to move — not this.
     let statusDotHollow = cls [ disc; Stroke.ring; Stroke.current ]
 
-    /// Still going: a command running, or a wait under way (`Icon.spin`). Always `ink-dim`,
-    /// never the status word's own colour (`statusOk`'s green, `statusWait`'s dim ink): the
-    /// word beside the mark is what still says which, the same way it always has
-    /// (docs/visual-design.md, Colour). Two 12-unit arcs, half the ring each, turning opposite
-    /// ways — passing each other rather than chasing, so at least one gap always shows. The
-    /// box is `overflow-visible` for nothing to clip the stroke's round caps at the ring's
-    /// four compass points.
+    /// Still going: a command running, or a wait under way (`Icon.spin`), and Pending's own
+    /// attention mark (`Icon.attention`) — one mark for "still going" everywhere it appears,
+    /// a machine's work included. Always `ink-dim` here; Pending draws the same two circles
+    /// under whatever ink `attentionInk` gives it instead, so the word beside the mark (or the
+    /// attention level itself) is what still says which. Two 12-unit arcs, a quarter of the
+    /// ring each, turning opposite ways — passing each other rather than chasing, so at least
+    /// one gap always shows, standing still or turning. The box is `overflow-visible` for
+    /// nothing to clip the stroke's round caps at the ring's four compass points.
     let statusSpin = "inline-block w-3 h-3 align-[-2px] text-ink-dim overflow-visible"
     /// The spin mark leading a word or a count on its line, as `statusDot` leads a settled one.
     let statusSpinLead = cls [ statusSpin; "mr-1" ]
-    /// One arc's turn, clockwise from twelve o'clock.
+    /// One arc's turn, clockwise, easing in and out each lap rather than a constant rate — the
+    /// mark reads as working at it, not as a gauge ticking round.
     let statusSpinCw =
         "origin-center [transform-box:fill-box] animate-status-spin-cw motion-reduce:animate-none"
-    /// The other arc's turn, the same rate the other way, starting from six o'clock — so at
+    /// The other arc's turn, the same pace the other way, starting half a lap ahead — so at
     /// rest the two arcs sit nose to tail and trace the full ring between them.
     let statusSpinCcw =
         "origin-center [transform-box:fill-box] animate-status-spin-ccw motion-reduce:animate-none"
@@ -748,7 +750,8 @@ module Style =
     /// The row's mark, which RIDES when the row unfolds: down a track to the first unfolded
     /// line, which is the one it ranks first, so that line says its word with no mark of its
     /// own rather than repeating the one above it (`--spacing-mark-slide`). A wrapper, so the
-    /// mark's own motion (`markOrbit` and its siblings) runs on undisturbed while it travels.
+    /// mark's own motion (`markRun`, `statusSpinCw`/`statusSpinCcw` and their siblings) runs
+    /// on undisturbed while it travels.
     let recordMarkRider =
         cls [ "relative flex transition-[translate]"; Motion.pace
               "[[data-expanded]_&]:translate-y-(--spacing-mark-slide)" ]
@@ -1684,15 +1687,12 @@ module Style =
     // about its own centre (`fill-box`), which for every circle here is the box's (6,6). Motion
     // goes only where a state is live or asks, and `motion-reduce` keeps the still face.
 
-    /// Pending's arc going round its track: the one mark that never stops, because the work
-    /// under it has not. Under reduced motion the arc holds still at three o'clock.
-    let markOrbit = "origin-center [transform-box:fill-box] animate-mark-orbit motion-reduce:animate-none"
     /// Working's own motion: a highlight running round the solid diamond's own edge, same
     /// ink as the fill under it (`currentColor`, both) — never a second colour arriving, only
     /// the edge seeming to give a little where the line passes each point. The fill itself
     /// never moves: the attention mark's ink owes the surface 3:1 at every frame, the same
-    /// rule `markOrbit`'s arc keeps by staying at its ink and only turning. Reduced motion
-    /// holds the line still, at the diamond's top point.
+    /// rule Pending's own two arcs keep (`statusSpinCw`/`statusSpinCcw`) by staying at their
+    /// ink and only turning. Reduced motion holds the line still, at the diamond's top point.
     let markRun = "animate-mark-run motion-reduce:animate-none"
     /// Wanted's halo: breathes out three times once the mark has arrived, then is gone, so a
     /// session left waiting an hour does not nag. Reduced motion draws no halo at all.
