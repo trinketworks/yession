@@ -2075,9 +2075,9 @@ let private uiChecklistTests =
                     (level = Standings.Pending)
                     (sprintf "%s goes round only if it is a machine's wait" (Standings.Attention.name level))
                 Expect.equal
-                    (html.Contains Yession.App.Style.markBeat)
+                    (html.Contains Yession.App.Style.markRun)
                     (level = Standings.Working)
-                    (sprintf "%s beats only if it is the agent's own" (Standings.Attention.name level))
+                    (sprintf "%s runs round its edge only if it is the agent's own" (Standings.Attention.name level))
             // The ones that ask arrive once; the ones that do not, do not.
             let arrives level =
                 let html = drawn level

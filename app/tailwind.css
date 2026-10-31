@@ -205,6 +205,15 @@
   from { transform: scale(0); }
   to { transform: scale(1); }
 }
+/* Working: a line traces the solid diamond's own edge, round at the diamond's four points —
+   the point it passes bulges a little wider than the fill under it, which is the "distorting"
+   read: not a different colour arriving (it is `currentColor` throughout, fill and line
+   alike), only the edge seeming to give as the line goes by. One lap, at `mark-orbit`'s rate,
+   because both say "still going". 6.72 of 26.87 is a quarter of the diamond's perimeter at
+   this size, the same proportion `mark-orbit`'s quarter arc keeps of the ring's. */
+@keyframes mark-run {
+  to { stroke-dashoffset: -26.87; }
+}
 @keyframes beat-live {
   0%, 100% { background-color: var(--color-green-down-2); }
   50% { background-color: var(--color-green); }

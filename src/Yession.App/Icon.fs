@@ -299,10 +299,12 @@ module Icon =
     /// - Pending: a quarter of that ring, going round a faint track of the rest of it — a
     ///   machine's work, needs nobody, so it keeps the shape a wait never gets to use for
     ///   itself (`Style.attentionInk`).
-    /// - Working: a solid diamond, the agent's own shape and nobody else's
-    ///   (`Style.agentAvatar`'s diamond seen flat, not turned in the hand as the transcript's
-    ///   cube is), beating in place rather than going round — the agent at work is not a
-    ///   wait on a track, it is the mark itself moving.
+    /// - Working: a solid diamond, the agent's own shape and nobody else's (`Style.agentAvatar`'s
+    ///   diamond seen flat, not turned in the hand as the transcript's cube is), a little
+    ///   larger than the other marks' radius because a plain fill reads smaller than a ring
+    ///   of the same reach. A line in the same ink runs once round its edge rather than the
+    ///   diamond going round itself — the agent at work is not a wait on a track, it is the
+    ///   mark's own edge that moves.
     /// - Wanted: a disc, radius 4, with a halo that breathes out three times on arrival.
     /// - Wrong: a disc, radius 3, in a ring, radius 5.25: the most ink, the whole box.
     ///
@@ -325,7 +327,7 @@ module Icon =
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.35"></circle><g transform="rotate(-90 6 6)"><circle class="{Style.markOrbit}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 26.7"></circle></g></svg>"""
         | Yession.Domain.Standings.Working ->
             html
-                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path class="{Style.markBeat}" d="M6 2 L10 6 L6 10 L2 6 Z" fill="currentColor"></path></svg>"""
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M6 1.25 L10.75 6 L6 10.75 L1.25 6 Z" fill="currentColor"></path><path class="{Style.markRun}" d="M6 1.25 L10.75 6 L6 10.75 L1.25 6 Z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-dasharray="6.72 20.15"></path></svg>"""
         | Yession.Domain.Standings.Wanted ->
             html
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle class="{Style.markHalo}" cx="6" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="1"></circle><g transform="rotate(-90 6 6)"><circle class="{Style.markClose}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="26.7"></circle></g><circle class="{Style.markFill}" cx="6" cy="6" r="4" fill="currentColor"></circle></svg>"""
