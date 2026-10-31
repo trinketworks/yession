@@ -331,8 +331,10 @@ module View =
     /// the word in the nav column, so in neither does it push the word off the rail. A wait's
     /// beats; a wrong one stands still.
     let private statusLineMark (line: StatusLine) : TemplateResult =
-        let mark = if line.Wrong then Style.statusLineMarkWrong else Style.statusLineMarkWait
-        html $"""<span class="{mark}" aria-hidden="true"></span>"""
+        if line.Wrong then
+            html $"""<span class="{Style.statusLineMarkWrong}" aria-hidden="true"></span>"""
+        else
+            Icon.spin
 
     let private statusLineWord (line: StatusLine) : TemplateResult =
         let voice = if line.Wrong then Style.statusErr else Style.statusWait
@@ -665,7 +667,7 @@ module View =
     /// Something still under way, said by a beating dot; the word is for screen readers. Live,
     /// so green: blue is never a status (docs/visual-design.md, Colour).
     let private runningDot =
-        html $"""<span class="{Style.statusOk}"><span class="{Style.statusDotLive}"></span><span class="{Style.srOnly}">{Dom.Text.blockRunning}</span></span>"""
+        html $"""<span class="{Style.statusOk}">{Icon.spin}<span class="{Style.srOnly}">{Dom.Text.blockRunning}</span></span>"""
 
     /// A terminal's state, as a small mark beside its name: running, its last command failed,
     /// or closed — and nothing at all for one that is open, idle and fine, which is most of
@@ -712,7 +714,7 @@ module View =
     let private environmentStatus =
         function
         | EnvironmentNotStarted -> Style.statusFaint, html $"""not started"""
-        | EnvironmentStarting -> Style.statusWait, html $"""<span class="{Style.statusDotBeat}"></span>starting"""
+        | EnvironmentStarting -> Style.statusWait, html $"""{Icon.spinLead}starting"""
         | EnvironmentRunning _ -> Style.statusOk, html $"""<span class="{Style.statusDot}"></span>running"""
         | EnvironmentFailed _ -> Style.statusErr, html $"""failed"""
         | EnvironmentDown -> Style.statusFaint, html $"""stopped"""
@@ -858,7 +860,7 @@ module View =
             // shows it, not merely that the session said yes (`Pending`).
             match claude.Flow with
             | _ when Pending.inFlight claude.Pending ->
-                html $"""<span class="{Style.statusWait}" data-claude-busy><span class="{Style.statusDotBeat}"></span>working…</span>"""
+                html $"""<span class="{Style.statusWait}" data-claude-busy>{Icon.spinLead}working…</span>"""
             | ClaudeAwaitingCode (url, _) ->
                 html $"""
                     <a class="{Style.btnPrimary}" href="{url}" target="_blank" rel="noreferrer" data-claude-authorize>Approve on claude.ai</a>
@@ -945,7 +947,7 @@ module View =
             // As Claude's, for its reason.
             match github.Flow with
             | _ when Pending.inFlight github.Pending ->
-                html $"""<span class="{Style.statusWait}" data-github-busy><span class="{Style.statusDotBeat}"></span>working…</span>"""
+                html $"""<span class="{Style.statusWait}" data-github-busy>{Icon.spinLead}working…</span>"""
             | GitHubAwaitingApproval (userCode, verificationUri, _, _) ->
                 // The code has to reach github.com's form, and on the phone that means the
                 // clipboard: this session is one tab, the approval is another, and eight
@@ -1659,7 +1661,7 @@ module View =
                 html $"""
                     <button type="button" class="{Style.trayRunning}" aria-label="{Dom.Text.revealRunningLabel (BlockLabel.ofBlock block)}"
                             data-reveal-running="{BlockId.value block.BlockId}"
-                            @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealCommand (terminal, block.BlockId))))}><span class="{Style.trayMark}"><span class="{Style.trayRunningDot}" aria-hidden="true"></span></span>running</button>"""
+                            @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealCommand (terminal, block.BlockId))))}><span class="{Style.trayMark}">{Icon.spin}</span>running</button>"""
             | Some turn, _ ->
                 // `Interrupting` only ever names THIS turn or none (the event fold clears it the
                 // moment the turn it named ends), so a plain equality is the whole check.
@@ -1785,7 +1787,7 @@ module View =
                     match upload |> Option.map (fun u -> u.State) with
                     | Some (UploadState.Sending sent) ->
                         "sending",
-                        html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}" aria-hidden="true"></span>{Dom.Text.uploadSending (ContentSize.render sent) (ContentSize.render bytes)}</span>"""
+                        html $"""<span class="{Style.statusWait}">{Icon.spinLead}{Dom.Text.uploadSending (ContentSize.render sent) (ContentSize.render bytes)}</span>"""
                     | Some (UploadState.Failed reason) -> "failed", html $"""<span class="{Style.statusErr}">{reason}</span>"""
                     | Some (UploadState.Refused reason) -> "refused", html $"""<span class="{Style.statusErr}">{reason}</span>"""
                     | None -> "attached", html $"""<span class="{Style.draftFileSize}">{ContentSize.render bytes}</span>"""
@@ -1979,7 +1981,7 @@ module View =
         let pictured (voice: string) (mark: TemplateResult) =
             html $"""<span class="{voice}" data-block-mark="{token}"><span aria-hidden="true">{mark}</span><span class="{Style.srOnly}">{terminalBlockStatusWord model status}</span></span>"""
         match status with
-        | BlockRunning -> pictured Style.statusOk (html $"""<span class="{Style.statusDotLive}"></span>""")
+        | BlockRunning -> pictured Style.statusOk Icon.spin
         | BlockFinished (CommandSucceeded code) -> pictured Style.statusDone (html $"""{Icon.checkSm} {code}""")
         | BlockFinished (CommandFailed code) -> pictured Style.statusErr (html $"""{Icon.crossSm} {code}""")
         | BlockFinished CommandTimedOut
@@ -2066,7 +2068,7 @@ module View =
     let private pendingStatus (model: ClientModel) (entry: PendingAct) : string * TemplateResult =
         if ClientModel.awaitsTerminal entry model then
             Dom.Text.queuedAwaitingTerminal,
-            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>terminal busy</span>"""
+            html $"""<span class="{Style.statusWait}">{Icon.spinLead}terminal busy</span>"""
         else
             // Queued is a WAIT, like the hold above it, so it wears its voice and its
             // dot rather than live green (docs/visual-design.md, Colour). Green said the
@@ -2074,7 +2076,7 @@ module View =
             // that is NOT running, and it was the only status on the surface wearing live's
             // colour while the command actually running wore it too.
             Dom.Text.queuedReady,
-            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>queued</span>"""
+            html $"""<span class="{Style.statusWait}">{Icon.spinLead}queued</span>"""
 
     /// What the terminal this act is queued in is CALLED — its name, or its id while this
     /// client has not folded the terminal yet. Words, never a raw id when a name exists, for
@@ -2227,7 +2229,7 @@ module View =
         let listing =
             match launch.Listing with
             | ListingUnknown ->
-                note (html $"""<span class="{Style.statusWait}" role="status"><span class="{Style.statusDotBeat}"></span>{Dom.Text.repoPickerLooking}</span>""")
+                note (html $"""<span class="{Style.statusWait}" role="status">{Icon.spinLead}{Dom.Text.repoPickerLooking}</span>""")
             | ListingUnavailable (reason, true) ->
                 let said = note (html $"""<span class="{Style.small}">{reason}</span>""")
                 html $"""
@@ -2305,7 +2307,7 @@ module View =
         let actionsRow =
             match launch.Stage with
             | Resolving _ ->
-                html $"""<span class="{Style.statusWait}" role="status"><span class="{Style.statusDotBeat}"></span>{Dom.Text.repoPickerLooking}</span>"""
+                html $"""<span class="{Style.statusWait}" role="status">{Icon.spinLead}{Dom.Text.repoPickerLooking}</span>"""
             | Choosing -> startButton (Launch.target launch) false
             | Sent (_, target) -> startButton (Some target) true
             | Cloning target -> startButton (Some target) true
@@ -2406,7 +2408,7 @@ module View =
                         note (html $"""<span class="{Style.statusErr}" role="status">{reason}</span>""")
                     | Some BranchesUnknown
                     | None ->
-                        note (html $"""<span class="{Style.statusWait}" role="status"><span class="{Style.statusDotBeat}"></span>{Dom.Text.repoPickerLooking}</span>""")
+                        note (html $"""<span class="{Style.statusWait}" role="status">{Icon.spinLead}{Dom.Text.repoPickerLooking}</span>""")
                     | Some (BranchesLoaded page) ->
                         let foot =
                             match page.Next, launch.BranchMore, launch.BranchQuery.Trim () with
@@ -3146,12 +3148,12 @@ module View =
                 | _, Some entry -> pendingStatus model entry
                 | CommandStarting, None ->
                     Dom.Text.commandStarting,
-                    html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{Dom.Text.commandStarting}</span>"""
+                    html $"""<span class="{Style.statusWait}">{Icon.spinLead}{Dom.Text.commandStarting}</span>"""
                 // Answered and queued, and the entry is not in this replica's doc: the block
                 // that drained it is on its way. Said as the queue says a ready command.
                 | CommandWaiting, None ->
                     Dom.Text.queuedReady,
-                    html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>queued</span>"""
+                    html $"""<span class="{Style.statusWait}">{Icon.spinLead}queued</span>"""
             let opens =
                 match queued with
                 | Some entry -> Some entry.Terminal
@@ -3311,7 +3313,7 @@ module View =
             let failed =
                 count tally.Failed (html $"""<span class="{Style.statusErr}">{Icon.crossSm} {tally.Failed}<span class="{Style.srOnly}"> {Dom.Text.failed}</span></span>""")
             let running =
-                count tally.Running (html $"""<span class="{Style.statusOk}"><span class="{Style.statusDotLiveLead}"></span>{tally.Running}<span class="{Style.srOnly}"> {Dom.Text.blockRunning}</span></span>""")
+                count tally.Running (html $"""<span class="{Style.statusOk}">{Icon.spinLead}{tally.Running}<span class="{Style.srOnly}"> {Dom.Text.blockRunning}</span></span>""")
             let done' =
                 count tally.Done (html $"""<span class="{Style.statusDone}">{Icon.checkSm} {tally.Done}<span class="{Style.srOnly}"> {Dom.Text.blockOk}</span></span>""")
             let counts =
@@ -3621,7 +3623,7 @@ module View =
             html $"""
                 <section class="{Style.messageGroup}" role="status" data-history-loading>
                   <header class="{Style.messageGroupHead}">
-                    <span class="{Style.readingMark}" aria-hidden="true"><span class="{Style.statusLineMarkWait}"></span></span>
+                    <span class="{Style.readingMark}">{Icon.spin}</span>
                     <span class="{Style.statusWait}">{Dom.Text.catchingUp}</span>
                   </header>
                 </section>"""
@@ -4058,7 +4060,7 @@ module View =
                             @click={Ev(fun _ -> dispatch (TakeTerminalMsg terminal))}>Take over</button>"""
         html $"""
             <div class="{Style.terminalBandRow}" data-terminal-lease="{label}" aria-live="polite">
-              <span class="{Style.paneLive}"><span class="{Style.statusDotLiveLead}"></span>live</span>
+              <span class="{Style.paneLive}">{Icon.spinLead}live</span>
               <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model holder ]}"></span>
               <span class="{Style.paneSays}">{who} in {where}</span>
               <div class="ml-auto flex items-center gap-2">{control}</div>
@@ -4875,7 +4877,7 @@ module View =
                 match upload.State with
                 | UploadState.Sending sent ->
                     "sending",
-                    html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}" aria-hidden="true"></span>{Dom.Text.uploadSending (ContentSize.render sent) (ContentSize.render upload.Bytes)}</span>""",
+                    html $"""<span class="{Style.statusWait}">{Icon.spinLead}{Dom.Text.uploadSending (ContentSize.render sent) (ContentSize.render upload.Bytes)}</span>""",
                     [ "remove" ]
                 | UploadState.Failed reason ->
                     "failed", html $"""<span class="{Style.statusErr}">{reason}</span>""", [ "retry"; "remove" ]

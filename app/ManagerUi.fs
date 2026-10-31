@@ -106,15 +106,16 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
     // word in its role's face, leading with its dot, then whatever this row has to add in the
     // line's own small voice. No block of its own: the cell carries the voice and the clipping
     // (`rowTemplate`).
-    let line (face: string) (dot: string) (hook: string) (word: string) (rest: TemplateResult) =
-        html $"""<span class="{face}" data-status="{hook}"><span class="{dot}" aria-hidden="true"></span>{word}</span>{rest}"""
+    let dotMark (dot: string) = html $"""<span class="{dot}" aria-hidden="true"></span>"""
+    let line (face: string) (mark: TemplateResult) (hook: string) (word: string) (rest: TemplateResult) =
+        html $"""<span class="{face}" data-status="{hook}">{mark}{word}</span>{rest}"""
     match view.Record.ArchivedAt, view.Status with
     // An operator's decision, not a process state — but it belongs on this line, because
     // "archived" is the answer a reader wants here and "stopped" for a session that can no
     // longer start is true and useless. A step fainter than `stopped`: it is the one state
     // nothing can be done to without first being undone.
-    | Some _, _ -> line Style.statusFaint Style.statusDot Dom.Manager.statusArchived "archived" nothing
-    | None, ProcessManager.NotRunning -> line Style.statusWait Style.statusDot Dom.Manager.statusStopped "stopped" nothing
+    | Some _, _ -> line Style.statusFaint (dotMark Style.statusDot) Dom.Manager.statusArchived "archived" nothing
+    | None, ProcessManager.NotRunning -> line Style.statusWait (dotMark Style.statusDot) Dom.Manager.statusStopped "stopped" nothing
     | None, ProcessManager.Running _ ->
         // Each standing in the tone the SESSION gave it: the Manager never learns what a
         // standing is about, so a colour it chose would be one it guessed. Worst first, so
@@ -125,21 +126,21 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
             Standing.byConcern view.Standings
             |> List.map (fun s ->
                 html $"""<span> · </span><span class="{Style.attentionInk s.Attention}" data-session-standing="{s.Facet}">{s.Word}</span>""")
-        line Style.statusOk Style.statusDotLiveLead Dom.Manager.statusRunning "running" (html $"""{standings}""")
+        line Style.statusOk Icon.spinLead Dom.Manager.statusRunning "running" (html $"""{standings}""")
     | None, ProcessManager.Launching ->
-        line Style.statusWait Style.statusDotBeat Dom.Manager.statusStarting "starting" nothing
+        line Style.statusWait Icon.spinLead Dom.Manager.statusStarting "starting" nothing
     | None, ProcessManager.LaunchFailed reason ->
         // The reason stays in the line's own voice: the red is the WORD's, and a sentence set
         // in it would be the red statement the doctrine allows one of, twice.
         line
             Style.statusErr
-            Style.statusDot
+            (dotMark Style.statusDot)
             Dom.Manager.statusFailed
             "failed to start"
             (html $"""<span title="{reason}"> · {reason}</span>""")
     | None, ProcessManager.Exited code ->
         let reason = code |> Option.map string |> Option.defaultValue "signal"
-        line Style.statusErr Style.statusDot Dom.Manager.statusExited (sprintf "exited (%s)" reason) nothing
+        line Style.statusErr (dotMark Style.statusDot) Dom.Manager.statusExited (sprintf "exited (%s)" reason) nothing
 
 /// What a row says when it unfolds, one line each, worst first: a running session's own
 /// standings, or, for every other state, the state. Each is an attention, a word, and the
@@ -1128,7 +1129,7 @@ let openingPage (nonce: string) (sessionId: SessionId) (target: string) (launchU
 <div class="%s" data-mark-intro aria-hidden="true">%s</div>
 <div class="%s" data-mark-static aria-hidden="true">%s</div>
 <p class="%s">yession</p>
-<p id="status" role="status" class="%s %s" %s="%s"><span class="%s"></span><span %s>starting</span><span class="%s">%s</span></p>
+<p id="status" role="status" class="%s %s" %s="%s">%s<span %s>starting</span><span class="%s">%s</span></p>
 <p class="%s"><a id="target" class="%s" href="%s">Open it directly</a> · <a class="%s" href="%s">Back to the session manager</a></p>
 </main>
 <script nonce="%s">%s</script>"""
@@ -1147,7 +1148,7 @@ let openingPage (nonce: string) (sessionId: SessionId) (target: string) (launchU
             Style.startStatus
             Dom.Manager.openingFailed
             (Ssr.escapeAttr Style.startFailed)
-            Style.statusDotBeat
+            (Ssr.render Icon.spinLead)
             Dom.Manager.openingWord
             Style.startStatusId
             (Ssr.escapeText (SessionId.value sessionId))

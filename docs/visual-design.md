@@ -84,11 +84,13 @@ mean three things:
 
 Blue is never a status, with one exception: the attention mark of an agent at work (Working,
 see Attention) wears the agent's own blue, because it is a mark of the agent, and that blue is
-the tone a control never wears. A wait is `ink-dim` text: reconnecting, catching up, queued, looking
-and no agent yet. A wait leads with a dot. The dot beats if the wait is live.
+the tone a control never wears. A wait is `ink-dim` text: reconnecting, catching up, queued,
+looking and no agent yet. A wait leads with the spin mark (see Motion): two arcs, always grey,
+turning in place rather than beating.
 
-Live is `green` text: a running command, a connected peer, a session that runs. A record of
-something that finished is `ink`.
+Live is `green` text: a running command, a connected peer, a session that runs. It leads with
+the same spin mark a wait does — one shape for "still going", whichever of the two it is — and
+the word beside it, not the mark, says which. A record of something that finished is `ink`.
 
 Wrong is `err`. The one red word on a surface is the newest wrong thing. An older wrong thing
 is a record and wears `ink-dim`. A repeated row, or a repeated item in the conversation, is a
@@ -106,15 +108,15 @@ content out is a fade. It never crosses text, because faded glyphs fall under th
 floor. Where a surface holds more than fits, it says so with a control or a rule.
 *Test: find every mask and every fade. No glyph is under one.*
 
-A status is text in its colour, and it leads with a dot. It is never a filled or boxed badge.
-A verb never leads with a mark. So the dot, not a tone, says that a word cannot be pressed: a
-tone is one step of grey that a blur or a greyscale print hides, and principle 2 blurs the
-screen.
-*Test: a caps word with a dot is a status. A caps word without one can be pressed.*
+A status is text in its colour, and it leads with a mark: a dot if it has settled, or the spin
+mark (see Motion) if it is still under way. It is never a filled or boxed badge. A verb never
+leads with a mark. So the mark, not a tone, says that a word cannot be pressed: a tone is one
+step of grey that a blur or a greyscale print hides, and principle 2 blurs the screen.
+*Test: a caps word with a leading mark is a status. A caps word without one can be pressed.*
 
 A status names a state. A reason says why. A reason is body text in the body voice, with no
-dot and no caps. A surface may carry both, the state first and the reason under it.
-*Test: do the words answer "what state" or "why"? What state leads with a dot. Why does not,
+mark and no caps. A surface may carry both, the state first and the reason under it.
+*Test: do the words answer "what state" or "why"? What state leads with a mark. Why does not,
 and is not in caps.*
 
 A state has one name, on every screen, column and side of the wire. A token a test reads is
@@ -215,13 +217,14 @@ notice the reader must still be able to answer. Nobody writes a stacking order a
 One vocabulary. Things arrive by sliding a little and fading in, at `pace`, eased out. Press
 is a tilt: in fast, back with a hair of overshoot. A pressed control is *held* (see State).
 
-A wait is a beat (`animate-beat`), not a spinner. A beating dot animates its colour between a
-role and its dim, never its opacity. Two things go round rather than beat, because they are
-work under way and not a wait on the reader: the attention mark's arc, Pending's (see
-Attention), always at its own ink; and a line round Working's own diamond, same ink as the
-fill it rides (never a second colour arriving), tracing the edge it belongs to rather than
-turning a ring. Both owe the surface 3:1 at every frame of their travel, the same floor a
-beat keeps. `motion-reduce` rides every one: it keeps the fill and drops the geometry.
+A settled status's dot is still; nothing left of it beats. A status still under way — a
+command live now, or a wait — turns instead: two arcs, always `ink-dim`, passing each other as
+they travel opposite ways round a ring, never varying in colour or opacity. The attention mark
+moves the same way, for the same reason: the attention mark's arc, Pending's (see Attention),
+always at its own ink; and a line round Working's own diamond, same ink as the fill it rides
+(never a second colour arriving), tracing the edge it belongs to rather than turning a ring.
+Every one of these owes the surface 3:1 at every frame of its travel. `motion-reduce` rides
+every one: it keeps the fill and drops the geometry.
 
 ### State
 

@@ -345,8 +345,8 @@ module Style =
     /// longer doing anything (docs/visual-design.md, Colour). Running keeps `statusOk`.
     let statusDone = caps + " text-ink"
     /// A wait: reconnecting, catching up, queued, looking, no agent yet. `ink-dim`, never blue
-    /// — blue is never a status (docs/visual-design.md, Colour). A LIVE thing is `statusOk`
-    /// with `statusDotLive`; a wait still under way leads with `statusDotBeat`.
+    /// — blue is never a status (docs/visual-design.md, Colour). A LIVE thing is `statusOk`;
+    /// both it and a wait still under way lead with the same turning mark, `Icon.spin`.
     ///
     /// A WRONG thing never wears this. It is the one tone a failure may not be quieted into:
     /// this value once carried "a fault that is no longer the newest" as a second meaning, and
@@ -361,13 +361,16 @@ module Style =
     let statusErr = caps + " text-err"
     let statusFaint = caps + " text-ink-faint"
 
-    /// The one disc every mark in the product is drawn as: 6px, round, inline. The point is
+    /// The one disc every SETTLED status's mark is drawn as: 6px, round, inline. The point is
     /// the second of the two primitives and it is always round (docs/visual-design.md, Form);
     /// written once, here, because it had been spelled out at nine sites, each free to arrive
-    /// a pixel off. What a status's mark MEANS is the colour and the motion composed onto it
-    /// below — never its size, and never its shape. The one point that ranks by shape is the
+    /// a pixel off. What a settled status's mark MEANS is the colour composed onto it below —
+    /// never its size, and never its shape. The one other point that ranks by shape is the
     /// attention mark (`attentionMark`, `Icon.attention`), which answers a different question:
-    /// not what state a thing is in, but how much it wants a person.
+    /// not what state a thing is in, but how much it wants a person. A status still UNDER WAY
+    /// is the one further exception, and by kind rather than by taste, same as the attention
+    /// mark: it turns rather than beats (`Icon.spin`), and needs more than a disc's room to
+    /// show that, so it is not drawn from this shape at all.
     let private disc = "inline-block w-1.5 h-1.5 rounded-full"
 
     /// How a mark that LEADS a word sits: in the gutter to its left, on the text's baseline,
@@ -376,15 +379,8 @@ module Style =
 
     /// The small leading dot a status may carry (`bg-current` follows the text colour).
     let statusDot = cls [ disc; "bg-current"; discLead ]
-    /// A wait still under way beats its dot. It beats in COLOUR — the record's ink to its dim
-    /// and back (`beat-wait`) — and never in opacity, which bottomed the mark out at a quarter
-    /// of itself, below the 3:1 a mark owes its surface at every frame of the beat, so a dot
-    /// that meant "still going" was caught reading as no dot at all (docs/visual-design.md,
-    /// Motion). Under reduced motion it stands still in the status's own ink, which is what
-    /// `bg-current` underneath is for.
-    let statusDotBeat = cls [ statusDot; "animate-beat-wait motion-reduce:animate-none" ]
     /// The same dot standing still: a state that has SETTLED, such as a terminal whose last
-    /// command failed, where a beat would claim it is still happening.
+    /// command failed, where motion would claim it is still happening.
     let statusDotSolid = cls [ disc; "bg-current" ]
 
     /// The dot with nothing in it: a state that has ENDED (a terminal that closed). Its ring
@@ -404,12 +400,24 @@ module Style =
     /// one shape may not mean two things. Watching is the rarer meaning and the one with
     /// somewhere else to go, so it is the one to move — not this.
     let statusDotHollow = cls [ disc; Stroke.ring; Stroke.current ]
-    /// A live dot: a command running. It beats in COLOUR, live's green to live's dim and back
-    /// (`beat-live`), never in opacity, so it holds the 3:1 a mark owes its surface at every
-    /// frame. Still and green under reduced motion.
-    let statusDotLive = cls [ disc; "bg-green animate-beat-live motion-reduce:animate-none" ]
-    /// The live dot leading a word or a count on its line, as `statusDot` leads a status.
-    let statusDotLiveLead = cls [ statusDotLive; discLead ]
+
+    /// Still going: a command running, or a wait under way (`Icon.spin`). Always `ink-dim`,
+    /// never the status word's own colour (`statusOk`'s green, `statusWait`'s dim ink): the
+    /// word beside the mark is what still says which, the same way it always has
+    /// (docs/visual-design.md, Colour). Two 12-unit arcs, half the ring each, turning opposite
+    /// ways — passing each other rather than chasing, so at least one gap always shows. The
+    /// box is `overflow-visible` for nothing to clip the stroke's round caps at the ring's
+    /// four compass points.
+    let statusSpin = "inline-block w-3 h-3 align-[-2px] text-ink-dim overflow-visible"
+    /// The spin mark leading a word or a count on its line, as `statusDot` leads a settled one.
+    let statusSpinLead = cls [ statusSpin; "mr-1" ]
+    /// One arc's turn, clockwise from twelve o'clock.
+    let statusSpinCw =
+        "origin-center [transform-box:fill-box] animate-status-spin-cw motion-reduce:animate-none"
+    /// The other arc's turn, the same rate the other way, starting from six o'clock — so at
+    /// rest the two arcs sit nose to tail and trace the full ring between them.
+    let statusSpinCcw =
+        "origin-center [transform-box:fill-box] animate-status-spin-ccw motion-reduce:animate-none"
     /// The settled dot with a halo round it: something has happened that the person reading
     /// has not seen yet (`ClientModel.unseen`). An `outline` rather than a border, so the gap
     /// between the two is the surface it sits on, whichever that is — and so this stays a
@@ -1938,11 +1946,6 @@ module Style =
 
     // --- The status line: what the link is doing, on either mount ---------------------------
 
-    /// A status line's dot, apart from its word: a WAIT beats, in its own ink; a WRONG one is
-    /// red and still (docs/visual-design.md, Colour). Apart, because on both mounts it hangs
-    /// in the gutter and the word starts on the rail — a dot that leads inline pushed every
-    /// status a dot's width off the column it stood in.
-    let statusLineMarkWait = cls [ syncDot; "bg-ink-dim animate-beat-wait motion-reduce:animate-none" ]
     let statusLineMarkWrong = cls [ syncDot; "bg-err" ]
     /// The word: one line, and the part of the row that gives way first.
     let statusLineWord = "min-w-0 truncate whitespace-nowrap"
@@ -3775,14 +3778,14 @@ module Style =
               "disabled:text-ink-faint disabled:cursor-default disabled:pointer-events-none" ]
 
     /// While no turn runs and a command does, the leading edge says so: `running` behind
-    /// the live dot every running command wears, pressed to go to that command's chip. The
-    /// dot sits in interrupt's own cell (`trayMark`), so the two states hand off at the same
-    /// width and the dot lands dead centre on the column the transcript's avatars and icons
-    /// stand on, rather than crowding the word off that rail. `gap-3` is `trayInterrupt`'s
-    /// own gutter, so the word lands on the same reading rail whichever state is showing.
-    /// Ink at rest, ink under the hand — it moves the reader, it stops nothing.
+    /// the spin mark (`Icon.spin`) every running command wears, pressed to go to that
+    /// command's chip. The mark sits in interrupt's own cell (`trayMark`), so the two states
+    /// hand off at the same width and it lands dead centre on the column the transcript's
+    /// avatars and icons stand on, rather than crowding the word off that rail. `gap-3` is
+    /// `trayInterrupt`'s own gutter, so the word lands on the same reading rail whichever
+    /// state is showing. Ink at rest, ink under the hand — it moves the reader, it stops
+    /// nothing.
     let trayRunning = cls [ trayVerb; "gap-3 hover:text-ink" ]
-    let trayRunningDot = statusDotLive
 
     /// The way back to the latest message, at the strip's trailing edge whatever stands at
     /// its leading one. Its word ends in the glyph, so no caps tracking trails past the ink.

@@ -335,6 +335,28 @@ module Icon =
             html
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><g transform="rotate(-90 6 6)"><circle class="{Style.markDraw}" cx="6" cy="6" r="5.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="32.99"></circle></g><circle class="{Style.markPop}" cx="6" cy="6" r="3" fill="currentColor"></circle></svg>"""
 
+    /// Still going: two arcs passing each other, turning opposite ways round a 12-unit ring.
+    /// One shape for every status that says "not settled yet" — a command live now and a wait
+    /// under way alike (`Style.statusSpin`, which used to be two different beating dots,
+    /// `statusDotLive` and `statusDotBeat`). Always `ink-dim`: this mark answers "is it still
+    /// going", never "how much does it want a person", so it never reaches for the attention
+    /// mark's ink or its shapes (the diamond, the ring, the disc) — the word beside it, in the
+    /// status's own colour (`Style.statusOk`'s green, `Style.statusWait`'s dim ink), is what
+    /// still says whether what is going is live or a wait. Each arc a QUARTER of the ring,
+    /// opposite the other, so two gaps always show, standing still or turning: a half-ring arc
+    /// apiece reads as one unbroken ring at rest (`motion-reduce`) and, worse, lands exactly on
+    /// the other arc every quarter turn and reads, for that instant, as one stray arc rather
+    /// than two. A quarter each keeps both apart always, including at rest, where the two sit
+    /// at opposite corners of the box rather than tracing a ring Absent's own shape could be
+    /// mistaken for.
+    let spinPath (extra: string) =
+        html
+            $"""<svg class="{extra}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle class="{Style.statusSpinCw}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 20.02"></circle><circle class="{Style.statusSpinCcw}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 20.02" stroke-dashoffset="13.35"></circle></svg>"""
+    /// Standing alone, where no word follows on the same line.
+    let spin = spinPath Style.statusSpin
+    /// Leading the status word it belongs to, as `statusDot`'s own lead does for a plain dot.
+    let spinLead = spinPath Style.statusSpinLead
+
     /// GitHub's mark, as GitHub draws it: the one FILLED shape in this file that is not a
     /// point, and the one exception to its vocabulary, because a brand's mark is not ours to redraw in strokes
     /// — a reader knows this shape, and a Metro-stroked octocat would be a different thing
