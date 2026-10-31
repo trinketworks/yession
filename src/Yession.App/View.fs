@@ -4751,7 +4751,10 @@ module View =
     /// Lists of rows rather than a `listbox`: a row carries its verbs, and a listbox's options
     /// may hold no controls. The name is the row's own button; the arrows walk the names
     /// (`ClientModel.walkList`), Tab reaches the verbs.
-    let private allPage (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+    ///
+    /// `docked` when the pane has nothing else to show: the list is then the pane's body, with
+    /// no scrim and nothing under it to dim — there is no blank page to drop it over.
+    let private allPage (actions: ViewActions) (dispatch: ClientMsg -> unit) (docked: bool) (model: ClientModel) : TemplateResult =
         let selected = ClientModel.selectedTerminal model
         // The arrow walk down the names, pressed on one: the row says which it is, and the
         // model says where that goes (`ClientModel.walkList`). Its default is refused here,
@@ -5075,13 +5078,19 @@ module View =
                 <ul aria-labelledby="start-in-heading">{places |> List.map choice}</ul>"""
         // Under the sheet, the pane goes on showing, dimmed: the sheet is a layer over it, not
         // a place. Pressed, the scrim puts the sheet away — a duplicate of the list button and
-        // of Escape, so out of the tree and the Tab order, as the phone's grab edge is.
+        // of Escape, so out of the tree and the Tab order, as the phone's grab edge is. Docked,
+        // there is nothing under it, so no scrim.
         let listed = html $"""{terminals}{opened}{closed}{empty}{files}"""
+        let scrim =
+            if docked then Lit.nothing
+            else
+                html $"""
+                    <button type="button" class="{Style.allSheetScrim}" tabindex="-1" aria-hidden="true"
+                            aria-label="{Dom.Text.switchTerminal}" data-pane-sheet-scrim
+                            @click={Ev(fun _ -> dispatch CloseSwitcherMsg)}></button>"""
         html $"""
-            <button type="button" class="{Style.allSheetScrim}" tabindex="-1" aria-hidden="true"
-                    aria-label="{Dom.Text.switchTerminal}" data-pane-sheet-scrim
-                    @click={Ev(fun _ -> dispatch CloseSwitcherMsg)}></button>
-            <div class="{Style.allSheet}" role="region" tabindex="-1" aria-label="{Dom.Text.terminalsAndFiles}"
+            {scrim}
+            <div class="{if docked then Style.allDocked else Style.allSheet}" role="region" tabindex="-1" aria-label="{Dom.Text.terminalsAndFiles}"
                  id="{Dom.paneSheetId}" data-pane-panel="{allKey}">
               <div class="{Style.allPage}" data-content-list aria-label="{Dom.Text.terminalsAndFiles}"
                    @paste={Ev(pasted)} @dragover={Ev(dragged)} @dragleave={Ev(left)} @drop={Ev(dropped)}>
@@ -5112,7 +5121,10 @@ module View =
             match preview.Subject with
             | PreviewSubject.Block _ -> true
             | PreviewSubject.Stretch _ | PreviewSubject.Content _ -> false
-        let onAll = model.Switcher
+        // With nothing open the list is the pane's body (`allPage`, docked), so `all` is up
+        // whether or not the sheet was asked for.
+        let nothingOpen = Option.isNone previewing && Option.isNone selected
+        let onAll = model.Switcher || nothingOpen
         // The file on screen, if one is: its own tab is the selected item.
         let shownFile =
             previewing
@@ -5477,21 +5489,10 @@ module View =
                          data-pane-panel="{key}" data-pane-preview="{key}">
                       {previewBody preview}
                     </div>"""
-            // The empty pane wears the terminal's own symbol — an idle prompt, display-sized —
-            // and says where a terminal is started from. It held a press of its own, and the
-            // strip a `+` with a menu; with the sheet's New terminal those were one act in
-            // three places, so the sheet's is the one and this points at it.
-            //
-            // The prompt is `text-heading`, not the `text-[28px] leading-8` it was: the same
-            // 28/32 the step already holds, written as two numbers off the ramp
-            // (docs/visual-design.md, Type — nothing sits off the ramp). Still a literal, and
-            // it wants a name in the Terminals section beside `terminalEmpty`.
-            | None, None ->
-                html $"""
-                    <div class="{Style.terminalEmpty}">
-                      <span class="font-terminal text-heading text-ink-faint select-none" aria-hidden="true">$</span>
-                      <p class="{Style.terminalEmptyHint}" data-pane-empty-hint>{Dom.Text.emptyPaneHint}</p>
-                    </div>"""
+            // Nothing open: the pane is the list, docked, because the list is where everything
+            // here is opened or started from. It was a blank page with a line pointing at the
+            // list button.
+            | None, None -> allPage actions dispatch true model
             | None, Some terminal ->
                 let inner =
                     match Projection.tryFind terminal model.Terminals with
@@ -5634,7 +5635,7 @@ module View =
                   {toolbar}
                   {refusalNotice dispatch model RefusalMount.Pane}
                   {body ()}
-                  {if onAll then allPage actions dispatch model else Lit.nothing}
+                  {if model.Switcher && not nothingOpen then allPage actions dispatch false model else Lit.nothing}
                 </div>
               </div>
             </aside>"""

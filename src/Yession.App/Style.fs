@@ -4762,10 +4762,10 @@ module Style =
     /// The page's word when there is nothing on it.
     let contentListEmptyWord = "px-3 py-3 font-ui font-light text-body text-ink-faint select-none"
 
-    /// The empty pane: the terminal's own symbol, display-sized, over one line saying where a
-    /// terminal is started from. It holds no press: the sheet's New terminal is the one way.
-    let terminalEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
-    let terminalEmptyHint = "font-ui font-light text-small text-ink-dim"
+    /// The list as the pane's body, when nothing is open to lay it over: the sheet's rows on the
+    /// pane's own ground, filling the pane and scrolling inside it — a page, not a layer, so no
+    /// step up and no rim.
+    let allDocked = cls [ "flex-1 min-h-0 overflow-y-auto overscroll-contain"; focusRingInset ]
 
 
     /// A section of the sheet's head: what it is called, and its acts. One line on a wide
