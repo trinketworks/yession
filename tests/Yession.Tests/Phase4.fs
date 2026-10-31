@@ -771,9 +771,20 @@ let private uiRenderTests =
                 let opened = row.IndexOf "data-status=\""
                 if opened < 0 then "" else
                 let bodyAt = row.IndexOf (">", opened) + 1
-                // Past the dot's own closing tag, so what is left is the status span's text.
-                let dotShut = row.IndexOf ("</span>", bodyAt) + "</span>".Length
-                let shut = row.IndexOf ("</span>", dotShut)
+                // The leading mark is a plain dot (one <span>...</span> pair) in some states
+                // and the spin mark (an <svg>...</svg>, no span inside) in others, so the
+                // status span's own close is not always the first `</span>` seen — it is the
+                // first one that does not belong to a `<span` the mark itself opened.
+                let rec outerClose (i: int) (depth: int) =
+                    let close = row.IndexOf ("</span>", i)
+                    let openNested = row.IndexOf ("<span", i)
+                    if openNested >= 0 && openNested < close then
+                        outerClose (openNested + 1) (depth + 1)
+                    elif depth > 0 then
+                        outerClose (close + "</span>".Length) (depth - 1)
+                    else
+                        close
+                let shut = outerClose bodyAt 0
                 let inner = row.Substring (bodyAt, shut - bodyAt)
                 System.Text.RegularExpressions.Regex.Replace(inner, "<[^>]*>", "").Trim ()
             let row status record =
@@ -1298,39 +1309,12 @@ let private themeContrastTests =
                     let ratio = contrast light (colour bg)
                     Expect.isTrue (ratio >= 3.0) (sprintf "seat %d's checker on --color-%s is %.2f:1 — a mark needs 3:1" seat bg ratio)
 
-        // A mark that beats owes 3:1 at every frame, not only at the top of its beat. The old
-        // pulse faded a dot to a quarter of itself, where on the pane's near-black it read as
-        // no dot at all. A dot that beats moves its COLOUR instead (docs/visual-design.md,
-        // Motion): every colour each beat passes through is read from the keyframes themselves,
-        // so retuning one is re-checked here.
-        //
-        // The population is DERIVED — every `beat-*` keyframe the stylesheet declares, not a
-        // list of the ones somebody remembered — because a new beat arriving unguarded and a
-        // suite that no longer sees it read identically in a green run.
-        testCase "every dot that beats keeps >= 3:1 on every surface at every step" <| fun () ->
-            let tokens = TestFiles.read "app/tokens.css"
-            let colour = themeColour tokens
-            let sheet = TestFiles.read "app/tailwind.css"
-            let beats =
-                System.Text.RegularExpressions.Regex.Matches (sheet, @"@keyframes (beat-[a-z0-9-]+) \{")
-                |> Seq.map (fun m -> m.Groups.[1].Value, sheet.Substring (m.Index, sheet.IndexOf ("\n}", m.Index) - m.Index))
-                |> List.ofSeq
-            Expect.isNonEmpty beats "the beats are declared in app/tailwind.css"
-            for name, body in beats do
-                // Opacity would put every colour below under something translucent, and the
-                // ratios read here would be of a mark nobody sees.
-                Expect.isFalse (body.Contains "opacity") (sprintf "%s moves colour, never opacity" name)
-                let steps =
-                    System.Text.RegularExpressions.Regex.Matches (body, @"var\(--color-([a-z0-9-]+)\)")
-                    |> Seq.map (fun m -> m.Groups.[1].Value)
-                    |> List.ofSeq
-                Expect.isNonEmpty steps (sprintf "%s names its colours" name)
-                for fg in steps do
-                    for bg in [ "bg"; "panel"; "surface"; "surface-2" ] do
-                        let ratio = contrast (colour fg) (colour bg)
-                        Expect.isTrue
-                            (ratio >= 3.0)
-                            (sprintf "%s: --color-%s on --color-%s is %.2f:1 — a mark needs 3:1" name fg bg ratio)
+        // "every dot that beats keeps >= 3:1 ..." pinned the floor for a mark that moved its
+        // own colour through a beat. None does any more: the running/pending dot that used to
+        // (`statusDotLive`, `statusDotBeat`) now turns instead (`Icon.spin`, `status-spin-cw`/
+        // `status-spin-ccw`), always at `ink-dim`, and Working's diamond runs a line round its
+        // own edge (`mark-run`) the same way — both move geometry, never colour. No `beat-*`
+        // keyframe is left in app/tailwind.css to check, so there is nothing left to pin here.
 
         // The theme's colours are written once: a hex is a constant, and everything else is
         // made from one. A variant picked by hand — a "bright" that was its own hex — is how
