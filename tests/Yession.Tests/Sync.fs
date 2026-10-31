@@ -75,14 +75,14 @@ let private entryIn (doc: Y.Doc) (root: string) (key: string) (fields: (string *
     (doc.getMap root : Y.Map<obj>).set (key, box entry) |> ignore
     fields |> List.iter (fun (field, value) -> entry.set (field, value) |> ignore)
 
-let private queueKeys (state: SyncedSessionState<Ylmish.Text>) : string list =
+let private queueKeys (state: SyncedSessionState<Ylmish.Text, A2ui.Surface>) : string list =
     state.Queue |> Map.toList |> List.map (fst >> QueueId.value)
 
 /// Hand the synced state a whole new value. The client's own messages only ever build the
 /// entries a PERSON writes — a terminal act that is foreground and asks for no stdin — so the
 /// codec's encode direction for every other shape of entry is reachable only by putting one
 /// into the model directly, which is what this does.
-type private Replaced = Replaced of SyncedSessionState<Ylmish.Text>
+type private Replaced = Replaced of SyncedSessionState<Ylmish.Text, A2ui.Surface>
 
 /// The synced-state codec bound to a doc with nothing of the client around it: the same
 /// `create`/`update`/`encode`/`decode` the client program binds, under the same

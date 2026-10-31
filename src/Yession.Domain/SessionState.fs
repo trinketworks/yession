@@ -152,7 +152,7 @@ type SharedBrief = { Body : string }
 
 /// Collaborative state synced via Ylmish.
 [<RequireQualifiedAccess>]
-type SyncedSessionState<'Text> =
+type SyncedSessionState<'Text, 'Surface> =
     { /// Keyed by author, and that key is the invariant: one draft per client is
       /// unrepresentable-otherwise, and two peers drafting across a partition cannot collide
       /// because their keys differ. An ownerless "session draft", if one is ever wanted, is a
@@ -202,13 +202,21 @@ type SyncedSessionState<'Text> =
       LaunchDismissed : bool
       /// Files attached to drafts and queued messages, keyed by the id the uploading browser
       /// minted — so two people attaching at once, even across a partition, never collide.
-      Attachments : Map<UploadId, Attachment> }
+      Attachments : Map<UploadId, Attachment>
+      /// The A2UI surfaces the agent has drawn, keyed by surface id. Collaborative because a
+      /// question put to the session is put to everybody in it: one copy, so a choice one
+      /// person ticks is ticked on every screen, and a reload or a late joiner finds the
+      /// question still standing. A surface's `Theme` and `SendDataModel` never sync — the look
+      /// is this product's, and the data model is already in the doc the agent's side reads.
+      /// A type parameter rather than A2UI's `Surface`, because the domain references nothing
+      /// (`DomainReferences`); the App and the Session both fill it with `A2ui.Surface`.
+      Surfaces : Map<string, 'Surface> }
 
 module SyncedSessionState =
 
     /// Nothing synced yet: no drafts, an empty queue, an unnamed title, no shared brief,
     /// no terminal composers.
-    let empty (text: CollabText<'Text>) : SyncedSessionState<'Text> =
+    let empty (text: CollabText<'Text>) : SyncedSessionState<'Text, 'Surface> =
         { Drafts = Map.empty
           Queue = Map.empty
           Title = text.Empty
@@ -218,7 +226,8 @@ module SyncedSessionState =
           Model = None
           Chapters = Map.empty
           LaunchDismissed = false
-          Attachments = Map.empty }
+          Attachments = Map.empty
+          Surfaces = Map.empty }
 
 /// What the session does about attached files, as rules over the synced state: when a queued
 /// message may be sent, what it says about its files when it is, and which files nothing wants
@@ -243,13 +252,13 @@ module Attachments =
     /// The queue keys an attachment can still be sent with: every draft's and every queued
     /// message's. An attachment to anything else belongs to a draft that was thrown away or a
     /// message that has already gone.
-    let private live (state: SyncedSessionState<'Text>) : Set<QueueId> =
+    let private live (state: SyncedSessionState<'Text, 'Surface>) : Set<QueueId> =
         Set.union
             (state.Drafts |> Map.toSeq |> Seq.map (fun (_, d) -> d.QueueId) |> Set.ofSeq)
             (state.Queue |> Map.toSeq |> Seq.map fst |> Set.ofSeq)
 
     /// Entries in the doc nothing can send any more.
-    let dead (state: SyncedSessionState<'Text>) : UploadId list =
+    let dead (state: SyncedSessionState<'Text, 'Surface>) : UploadId list =
         let live = live state
         state.Attachments
         |> Map.toList
@@ -266,7 +275,7 @@ module Attachments =
     /// `grace`. `staged` is every staged file with when it landed.
     let orphans
         (now: System.DateTimeOffset)
-        (state: SyncedSessionState<'Text>)
+        (state: SyncedSessionState<'Text, 'Surface>)
         (staged: (UploadId * System.DateTimeOffset) list)
         : UploadId list =
         let live = live state

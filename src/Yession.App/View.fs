@@ -5676,6 +5676,7 @@ module View =
                   {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
                 </div>
                 <div class="{Style.dock}">
+                  {model.Synced.Surfaces |> Map.toList |> List.map (fun (id, surface) -> SurfaceView.view dispatch id surface)}
                   {queue dispatch model}
                   {drafts actions dispatch model}
                 </div>

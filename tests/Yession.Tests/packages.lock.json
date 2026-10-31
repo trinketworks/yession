@@ -285,6 +285,7 @@
       "yession.app": {
         "type": "Project",
         "dependencies": {
+          "A2ui": "[1.0.0, )",
           "Fable.Browser.Dom": "[2.16.0, )",
           "Fable.BrowserExtras": "[1.0.0, )",
           "Fable.Elmish": "[4.2.0, )",

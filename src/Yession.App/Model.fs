@@ -1693,7 +1693,7 @@ type ClientModel =
       /// The first unexpected error on this page (`PageFault`). The first, because what
       /// follows one is usually its consequence.
       PageFault : PageFault option
-      Synced        : SyncedSessionState<Ylmish.Text>
+      Synced        : SyncedSessionState<Ylmish.Text, A2ui.Surface>
       Conversation  : ConversationProjection
       /// The terminal half of the chat (Plan 14, stage 1): block chips and lease-stretch
       /// items, with the offset each is anchored at. Merged with `Conversation` at render
@@ -2394,6 +2394,10 @@ type ClientMsg =
     /// like `SetModelMsg`'s, not launch view state, because it is the session's answer and
     /// not one client's (`SyncedSessionState.LaunchDismissed`).
     | DismissLaunchMsg
+    /// Somebody answered an input on an agent's surface: `value` goes at `path`, an absolute
+    /// pointer into that surface's data model. The spec's two-way binding, written into the
+    /// synced state so every peer sees the answer (`SyncedSessionState.Surfaces`).
+    | EditSurfaceMsg of surfaceId: string * path: string * value: A2ui.Json
     /// This client sent the session a command, under this request id. Dispatched by the one
     /// verb that sends commands (`Client.Connection.Ask`), BEFORE the command leaves, so no
     /// answer can arrive ahead of the record of what it answers.
@@ -3041,7 +3045,7 @@ module ClientModel =
         | SessionLink.Current
         | SessionLink.Refused _ -> true
 
-    let private withSynced (synced: SyncedSessionState<Ylmish.Text>) (model: ClientModel) : ClientModel =
+    let private withSynced (synced: SyncedSessionState<Ylmish.Text, A2ui.Surface>) (model: ClientModel) : ClientModel =
         { model with Synced = synced }
 
     /// A repo, or anything said - the fact that retires the launch surface for good; see
@@ -5917,6 +5921,18 @@ module ClientModel =
             { model with Refused = model.Refused |> Option.map (fun refusal -> { refusal with FocusedIn = mount }) }
         | SetModelMsg choice -> model |> withSynced { model.Synced with Model = choice }
         | DismissLaunchMsg -> model |> withSynced { model.Synced with LaunchDismissed = true }
+        // A surface deleted under the person answering it, or a path the data model cannot
+        // hold, leaves the model as it was: the answer has nowhere to go.
+        | EditSurfaceMsg (surfaceId, path, value) ->
+            match Map.tryFind surfaceId model.Synced.Surfaces with
+            | Some surface ->
+                match A2ui.Pointer.set path value surface.DataModel with
+                | Ok data ->
+                    model
+                    |> withSynced
+                        { model.Synced with Surfaces = Map.add surfaceId { surface with DataModel = data } model.Synced.Surfaces }
+                | Error _ -> model
+            | None -> model
         // An id this client's window does not hold is a page boundary, not a bug — and
         // there is nothing to toggle, because what the verdict would default to is on the item.
         | ToggleChapterMsg messageId ->

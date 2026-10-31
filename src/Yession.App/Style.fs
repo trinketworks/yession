@@ -945,6 +945,9 @@ module Style =
               "transition-colors"; focusRing ]
     let btnBare = cls [ btnBareBase; bareInk ]
     let btnBareDanger = cls [ btnBareBase; bareInkDanger ]
+    /// The bare word with nothing to act on yet: its waiting face (docs/visual-design.md,
+    /// State), as `btnSendInFieldWaiting` is for the icon in a field.
+    let btnBareWaiting = cls [ btnBareBase; bareInkWaiting ]
     /// A bare verb at the right of a roster row (`person`): pushed to the row's trailing edge,
     /// `-mr-1` so its WORD, not its padding, lines up with the status words other rows end in,
     /// and a thumb's height on a phone, where a 24px word is not a target. It keeps the row's
@@ -3874,6 +3877,83 @@ module Style =
     /// wearing the err fill at rest, because a touch has no hover to hold a warning up.
     let queueVerbDelete = cls [ btnIconBareDanger; hitTouch; queueDeleteGap ]
     let queueVerbDeleteArmed = cls [ btnIconBareDangerArmed; hitTouch; queueDeleteGap ]
+
+    // --- Agent surfaces: what the agent draws for people to answer (A2UI) ----------------------
+    // The agent says WHAT is on a surface, in the basic catalog's words; this product says how it
+    // looks, from the vocabulary above. So nothing here takes a colour, a size or a font from the
+    // surface: a Primary button is this product's fill, a heading is a step on this ramp.
+
+    /// One surface: a band in the dock, on the composer's gutter, as a queued message is —
+    /// because it is a thing waiting on a person, in the place a person answers from.
+    ///
+    /// Capped at half the visible height, and it scrolls inside the cap. The agent decides how
+    /// long a surface is, so without a cap a long question on a phone on its side (844x390) took
+    /// the whole column and pushed the conversation and the composer off screen, with its own
+    /// buttons cut off at the bottom. The dock is only as tall as its content, so a percentage
+    /// would resolve against nothing. The cap is a share of the shell's own height
+    /// (`--visual-h`, see `shell`), which already accounts for the iOS keyboard.
+    let agentSurface =
+        cls [ "shrink-0 flex flex-col gap-3 py-4 px-4 wide:px-rail bg-surface"
+              "max-h-[calc(var(--visual-h,100dvh)/2)] overflow-y-auto overscroll-contain" ]
+    let surfaceColumn = "flex flex-col gap-3 min-w-0"
+    let surfaceRow = "flex flex-wrap items-center gap-3 min-w-0"
+    /// A card inside a surface: one step up the greys, which is what nesting is said with.
+    let surfaceCard = "flex flex-col gap-3 p-4 bg-surface-2 min-w-0"
+    let surfaceDivider = cls [ Stroke.dividerTop; "w-full" ]
+    let surfaceDividerVertical = cls [ Stroke.dividerLeft; "self-stretch" ]
+
+    /// A container's `justify` along its own axis, and its `align` across it, as the spec names
+    /// them. Literal class names, because Tailwind generates only what a file writes out.
+    let surfaceJustify (justify: A2ui.Justify) : string =
+        match justify with
+        | A2ui.Justify.Start -> "justify-start"
+        | A2ui.Justify.Center -> "justify-center"
+        | A2ui.Justify.End -> "justify-end"
+        | A2ui.Justify.SpaceBetween -> "justify-between"
+        | A2ui.Justify.SpaceAround -> "justify-around"
+        | A2ui.Justify.SpaceEvenly -> "justify-evenly"
+        | A2ui.Justify.Stretch -> "justify-stretch"
+
+    let surfaceAlign (align: A2ui.Align) : string =
+        match align with
+        | A2ui.Align.Start -> "items-start"
+        | A2ui.Align.Center -> "items-center"
+        | A2ui.Align.End -> "items-end"
+        | A2ui.Align.Stretch -> "items-stretch"
+
+    /// The agent's words on a surface, in the agent's voice (sans): a heading at the heading
+    /// step, a subheading at the body step in weight, prose at the body step, a caption small.
+    let surfaceHeading = "font-ui font-extralight text-heading text-ink min-w-0"
+    let surfaceSubheading = "font-ui font-semibold text-body text-ink min-w-0"
+    let surfaceText = cls [ "font-ui"; body; "min-w-0" ]
+    let surfaceCaption = cls [ small; "min-w-0" ]
+
+    /// Why a control is not ready, or why an input is not valid: a REASON, so body text in the
+    /// body voice, no dot and no caps (docs/visual-design.md, Colour).
+    let surfaceReason = cls [ small; "min-w-0" ]
+
+    /// A field's own label above it, in the caps voice labels speak in.
+    let surfaceFieldLabel = cls [ label; "flex flex-col gap-1.5 min-w-0" ]
+    let surfaceField = field
+    /// The long-text field: the same face, given the height several lines need rather than
+    /// the one-line box's.
+    let surfaceFieldLong =
+        cls [ "bg-surface outline-none appearance-none min-h-20 px-3 py-2 transition-colors w-full resize-y"
+              Stroke.ring; Stroke.hair; Stroke.hoverRim; Stroke.focus; fieldType ]
+
+    /// A choice: a whole-row press, as the launch card's repositories are, with the tick in a
+    /// cell drawn on every row and filled on the chosen ones, so choosing moves no word.
+    let surfaceChoices = "flex flex-col divide-y divide-hair min-w-0"
+    let private surfaceChoiceBase =
+        cls [ "w-full text-left flex items-center gap-3 min-h-10 phone:min-h-touch py-2 border-0 cursor-pointer min-w-0 transition-colors"
+              focusRing ]
+    let surfaceChoice = cls [ surfaceChoiceBase; "bg-transparent"; rowLift ]
+    let surfaceChoiceChosen = cls [ surfaceChoiceBase; "bg-surface-2" ]
+    let surfaceChoiceMark = "w-5 shrink-0 self-center text-blue"
+    let surfaceChoiceLabel = cls [ "font-ui"; body; "min-w-0" ]
+
+    /// A component this renderer does not draw yet, said rather than silently dropped.
+    let surfaceUnsupported = surfaceCaption
 
     // --- Composer: the one gradient in the product lives on its focus edge --------------------
     // A COMPOSER IS A BAND, not a box on a ground. It used to be a bordered box inside a padded
