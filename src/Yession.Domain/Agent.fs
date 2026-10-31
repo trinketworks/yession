@@ -1196,14 +1196,16 @@ module AgentWake =
     /// gone; a completion is ordinary news.
     ///
     /// A turn cut off outranks them all: the agent was in the middle of something, and every
-    /// other reason is news ABOUT work — this one is the work.
+    /// other reason is news ABOUT work — this one is the work. An answer to a surface comes
+    /// next: a person replied to what the agent asked, and the turn should wear their name.
     let private rank =
         function
         | CutOff _ -> 0
-        | IntegrationLost _ -> 1
-        | StreamEnded _ -> 2
-        | CommandFinished -> 3
-        | PrChanged _ -> 4
+        | SurfaceAnswered _ -> 1
+        | IntegrationLost _ -> 2
+        | StreamEnded _ -> 3
+        | CommandFinished -> 4
+        | PrChanged _ -> 5
 
     /// Whose an act a loss refused is, as a wake runs: the principal behind the AGENT's act,
     /// and nobody for anyone else's. A person's refused command is news to that person, who
@@ -1353,6 +1355,9 @@ module AgentWake =
                 // as whoever's credential the watch was looking with, which for a watch the
                 // agent started is the person whose turn it started in.
                 | SessionEvent.PrTransitioned p -> background, lastAgent, pendingCommands, better (PrChanged p.Pr, p.Watcher) owed
+                // A person answered a surface. Owed as whoever pressed (`SurfaceAnswered`).
+                | SessionEvent.SurfaceActionTaken a ->
+                    background, lastAgent, pendingCommands, better (SurfaceAnswered a.SurfaceId, a.By) owed
                 // Unwatching clears what that pull request owed. A person who has just said
                 // they no longer care must not get a turn about it a moment later.
                 | SessionEvent.PrUnwatched p ->

@@ -712,7 +712,8 @@ module Refusal =
         | ReattachTerminal _ -> true
         | InterruptAgentTurn _
         | ApproveRepoCapabilities _
-        | AddRepo _ -> false
+        | AddRepo _
+        | PressSurfaceButton _ -> false
 
     /// Where `refusal` is drawn: in the pane while the pane is open and the refusal is one
     /// of its verbs' — that is where the press was — and in the conversation otherwise,
@@ -2399,6 +2400,10 @@ type ClientMsg =
     /// pointer into that surface's data model. The spec's two-way binding, written into the
     /// synced state so every peer sees the answer (`SyncedSessionState.Surfaces`).
     | EditSurfaceMsg of surfaceId: string * path: string * value: A2ui.Json
+    /// Somebody pressed a button on an agent's surface, drawn under template item `scope`
+    /// (`""` at the root). A request of the session (`PressSurfaceButton`), which reads the
+    /// answer from the doc itself; it reaches everyone as `SurfaceActionTaken`.
+    | PressSurfaceMsg of surfaceId: string * componentId: string * scope: string
     /// This client sent the session a command, under this request id. Dispatched by the one
     /// verb that sends commands (`Client.Connection.Ask`), BEFORE the command leaves, so no
     /// answer can arrive ahead of the record of what it answers.
@@ -2744,6 +2749,7 @@ type ClientEffect =
     | OpenTerminal of title: string * sandbox: SandboxRef
     | InterruptTurn of AgentTurnId
     | ApproveRepoCapabilities of RepoRef * granted: string list
+    | PressSurface of surfaceId: string * componentId: string * scope: string
     | Launch of LaunchEffect
     | Claude of ClaudeCall
     | GitHub of GitHubCall
@@ -5974,7 +5980,8 @@ module ClientModel =
         | ReleaseTerminalMsg _
         | ReattachTerminalMsg _
         | InterruptTerminalMsg _
-        | ApproveRepoCapabilitiesMsg _ -> model
+        | ApproveRepoCapabilitiesMsg _
+        | PressSurfaceMsg _ -> model
         // `update` hands these to `Uploads` and the attachment rules beside it, which say both
         // halves — the state and the effects — at once; they reach here from nowhere else.
         | UploadPickedMsg _
@@ -6230,6 +6237,7 @@ module ClientModel =
             | OpenTerminalMsg (title, sandbox) -> [ ClientEffect.OpenTerminal (title, sandbox) ]
             | InterruptTurnMsg turn -> [ ClientEffect.InterruptTurn turn ]
             | ApproveRepoCapabilitiesMsg (repo, granted) -> [ ClientEffect.ApproveRepoCapabilities (repo, granted) ]
+            | PressSurfaceMsg (surfaceId, componentId, scope) -> [ ClientEffect.PressSurface (surfaceId, componentId, scope) ]
             | LaunchMsg launchMsg -> Launch.update launchMsg model.Launch |> snd |> List.map ClientEffect.Launch
             | ClaudePressedMsg press -> ClaudePress.call press model.Claude |> Result.toList |> List.map ClientEffect.Claude
             | GitHubPressedMsg press -> GitHubPress.call press model.GitHub |> Result.toList |> List.map ClientEffect.GitHub

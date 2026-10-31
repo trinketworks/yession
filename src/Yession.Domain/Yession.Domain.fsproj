@@ -44,6 +44,8 @@
     <Compile Include="FilesFacts.fs" />
     <!-- An artifact version shared into the session: the act, and what the log keeps of it. -->
     <Compile Include="ArtifactFacts.fs" />
+    <!-- A button pressed on an agent's surface: the act, and the answer it carried. -->
+    <Compile Include="SurfaceFacts.fs" />
     <Compile Include="ChatFacts.fs" />
     <Compile Include="AgentFacts.fs" />
     <Compile Include="TerminalsFacts.fs" />

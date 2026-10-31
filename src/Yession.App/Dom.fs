@@ -1210,6 +1210,7 @@ module Dom =
         let wokeIntegrationLost = "integration-lost"
         let wokePrChanged = "pr-changed"
         let wokeCutOff = "cut-off"
+        let wokeSurfaceAnswered = "surface-answered"
         /// What a woken turn wears in the chat, in the slot its siblings — *streaming*,
         /// *interrupted* — already occupy. A word rather than a new glyph: this design says
         /// a message's state in one lowercase word, and a mark nobody can decode without a
@@ -1222,6 +1223,7 @@ module Dom =
         let turnWokeIntegrationLost = "The agent started on its own. A terminal where the agent had work cannot run commands."
         let turnWokePrChanged = "The agent started this on its own: a pull request watched here changed state."
         let turnWokeCutOff = "The agent started this on its own. The session stopped during its previous turn. The agent is resuming that turn."
+        let turnWokeSurfaceAnswered = "The agent started this because a person pressed a button on a surface it showed."
         /// Stands where the quoted message would be when the ref points past the loaded page —
         /// the reply is real, its cause simply is not on screen yet.
         let replyRefMissing = "earlier message"
