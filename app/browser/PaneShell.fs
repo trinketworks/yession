@@ -93,9 +93,12 @@ let private toCommandLine (terminal: Yession.Domain.TerminalId) : unit =
 /// frame after the render that shut it, it is there.
 let private toPaneReopen () : unit = focusOn (find "[data-content-toggle=\"show\"]")
 
-/// Onto the list button, once the pane is empty: the empty pane holds no press, and the list's
-/// sheet is where a terminal is started from.
-let private toPaneEmpty () : unit = focusOn (find "[data-pane-switcher]")
+/// Onto the docked list's New terminal, once the pane is empty: the press that fills it. The
+/// list button if that has not drawn.
+let private toPaneEmpty () : unit =
+    find "[data-content-list] [data-terminal-new]"
+    |> Option.orElseWith (fun () -> find "[data-pane-switcher]")
+    |> focusOn
 
 /// Onto one terminal's row on the `all` page, or the page's pivot item when it has gone since.
 let private toSwitcherRow (terminal: Yession.Domain.TerminalId) : unit =

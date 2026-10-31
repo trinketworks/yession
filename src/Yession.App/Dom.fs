@@ -1066,8 +1066,6 @@ module Dom =
         /// The heading over the list of places, and its way back.
         let startInHeading = "start a terminal in"
         let backToList = "Back to terminals and files"
-        /// The empty pane's line: where a terminal is started from, since it is not here.
-        let emptyPaneHint = "Start a terminal from the list above"
         /// The hidden pane's edge tab (P1-4): what the column holds, counted, so that a
         /// session with work in it says so with the pane shut. With none open it is still the
         /// door to making one, and says what kind of thing is behind it. The tab's FACE is the

@@ -1225,7 +1225,7 @@ let private edgeTabTests =
 
         testCase "a pane brought up over a session with no open terminal shows the empty pane" <| fun () ->
             let model = firstLook false [ [ at 1L 0.0 (sent "1" "hello") ] ] |> Support.step ToggleContentMsg
-            Expect.isFalse model.Switcher "nothing to list, and the empty pane says where a terminal is made"
+            Expect.isFalse model.Switcher "no sheet asked for: the pane's body is the list, docked (`View.allPage`)"
 
         testCase "a pane brought up before the log arrived lands on the switcher once it has" <| fun () ->
             // Before the log is read through, "no terminal" and "not heard yet" look the same;
@@ -1242,14 +1242,16 @@ let private edgeTabTests =
             let moves = effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
             Expect.equal moves [ ClientEffect.Move (DomMove.IfDropped DomMove.FocusSwitcher) ] "onto the switcher, if dropped"
 
-        testCase "an empty pane points at the sheet, whose New terminal is the one way to make one" <| fun () ->
-            let doors (html: string) =
-                System.Text.RegularExpressions.Regex.Matches(html, "data-terminal-new[\\s=>]").Count
+        testCase "an empty pane is the list, docked, with its one New terminal" <| fun () ->
+            let count (pattern: string) (html: string) = System.Text.RegularExpressions.Regex.Matches(html, pattern).Count
+            let doors = count "data-terminal-new[\\s=>]"
+            let lists = count "data-content-list[\\s=>]"
+            let scrims = count "data-pane-sheet-scrim[\\s=>]"
             let empty = shownOf [] |> Support.step ToggleContentMsg
             let html = Support.render empty
-            Expect.equal (doors html) 0 "the empty pane makes nothing itself"
-            Expect.isTrue (html.Contains Dom.Text.emptyPaneHint) "and says where a terminal is started"
-            Expect.equal (doors (Support.render (Support.step OpenAllMsg empty))) 1 "one New terminal, on the sheet"
+            Expect.equal (lists html, doors html, scrims html) (1, 1, 0) "the list is the pane, with nothing under it to dim"
+            let asked = Support.render (Support.step OpenAllMsg empty)
+            Expect.equal (lists asked, doors asked, scrims asked) (1, 1, 0) "asked for, it is the same one list, not a second over it"
     ]
 
 // --- How a block ended, on every surface ----------------------------------------------------
