@@ -1980,6 +1980,9 @@ type ClientModel =
       /// default: they are the record, and a session that has run forty commands has forty
       /// of them to push its live terminals' rows apart.
       ClosedShown   : bool
+      /// Whether a drag carrying files is over the list's sheet, which then shows where they
+      /// will land (`Style.uploadDropZone`). View state, told by the sheet's drag events.
+      FilesOver     : bool
       /// What time the page says things happened against — "4m ago" on a command's line.
       /// The composition root's clock (`Client.withClock`), told at once and every minute
       /// after; `None` until it has said, which is a server render and nothing else, and
@@ -2623,6 +2626,8 @@ type ClientMsg =
     | CloseSwitcherMsg
     /// Unfold the list's closed terminals, or fold them away again (`ClosedShown`).
     | ToggleClosedMsg
+    /// A drag carrying files came over the list's sheet (`true`), or left it or dropped (`false`).
+    | FilesOverMsg of bool
     /// An arrow, Home or End pressed on one of the list's rows: walk to the row it names
     /// (`ClientModel.walkList`). Changes nothing in the model; the answer is a focus move.
     | WalkListMsg of key: string * from: ListRow
@@ -2970,6 +2975,7 @@ module ClientModel =
           Switcher = false
           ListHeld = Set.empty
           ClosedShown = false
+          FilesOver = false
           Now = None
           Refused = None
           Stolen = None
@@ -5785,6 +5791,7 @@ module ClientModel =
         | OpenAllMsg -> drawerShut { model with Switcher = true; PaneMenu = false; TerminalsOpen = true }
         | CloseSwitcherMsg -> { model with Switcher = false }
         | ToggleClosedMsg -> { model with ClosedShown = not model.ClosedShown }
+        | FilesOverMsg over -> { model with FilesOver = over }
         | WalkListMsg _ -> model
         | ClockMsg at -> { model with Now = Some at }
         | EnsureTerminalDraftMsg (terminal, author, queueId) ->

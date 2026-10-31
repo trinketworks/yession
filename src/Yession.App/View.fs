@@ -4918,19 +4918,24 @@ module View =
                 // Emptied, so the same file chosen again is a change the input reports.
                 input.value <- "")
         let pasted (e: Browser.Types.Event) = if take (CarriedFiles.ofPaste e) then e.preventDefault ()
-        let dragged (e: Browser.Types.Event) = if CarriedFiles.inDrag e then e.preventDefault ()
-        let dropped (e: Browser.Types.Event) = if take (CarriedFiles.ofDrop e) then e.preventDefault ()
+        let dragged (e: Browser.Types.Event) =
+            if CarriedFiles.inDrag e then
+                e.preventDefault ()
+                // `dragover` fires every few milliseconds; only the change is news.
+                if not model.FilesOver then dispatch (FilesOverMsg true)
+        let left (e: Browser.Types.Event) = if model.FilesOver && CarriedFiles.leftOut e then dispatch (FilesOverMsg false)
+        let dropped (e: Browser.Types.Event) =
+            if model.FilesOver then dispatch (FilesOverMsg false)
+            if take (CarriedFiles.ofDrop e) then e.preventDefault ()
         // The way to choose is the file input itself, in a `<label>` that is its face: a press
         // on the label is a press on the input, and Tab, Enter and Space reach the input as
         // they reach any control, so the browser opens its chooser with no script of ours. A
         // `hidden` input with a button beside it had to be found in the DOM and clicked.
         let uploadControl =
             html $"""
-                <div class="{Style.uploadCell}">
-                  <label class="{Style.paneToolbarPick}" data-artifact-upload>
-                    <input type="file" class="{Style.pickerInput}" multiple data-artifact-upload-input
-                           aria-label="{Dom.Text.uploadNamed}" @change={Ev(picked)}>{Icon.up}{Dom.Text.upload}</label>
-                </div>"""
+                <label class="{Style.uploadControl}" data-artifact-upload>
+                  <input type="file" class="{Style.pickerInput}" multiple data-artifact-upload-input
+                         aria-label="{Dom.Text.uploadNamed}" @change={Ev(picked)}>{Icon.up}{Dom.Text.upload}</label>"""
         // The closed terminals, folded under one row that says how many — and unfolded in
         // place under it, never somewhere else. No fold over nothing.
         let closed =
@@ -4960,12 +4965,19 @@ module View =
                 match List.length sections.FileRows + List.length sections.UploadRows with
                 | 0 -> Lit.nothing
                 | n -> html $"""<span class="{Style.listCount}">{string n}</span>"""
+            let drop =
+                if model.FilesOver then
+                    html $"""<div class="{Style.uploadDropZone}" data-artifact-drop aria-hidden="true">{Icon.up}{Dom.Text.dropToUpload}</div>"""
+                else Lit.nothing
             html $"""
-                <div class="{Style.listSectionLabel}" data-list-section="{Dom.Text.filesHeading}">
-                  <span>{Dom.Text.filesHeading}</span>
-                  {count}
+                <div class="{Style.listSectionHead}">
+                  <div class="{Style.listSectionLabel}" data-list-section="{Dom.Text.filesHeading}">
+                    <span>{Dom.Text.filesHeading}</span>
+                    {count}
+                  </div>
                   {uploadControl}
                 </div>
+                {drop}
                 <div role="list" aria-label="{Dom.Text.filesHeading}">
                   {(sections.FileRows |> List.map artifactRow) @ (sections.UploadRows |> List.map uploadRow)}
                 </div>"""
@@ -4987,7 +4999,7 @@ module View =
             <div class="{Style.allSheet}" role="region" tabindex="-1" aria-label="{Dom.Text.terminalsAndFiles}"
                  id="{Dom.paneSheetId}" data-pane-panel="{allKey}">
               <div class="{Style.allPage}" data-content-list aria-label="{Dom.Text.terminalsAndFiles}"
-                   @paste={Ev(pasted)} @dragover={Ev(dragged)} @drop={Ev(dropped)}>
+                   @paste={Ev(pasted)} @dragover={Ev(dragged)} @dragleave={Ev(left)} @drop={Ev(dropped)}>
                 {opened}
                 {closed}
                 {empty}

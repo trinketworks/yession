@@ -347,6 +347,11 @@ module CarriedFiles =
     [<Emit("(function (e) { return !!(e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')); })($0)")>]
     let inDrag (e: Event) : bool = jsNative
 
+    /// Whether a `dragleave` left the element it is heard on, rather than moving between
+    /// that element's children (it fires for each). Out of the window, there is nothing it went into.
+    [<Emit("(function (e) { return !(e.relatedTarget && e.currentTarget.contains(e.relatedTarget)); })($0)")>]
+    let leftOut (e: Event) : bool = jsNative
+
 /// A `PUT` that says how much of its body has gone — which `fetch` cannot, and which is the
 /// only progress a person waiting on a large file has. Exactly one of `answered` (a status and
 /// the response's text) or `unanswered` (why there was none) is called, unless the returned

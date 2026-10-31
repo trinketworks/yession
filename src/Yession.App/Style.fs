@@ -4501,9 +4501,6 @@ module Style =
         cls [ "h-touch px-1.5 shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer no-underline"
               caps; "whitespace-nowrap text-ink-dim hover:text-ink transition-colors motion-reduce:transition-none" ]
     let paneToolbarAct = cls [ paneToolbarFace; focusRingInset ]
-    /// The same act as the `<label>` of a file input it holds, wearing that input's ring
-    /// (`focusRingHeldInset`): the face of a chooser the browser opens itself.
-    let paneToolbarPick = cls [ paneToolbarFace; focusRingHeldInset ]
     /// The one act a surface is FOR — the empty pane's way to make a terminal: blue, which is
     /// what interactive means here, and nothing louder than that.
     let paneActPrimary = cls [ paneActBase; "text-pivot leading-6 text-blue hover:text-blue-up-1" ]
@@ -4744,10 +4741,21 @@ module Style =
     let terminalEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center phone:[&_button]:min-h-11"
 
 
-    /// What a section of the sheet is called — its files — in the caps voice, `ink-dim`, with
-    /// its count and its one act beside it. The terminals have none: the list button above
-    /// them says what they are.
-    let listSectionLabel = cls [ "h-11 flex items-center gap-2.5 pl-3 pr-1 mt-4 select-none text-ink-dim"; caps; Stroke.dividerBottom ]
+    /// A section of the sheet's head: what it is called, and its one act. One line on a wide
+    /// screen, the act at its right end and one hairline under both. Two on a phone, the act
+    /// a full-width row of its own under the name, because a thumb lands on a row and not on
+    /// the corner of one. The terminals have none: the list button above them says what they are.
+    let listSectionHead = cls [ "mt-4 flex phone:flex-col wide:items-center wide:border-b wide:border-hair" ]
+    /// What a section is called, in the caps voice, `ink-dim`, with its count beside it.
+    let listSectionLabel =
+        cls [ "h-11 flex items-center gap-2.5 pl-3 pr-1 select-none text-ink-dim wide:flex-1"; caps
+              "phone:border-b phone:border-hair" ]
+    /// A section's act, a blue link like the repo picker's branch (`askRowBranch`): no box,
+    /// because the row it stands on is the box.
+    let private listSectionActFace =
+        cls [ caps; "h-11 shrink-0 inline-flex items-center gap-1.5 px-3 bg-transparent border-0 cursor-pointer"
+              "text-blue hover:text-blue-up-1 transition-colors motion-reduce:transition-none"
+              "phone:w-full phone:border-b phone:border-hair" ]
 
     /// An artifact's row: the same row as a terminal's, so the two sections read as one list
     /// of things rather than two designs.
@@ -4761,8 +4769,17 @@ module Style =
     /// and not a control — there is nothing to open until the store has it.
     let uploadName = "min-w-0 truncate font-ui font-light text-body text-ink-dim"
 
-    /// The sheet's way to send a file in, at the right end of its files' heading.
-    let uploadCell = "ml-auto shrink-0 flex items-center"
+    /// The files' act: the `<label>` of a file input, so its ring is the input's
+    /// (`focusRingHeldInset`). The input is `sr-only`, so the label draws the ring while it has focus.
+    let uploadControl = cls [ listSectionActFace; focusRingHeldInset ]
+
+    /// Where a file being dragged over the sheet will land: under the files' head, dashed,
+    /// because it is a place and not a control. Drawn only while a drag carrying files is over
+    /// the sheet (`ClientModel.FilesOver`). Dropping anywhere on the sheet uploads, so this
+    /// shows that the drop is taken. It is not a target of its own.
+    let uploadDropZone =
+        cls [ caps; "mx-3 my-3 h-20 flex items-center justify-center gap-1.5 pointer-events-none"
+              "border border-dashed border-blue bg-surface-2 text-blue" ]
 
     /// The block history's scroll box, and the stream inside it.
     ///
