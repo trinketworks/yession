@@ -39,6 +39,8 @@
     <Compile Include="Domain.fs" />
     <!-- The A2UI binding against the spec's own examples and schema cases. -->
     <Compile Include="A2ui.fs" />
+    <!-- Its pure core against the spec's conformance suites, and the fold over its examples. -->
+    <Compile Include="A2uiCore.fs" />
     <Compile Include="Entities.fs" />
     <Compile Include="Routes.fs" />
     <Compile Include="Assets.fs" />

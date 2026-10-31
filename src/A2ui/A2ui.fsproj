@@ -2,12 +2,14 @@
 
   <!--
     A2UI v0.9.1 (https://a2ui.org), bound in F#: the protocol's messages and the basic
-    catalog as types, and the codec that is the one door between them and JSON. Nothing in
+    catalog as types, the codec that is the one door between them and JSON, and the pure
+    core a renderer and a server both need (data model pointers, `formatString`'s
+    expressions, the catalog's functions, the fold over a surface's messages). Nothing in
     it is ours, so it is not `Yession.*`, and it refers to nothing of ours: it sits beside
     `Yession.Codecs` in the order, below the App and the Session that will both speak it.
 
-    The spec's own schemas and test cases pin it (`tests/Yession.Tests/A2ui.fs`, over the
-    copies in `tests/fixtures/a2ui`).
+    The spec's own schemas, test cases and conformance suites pin it
+    (`tests/Yession.Tests/A2ui.fs`, over the copies in `tests/fixtures/a2ui`).
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -16,6 +18,10 @@
   <ItemGroup>
     <Compile Include="Types.fs" />
     <Compile Include="Codec.fs" />
+    <Compile Include="Pointer.fs" />
+    <Compile Include="Expression.fs" />
+    <Compile Include="Evaluate.fs" />
+    <Compile Include="Surface.fs" />
   </ItemGroup>
 
   <ItemGroup>
