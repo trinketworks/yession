@@ -40,6 +40,15 @@ __pycache__/
 # OS / editor
 .DS_Store
 
+# Core dumps. A process that crashes in a dev container writes `core` into its working
+# directory, the checkout root. Unignored, it is an untracked file that `git add -A` commits
+# and that the Repo layout suite (which lists untracked files) reads: a 3.26 GB one did.
+# Anchored at no directory, since a crash can happen wherever a process was started. The
+# negation keeps a DIRECTORY named core visible: only the dump's file is meant.
+core
+core.[0-9]*
+!core/
+
 # Nix
 result
 result-*
