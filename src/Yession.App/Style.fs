@@ -4281,7 +4281,7 @@ module Style =
         + Stroke.dividerLeft + " "
         + "wide:transition-[width] wide:duration-200 wide:ease-out wide:[.term-resizing_&]:transition-none "
         + "wide:[.term-closed_&]:w-0 wide:[.term-closed_&]:border-l-0 "
-        + "phone:fixed phone:inset-y-0 phone:right-0 phone:left-5 phone:w-auto phone:border-l-0 "
+        + "phone:fixed phone:inset-y-0 phone:right-0 phone:left-5 phone:w-auto "
         + degradedBarRoom + " "
         + "phone:transition-transform phone:duration-200 phone:ease-out "
         + "phone:[.term-closed_&]:translate-x-[101%] " + reduceColumnMotion
