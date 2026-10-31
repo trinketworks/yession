@@ -1019,7 +1019,12 @@ type ToolCapabilities =
       /// the whole record is resolved per turn: the turn holds a SNAPSHOT, so a set change
       /// mid-turn lands on the next turn and the model's tool list never shifts underneath
       /// it. A server that is down contributes nothing here and fails nothing.
-      Foreign : ToolRegistry list }
+      Foreign : ToolRegistry list
+      /// Tools of the session's own namespace whose body reaches what the domain cannot name:
+      /// `show_surface` writes A2UI surfaces into the session's doc, and the domain references
+      /// neither A2UI nor Yjs (`DomainReferences`). The same seam `Repos.ProviderTools` is for
+      /// GitHub's verbs. Empty where no doc is wired (`AgentCapabilities.none`).
+      Contributed : (ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>)) list }
 
 /// Everything the agent is permitted to do this turn, one record per feature.
 ///
@@ -1094,7 +1099,8 @@ module AgentCapabilities =
               Read = fun _ -> async { return Error "no query capability" } }
           Tools =
             { Record = ToolUseLog.none
-              Foreign = [] }
+              Foreign = []
+              Contributed = [] }
           RunGated =
             fun call ->
                 async { return Error (sprintf "no gate to run %s through in this session" call.Tool) } }

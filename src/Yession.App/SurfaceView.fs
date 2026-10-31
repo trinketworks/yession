@@ -19,7 +19,8 @@ open Lit
 [<RequireQualifiedAccess>]
 module SurfaceView =
 
-    let private kindName (kind: ComponentKind) : string =
+    /// The catalog's name for a component, as the agent wrote it.
+    let kindName (kind: ComponentKind) : string =
         match kind with
         | ComponentKind.Text _ -> "Text"
         | ComponentKind.Image _ -> "Image"
@@ -39,6 +40,30 @@ module SurfaceView =
         | ComponentKind.ChoicePicker _ -> "ChoicePicker"
         | ComponentKind.Slider _ -> "Slider"
         | ComponentKind.DateTimeInput _ -> "DateTimeInput"
+
+    /// Whether this module draws a component, rather than saying it cannot. What the agent's
+    /// tool refuses by (`SurfaceTool`), so the agent is never told a component works that
+    /// people would see as a hole.
+    let draws (kind: ComponentKind) : bool =
+        match kind with
+        | ComponentKind.Text _
+        | ComponentKind.Row _
+        | ComponentKind.Column _
+        | ComponentKind.List _
+        | ComponentKind.Card _
+        | ComponentKind.Divider _
+        | ComponentKind.Button _
+        | ComponentKind.TextField _
+        | ComponentKind.CheckBox _
+        | ComponentKind.ChoicePicker _ -> true
+        | ComponentKind.Image _
+        | ComponentKind.Icon _
+        | ComponentKind.Video _
+        | ComponentKind.AudioPlayer _
+        | ComponentKind.Tabs _
+        | ComponentKind.Modal _
+        | ComponentKind.Slider _
+        | ComponentKind.DateTimeInput _ -> false
 
     /// What one surface's components draw against.
     type private Canvas =

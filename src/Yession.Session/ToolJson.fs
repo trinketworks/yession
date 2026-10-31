@@ -103,6 +103,12 @@ module ToolArgs =
         { ToolArgs.Fields = [ ToolField.optionalList key "string" description ]
           ToolArgs.Read = fun get -> get.Optional.Field key (Decode.list Decode.string) |> Option.defaultValue [] }
 
+    /// A required list of JSON objects, each handed on as its own JSON text: for a tool whose
+    /// argument is another protocol's messages, which that protocol's codec reads.
+    let objects (key: string) (description: string) : ToolArgs<string list> =
+        { ToolArgs.Fields = [ { ToolField.required key "array" description with Items = Some "object" } ]
+          ToolArgs.Read = fun get -> get.Required.Field key (Decode.list Decode.value) |> List.map (Encode.toString 0) }
+
     /// The JSON Schema a descriptor carries.
     let schema (input: ToolArgs<'a>) : string = ToolSchema.ofFields input.Fields
 

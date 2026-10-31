@@ -745,7 +745,8 @@ let startFull
                   // is decorated so a stream a provider offers becomes a terminal (Plan 19) —
                   // over the REGISTRY rather than inside the client, so the seam sits where
                   // every call already passes, beside the audit's.
-                  Foreign = mcpConnections.Registries () |> List.map streamAttacher.Decorate } }
+                  Foreign = mcpConnections.Registries () |> List.map streamAttacher.Decorate
+                  Contributed = [] } }
 
         // The queue drain and turn scheduler (Phase 3) — the real machinery lives in
         // `Scheduler` (shared with the property harness); the Host wires it to this

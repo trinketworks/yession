@@ -2,8 +2,9 @@ module Yession.Tests.AgentSurfaces
 
 // An agent's A2UI surface as the App holds it: in the synced state, so in the doc every peer
 // shares; answered through the spec's two-way binding (`EditSurfaceMsg`); and drawn in the dock
-// (`SurfaceView`). Nothing in the product writes a surface yet, so each case writes one the way a
-// peer's update would arrive: straight onto the doc, or straight into the model.
+// (`SurfaceView`). The agent's side writes a surface with `show_surface` (`SurfaceTool`), whose
+// cases run it against a doc; the rest write one the way a peer's update would arrive: straight
+// onto the doc, or straight into the model.
 
 open Fable.Pyxpecto
 open Yjs
@@ -183,9 +184,118 @@ let private viewTests =
                 "nothing to answer yet"
     ]
 
+/// One component of every kind the catalog has, to hold the tool's list against the renderer.
+let private everyKind : ComponentKind list =
+    let text = Literal "x"
+    [ ComponentKind.Text (text, None)
+      ComponentKind.Image (text, None, None, None)
+      ComponentKind.Icon (IconSource.Named "home")
+      ComponentKind.Video text
+      ComponentKind.AudioPlayer (text, None)
+      ComponentKind.Row (Static [], None, None)
+      ComponentKind.Column (Static [], None, None)
+      ComponentKind.List (Static [], None, None)
+      ComponentKind.Card "c"
+      ComponentKind.Tabs []
+      ComponentKind.Modal ("a", "b")
+      ComponentKind.Divider None
+      ComponentKind.Button ("c", None, Action.Event ("e", []), [])
+      ComponentKind.TextField (text, None, None, None, [])
+      ComponentKind.CheckBox (text, Literal false, [])
+      ComponentKind.ChoicePicker (None, None, [], Literal [], None, None, [])
+      ComponentKind.Slider (None, None, 1.0, Literal 0.0, [])
+      ComponentKind.DateTimeInput (text, None, None, None, None, None, []) ]
+
+/// What the agent's call answers, run against a doc.
+let private show (doc: Y.Doc) (messages: string) : Async<string> =
+    async {
+        let _, body = Yession.Session.SurfaceTool.tool (SyncedStateSync.applySurfaceMessages doc)
+        match! body (sprintf "{\"messages\":%s}" messages) with
+        | Ok answer -> return answer.Text
+        | Error e -> return failwithf "the call did not happen: %s" e
+    }
+
+let private message (body: string) : string = sprintf "{\"version\":\"v0.9.1\",%s}" body
+
+let private create (id: string) : string =
+    message (sprintf "\"createSurface\":{\"surfaceId\":\"%s\",\"catalogId\":\"%s\"}" id Codec.BasicCatalogId)
+
+let private surfacesIn (doc: Y.Doc) = (SyncedStateSync.ofDoc doc).Surfaces
+
+let private toolTests =
+    testList "Tool" [
+        testCase "the tool lists exactly the components the app draws" <| fun () ->
+            Expect.equal
+                (everyKind |> List.filter SurfaceView.draws |> List.map SurfaceView.kindName |> List.sort)
+                (List.sort Yession.Session.SurfaceTool.drawnNames)
+                "the description and the refusal go by the same answer"
+
+        // The example is what an agent copies, so it has to be one the session takes.
+        testCaseAsync "the choice example in the description puts a question in front of everybody" <| async {
+            let doc = Y.Doc.Create ()
+            let ada = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+            let! said = show doc Yession.Session.SurfaceTool.example
+            Expect.stringContains said "applied 3 messages" "all three applied"
+            let page = render (ada.Model ())
+            Expect.stringContains page "data-surface=\"pick\"" "a peer draws it"
+            Expect.stringContains (tagWith "data-surface-choice=\"release/2.4\"" page) "aria-checked=\"false\"" "with its choices, none taken"
+            Expect.stringContains (tagWith "data-surface-component=\"go\"" page) "aria-disabled=\"true\"" "and the button waits for one"
+        }
+
+        testCaseAsync "a component the app does not draw is refused, and nothing is written" <| async {
+            let doc = Y.Doc.Create ()
+            let image = message "\"updateComponents\":{\"surfaceId\":\"s\",\"components\":[{\"id\":\"root\",\"component\":\"Image\",\"url\":\"https://example.com/a.png\"}]}"
+            let! said = show doc (sprintf "[%s,%s]" (create "s") image)
+            Expect.stringContains said "REFUSED" "refused"
+            Expect.stringContains said "Image (root)" "naming the component"
+            Expect.stringContains said "ChoicePicker" "and what it may use instead"
+            Expect.equal (surfacesIn doc) Map.empty "the createSurface before it did not land either"
+        }
+
+        testCaseAsync "a message that does not apply refuses the whole call" <| async {
+            let doc = Y.Doc.Create ()
+            let elsewhere = message "\"deleteSurface\":{\"surfaceId\":\"other\"}"
+            let! said = show doc (sprintf "[%s,%s]" (create "s") elsewhere)
+            Expect.stringContains said "there is no surface 'other'" "says which surface is missing"
+            Expect.equal (surfacesIn doc) Map.empty "and wrote nothing"
+        }
+
+        testCaseAsync "something that is not an A2UI message is refused by its place in the list" <| async {
+            let doc = Y.Doc.Create ()
+            let! said = show doc (sprintf "[%s,{\"hello\":1}]" (create "s"))
+            Expect.stringContains said "message 2 is not an A2UI v0.9.1 message" "names the second"
+        }
+
+        // The agent revises a question people are already answering: it moves the field it
+        // names, and the answers it did not name stay where people put them.
+        testCaseAsync "the agent's data update keeps the answers it did not name" <| async {
+            let doc = Y.Doc.Create ()
+            let ada = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+            let! _ = show doc Yession.Session.SurfaceTool.example
+            ada.Dispatch (user (EditSurfaceMsg ("pick", "/note", JString "after lunch")))
+            let! _ = show doc (sprintf "[%s]" (message "\"updateDataModel\":{\"surfaceId\":\"pick\",\"path\":\"/choice\",\"value\":[\"main\"]}"))
+            Expect.equal
+                (surfacesIn doc |> Map.tryFind "pick" |> Option.map (fun s -> s.DataModel))
+                (Some (JObject [ "choice", branches [ "main" ]; "note", JString "after lunch" ]))
+                "both, in the doc everyone reads"
+        }
+
+        testCaseAsync "deleteSurface takes the surface and its answers out of the doc" <| async {
+            let doc = Y.Doc.Create ()
+            let! _ = show doc Yession.Session.SurfaceTool.example
+            let! said = show doc (sprintf "[%s]" (message "\"deleteSurface\":{\"surfaceId\":\"pick\"}"))
+            Expect.stringContains said "applied 1 message." "applied"
+            Expect.equal (surfacesIn doc) Map.empty "no surface"
+            Expect.isFalse
+                ((doc.getMap "surfaceData" : Y.Map<obj>).has (SyncedStateSync.SurfaceDataKey.make "pick" "choice"))
+                "and no answer left behind"
+        }
+    ]
+
 let tests =
     testList "Agent surfaces" [
         syncTests
         modelTests
         viewTests
+        toolTests
     ]

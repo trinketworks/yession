@@ -1184,7 +1184,11 @@ module AgentTools =
         let ofArguments (descriptor, body: string -> Async<Result<ToolAnswer, string>>) =
             descriptor, (fun (call: ToolCall) -> body call.Arguments)
         executeCommandTool capabilities
-        :: (verbs capabilities @ queryTools capabilities @ capabilities.Repos.ProviderTools |> List.map ofArguments)
+        :: (verbs capabilities
+            @ queryTools capabilities
+            @ capabilities.Repos.ProviderTools
+            @ capabilities.Tools.Contributed
+            |> List.map ofArguments)
 
     /// The `yession` registry for one turn's capabilities.
     let registry (capabilities: AgentCapabilities) : ToolRegistry =
