@@ -121,6 +121,43 @@ module Strategy =
     let private nonBlank (value: string option) : string option =
         value |> Option.bind (fun v -> let t = v.Trim () in if t = "" then None else Some t)
 
+    /// An RFC 2047 "encoded word": `=?charset?encoding?text?=`. HTTP header values are
+    /// meant to be US-ASCII, so an asserting proxy built on an upstream that only hands it
+    /// an ASCII header falls back to the same MIME encoding email headers use for a non-ASCII
+    /// name — Tailscale's `Tailscale-User-Name` does this verbatim. The deployment docs
+    /// promise `x-yession-*` values are plain UTF-8, so this decodes on the way in rather
+    /// than making every reader of `DisplayName` understand RFC 2047.
+    let private encodedWord = System.Text.RegularExpressions.Regex (@"=\?[^?\s]+\?([BbQq])\?([^?]*)\?=")
+
+    /// The Q encoding: quoted-printable with `_` standing for space.
+    let private decodeQ (text: string) : byte[] =
+        let text = text.Replace ('_', ' ')
+        let bytes = ResizeArray<byte> ()
+        let mutable i = 0
+        while i < text.Length do
+            if text.[i] = '=' && i + 2 < text.Length then
+                bytes.Add (System.Convert.ToByte (text.Substring (i + 1, 2), 16))
+                i <- i + 3
+            else
+                bytes.Add (byte text.[i])
+                i <- i + 1
+        bytes.ToArray ()
+
+    /// Decodes every RFC 2047 encoded word `value` carries to UTF-8 text. A value with none
+    /// is returned unchanged; a word this cannot decode is left as it was rather than
+    /// dropped, because a header we misread is still better evidence than a blank one.
+    let private decodeEncodedWords (value: string) : string =
+        encodedWord.Replace (
+            value,
+            fun m ->
+                try
+                    let encoding, text = m.Groups.[1].Value, m.Groups.[2].Value
+                    let bytes =
+                        if encoding = "B" || encoding = "b" then System.Convert.FromBase64String text
+                        else decodeQ text
+                    System.Text.Encoding.UTF8.GetString bytes
+                with _ -> m.Value)
+
     /// Trusted-headers: the operator's proxy authenticated the human and asserts the
     /// identity in `x-yession-*` headers. Replaces (never composes with) `localhost` —
     /// behind a loopback-terminating proxy every request is loopback, so composing
@@ -138,7 +175,7 @@ module Strategy =
                         return
                             Attributed
                                 { Subject = subject
-                                  DisplayName = nonBlank (context.Header NameHeader)
+                                  DisplayName = context.Header NameHeader |> Option.map decodeEncodedWords |> nonBlank
                                   Email = nonBlank (context.Header EmailHeader)
                                   Picture = nonBlank (context.Header PictureHeader)
                                   Extra =
