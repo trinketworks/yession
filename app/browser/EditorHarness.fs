@@ -841,10 +841,9 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                             Size = None
                             ToolUseId = None } ] }
         Conversation =
-                [ // Two of a repo's sandboxes, up. The menu behind the strip's `+` (Plan 20,
-                  // stage 1) reads the starts on the timeline for somewhere to open a
-                  // terminal, so a harness without them could draw that surface and never
-                  // show what it has to survive.
+                [ // Two of a repo's sandboxes, up. The sheet's list of places to start a
+                  // terminal in reads the starts on the timeline, so a harness without them
+                  // could draw that surface and never show what it has to survive.
                   //
                   // The DESCRIPTIONS are whole sentences, as a real `yession.yaml` writes
                   // them — this repository's own are 170 and 100 characters. A fixture that

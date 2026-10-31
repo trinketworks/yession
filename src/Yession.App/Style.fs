@@ -3464,56 +3464,6 @@ module Style =
     /// it would, if a keyboard ever reached it.
     let itemMenuBackdrop = cls [ "fixed inset-0 z-20 bg-transparent cursor-default select-none"; focusRing ]
 
-    /// The strip's menu of things to open (Plan 20, stage 1). `itemMenu`'s own chrome, because
-    /// it is the same KIND of surface — a short set of acts over the page — and two menus in
-    /// one product differing in their ring and their ground are two menus a reader has to
-    /// learn separately. Hung under its control and wider than that one, because its entries
-    /// carry a second line.
-    /// Capped, and that is the load-bearing part. `min-w` alone let the box grow to its
-    /// widest entry, and an entry carries what a repo's file says its sandbox is FOR —
-    /// whole sentences, 170 characters in this repository's own `yession.yaml`. Measured on
-    /// a 375px phone: a 962px menu, hung from `right-0`, so it reached 599px off the left of
-    /// the screen with its text cut off mid-word. `truncate` on the note could not save it,
-    /// because a flex column with no width to fit into has nothing to truncate against.
-    ///
-    /// 18rem rather than the pane, so the cap holds wherever the menu is: the pane's splitter
-    /// stops at 320px, which this clears with its gutters. The viewport term is the floor
-    /// under that, for a screen narrower than any phone sold.
-    let paneNewMenu =
-        cls [ "absolute right-0 top-full mt-1 z-30 py-1 select-none bg-panel"
-              "min-w-[14rem]"
-              Stroke.ring
-              Stroke.hair ]
-    /// The same menu hung from the empty pane's button (P1-4), which is centred in the
-    /// column rather than at its right edge: so it hangs centred under it, and reads its
-    /// entries from the left whatever the empty state's own alignment.
-    let paneNewMenuUnder =
-        cls [ "absolute left-1/2 -translate-x-1/2 top-full mt-1 z-30 py-1 select-none bg-panel text-left"
-              "min-w-[14rem]"
-              Stroke.ring
-              Stroke.hair ]
-
-    /// An entry carrying a note under its name. The menu's own entry sets the box, the
-    /// padding and the states; this only makes it two lines.
-    /// `min-w-0`, or the column refuses to shrink below its content and the cap above is a
-    /// number the box ignores.
-    let menuEntryStacked = cls [ itemMenuEntry; "flex flex-col gap-0.5" ]
-    /// Its first line — ink, not the dim a one-line entry wears, because a name no brighter
-    /// than its own footnote is not a name.
-    ///
-    /// NOT truncated, though it is a label and labels usually are: a `SandboxName` is capped
-    /// at 40 characters, so the widest a name can make this menu is bounded and small, and
-    /// the menu sizing to its longest name is a better answer than a name with its end cut
-    /// off. Truncating would need the column to shrink, and a `min-w-0` kept for a case that
-    /// cannot arrive is CSS nobody can test.
-    let menuEntryName = "text-body text-ink"
-    /// Which repo declared this place, and what its file said the place is for.
-    ///
-    /// WRAPPED and clamped rather than truncated: a description is prose somebody wrote, and
-    /// an ellipsis after the first four words of a sentence says less than nothing. Two lines
-    /// is what distinguishes one sandbox from another without the menu becoming a document.
-    let menuEntryNote = "line-clamp-2 font-light text-small text-ink-faint"
-
     /// A repo note in the timeline (Plan 14): one quiet act-line, indented past the
     /// avatar gutter so the reading edge lines up with message bodies.
     let actNote = cls [ itemGround; readingColumn; foldRow; "max-md:pl-4" ]
@@ -4402,11 +4352,10 @@ module Style =
     /// chip and the hairline it should run into. `items-stretch`, and no explicit height on
     /// `pivotItemBase` (`min-w-touch` still bounds its width, never its height), lets every
     /// entry fill the row edge to edge instead, so the selected tab's own ground runs all the
-    /// way to the hairline with nothing of the strip's showing between them. The three controls
+    /// way to the hairline with nothing of the strip's showing between them. The controls
     /// outside the scroller (`paneListButtonBase`, `paneStripAct`) keep their own `h-touch`, so
     /// a bare `items-stretch` would snap them to the row's top instead of leaving them centred
-    /// as before — they carry `self-center` for that. The `+` cell's own wrapper (`terminalTabNewCell`)
-    /// already centres its one button with its own `items-center`, so it needs no such tag.
+    /// as before — they carry `self-center` for that.
     ///
     /// `paneToolbar`, where there is one, is now the column's own second row underneath —
     /// `spacing-touch` tall and no longer asked to land on the band. Its hairline is its own,
@@ -4506,10 +4455,6 @@ module Style =
     /// Everything under the strip — the toolbar, the body, and the list's sheet when it is down,
     /// which is laid over the first two from the strip's edge.
     let paneUnderStrip = "relative flex-1 min-h-0 flex flex-col"
-    let terminalTabNewCell = "relative shrink-0 flex items-center"
-    let terminalTabNew = paneStripAct
-    /// The empty pane's button's cell: the positioning context its menu hangs from.
-    let terminalEmptyNewCell = "relative"
     /// A tab's presence marks: one dot per peer whose caret is in THAT terminal, so a
     /// collaborator typing a command in a terminal you are not looking at is visible from
     /// the pivot rather than only from inside it.
@@ -4563,17 +4508,18 @@ module Style =
     /// The rest tone is `ink-dim`, a step up from the pivot's unchosen names: those are places,
     /// these are acts, and an act should not read as the quietest thing on screen. Both inks
     /// and the blue clear 4.5:1 on every surface (app/tailwind.css, Phase4). A thumb's 44 is the
-    /// ROW's to give where the row holds the act directly (`paneActions`, `terminalEmpty`); an
+    /// ROW's to give where the row holds the act directly (`paneActions`); an
     /// act inside a band line sits in a group of its own there, so it says so itself.
     let private paneActBase =
         cls [ "shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer p-0 no-underline"
               "font-ui font-light lowercase whitespace-nowrap"
               "transition-colors duration-150 ease-out motion-reduce:transition-none"; focusRingFar ]
-    /// There are THREE faces below and no more, one per kind of line a bare verb ends: the
-    /// toolbar's caps, a band line's body, and the empty pane's one door. A fourth, `paneAct`,
-    /// stood here with nothing wearing it — it was "show in <terminal>"'s, and that act went
-    /// when the row became the way in (#1308). A face with no wearer is a face the next author
-    /// reaches for by accident, so it is deleted rather than kept for symmetry.
+    /// There are TWO faces below and no more, one per kind of line a bare verb ends: the
+    /// toolbar's caps and a band line's body. Others stood here with nothing wearing them —
+    /// "show in <terminal>"'s, gone when the row became the way in (#1308), and the empty
+    /// pane's door, gone when the sheet's New terminal became the one way to make one. A face
+    /// with no wearer is a face the next author reaches for by accident, so it is deleted
+    /// rather than kept for symmetry.
     ///
     /// An act in the toolbar: its mark and its word in the caps voice, the face the agent's
     /// interrupt wears — a verb about the whole thing on screen, not a word in a sentence.
@@ -4581,9 +4527,6 @@ module Style =
         cls [ "h-touch px-1.5 shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer no-underline"
               caps; "whitespace-nowrap text-ink-dim hover:text-ink transition-colors motion-reduce:transition-none" ]
     let paneToolbarAct = cls [ paneToolbarFace; focusRingInset ]
-    /// The one act a surface is FOR — the empty pane's way to make a terminal: blue, which is
-    /// what interactive means here, and nothing louder than that.
-    let paneActPrimary = cls [ paneActBase; "text-pivot leading-6 text-blue hover:text-blue-up-1" ]
     /// An act inside a line of the command band (the lease bar, the cannot-run notice): the same word
     /// at the size of the line it sits in, so it reads as part of the sentence it ends.
     let bandAct = cls [ paneActBase; "text-body text-ink-dim hover:text-ink phone:min-h-touch" ]
@@ -4816,26 +4759,63 @@ module Style =
     /// The page's word when there is nothing on it.
     let contentListEmptyWord = "px-3 py-3 font-ui font-light text-body text-ink-faint select-none"
 
-    /// The empty pane: the terminal's own symbol, display-sized, over the one press that
-    /// fills it — a thumb's height on a phone, like every press in this column.
-    let terminalEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center phone:[&_button]:min-h-11"
+    /// The empty pane: the terminal's own symbol, display-sized, over one line saying where a
+    /// terminal is started from. It holds no press: the sheet's New terminal is the one way.
+    let terminalEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
+    let terminalEmptyHint = "font-ui font-light text-small text-ink-dim"
 
 
-    /// A section of the sheet's head: what it is called, and its one act. One line on a wide
-    /// screen, the act at its right end and one hairline under both. Two on a phone, the act
-    /// a full-width row of its own under the name, because a thumb lands on a row and not on
-    /// the corner of one. The terminals have none: the list button above them says what they are.
-    let listSectionHead = cls [ "mt-4 flex phone:flex-col wide:items-center wide:border-b wide:border-hair" ]
+    /// A section of the sheet's head: what it is called, and its acts. One line on a wide
+    /// screen, the acts at its right end and one hairline under both. Two on a phone, the acts
+    /// a full-width row of their own under the name, because a thumb lands on a row and not on
+    /// the corner of one.
+    /// The sheet's first head sits at the sheet's top edge; the next is a step below the list
+    /// before it.
+    let listSectionHeadFirst = "flex phone:flex-col wide:items-center wide:border-b wide:border-hair"
+    let listSectionHead = cls [ "mt-4"; listSectionHeadFirst ]
     /// What a section is called, in the caps voice, `ink-dim`, with its count beside it.
     let listSectionLabel =
         cls [ "h-11 flex items-center gap-2.5 pl-3 pr-1 select-none text-ink-dim wide:flex-1"; caps
               "phone:border-b phone:border-hair" ]
     /// A section's act, a blue link like the repo picker's branch (`askRowBranch`): no box,
     /// because the row it stands on is the box.
-    let private listSectionActFace =
+    let private listSectionActBase =
         cls [ caps; "h-11 shrink-0 inline-flex items-center gap-1.5 px-3 bg-transparent border-0 cursor-pointer"
-              "text-blue hover:text-blue-up-1 transition-colors motion-reduce:transition-none"
-              "phone:w-full phone:border-b phone:border-hair" ]
+              "text-blue hover:text-blue-up-1 transition-colors motion-reduce:transition-none" ]
+    let private listSectionActFace = cls [ listSectionActBase; "phone:w-full phone:border-b phone:border-hair" ]
+    /// The terminals' two acts on one line: on a phone, New terminal takes the row and where
+    /// it starts sits at the row's right end, as the branch sits on the repo picker's row.
+    let listSectionActs = "flex items-center phone:border-b phone:border-hair"
+    let terminalNew = cls [ listSectionActBase; "phone:flex-1"; focusRingInset ]
+    /// Where New terminal starts one, and the way to choose: the repo picker's branch link —
+    /// the place's name in the terminal face, then the chevron, because it goes somewhere.
+    /// Shown only while there is more than one place.
+    let startInLink = cls [ listSectionActBase; focusRingInset ]
+    let startInWord = "text-ink-dim"
+    let startInName = "font-terminal text-small normal-case tracking-normal"
+
+    /// The list of places, in the sheet in place of its terminals and files: its head (the
+    /// way back, and what the list is for), then one row per place, the chosen one ticked.
+    let startInHead =
+        cls [ "h-11 flex items-center gap-1 pr-3 select-none text-ink-dim border-b border-hair"; caps ]
+    let startInBack =
+        cls [ "h-11 w-11 shrink-0 inline-flex items-center justify-center bg-transparent border-0 cursor-pointer"
+              "text-blue hover:text-blue-up-1 transition-colors motion-reduce:transition-none"; focusRingInset ]
+    let startInRow = cls [ "flex hover:bg-surface-2"; Stroke.dividerBottom ]
+    let startInChoice =
+        cls [ "min-w-0 flex-1 flex items-center gap-2 pl-3 pr-3 py-2 min-h-11 bg-transparent border-0 cursor-pointer text-left"
+              focusRingInset ]
+    /// The tick's cell is on every row and filled only on the chosen one, so the names do
+    /// not move when the choice does.
+    let startInMark = "w-5 shrink-0 self-center text-blue"
+    let startInWho = "min-w-0 flex-1 flex flex-col gap-0.5"
+    /// The place's name, in the terminal face, as the repo picker writes a branch.
+    let startInChoiceName = "font-terminal text-body text-ink truncate min-w-0"
+    /// Which repo declared the place, and what its file said it is for — prose somebody
+    /// wrote, so wrapped and clamped rather than cut after its first words.
+    let startInNote = "line-clamp-2 font-ui font-light text-small text-ink-faint"
+    /// "default", beside the session's own place.
+    let startInDefault = cls [ label; "ml-auto shrink-0" ]
 
     /// An artifact's row: the same row as a terminal's, so the two sections read as one list
     /// of things rather than two designs.
