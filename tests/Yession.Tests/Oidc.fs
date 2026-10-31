@@ -224,6 +224,33 @@ let private strategyTests =
                 | outcome -> failwithf "expected an attributed user, got %A" outcome
             }
 
+        testCaseAsync "trusted-headers decodes an RFC 2047 encoded-word display name" <|
+            async {
+                // Tailscale's `Tailscale-User-Name` header MIME-encodes a non-ASCII name,
+                // same as an email header would, because HTTP headers are meant to stay
+                // US-ASCII. The Caddyfile copies it into x-yession-user-name verbatim.
+                let headers =
+                    [ Strategy.SubjectHeader, "tri@example.com"
+                      Strategy.NameHeader, "=?utf-8?q?Tr=C3=AD?=" ]
+                match! Strategy.trustedHeaders.Authenticate (contextOf None headers) with
+                | Attributed claims -> Expect.equal claims.DisplayName (Some "Trí") "decoded to plain UTF-8"
+                | outcome -> failwithf "expected an attributed user, got %A" outcome
+
+                // Base64 (B encoding) is the other RFC 2047 form.
+                let headersB =
+                    [ Strategy.SubjectHeader, "tri@example.com"
+                      Strategy.NameHeader, "=?utf-8?b?VHLDrQ==?=" ]
+                match! Strategy.trustedHeaders.Authenticate (contextOf None headersB) with
+                | Attributed claims -> Expect.equal claims.DisplayName (Some "Trí") "decoded B-encoding too"
+                | outcome -> failwithf "expected an attributed user, got %A" outcome
+
+                // A plain ASCII name carries no encoded word and passes through untouched.
+                let headersPlain = [ Strategy.SubjectHeader, "nick@example.com"; Strategy.NameHeader, "Nick" ]
+                match! Strategy.trustedHeaders.Authenticate (contextOf None headersPlain) with
+                | Attributed claims -> Expect.equal claims.DisplayName (Some "Nick") "unencoded names are unaffected"
+                | outcome -> failwithf "expected an attributed user, got %A" outcome
+            }
+
         testCaseAsync "trusted-headers denies without the subject header, even from loopback" <|
             async {
                 match! Strategy.trustedHeaders.Authenticate (contextOf (Some "127.0.0.1") []) with
