@@ -4769,13 +4769,17 @@ module Style =
     /// screen, the acts at its right end and one hairline under both. Two on a phone, the acts
     /// a full-width row of their own under the name, because a thumb lands on a row and not on
     /// the corner of one.
-    /// The sheet's first head sits at the sheet's top edge; the next is a step below the list
-    /// before it.
+    /// The sheet's first head sits at the sheet's top edge; the next is a clear gap below the
+    /// list before it, so the two sections read as two.
     let listSectionHeadFirst = "flex phone:flex-col wide:items-center wide:border-b wide:border-hair"
-    let listSectionHead = cls [ "mt-4"; listSectionHeadFirst ]
-    /// What a section is called, in the caps voice, `ink-dim`, with its count beside it.
+    let listSectionHead = cls [ "mt-8"; listSectionHeadFirst ]
+    /// What a section is called: the pivot's light lowercase at its step, in `ink`, with its
+    /// count beside it. It was the caps voice in `ink-dim`, which is the voice of the closed
+    /// fold and of every verb on the sheet — a heading that read as one more thing to press
+    /// (docs/visual-design.md, Type: caps are for labels and buttons).
     let listSectionLabel =
-        cls [ "h-11 flex items-center gap-2.5 pl-3 pr-1 select-none text-ink-dim wide:flex-1"; caps
+        cls [ "h-11 flex items-center gap-2.5 pl-3 pr-1 select-none wide:flex-1"
+              "font-ui font-extralight text-pivot tracking-[-0.01em] lowercase text-ink"
               "phone:border-b phone:border-hair" ]
     /// A section's act, a blue link like the repo picker's branch (`askRowBranch`): no box,
     /// because the row it stands on is the box.
