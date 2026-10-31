@@ -501,6 +501,77 @@ module ControlWire =
                 { ConnectionResolveResponse.Kind = get.Required.Field "kind" connectionKind.Decode
                   ConnectionResolveResponse.Value = get.Required.Field "value" Decode.string }) }
 
+    // --- records ---------------------------------------------------------------------------
+    // Values session code keeps for a person across their sessions (`RecordId`). The value
+    // crosses this channel both ways as text the Manager never parses: what it means is the
+    // session's. A write names the revision it read, and the answer says whether it landed.
+
+    [<RequireQualifiedAccess>]
+    type ReadRecordRequest = { Target : RecordId }
+    [<RequireQualifiedAccess>]
+    type ReadRecordResponse = { Record : StoredRecord option }
+    [<RequireQualifiedAccess>]
+    type WriteRecordRequest =
+        { Target : RecordId
+          /// The revision the caller read, or `None` when it found no record.
+          Expected : int option
+          Value : string }
+
+    let private storedRecord : Codec<StoredRecord> =
+        { Encode =
+            fun (r: StoredRecord) ->
+                Encode.object
+                    [ "value", Encode.string r.Value
+                      "revision", Encode.int r.Revision
+                      "updatedAt", Codec.timestamp.Encode r.UpdatedAt ]
+          Decode =
+            Decode.object (fun get ->
+                { StoredRecord.Value = get.Required.Field "value" Decode.string
+                  StoredRecord.Revision = get.Required.Field "revision" Decode.int
+                  StoredRecord.UpdatedAt = get.Required.Field "updatedAt" Codec.timestamp.Decode }) }
+
+    let readRecordRequest : Codec<ReadRecordRequest> =
+        { Encode = fun (r: ReadRecordRequest) -> Encode.object [ "target", RecordsCodec.recordId.Encode r.Target ]
+          Decode =
+            Decode.object (fun get ->
+                { ReadRecordRequest.Target = get.Required.Field "target" RecordsCodec.recordId.Decode }) }
+
+    /// `{"record": null}` when there is none.
+    let readRecordResponse : Codec<ReadRecordResponse> =
+        { Encode = fun (r: ReadRecordResponse) -> Encode.object [ "record", Encode.option storedRecord.Encode r.Record ]
+          Decode =
+            Decode.object (fun get ->
+                { ReadRecordResponse.Record = get.Required.Field "record" (Decode.option storedRecord.Decode) }) }
+
+    let writeRecordRequest : Codec<WriteRecordRequest> =
+        { Encode =
+            fun (r: WriteRecordRequest) ->
+                Encode.object
+                    [ "target", RecordsCodec.recordId.Encode r.Target
+                      "expected", Encode.option Encode.int r.Expected
+                      "value", Encode.string r.Value ]
+          Decode =
+            Decode.object (fun get ->
+                { WriteRecordRequest.Target = get.Required.Field "target" RecordsCodec.recordId.Decode
+                  WriteRecordRequest.Expected = get.Required.Field "expected" (Decode.option Decode.int)
+                  WriteRecordRequest.Value = get.Required.Field "value" Decode.string }) }
+
+    /// `{"kind":"written","revision":n}` | `{"kind":"stale","current":n|null}`.
+    let recordWrite : Codec<RecordWrite> =
+        { Encode =
+            fun outcome ->
+                match outcome with
+                | RecordWrite.Written revision ->
+                    Encode.object [ "kind", Encode.string "written"; "revision", Encode.int revision ]
+                | RecordWrite.Stale current ->
+                    Encode.object [ "kind", Encode.string "stale"; "current", Encode.option Encode.int current ]
+          Decode =
+            Decode.field "kind" Decode.string
+            |> Decode.andThen (function
+                | "written" -> Decode.field "revision" Decode.int |> Decode.map RecordWrite.Written
+                | "stale" -> Decode.field "current" (Decode.option Decode.int) |> Decode.map RecordWrite.Stale
+                | other -> Decode.fail (sprintf "Unknown record write outcome: %s" other)) }
+
     /// One Running session in the registry stream: what an operator's
     /// serving binding needs to expose it — the OS-assigned port — plus identity for
     /// display and the pid for supervision-side correlation.

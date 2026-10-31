@@ -526,7 +526,7 @@ let private startControlServerOver
         let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (
                 WebhookRelay.tryHandle relay req res
-                || Control.tryHandle (fun secret -> Map.tryFind secret table) (fun _ _ -> async { return Ok () }) (fun _ _ -> async { return Ok () }) (fun _ _ -> async { return Ok () }) hub.Register mcp.Register registerClient None None (fun _ _ -> Subscription.none) relay.Subscribe relay.Unsubscribe ignore req res) then
+                || Control.tryHandle (fun secret -> Map.tryFind secret table) (fun _ _ -> async { return Ok () }) (fun _ _ -> async { return Ok () }) (fun _ _ -> async { return Ok () }) hub.Register mcp.Register registerClient None None None (fun _ _ -> Subscription.none) relay.Subscribe relay.Unsubscribe ignore req res) then
                 res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
         let server = createServer handler

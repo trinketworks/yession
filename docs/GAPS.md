@@ -499,6 +499,15 @@ The last section holds trust boundaries as sharp as the first section's.
 - **The JSONL event log loads fully into memory.** It has no compaction, rotation or
   checksumming. A corrupt line fails the whole open, loudly by design. The doc store compacts
   only at open, so a long-lived Process grows its sidecar until restart.
+- **Nothing lists or removes a person's records.** A record is what session code keeps for a
+  person across their sessions
+  ([ADR](decisions/2026-11-01-records-are-a-third-family-of-the-store.md)). A session reads and
+  writes one by its name, and that is all.
+  - Why: no feature has needed more yet.
+  - Cost: a record nobody needs any more stays in `records.json` until it is edited by hand. An
+    owner holds at most 512 records, so one who reaches that limit cannot add another.
+  - Open: the Manager's own page could list an owner's record names and delete one without
+    understanding it.
 - **Cookies gate event ranges for browsers. Headless clients still put a minted peer token in the
   range URL** (`?token=`). The browser path sends the same-origin auth cookie with each request, so
   the URLs, and the cache keys the client stores them under, carry no secrets. The token-in-URL

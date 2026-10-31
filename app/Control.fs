@@ -37,6 +37,11 @@ module Yession.Host.Control
 //   ResolveConnection    { target }             -> { kind, value }
 //        (the ONE value-returning route (Plan 08): an agent turn needs the token
 //         in-process; policy gates it to targets whose scope the caller is bound to)
+//   ReadRecord       { target }                  -> { record: { value, revision, updatedAt } | null }
+//   WriteRecord      { target, expected, value } -> { kind: written, revision } | { kind: stale, current }
+//        (records: what session code keeps for a person across sessions, as text the
+//         Manager stores and never parses. Policy gates both to owners the caller is bound
+//         to, as it gates their connection credentials.)
 //   SubscribeHook    { filter }     -> { id }
 //   UnsubscribeHook  { id }         -> { dropped }
 //        (the hook relay: what this session wants forwarded from the Manager's hook
@@ -104,6 +109,13 @@ type ConnectionsApi =
       Resolve : ControlCaller -> ControlWire.ConnectionResolveRequest -> Async<Result<ControlWire.ConnectionResolveResponse, SecretsError>>
       Status : ControlCaller -> Async<ConnectionStatusList> }
 
+/// The Manager's records handlers, pre-composed with authorization (`RecordAction` × the
+/// record's owner). The value crosses in both directions and the Manager never reads it.
+[<RequireQualifiedAccess>]
+type RecordsApi =
+    { Read : ControlCaller -> ControlWire.ReadRecordRequest -> Async<Result<StoredRecord option, SecretsError>>
+      Write : ControlCaller -> ControlWire.WriteRecordRequest -> Async<Result<RecordWrite, SecretsError>> }
+
 let private respondJson (res: ServerResponse) (json: string) =
     res.writeHead (200, [ ResponseHeader.ContentType "application/json"; ResponseHeader.CacheControl "no-store" ])
     res.``end`` json
@@ -130,6 +142,7 @@ let tryHandle
     (registerClient: string -> SessionId -> string -> RegisterClientResponse)
     (secretsApi: SecretsApi option)
     (connectionsApi: ConnectionsApi option)
+    (recordsApi: RecordsApi option)
     (subscribeConnections: string -> Subscribe<ConnectionStatusList>)
     // The hook relay: a session declares a filter over the deliveries it wants forwarded
     // from the Manager's hook endpoints, keyed by its launch secret so the declaration dies
@@ -183,6 +196,10 @@ let tryHandle
                 | Some api -> handle api
             let withConnections (handle: ConnectionsApi -> unit) =
                 match connectionsApi with
+                | None -> respond res 403 "no secrets store configured"
+                | Some api -> handle api
+            let withRecords (handle: RecordsApi -> unit) =
+                match recordsApi with
                 | None -> respond res 403 "no secrets store configured"
                 | Some api -> handle api
             match ControlRoute.parse req.``method`` path with
@@ -342,6 +359,27 @@ let tryHandle
                             async {
                                 let! outcome = api.Resolve caller request
                                 respondWith (ControlWire.toString ControlWire.connectionResolveResponse) outcome
+                            })))
+            // Records. The same thin arms: decode, hand the verified caller to the
+            // pre-authorized handlers, map the outcome.
+            | Some ControlRoute.ReadRecord ->
+                withRecords (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.readRecordRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.Read caller request
+                                respondWith
+                                    (fun record ->
+                                        ControlWire.toString ControlWire.readRecordResponse { ControlWire.ReadRecordResponse.Record = record })
+                                    outcome
+                            })))
+            | Some ControlRoute.WriteRecord ->
+                withRecords (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.writeRecordRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.Write caller request
+                                respondWith (ControlWire.toString ControlWire.recordWrite) outcome
                             })))
             | Some ControlRoute.ConnectionStatuses ->
                 // The connections reverse leg: the caller's current readable statuses as

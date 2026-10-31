@@ -298,6 +298,39 @@ let connections (endpoint: ControlEndpoint) (secret: string) : SessionConnection
                 (ControlWire.toString ControlWire.connectionResolveRequest { Target = target })
                 (ControlWire.fromString ControlWire.connectionResolveResponse >> Result.map (fun r -> r.Kind, r.Value)) }
 
+/// The session side of records: values this session's code keeps for a person across their
+/// sessions, which the Manager stores and never reads. The code that owns a record's schema
+/// encodes and decodes it; this carries text. Failures (including policy 403s, with the
+/// Manager's reason) are values, never exceptions.
+[<RequireQualifiedAccess>]
+type SessionRecords =
+    { Read : RecordId -> Async<Result<StoredRecord option, string>>
+      /// Replace a record at the revision the caller read (`None`: it found none). `Stale`
+      /// means another write landed first: read again, merge, write again.
+      Write : RecordId -> int option -> string -> Async<Result<RecordWrite, string>> }
+
+let records (endpoint: ControlEndpoint) (secret: string) : SessionRecords =
+    { SessionRecords.Read =
+        fun target ->
+            postRoute
+                endpoint
+                secret
+                ControlRoute.ReadRecord
+                (ControlWire.toString ControlWire.readRecordRequest { ControlWire.ReadRecordRequest.Target = target })
+                (ControlWire.fromString ControlWire.readRecordResponse >> Result.map (fun r -> r.Record))
+      SessionRecords.Write =
+        fun target expected value ->
+            postRoute
+                endpoint
+                secret
+                ControlRoute.WriteRecord
+                (ControlWire.toString
+                    ControlWire.writeRecordRequest
+                    { ControlWire.WriteRecordRequest.Target = target
+                      ControlWire.WriteRecordRequest.Expected = expected
+                      ControlWire.WriteRecordRequest.Value = value })
+                (ControlWire.fromString ControlWire.recordWrite) }
+
 /// Subscribe to the Manager's connection-status stream (the third reverse leg). The
 /// caller's current readable statuses arrive immediately, then a fresh list on every
 /// change; metadata only, never values. A malformed frame is logged and skipped.

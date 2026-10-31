@@ -41,6 +41,9 @@ type ControlRoute =
     | RejectConnection
     /// The one value-returning connections route.
     | ResolveConnection
+    /// A record's value: what session code keeps for a person across sessions, opaque here.
+    | ReadRecord
+    | WriteRecord
     /// The reverse leg: notifications pushed down to the session, as SSE.
     | Notifications
     /// The second reverse leg: this session's resolved MCP server set, as SSE.
@@ -71,6 +74,8 @@ module ControlRoute =
           ControlRoute.DisconnectConnection
           ControlRoute.RejectConnection
           ControlRoute.ResolveConnection
+          ControlRoute.ReadRecord
+          ControlRoute.WriteRecord
           ControlRoute.Notifications
           ControlRoute.McpServers
           ControlRoute.ConnectionStatuses ]
@@ -97,7 +102,9 @@ module ControlRoute =
         | ControlRoute.PutConnectionGrant
         | ControlRoute.DisconnectConnection
         | ControlRoute.RejectConnection
-        | ControlRoute.ResolveConnection -> "POST"
+        | ControlRoute.ResolveConnection
+        | ControlRoute.ReadRecord
+        | ControlRoute.WriteRecord -> "POST"
 
     /// A route as the root-anchored path the Manager serves it at: always begins with
     /// `/control/`, which is how `Control` knows a request is for it at all.
@@ -120,6 +127,8 @@ module ControlRoute =
         | ControlRoute.DisconnectConnection -> "/control/connections/disconnect"
         | ControlRoute.RejectConnection -> "/control/connections/reject"
         | ControlRoute.ResolveConnection -> "/control/connections/resolve"
+        | ControlRoute.ReadRecord -> "/control/records/read"
+        | ControlRoute.WriteRecord -> "/control/records/write"
         | ControlRoute.Notifications -> "/control/notifications"
         | ControlRoute.McpServers -> "/control/mcp"
         | ControlRoute.ConnectionStatuses -> "/control/connections"

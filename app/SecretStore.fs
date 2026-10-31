@@ -18,6 +18,11 @@ module Yession.Host.SecretStore
 // one alone, so neither can name the other's entries. Each family seals under its own AAD.
 // A version 1 file predates the split, and `migrateV1` sorts it at open
 // (docs/decisions/2026-10-26-secrets-and-connections-are-two-families.md).
+//
+// A third family, records, keeps what session code wants for a person across their sessions:
+// a value keyed by `RecordId` that the Manager seals and never reads. It lives in a file of its
+// own under the same key, so a rollback to a build without records leaves them as they are
+// (docs/decisions/2026-11-01-records-are-a-third-family-of-the-store.md).
 
 open System
 open Yession.Domain
@@ -38,17 +43,54 @@ type Partition<'Id, 'Metadata> =
       /// values feed env injection (`SecretResolution`), connection values the broker.
       Resolve : 'Id -> Async<Result<string option, string>> }
 
+/// The third family (`RecordId`): values session code keeps for a person across their
+/// sessions, sealed here and never read. Read, and a write at the revision its caller read
+/// (`RecordWrite`). Nothing lists or removes one: a session reaches a record by the name its
+/// own code chose.
+[<RequireQualifiedAccess>]
+type RecordStore =
+    { Read : RecordId -> Async<Result<StoredRecord option, string>>
+      Write : RecordId -> int option -> string -> Async<Result<RecordWrite, string>> }
+
+/// How much one owner may keep. Any session the owner signed in to can write their records,
+/// and the file is rewritten whole at every write, so both are bounded here, where the
+/// records are, rather than trusted to every session that writes one.
+module RecordLimits =
+    /// Characters in one record's value.
+    let maxValueLength = 8192
+    /// Records one owner may hold.
+    let maxRecordsPerOwner = 512
+
+/// Where a durable store keeps its files: the secrets envelope (generic secrets and connection
+/// credentials) and the records envelope. Two files, so a Manager rolled back to a build
+/// without records leaves the records as they are instead of refusing every secret.
+[<RequireQualifiedAccess>]
+type StoreFiles = { Secrets : string; Records : string }
+
+module StoreFiles =
+    /// The files a Manager keeps in its data directory.
+    let inDirectory (dataDir: string) : StoreFiles =
+        { Secrets = sprintf "%s/secrets.json" dataDir
+          Records = sprintf "%s/records.json" dataDir }
+
 type SecretStore =
     { /// What sessions write (`set_secret`) and a `SecretRef` reads.
       Secrets : Partition<SecretId, SecretMetadata>
       /// What the connection broker writes and resolves. Nothing else holds this partition.
       Connections : Partition<ConnectionId, ConnectionMetadata>
+      /// What the records routes read and write. Nothing else holds this partition.
+      Records : RecordStore
+      /// Why the records file could not be opened, when it could not: then every records call
+      /// answers this, and the file is left as it is. The credential families are unaffected.
+      RecordsRefused : string option
       /// True when backed by the encrypted file; false when in-memory only.
       Durable : bool
       /// True when the KEK was minted at this open (first run); false when loaded.
       KekMinted : bool
       /// Entries in the envelope at open, both families (0 for a fresh or ephemeral store).
-      EntriesAtOpen : int }
+      EntriesAtOpen : int
+      /// Records at open (0 for a fresh, ephemeral or refused records file).
+      RecordsAtOpen : int }
 
 /// Why an open failed — structural, so the boot path can audit the KIND without
 /// string-sniffing. `describe` renders exactly the wording the failures always had.
@@ -116,21 +158,26 @@ let private migrateV1 (cipher: SecretsCipher.Cipher) (file: SecretsFile) : Async
 /// sessions by the `/control/secrets/resolve` route.
 type ResolveSecret = SessionId -> SecretName -> Async<Result<string, string>>
 
-/// Open the store. Durable when `persistPath` is set: KEK through the KeyStore
+/// Open the store. Durable when `files` is set: KEK through the KeyStore
 /// (created on first run, durable in the credential manager BEFORE first use), file
 /// loaded through the codec (missing = empty; corrupt = loud Error; KekId mismatch =
 /// distinct loud Error). Ephemeral when `None`: same semantics, zero file I/O.
+///
+/// The records file is read beside the secrets file, and what it costs to be unreadable is
+/// the records alone: they answer every call with why (`RecordsRefused`), the file is never
+/// written over, and the credentials open as they would without it.
 ///
 /// A KEK is minted ONLY when there is no durable file. A key store that answers "no
 /// key" while a sealed file exists is a failure, never a first run: a locked macOS
 /// keychain reads exactly like an empty one, and minting there would overwrite the real
 /// key the moment the keychain unlocked, leaving every entry in the file unreadable.
-let openStore (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async<Result<SecretStore, OpenError>> =
+let openStore (files: StoreFiles option) (keyStore: KeyStore.KeyStore) : Async<Result<SecretStore, OpenError>> =
     async {
-        // The durable file is read first: whether a missing key may be minted depends on it.
+        // The durable files are read first: whether a missing key may be minted depends on them.
         let existing : Result<(string * SecretsFile) option, OpenError> =
-            match persistPath with
-            | Some path when Fs.exists path ->
+            match files with
+            | Some files when Fs.exists files.Secrets ->
+                let path = files.Secrets
                 let json = Fs.readText path
                 match SecretsCodec.newerVersionOf json with
                 | Some version -> Error (WrittenByNewerBuild (path, version))
@@ -139,24 +186,43 @@ let openStore (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async
                     | Error e -> Error (CorruptStore (path, e))
                     | Ok file -> Ok (Some (path, file))
             | _ -> Ok None
+        let existingRecords : Result<(string * RecordsFile) option, string> =
+            match files with
+            | Some files when Fs.exists files.Records ->
+                let path = files.Records
+                let json = Fs.readText path
+                match RecordsCodec.newerVersionOf json with
+                | Some version -> Error (sprintf "records store %s: %s" path (RecordsCodec.newerBuild version))
+                | None ->
+                    match RecordsCodec.fromString json with
+                    | Error e -> Error (sprintf "corrupt records store %s: %s" path e)
+                    | Ok file -> Ok (Some (path, file))
+            | _ -> Ok None
         match existing with
         | Error e -> return Error e
         | Ok existing ->
 
-        // Resolve (or mint) the KEK — the only moment the raw key bytes are in scope.
+        // Resolve (or mint) the KEK — the only moment the raw key bytes are in scope. Either
+        // file sealed under a key means there IS a key: a record can be written before any
+        // secret, so the secrets file alone cannot answer.
+        let sealedOnDisk : (string * string) option =
+            match existing, existingRecords with
+            | Some (path, file), _ -> Some (path, file.KekId)
+            | None, Ok (Some (path, file)) -> Some (path, file.KekId)
+            | None, _ -> None
         let! stored = keyStore.Get ()
         let keyStoreFailure detail = KeyStoreFailure (sprintf "secrets key store (%s): %s" keyStore.Name detail)
         let resolved =
-            match stored, existing with
+            match stored, sealedOnDisk with
             | Error e, _ -> Error (keyStoreFailure e)
             | Ok (Some raw), _ -> KeyStore.splitPayload raw |> Result.map (fun p -> p, false) |> Result.mapError keyStoreFailure
-            | Ok None, Some (path, file) ->
+            | Ok None, Some (path, kekId) ->
                 Error (
                     keyStoreFailure (
                         sprintf
                             "the credential manager has no key, but %s is sealed under key %s. This Manager does not mint a new key over it. A locked keychain reads as empty. Unlock it (on macOS, log in to this Mac)."
                             path
-                            file.KekId
+                            kekId
                     )
                 )
             | Ok None, None -> Ok ((Interop.randomSecret (), SecretsCipher.generateKek ()), true)
@@ -197,7 +263,7 @@ let openStore (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async
                 // interleaved Sets compose instead of losing entries.
                 let mutable file = loaded
                 let save () =
-                    persistPath |> Option.iter (fun path -> Fs.writeTextAtomic path (SecretsCodec.toString file))
+                    files |> Option.iter (fun files -> Fs.writeTextAtomic files.Secrets (SecretsCodec.toString file))
                 // A sorted version 1 file is written back at once, so the file on disk opens
                 // under the rules this build reads by, and is sorted only once.
                 match existing with
@@ -272,13 +338,100 @@ let openStore (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async
                             }
                       Resolve = fun id -> opened (SecretsCipher.connectionAadFor id) (SecretsFile.tryFindConnection id file) }
 
+                // The records envelope: the file read above, a fresh one, or the reason it
+                // cannot be had. A refused file is never written: it may be a newer build's,
+                // and the build after this one may want it back.
+                let recordsLoaded : Result<RecordsFile, string> =
+                    match existingRecords with
+                    | Error reason -> Error reason
+                    | Ok None -> Ok (RecordsFile.empty kekId)
+                    | Ok (Some (path, onDisk)) when onDisk.KekId <> kekId ->
+                        Error (sprintf "records store %s was sealed by a different key (%s, this host's is %s)" path onDisk.KekId kekId)
+                    | Ok (Some (_, onDisk)) -> Ok onDisk
+
+                let records : RecordStore =
+                    match recordsLoaded with
+                    | Error reason ->
+                        { RecordStore.Read = fun _ -> async { return Error reason }
+                          RecordStore.Write = fun _ _ _ -> async { return Error reason } }
+                    | Ok loadedRecords ->
+                        // Its own envelope and its own save, beside the credentials' and in the
+                        // same discipline: each write is decided on the loop AFTER its
+                        // encryption completes, so no other write lands between the revision
+                        // check and the commit.
+                        let mutable recordsFile = loadedRecords
+                        let saveRecords () =
+                            files |> Option.iter (fun files -> Fs.writeTextAtomic files.Records (RecordsCodec.toString recordsFile))
+                        { RecordStore.Read =
+                            fun id ->
+                                async {
+                                    match RecordsFile.tryFind id recordsFile with
+                                    | None -> return Ok None
+                                    | Some entry ->
+                                        let! decrypted = cipher.Decrypt (SecretsCipher.recordAadFor id) entry.Iv entry.Ciphertext
+                                        return
+                                            decrypted
+                                            |> Result.map (fun value ->
+                                                Some
+                                                    { StoredRecord.Value = value
+                                                      StoredRecord.Revision = entry.Revision
+                                                      StoredRecord.UpdatedAt = entry.UpdatedAt })
+                                }
+                          RecordStore.Write =
+                            fun id expected value ->
+                                async {
+                                    if value.Length > RecordLimits.maxValueLength then
+                                        return
+                                            Error (
+                                                sprintf
+                                                    "record %s is %d characters. A record holds at most %d."
+                                                    (RecordName.value id.Name)
+                                                    value.Length
+                                                    RecordLimits.maxValueLength
+                                            )
+                                    else
+                                        let! iv, ciphertext = cipher.Encrypt (SecretsCipher.recordAadFor id) value
+                                        let current = RecordsFile.tryFind id recordsFile |> Option.map (fun e -> e.Revision)
+                                        if current <> expected then
+                                            return Ok (RecordWrite.Stale current)
+                                        elif current.IsNone && RecordsFile.countOf id.Owner recordsFile >= RecordLimits.maxRecordsPerOwner then
+                                            return
+                                                Error (
+                                                    sprintf
+                                                        "%s already holds %d records, the most one owner may keep"
+                                                        (CredentialOwner.describe id.Owner)
+                                                        RecordLimits.maxRecordsPerOwner
+                                                )
+                                        else
+                                            let revision = (defaultArg current 0) + 1
+                                            let entry : RecordEntry =
+                                                { Owner = id.Owner
+                                                  Name = id.Name
+                                                  Revision = revision
+                                                  UpdatedAt = now ()
+                                                  Iv = iv
+                                                  Ciphertext = ciphertext }
+                                            recordsFile <- RecordsFile.upsert entry recordsFile
+                                            saveRecords ()
+                                            return Ok (RecordWrite.Written revision)
+                                } }
+
                 return
                     Ok
                         { Secrets = secrets
                           Connections = connections
-                          Durable = Option.isSome persistPath
+                          Records = records
+                          RecordsRefused =
+                            match recordsLoaded with
+                            | Error reason -> Some reason
+                            | Ok _ -> None
+                          Durable = Option.isSome files
                           KekMinted = minted
-                          EntriesAtOpen = loaded.Entries.Length + loaded.Connections.Length }
+                          EntriesAtOpen = loaded.Entries.Length + loaded.Connections.Length
+                          RecordsAtOpen =
+                            match recordsLoaded with
+                            | Ok loadedRecords -> loadedRecords.Records.Length
+                            | Error _ -> 0 }
     }
 
 /// `openStore`, waiting out a credential manager that cannot answer yet instead of
@@ -286,10 +439,10 @@ let openStore (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async
 /// keychain, which unlocks by itself when the person logs in — while a corrupt or
 /// differently-sealed file still fails at once: no amount of waiting fixes those.
 /// `onWait` hears each distinct failure once, not every attempt.
-let openStoreWaiting (retryEveryMs: int) (onWait: OpenError -> unit) (persistPath: string option) (keyStore: KeyStore.KeyStore) : Async<Result<SecretStore, OpenError>> =
+let openStoreWaiting (retryEveryMs: int) (onWait: OpenError -> unit) (files: StoreFiles option) (keyStore: KeyStore.KeyStore) : Async<Result<SecretStore, OpenError>> =
     let rec attempt (lastSaid: OpenError option) =
         async {
-            match! openStore persistPath keyStore with
+            match! openStore files keyStore with
             | Error (KeyStoreFailure _ as e) ->
                 if lastSaid <> Some e then onWait e
                 do! Async.Sleep retryEveryMs
@@ -444,6 +597,12 @@ module Audit =
         match access with
         | SecretAccess (a, _) -> sprintf "%A" a
         | ConnectionAccess (a, _) -> sprintf "%A" a
+        | RecordAccess (a, _) -> sprintf "%A" a
+
+    /// A record's owner, in the scope attributes its owner's credentials are logged with, and
+    /// its name. Never its value: the Manager does not read one.
+    let private recordAttrs (id: RecordId) : (string * LogValue) list =
+        ("yession.record.name", StringValue (RecordName.value id.Name)) :: scopeAttrs (CredentialOwner.scope id.Owner)
 
     let authzDeny (sessionId: SessionId) (access: Access) (reason: string) : Record =
         let resourceAttrs =
@@ -453,6 +612,7 @@ module Audit =
             | SecretAccess (_, SecretCollection scope) -> scopeAttrs scope
             | ConnectionAccess (_, id) ->
                 ("yession.secret.name", StringValue (SecretName.value id.Name)) :: scopeAttrs id.Scope
+            | RecordAccess (_, id) -> recordAttrs id
         make "yession.authz.deny" Severity.warn
             ([ session sessionId
                "yession.authz.action", StringValue (actionLabel access)
@@ -509,13 +669,29 @@ module Audit =
               "yession.authz.reason", StringValue reason ]
             "secret injection missed"
 
-    let storeOpen (mode: string) (keystore: string) (kekMinted: bool) (entries: int) : Record =
+    /// A write to a record, and what it came to: `written`, `stale` (another write landed
+    /// since the caller read it), or `failed`. Reads are not audited: a session reads a record
+    /// as often as it acts on one, and a read changes nothing.
+    let recordWrite (sessionId: SessionId) (id: RecordId) (outcome: string) : Record =
+        make "yession.record.write" (if outcome = "failed" then Severity.warn else Severity.info)
+            ([ session sessionId; "yession.outcome", StringValue outcome ] @ recordAttrs id)
+            (sprintf "record write %s" outcome)
+
+    let storeOpen (mode: string) (keystore: string) (kekMinted: bool) (entries: int) (records: int) : Record =
         make "yession.secrets.store_open" Severity.info
             [ "yession.secrets.mode", StringValue mode
               "yession.secrets.keystore", StringValue keystore
               "yession.secrets.kek", StringValue (if kekMinted then "created" else "loaded")
-              "yession.secrets.entries", IntValue entries ]
+              "yession.secrets.entries", IntValue entries
+              "yession.secrets.records", IntValue records ]
             (sprintf "secrets store open (%s)" mode)
+
+    /// A records file this run will not read or write, and why. The credentials opened without
+    /// it; every records call answers the same reason until the file is fixed or restored.
+    let recordsRefused (reason: string) : Record =
+        make "yession.secrets.records_refused" Severity.error
+            [ "yession.secrets.reason", StringValue reason ]
+            reason
 
     /// An in-memory store, and WHY. The severity is the point: a store the operator asked
     /// to be ephemeral (`--secrets ephemeral`) is the deliberate, safer posture and reads

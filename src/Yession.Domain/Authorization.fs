@@ -55,6 +55,14 @@ type ConnectionAction =
     | ResolveCredential
     | DisconnectCredential
 
+/// Actions on records: values session code keeps for a person across their sessions, which
+/// the Manager stores and never reads (`RecordId`). Read and write, and nothing that lists
+/// or removes: a session reaches a record by the name its own code chose.
+type RecordAction =
+    | ReadRecord
+    /// Replace a record, at the revision the caller read (`RecordWrite`).
+    | WriteRecord
+
 /// What a request asks to do, to what. Each family's actions pair with that family's own
 /// identity, so the type cannot express a generic action on a connection credential (an
 /// `InjectSecret` that names a refresh token, a `SetSecret` that overwrites one) or a
@@ -63,6 +71,7 @@ type ConnectionAction =
 type Access =
     | SecretAccess of SecretAction * Resource
     | ConnectionAccess of ConnectionAction * ConnectionId
+    | RecordAccess of RecordAction * RecordId
 
 type Request =
     { Subject : Subject
@@ -108,6 +117,15 @@ module Policy =
         // has, not as a Manager-wide secret drawer — generic secret actions on it fall
         // through to the default deny below.
         | ConnectionAccess (_, { ConnectionId.Scope = LocalScope }) ->
+            localAccess ()
+        // Records: a person's are reachable from exactly where their connection credentials
+        // are, a session they signed in to, and the deployment's from a launch the Manager
+        // granted unattributed access. The Manager sees the launch and who signed in to it,
+        // never which of them is acting, so what a session does with a record for whom is
+        // the session's own rule.
+        | RecordAccess (_, { RecordId.Owner = UserOwner user }) ->
+            boundUser user
+        | RecordAccess (_, { RecordId.Owner = LocalOwner }) ->
             localAccess ()
         | SecretAccess ((SetSecret | DeleteSecret | InjectSecret), SecretResource { SecretId.Scope = SessionScope owner }) ->
             ownSession owner

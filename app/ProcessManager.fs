@@ -212,7 +212,7 @@ type Options =
 /// been probed for a credential manager.
 and SecretsBacking =
     /// A usable OS credential manager holds the KEK; the encrypted store lives at
-    /// <DataDir>/secrets.json.
+    /// <DataDir>/secrets.json, and its records at <DataDir>/records.json.
     | DurableSecrets of KeyStore.KeyStore
     /// The store runs in memory under a per-boot random key and dies with the Manager.
     /// Never a plaintext key file. Carries WHY, because the two ways here deserve
@@ -451,6 +451,50 @@ let secretsApiFor
                 match! resolve caller.SessionId request.Name with
                 | Ok value -> return Ok value
                 | Error e -> return Error (Control.SecretsDenied e)
+            } }
+
+/// The records handlers: same discipline as `secretsApiFor` — the verified Subject is built
+/// here and nowhere else, every deny and every write audited, every permitted call delegated
+/// to the store's records partition. Module-level so the authorization matrix is testable
+/// over a bare control server.
+let recordsApiFor (audit: SecretStore.Audit.Sink) (store: SecretStore.RecordStore) : Control.RecordsApi =
+    let authorize (caller: Control.ControlCaller) (action: RecordAction) (target: RecordId) =
+        let access = RecordAccess (action, target)
+        let request =
+            { Subject = { Session = Some caller.SessionId; Users = caller.Users; Local = caller.Local }
+              Access = access }
+        match Policy.authorize request with
+        | Permit -> Ok ()
+        | Deny reason ->
+            audit (SecretStore.Audit.authzDeny caller.SessionId access reason)
+            Error (Control.SecretsDenied reason)
+    { Control.RecordsApi.Read =
+        fun caller request ->
+            async {
+                match authorize caller ReadRecord request.Target with
+                | Error e -> return Error e
+                | Ok () ->
+                    match! store.Read request.Target with
+                    | Ok record -> return Ok record
+                    | Error e -> return Error (Control.SecretsFailed e)
+            }
+      Control.RecordsApi.Write =
+        fun caller request ->
+            async {
+                match authorize caller WriteRecord request.Target with
+                | Error e -> return Error e
+                | Ok () ->
+                    match! store.Write request.Target request.Expected request.Value with
+                    | Ok outcome ->
+                        let said =
+                            match outcome with
+                            | RecordWrite.Written _ -> "written"
+                            | RecordWrite.Stale _ -> "stale"
+                        audit (SecretStore.Audit.recordWrite caller.SessionId request.Target said)
+                        return Ok outcome
+                    | Error e ->
+                        audit (SecretStore.Audit.recordWrite caller.SessionId request.Target "failed")
+                        return Error (Control.SecretsFailed e)
             } }
 
 /// The connection-broker handlers (Plan 08): same discipline as `secretsApiFor` — the
@@ -905,7 +949,7 @@ let createWithUi
     // Manager comes up by itself once the keychain unlocks. The ephemeral mode says
     // so at boot and leaves any durable file from a previous run untouched (unread,
     // never deleted).
-    let secretsPath = sprintf "%s/secrets.json" options.DataDir
+    let storeFiles = SecretStore.StoreFiles.inDirectory options.DataDir
     let! secretStore =
         async {
             match options.Secrets with
@@ -916,20 +960,22 @@ let createWithUi
                     eprintfn
                         "Yession Manager: waiting for the OS credential manager to give the secrets key (retrying every 30 s): %s"
                         (SecretStore.OpenError.describe e)
-                match! SecretStore.openStoreWaiting 30_000 waitingForKey (Some secretsPath) keyStore with
+                match! SecretStore.openStoreWaiting 30_000 waitingForKey (Some storeFiles) keyStore with
                 | Ok store ->
-                    audit (SecretStore.Audit.storeOpen "durable" keyStore.Name store.KekMinted store.EntriesAtOpen)
+                    audit (SecretStore.Audit.storeOpen "durable" keyStore.Name store.KekMinted store.EntriesAtOpen store.RecordsAtOpen)
+                    store.RecordsRefused |> Option.iter (fun reason -> audit (SecretStore.Audit.recordsRefused reason))
                     return Some store
                 | Error e ->
                     audit (SecretStore.Audit.storeOpenFailed (SecretStore.OpenError.kind e) (SecretStore.OpenError.describe e))
                     return failwithf "secrets store: %s" (SecretStore.OpenError.describe e)
             | Some (EphemeralSecrets reason) ->
                 audit (SecretStore.Audit.storeEphemeral (reason = OperatorChose))
-                if Fs.exists secretsPath then
-                    audit (SecretStore.Audit.storeInaccessible secretsPath)
+                [ storeFiles.Secrets; storeFiles.Records ]
+                |> List.filter Fs.exists
+                |> List.iter (fun path -> audit (SecretStore.Audit.storeInaccessible path))
                 match! SecretStore.openStore None (KeyStore.random ()) with
                 | Ok store ->
-                    audit (SecretStore.Audit.storeOpen "ephemeral" "in-memory" store.KekMinted store.EntriesAtOpen)
+                    audit (SecretStore.Audit.storeOpen "ephemeral" "in-memory" store.KekMinted store.EntriesAtOpen store.RecordsAtOpen)
                     return Some store
                 | Error e -> return failwithf "secrets store (ephemeral): %s" (SecretStore.OpenError.describe e)
         }
@@ -1056,6 +1102,10 @@ let createWithUi
         secretSessions
         |> Map.exists (fun secret sid -> sid = sessionId && Set.contains secret launchLocal)
 
+    // Records: the store's third family, behind the same verified caller and the same policy.
+    let recordsApi : Control.RecordsApi option =
+        secretStore |> Option.map (fun store -> recordsApiFor audit store.Records)
+
     // Session-scoped secret resolution (Plan 06): a `SecretRef` reads the calling
     // session's own scope and nothing else (`SecretStore.SecretResolution`). It serves
     // the `/control/secrets/resolve` route. A Manager with no store has no secrets API,
@@ -1109,7 +1159,7 @@ let createWithUi
             let handler (req: IncomingMessage) (res: ServerResponse) =
                 let handled =
                     WebhookRelay.tryHandle hookRelay req res
-                    || Control.tryHandle resolveCaller reportName reportActivity reportStatus notifications.Register mcp.Register provider.RegisterClient secretsApi connectionsApi connectionsHub.Register hookRelay.Subscribe hookRelay.Unsubscribe (fun path -> audit (SecretStore.Audit.controlUnauthorized path)) req res
+                    || Control.tryHandle resolveCaller reportName reportActivity reportStatus notifications.Register mcp.Register provider.RegisterClient secretsApi connectionsApi recordsApi connectionsHub.Register hookRelay.Subscribe hookRelay.Unsubscribe (fun path -> audit (SecretStore.Audit.controlUnauthorized path)) req res
                     || handleConnectionsCallback req res
                     || provider.TryHandle req res
                     || (match ui, self with
