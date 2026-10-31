@@ -292,10 +292,13 @@ module Dom =
         let agentPresence = "data-agent-presence"
         let noAgent = "data-no-agent"
         let noAgentConnect = "data-no-agent-connect"
-        /// One per repo waiting on somebody. Counted rather than read: what the prompt SAYS
-        /// is a design, that there is exactly one per waiting repo is a promise.
-        let approvalPrompt = "data-repo-approval"
-        let approvalAction = "data-repo-approve"
+        /// One trust card per repo waiting for somebody here to trust it. Counted rather than
+        /// read: what the card SAYS is a design, that there is exactly one per waiting repo is a
+        /// promise.
+        let trustCard = "data-repo-trust"
+        let trustAnswer = "data-repo-trust-answer"
+        let trustRoute = "data-repo-trust-route"
+        let trustLater = "data-repo-trust-later"
         /// How to read the values above it, where they are written in a vocabulary rather
         /// than in words. Carries how many entries it holds, because that is the promise
         /// worth counting: a consent prompt shows the entries ITS grants use, so a legend

@@ -622,15 +622,104 @@ let private cell (value: 'a) = fun () -> value
 /// A session whose host declares no resources: every selection comes to nothing. The
 /// capability notes have their own cases, where a real vocabulary is worth the setup.
 let private noCapabilities : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
-    fun _ -> Ok { RepoSandboxes.Granted = []; RepoSandboxes.Sensitive = false }
+    fun _ -> Ok { RepoSandboxes.Granted = []; RepoSandboxes.GitHubRoutes = [] }
 
-/// A vocabulary that grants exactly these lines, and nothing an operator marked sensitive —
-/// so the fold's approval gate stays out of the way of cases about something else.
-let private sensitively (lines: string list) : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
-    fun _ -> Ok { RepoSandboxes.Granted = lines; RepoSandboxes.Sensitive = true }
-
+/// A vocabulary that grants exactly these lines and forwards nobody's GitHub, so the fold asks
+/// nobody to trust anything in cases about something else.
 let private granting (lines: string list) : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
-    fun _ -> Ok { RepoSandboxes.Granted = lines; RepoSandboxes.Sensitive = false }
+    fun _ -> Ok { RepoSandboxes.Granted = lines; RepoSandboxes.GitHubRoutes = [] }
+
+/// A vocabulary that forwards GitHub by these routes: what a repo asks people to trust it with.
+let private forwardingGitHub (routes: ConnectionRoute list) : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
+    fun _ ->
+        Ok
+            { RepoSandboxes.Granted = routes |> List.map (fun route -> sprintf "conn:github/%s" (ConnectionRoute.name route))
+              RepoSandboxes.GitHubRoutes = routes }
+
+/// The fold over nobody's trust: every case here that is not about trust.
+let private createFold repos sandboxes gate log capabilities =
+    RepoSandboxes.create repos (RepoTrusts.none "nobody keeps trust in these cases") sandboxes gate log capabilities
+
+let private ada = Principal.User (UserId.create "ada" |> expect)
+let private bob = Principal.User (UserId.create "bob" |> expect)
+/// Both routes, in the order a set lists them.
+let private both = [ ConnectionRoute.Git; ConnectionRoute.Api ]
+
+/// What each person's record says, in memory, and whose cannot be read: somebody not signed in
+/// to this launch. An answer writes the record, as the Manager would.
+let private trustOf (answers: (Principal * Set<ConnectionRoute>) list) (unreadable: Principal list) : RepoTrusts =
+    let key (owner: Yession.Domain.Access.CredentialOwner) = Yession.Domain.Access.CredentialOwner.describe owner
+    let kept =
+        ref (
+            answers
+            |> List.map (fun (person, routes) ->
+                key (RepoTrust.ownerOf person),
+                { RepoTrust.Repo = "octo/hello"; RepoTrust.Granted = routes; RepoTrust.Seen = routes })
+            |> Map.ofList
+        )
+    let away = unreadable |> List.map (RepoTrust.ownerOf >> key) |> Set.ofList
+    let read owner =
+        async {
+            if Set.contains (key owner) away then return Error "user is not signed in to this session"
+            else return Ok (Map.tryFind (key owner) kept.Value)
+        }
+    { RepoTrusts.Read = fun owner _ -> read owner
+      RepoTrusts.Answer =
+        fun owner repo shown ticked ->
+            async {
+                let next = RepoTrust.answer repo shown ticked (Map.tryFind (key owner) kept.Value)
+                kept.Value <- Map.add (key owner) next kept.Value
+                return Ok next
+            }
+      RepoTrusts.Granted =
+        fun owner _ forwarded ->
+            async {
+                match! read owner with
+                | Ok trust -> return RepoTrust.granted owner forwarded trust
+                | Error _ -> return RepoTrust.granted owner forwarded None
+            } }
+
+/// A repo whose one sandbox selects a resource, which `trustingFold`'s vocabulary says forwards
+/// GitHub by both routes.
+let private selecting () =
+    let r = repo "octo/hello"
+    r, checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ github ]\n")
+
+/// The fold over these people's trust, for a repo whose sandboxes forward GitHub by both routes.
+let private trustingFold (trusts: RepoTrusts) (r: RepoRef) (dir: string) (gate: RunGatedCommand) (log: EventLog<SessionEvent>) =
+    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) trusts (cell WorkSandboxes.unavailable) gate log (forwardingGitHub both)
+
+/// How many cards the log has asked.
+let private trustAsks (log: EventLog<SessionEvent>) =
+    async {
+        let! page = log.Read None System.Int32.MaxValue
+        return
+            page.Events
+            |> List.filter (fun e -> match e.Event with SessionEvent.RepoTrustAsked _ -> true | _ -> false)
+            |> List.length
+    }
+
+let private trustAsked (r: RepoRef) (routes: ConnectionRoute list) =
+    SessionEvent.RepoTrustAsked
+        { RepoTrustAsked.MessageId = MessageId.create "m1" |> expect
+          RepoTrustAsked.Repo = r
+          RepoTrustAsked.Routes = routes
+          RepoTrustAsked.Actor = ActorRef.Configured r
+          RepoTrustAsked.CausedBy = None }
+
+let private trusted (r: RepoRef) (person: Principal) =
+    SessionEvent.RepoTrusted
+        { RepoTrusted.MessageId = MessageId.create "m2" |> expect
+          RepoTrusted.Repo = r
+          RepoTrusted.By = person
+          RepoTrusted.Actor = Principal.toActor person }
+
+/// The log already says this repo runs here with this person's trust.
+let private trustedHere (log: EventLog<SessionEvent>) (r: RepoRef) (person: Principal) =
+    async {
+        let! _ = log.Append (Principal.toActor person) (trusted r person)
+        return ()
+    }
 
 /// A log for the fold to read its own history from and append its notes to. Fresh per case:
 /// what a fold says is a delta against what the session was already told, so a shared log
@@ -654,7 +743,7 @@ let foldTests =
                 TestFiles.write (pathIn dir two) "version: 2\nsandboxes:\n  dev: {}\n  gate: {}\n"
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ one; two ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate seen)
@@ -692,7 +781,7 @@ let foldTests =
                             return Ok { Handle = None; Tool = call.Tool; Summary = call.Summary; Status = CommandRan "ok" }
                         }
                 let folded =
-                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) barrier (foldLog ()) noCapabilities
+                    createFold (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) barrier (foldLog ()) noCapabilities
                 // Started as a child: a sequential fold would deadlock here (the first call
                 // waits on a second the fold has not started), so we do NOT await it to a
                 // finish — we check that both declarations reached the gate.
@@ -709,7 +798,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
-                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
+                    createFold (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal (Authority.author seen.[0].Authority) (ActorRef.Configured r) "the repo's own file"
                 Expect.equal (Authority.onBehalfOf seen.[0].Authority) None "and a boot fold borrows nobody's authority"
@@ -721,7 +810,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ github ]\n")
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
-                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
+                    createFold (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
                 let ada = Principal.User (UserId.create "ada" |> expect)
                 do! folded.Fold (FoldCause.Connected (CredentialFor.Person ada)) (CredentialFor.Person ada)
                 Expect.equal (Authority.credential seen.[0].Authority) (CredentialFor.Person ada) "whose authority the started sandbox is on"
@@ -748,7 +837,7 @@ let foldTests =
                             return Ok { Handle = None; Tool = call.Tool; Summary = call.Summary; Status = CommandRan "ok" }
                         }
                 let folded =
-                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) holding (foldLog ()) noCapabilities
+                    createFold (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) holding (foldLog ()) noCapabilities
                 let ada = Principal.User (UserId.create "ada" |> expect)
                 let! first = Async.StartChild (folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment)
                 do! Support.waitUntil "the first fold to be held at the gate" (fun () -> release.IsSome)
@@ -769,7 +858,7 @@ let foldTests =
                 let r = repo "octo/hello"
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (refusingGate "registry.npmjs.org is not in this session's egress")
@@ -789,7 +878,7 @@ let foldTests =
                 let r = repo "octo/hello"
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -807,7 +896,7 @@ let foldTests =
                 let r = repo "octo/hello"
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    nope: 1\n")
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -829,7 +918,7 @@ let foldTests =
                 let r, stray = repo "octo/hello", repo "octo/hello-phone"
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposReading dir (fun () -> [ listedAt dir r; unreadableAt dir stray ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -847,7 +936,7 @@ let foldTests =
                 let r, stray = repo "octo/hello", repo "octo/hello-phone"
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposReading dir (fun () -> [ listedAt dir r; unreadableAt dir stray ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -862,7 +951,7 @@ let foldTests =
                 let stray = repo "octo/hello-phone"
                 let dir = TestFiles.tempDir "yession-config-"
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposReading dir (fun () -> [ unreadableAt dir stray ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -886,7 +975,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let readable = ref true
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposReading dir (fun () -> [ (if readable.Value then listedAt dir r else unreadableAt dir r) ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -909,7 +998,7 @@ let foldTests =
                 let dir = checkout r None
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
-                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
+                    createFold (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal seen.Count 0 "nothing was asked for"
                 Expect.equal (folded.Outcomes ()) [] "and nothing is wrong"
@@ -923,7 +1012,7 @@ let foldTests =
                 let r = repo "octo/hello"
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (listingFailingWhile (fun () -> true) (reposOver dir [ r ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -939,7 +1028,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let mutable failing = true
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (listingFailingWhile (fun () -> failing) (reposOver dir [ r ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -964,7 +1053,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let mutable failing = false
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (listingFailingWhile (fun () -> failing) (reposOver dir [ r ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -986,7 +1075,7 @@ let foldTests =
                 let r = repo "octo/hello"
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (listingFailingWhile (fun () -> true) (reposOver dir [ r ]))))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -1017,7 +1106,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let log = foldLog ()
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (refusingGate "registry.npmjs.org is not in this session's egress")
@@ -1041,7 +1130,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let log = foldLog ()
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (refusingGate "registry.npmjs.org is not in this session's egress")
@@ -1062,7 +1151,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let log = foldLog ()
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (refusingGate "the ceiling is closed")
@@ -1085,7 +1174,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n    wants: [ nix ]\n")
                 let log = foldLog ()
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray ()))
@@ -1114,7 +1203,7 @@ let foldTests =
                                         Status = CommandRefusedBy (ActorRef.System, Some why) }
                         }
                 let folded =
-                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) moving log noCapabilities
+                    createFold (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) moving log noCapabilities
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 why <- "no credential to forward"
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
@@ -1132,7 +1221,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev: {}\n")
                 let log = foldLog ()
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -1155,7 +1244,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n")
                 let log = foldLog ()
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -1178,7 +1267,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n")
                 let log = foldLog ()
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -1205,7 +1294,6 @@ let foldTests =
                         { RepoCapabilitiesChanged.MessageId = MessageId.create "m1" |> expect
                           RepoCapabilitiesChanged.Repo = r
                           RepoCapabilitiesChanged.Granted = [ "path:/nix:ro" ]
-                          RepoCapabilitiesChanged.Sensitive = false
                           RepoCapabilitiesChanged.Actor = ActorRef.Configured r
                           RepoCapabilitiesChanged.CausedBy = Some (Cause.Item (MessageId.create "added" |> expect)) } }
             let json = Codec.toString Events.sessionEventEnvelope envelope
@@ -1219,7 +1307,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n")
                 let log = foldLog ()
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -1242,7 +1330,7 @@ let foldTests =
                 let log = foldLog ()
                 let mutable granted = [ "path:/nix:ro" ]
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ r ])))
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ()))
@@ -1261,196 +1349,220 @@ let foldTests =
                     "and the second note carries the whole set, so a person reads what it is now rather than what moved"
             }
 
-        // Only a SENSITIVE set waits on somebody. A prompt that appears for every repo is a
-        // prompt people learn to dismiss without reading, which is worse than none — it
-        // launders the one that mattered.
-        testCaseAsync "an ordinary capability set starts without asking anybody" <|
+        // A repo whose sandboxes forward nobody's GitHub spends nothing of anybody's, so it asks
+        // nobody: what else it holds is the operator's to grant, in the profile.
+        testCaseAsync "a repo that forwards no GitHub starts without asking anybody" <|
             async {
-                let r = repo "octo/hello"
-                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n")
+                let r, dir = selecting ()
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
-                    RepoSandboxes.create
+                    createFold
                         (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate seen) (foldLog ()) (granting [ "path:/nix:ro" ])
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal seen.Count 1 "the declaration reached the gate"
             }
 
-        testCaseAsync "a sensitive capability set starts nothing until somebody approves it" <|
+        testCaseAsync "a repo that forwards GitHub starts nothing until somebody here trusts it" <|
             async {
-                let r = repo "octo/hello"
-                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ web ]\n")
+                let r, dir = selecting ()
                 let seen = ResizeArray<GatedCall> ()
-                let folded =
-                    RepoSandboxes.create
-                        (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
-                        (recordingGate seen) (foldLog ()) (sensitively [ "!net:anywhere" ])
+                let folded = trustingFold (trustOf [] []) r dir (recordingGate seen) (foldLog ())
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal seen.Count 0 "nothing was started"
-                match folded.Outcomes () with
-                | [ outcome ] ->
-                    match outcome.Problem with
-                    | None -> failwithf "expected the row to state a problem, got %A" outcome
-                    | Some problem ->
-                        Expect.isTrue
-                            (problem.Contains "approve")
-                            (sprintf "the row says what is waited on, said: %s" problem)
-                        Expect.isTrue
-                            (problem.Contains "net:anywhere")
-                            "and what is being asked for, so the answer is beside the question"
-                | other -> failwithf "expected one row, got %A" other
             }
 
-        // Approving is not a note taken for later. The person clicked the button because
-        // they wanted the thing to run, and nothing else in this session is going to ask
-        // again on their behalf — so the fold runs on the approval, not on the next repo
-        // verb that happens along. Deliberately NO `Fold` call after `Approve` here: with
-        // one, this case is green whether or not approval does anything at all.
-        testCaseAsync "approving starts it, without waiting for another repo verb" <|
+        testCaseAsync "a repo waiting for trust says so in its row" <|
             async {
-                let r = repo "octo/hello"
-                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ web ]\n")
+                let r, dir = selecting ()
+                let folded = trustingFold (trustOf [] []) r dir (recordingGate (ResizeArray ())) (foldLog ())
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                match folded.Outcomes () |> List.choose (fun outcome -> outcome.Problem) with
+                | [ problem ] -> Expect.stringContains problem "trust" "the row says what it waits for"
+                | other -> failwithf "expected one problem, got %A" other
+            }
+
+        // The card is a fact of the log, so it is asked once and stands: a fold that runs again
+        // for any other reason says nothing new.
+        testCaseAsync "a repo waiting for trust asks once, however often the fold runs" <|
+            async {
+                let r, dir = selecting ()
+                let log = foldLog ()
+                let folded = trustingFold (trustOf [] []) r dir (recordingGate (ResizeArray ())) log
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Changed (r, None)) CredentialFor.Deployment
+                let! asks = trustAsks log
+                Expect.equal asks 1 "one card"
+            }
+
+        // Trusting is not a note taken for later. The person pressed Trust because they wanted
+        // the repo to run, and nothing else here is going to ask on their behalf, so the fold runs
+        // on the answer. Deliberately NO `Fold` call after `Trust` here: with one, this case is
+        // green whether or not trusting does anything at all.
+        testCaseAsync "trusting it starts it, without waiting for another repo verb" <|
+            async {
+                let r, dir = selecting ()
+                let seen = ResizeArray<GatedCall> ()
+                let folded = trustingFold (trustOf [] []) r dir (recordingGate seen) (foldLog ())
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                let! trusted = folded.Trust ada r both both
+                Expect.equal (trusted, seen.Count) (Ok (), 1) "the answer alone starts it"
+            }
+
+        testCaseAsync "a repo somebody trusts here starts on their authority" <|
+            async {
+                let r, dir = selecting ()
+                let seen = ResizeArray<GatedCall> ()
+                let folded = trustingFold (trustOf [] []) r dir (recordingGate seen) (foldLog ())
+                let! _ = folded.Trust ada r both both
+                Expect.equal
+                    (seen |> Seq.map (fun call -> Authority.credential call.Authority) |> List.ofSeq)
+                    [ CredentialFor.Person ada ]
+                    "its setup is lent the GitHub of the person who trusts it"
+            }
+
+        // An answer is about the routes the card showed. A route it did not show is unanswered,
+        // and a repo that asks for one still waits.
+        testCaseAsync "an answer that did not see a route the repo asks for leaves it waiting" <|
+            async {
+                let r, dir = selecting ()
+                let seen = ResizeArray<GatedCall> ()
+                let folded = trustingFold (trustOf [] []) r dir (recordingGate seen) (foldLog ())
+                let! _ = folded.Trust ada r [ ConnectionRoute.Git ] [ ConnectionRoute.Git ]
+                Expect.equal seen.Count 0 "api is still unanswered"
+            }
+
+        // The one act besides answering the card that offers somebody's trust: adding the repo.
+        // A person who trusts it already is not asked again, in this session or any other.
+        testCaseAsync "adding a repo its person already trusts starts it without asking" <|
+            async {
+                let r, dir = selecting ()
                 let seen = ResizeArray<GatedCall> ()
                 let log = foldLog ()
-                let folded =
-                    RepoSandboxes.create
-                        (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
-                        (recordingGate seen) log (sensitively [ "!net:anywhere" ])
+                let folded = trustingFold (trustOf [ ada, Set.ofList both ] []) r dir (recordingGate seen) log
+                do! folded.Fold (FoldCause.Offered (r, None, ada)) (CredentialFor.Person ada)
+                let! asks = trustAsks log
+                Expect.equal (seen.Count, asks) (1, 0) "started, and nobody asked"
+            }
+
+        // Trusting a repo is not lending your GitHub to every session it is open in. A person
+        // who joins reads who the repo runs with; they never become it.
+        testCaseAsync "somebody joining never starts a repo that waits for trust" <|
+            async {
+                let r, dir = selecting ()
+                let seen = ResizeArray<GatedCall> ()
+                let folded = trustingFold (trustOf [ bob, Set.ofList both ] []) r dir (recordingGate seen) (foldLog ())
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
-                let ada = Principal.User (UserId.create "ada" |> expect)
-                let! approved = folded.Approve ada r [ "!net:anywhere" ]
-                Expect.equal approved (Ok ()) "a signed-in person may consent"
-                Expect.equal seen.Count 1 "and that alone starts it"
+                do! folded.Fold (FoldCause.Connected (CredentialFor.Person bob)) (CredentialFor.Person bob)
+                Expect.equal seen.Count 0 "bob's trust is his, not this session's"
             }
 
-        // The agent must not consent on a checkout's behalf. That is the whole reason the
-        // repo is a separate principal from the people in the session.
-        // "The agent cannot approve what a repo asks for" was a case here. It is now the
-        // type: `Approve` takes a `Principal`, and there is no way to write the agent into
-        // one — so the refusal it pinned has no call to be made from.
-
-        // A peer who did not sign in is still a PERSON, and on a deployment that trusts
-        // whoever reaches it they are the only person there. What the record must not do is
-        // call them a signed-in user — `Principal` keeps the two apart, and the approval says
-        // which one actually consented.
-        testCaseAsync "a peer who did not sign in may approve, and is recorded as a peer" <|
+        testCaseAsync "switching a branch does not make the switcher the repo's truster" <|
             async {
-                let r = repo "octo/hello"
-                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ web ]\n")
+                let r, dir = selecting ()
+                let seen = ResizeArray<GatedCall> ()
+                let folded = trustingFold (trustOf [ bob, Set.ofList both ] []) r dir (recordingGate seen) (foldLog ())
+                do! folded.Fold (FoldCause.Changed (r, Some (MessageId.create "switched" |> expect))) (CredentialFor.Person bob)
+                Expect.equal seen.Count 0 "a switch offers nothing"
+            }
+
+        // After a restart the session cannot read the record of somebody not signed in to it
+        // yet. The repo waits for them, and without a card: a card would hand it to whoever
+        // came first.
+        testCaseAsync "after a restart the repo waits for its truster without a card" <|
+            async {
+                let r, dir = selecting ()
+                let seen = ResizeArray<GatedCall> ()
                 let log = foldLog ()
-                let folded =
-                    RepoSandboxes.create
-                        (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
-                        (recordingGate (ResizeArray<GatedCall> ())) log
-                        (sensitively [ "!net:anywhere" ])
-                let anonymous = Principal.Peer (PeerId.create "peer-1" |> expect)
-                let! approved = folded.Approve anonymous r [ "!net:anywhere" ]
-                Expect.equal approved (Ok ()) "a person at a browser is a person"
-                let! page = log.Read None System.Int32.MaxValue
-                match page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoCapabilitiesApproved a -> Some a.Actor | _ -> None) with
-                | [ actor ] -> Expect.equal actor (Principal.toActor anonymous) "recorded as the peer they are, not promoted to a user"
-                | other -> failwithf "expected one approval, got %A" other
+                do! trustedHere log r ada
+                let folded = trustingFold (trustOf [ ada, Set.ofList both ] [ ada ]) r dir (recordingGate seen) log
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                let! asks = trustAsks log
+                Expect.equal (seen.Count, asks) (0, 0) "held, and nobody else asked"
             }
 
-        // A capability set is authored by whoever can push to the checkout, so it can change
-        // between a screen being drawn and a button being pressed. Approving something other
-        // than what was read is the failure worth preventing.
-        testCaseAsync "approving a set the repo no longer asks for is refused" <|
+        testCaseAsync "its truster coming back resumes the repo" <|
             async {
-                let r = repo "octo/hello"
-                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ web ]\n")
-                let folded =
-                    RepoSandboxes.create
-                        (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
-                        (recordingGate (ResizeArray<GatedCall> ())) (foldLog ())
-                        (sensitively [ "!net:anywhere" ])
-                let ada = Principal.User (UserId.create "ada" |> expect)
-                match! folded.Approve ada r [ "reaches nowhere much" ] with
-                | Ok () -> failwith "consent to a set that is not what is asked must not stand"
-                | Error e ->
-                    Expect.isTrue (e.Contains "changed since you looked") (sprintf "and says so, said: %s" e)
-                    Expect.isTrue (e.Contains "net:anywhere") "naming what it asks for now"
+                let r, dir = selecting ()
+                let seen = ResizeArray<GatedCall> ()
+                let log = foldLog ()
+                do! trustedHere log r ada
+                let folded = trustingFold (trustOf [ ada, Set.ofList both ] []) r dir (recordingGate seen) log
+                do! folded.Fold (FoldCause.Connected (CredentialFor.Person ada)) (CredentialFor.Person ada)
+                Expect.equal
+                    (seen |> Seq.map (fun call -> Authority.credential call.Authority) |> List.ofSeq)
+                    [ CredentialFor.Person ada ]
+                    "started again, on her authority"
             }
 
-        // Both sides fold the same log: the Process to know what to gate, a client to know
-        // what to offer. A prompt somebody sees and a sandbox that is waiting have to be two
+        testCaseAsync "a later answer does not take a repo from the person it runs with" <|
+            async {
+                let r, dir = selecting ()
+                let seen = ResizeArray<GatedCall> ()
+                let log = foldLog ()
+                do! trustedHere log r ada
+                let folded =
+                    trustingFold (trustOf [ ada, Set.ofList both; bob, Set.ofList both ] []) r dir (recordingGate seen) log
+                let! _ = folded.Trust bob r both both
+                Expect.equal
+                    (seen |> Seq.map (fun call -> Authority.credential call.Authority) |> List.ofSeq)
+                    [ CredentialFor.Person ada ]
+                    "it still runs with ada's"
+            }
+
+        testCaseAsync "a repo removed and added again is trusted by nobody here" <|
+            async {
+                let r, dir = selecting ()
+                let seen = ResizeArray<GatedCall> ()
+                let log = foldLog ()
+                do! trustedHere log r ada
+                let! _ =
+                    log.Append
+                        (Principal.toActor ada)
+                        (SessionEvent.RepoRemoved
+                            { RepoRemoved.MessageId = MessageId.create "removed" |> expect
+                              RepoRemoved.Repo = r
+                              RepoRemoved.Actor = Principal.toActor ada })
+                let folded = trustingFold (trustOf [ ada, Set.ofList both ] []) r dir (recordingGate seen) log
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                Expect.equal seen.Count 0 "her trust here went with the repo"
+            }
+
+        // A peer who did not sign in is still a PERSON, and on a deployment that trusts whoever
+        // reaches it they are the only person there. What the record must not do is call them
+        // a signed-in user: `Principal` keeps the two apart, and the event says which one it is.
+        testCaseAsync "a peer who did not sign in may trust a repo, and is recorded as a peer" <|
+            async {
+                let r, dir = selecting ()
+                let log = foldLog ()
+                let folded = trustingFold (trustOf [] []) r dir (recordingGate (ResizeArray ())) log
+                let anonymous = Principal.Peer (PeerId.create "peer-1" |> expect)
+                let! _ = folded.Trust anonymous r both both
+                let! page = log.Read None System.Int32.MaxValue
+                match page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoTrusted t -> Some t.By | _ -> None) with
+                | [ by ] -> Expect.equal by anonymous "recorded as the peer they are, not promoted to a user"
+                | other -> failwithf "expected one trust, got %A" other
+            }
+
+        // Both sides fold the same log: the Process to know what is held, a client to know which
+        // card to show. A card somebody sees and a sandbox that is waiting have to be two
         // readings of one fact rather than two answers free to disagree.
-        testCase "a sensitive ask with no approval is pending" <| fun () ->
+        testCase "a trust ask is pending until somebody trusts the repo" <| fun () ->
             let r = repo "octo/hello"
-            let asked =
-                SessionEvent.RepoCapabilitiesChanged
-                    { RepoCapabilitiesChanged.MessageId = MessageId.create "m1" |> expect
-                      RepoCapabilitiesChanged.Repo = r
-                      RepoCapabilitiesChanged.Granted = [ "!net:anywhere" ]
-                      RepoCapabilitiesChanged.Sensitive = true
-                      RepoCapabilitiesChanged.Actor = ActorRef.Configured r
-                      RepoCapabilitiesChanged.CausedBy = None }
-            Expect.equal
-                (RepoApprovals.pending [ asked ])
-                [ r, [ "!net:anywhere" ] ]
-                "somebody has to decide about it"
+            Expect.equal (RepoTrustWaits.pending [ trustAsked r both ]) [ r, both ] "somebody has to answer"
 
-        testCase "an ordinary ask is never pending, however often it changes" <| fun () ->
+        testCase "trusting a repo settles its ask" <| fun () ->
             let r = repo "octo/hello"
-            let asked granted =
-                SessionEvent.RepoCapabilitiesChanged
-                    { RepoCapabilitiesChanged.MessageId = MessageId.create "m1" |> expect
-                      RepoCapabilitiesChanged.Repo = r
-                      RepoCapabilitiesChanged.Granted = granted
-                      RepoCapabilitiesChanged.Sensitive = false
-                      RepoCapabilitiesChanged.Actor = ActorRef.Configured r
-                      RepoCapabilitiesChanged.CausedBy = None }
-            Expect.equal (RepoApprovals.pending [ asked [ "path:/nix:ro" ]; asked [ "path:/nix:ro"; "path:/opt:ro" ] ]) [] "nothing to ask"
+            Expect.equal (RepoTrustWaits.pending [ trustAsked r both; trusted r ada ]) [] "settled"
 
-        testCase "an approval settles the set it names" <| fun () ->
+        testCase "a repo that leaves the session stops waiting" <| fun () ->
             let r = repo "octo/hello"
-            let ada = UserRef (UserId.create "ada" |> expect)
-            let asked =
-                SessionEvent.RepoCapabilitiesChanged
-                    { RepoCapabilitiesChanged.MessageId = MessageId.create "m1" |> expect
-                      RepoCapabilitiesChanged.Repo = r
-                      RepoCapabilitiesChanged.Granted = [ "!net:anywhere" ]
-                      RepoCapabilitiesChanged.Sensitive = true
-                      RepoCapabilitiesChanged.Actor = ActorRef.Configured r
-                      RepoCapabilitiesChanged.CausedBy = None }
-            let approved granted =
-                SessionEvent.RepoCapabilitiesApproved
-                    { RepoCapabilitiesApproved.MessageId = MessageId.create "m2" |> expect
-                      RepoCapabilitiesApproved.Repo = r
-                      RepoCapabilitiesApproved.Granted = granted
-                      RepoCapabilitiesApproved.Actor = ada }
-            Expect.equal (RepoApprovals.pending [ asked; approved [ "!net:anywhere" ] ]) [] "settled"
-            Expect.equal
-                (RepoApprovals.pending [ asked; approved [ "something else entirely" ] ])
-                [ r, [ "!net:anywhere" ] ]
-                "an approval of something else leaves the ask standing"
-
-        // The case the whole rule exists for: yes to one set is not yes to a wider one.
-        testCase "a repo that widens what it asks for is pending again" <| fun () ->
-            let r = repo "octo/hello"
-            let ada = UserRef (UserId.create "ada" |> expect)
-            let asked granted =
-                SessionEvent.RepoCapabilitiesChanged
-                    { RepoCapabilitiesChanged.MessageId = MessageId.create "m1" |> expect
-                      RepoCapabilitiesChanged.Repo = r
-                      RepoCapabilitiesChanged.Granted = granted
-                      RepoCapabilitiesChanged.Sensitive = true
-                      RepoCapabilitiesChanged.Actor = ActorRef.Configured r
-                      RepoCapabilitiesChanged.CausedBy = None }
-            let approved =
-                SessionEvent.RepoCapabilitiesApproved
-                    { RepoCapabilitiesApproved.MessageId = MessageId.create "m2" |> expect
-                      RepoCapabilitiesApproved.Repo = r
-                      RepoCapabilitiesApproved.Granted = [ "!net:anywhere" ]
-                      RepoCapabilitiesApproved.Actor = ada }
-            Expect.equal
-                (RepoApprovals.pending
-                    [ asked [ "!net:anywhere" ]
-                      approved
-                      asked [ "!net:anywhere"; "path:/etc:ro" ] ])
-                [ r, [ "!net:anywhere"; "path:/etc:ro" ] ]
-                "the old yes does not cover the new ask"
+            let removed =
+                SessionEvent.RepoRemoved
+                    { RepoRemoved.MessageId = MessageId.create "m3" |> expect
+                      RepoRemoved.Repo = r
+                      RepoRemoved.Actor = Principal.toActor ada }
+            Expect.equal (RepoTrustWaits.pending [ trustAsked r both; removed ]) [] "nothing to answer"
 
         // Where the session's terminals start is the one thing a file asks of the session,
         // and it is asked the way a sandbox is: through the gate, as the file, on the
@@ -1461,7 +1573,7 @@ let foldTests =
                 let dir = checkout r (Some "version: 2\nsession:\n  shell-profile: src\n")
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
-                    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
+                    createFold (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
                 let ada = Principal.User (UserId.create "ada" |> expect)
                 let added = MessageId.create "added" |> expect
                 do! folded.Fold (FoldCause.Changed (r, Some added)) (CredentialFor.Person ada)
@@ -1485,7 +1597,7 @@ let foldTests =
                 let seen = ResizeArray<GatedCall> ()
                 let log = foldLog ()
                 let folded =
-                    RepoSandboxes.create (cell (Some (reposOver dir [ one; two ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) log noCapabilities
+                    createFold (cell (Some (reposOver dir [ one; two ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) log noCapabilities
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.isEmpty (List.ofSeq seen) "no profile is set: neither file wins"
@@ -1502,7 +1614,7 @@ let foldTests =
         testCaseAsync "a session with no repos service folds nothing rather than failing" <|
             async {
                 let folded =
-                    RepoSandboxes.create (cell None) (cell WorkSandboxes.unavailable) (recordingGate (ResizeArray<GatedCall> ())) (foldLog ()) noCapabilities
+                    createFold (cell None) (cell WorkSandboxes.unavailable) (recordingGate (ResizeArray<GatedCall> ())) (foldLog ()) noCapabilities
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal (folded.Outcomes ()) [] "no repos is not a fault"
             }

@@ -118,23 +118,14 @@ and [<RequireQualifiedAccess>] RepoCapabilitiesChanged =
       /// the same rendering the operator's `resources` surface uses, so what is said here and
       /// what is read there cannot become two answers.
       Granted : string list
-      /// Whether this set is one somebody has to decide about.
-      ///
-      /// Carried rather than re-derived by every reader, because deriving it needs the
-      /// operator's profile and a client has none — and a client that guessed by looking for
-      /// a word in `Granted` would be a client whose prompt depends on the wording of a
-      /// sentence, which is a design and will move.
-      Sensitive : bool
       /// The repo's file, as the party asking.
       Actor : ActorRef
       /// What made the file be read this time — the same cause the starts it precedes carry.
       CausedBy : Cause option }
 
-/// A person consented to what a repo asks for.
-///
-/// The APPROVER is on the record and must be an attributed human. The agent cannot consent
-/// on a repo's behalf, and that is the whole point of the repo being a separate principal:
-/// a checkout that could approve itself is a checkout nobody is deciding about.
+/// A person consented to what a repo asks for. RETIRED: consent is now a person's trust in
+/// the repo (`RepoTrusted`). Nothing appends this. The case stays because a log written before
+/// that change still holds it, and a log that would not load is not a tidier union.
 and [<RequireQualifiedAccess>] RepoCapabilitiesApproved =
     { MessageId : MessageId
       Repo : RepoRef
@@ -142,6 +133,35 @@ and [<RequireQualifiedAccess>] RepoCapabilitiesApproved =
       /// than something the old yes silently covers.
       Granted : string list
       /// Who said yes. Never `Configured` and never the agent.
+      Actor : ActorRef }
+
+/// A repo's sandboxes wait for somebody here to trust it with their GitHub.
+///
+/// Written by the fold when the repo's sandboxes forward GitHub and nobody here can run them
+/// with theirs: nobody trusts it yet, or the one who does is not here, or it now asks for a
+/// route their record has not answered. A card asks everyone here; the sandboxes start when
+/// one of them trusts it (`RepoTrusted`).
+and [<RequireQualifiedAccess>] RepoTrustAsked =
+    { MessageId : MessageId
+      Repo : RepoRef
+      /// The routes its sandboxes forward GitHub by, which is what trusting it means.
+      Routes : ConnectionRoute list
+      /// The repo's file, as the party asking.
+      Actor : ActorRef
+      CausedBy : Cause option }
+
+/// A repo's sandboxes run with this person's GitHub here.
+///
+/// Their trust in the repo is their own record, kept across sessions (`RepoTrust`). This is the
+/// other fact: that THIS session runs the repo on it. Only an act of theirs writes it: adding
+/// the repo when their record already trusts it, or answering its card. Joining a session never
+/// does, because trusting a repo is not lending your GitHub to every session it is in.
+and [<RequireQualifiedAccess>] RepoTrusted =
+    { MessageId : MessageId
+      Repo : RepoRef
+      /// Whose GitHub. A person: the agent, a process and a repo's file cannot trust anything.
+      By : Principal
+      /// The person, as the party acting.
       Actor : ActorRef }
 
 and RepoConfigRefused =
@@ -242,6 +262,28 @@ module RepoCapabilitiesApproved =
 
     let phrase (a: RepoCapabilitiesApproved) : Phrase =
         Phrase.deed "approved" [ Segment.Text "what "; Segment.Ref (EntityRef.Repo a.Repo); Segment.Text " asks for" ]
+
+/// What a route lets a repo's code do with somebody's GitHub, in a person's words.
+let private routeWords (route: ConnectionRoute) : string =
+    match route with
+    | ConnectionRoute.Git -> "push and fetch"
+    | ConnectionRoute.Api -> "the API"
+
+module RepoTrustAsked =
+
+    let phrase (a: RepoTrustAsked) : Phrase =
+        Phrase.deed
+            "is waiting"
+            (Phrase.text (
+                sprintf
+                    "for somebody here to trust it with their GitHub (%s)"
+                    (a.Routes |> List.map routeWords |> String.concat ", ")
+            ))
+
+module RepoTrusted =
+
+    let phrase (t: RepoTrusted) : Phrase =
+        Phrase.deed "trusts" [ Segment.Ref (EntityRef.Repo t.Repo); Segment.Text ": its sandboxes run with their GitHub here" ]
 
 module RepoConfigRefused =
 

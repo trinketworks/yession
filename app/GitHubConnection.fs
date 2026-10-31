@@ -157,6 +157,29 @@ let tokenOver
         | _ -> return ambient ()
     }
 
+/// The token a repo's sandbox may be lent of one owner's GitHub: their OWN connected credential
+/// and nothing else. Not the session's, not the deployment's on their behalf, and not the
+/// ambient `GITHUB_TOKEN`: a repo runs with the GitHub of somebody who trusts it, their trust
+/// is their own record, and so the credential it lends is theirs too (`GrantedRoutes.owner`).
+/// `None` when they have none connected, which lends nothing.
+let ownTokenOver
+    (heard: unit -> Map<ConnectionId, ConnectionStatus>)
+    (resolve: (ConnectionId -> Async<Result<ConnectionKind * string, string>>) option)
+    (unresolved: string -> unit)
+    (owner: CredentialOwner)
+    : Async<string option> =
+    async {
+        let target : ConnectionId = { Scope = CredentialOwner.scope owner; Name = secretName }
+        match resolve with
+        | Some resolve when Map.containsKey target (heard ()) ->
+            match! resolve target with
+            | Ok (_, value) -> return Some value
+            | Error reason ->
+                unresolved reason
+                return None
+        | _ -> return None
+    }
+
 // --- the device flow, as data ----------------------------------------------------------
 
 /// What `POST /login/device/code` answered: the code pair and how to pace the polling.

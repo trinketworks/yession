@@ -599,6 +599,11 @@ module ConversationProjection =
         | SessionEvent.RepoCapabilitiesChanged c ->
             proj |> causedNote c.MessageId c.CausedBy c.Actor (Act.RepoCapabilitiesChanged c) envelope
         | SessionEvent.RepoCapabilitiesApproved a -> proj |> noted a.MessageId a.Actor (Act.RepoCapabilitiesApproved a) envelope
+        // Who this session's repo runs with, and when it waits for somebody to say. The agent
+        // reads both as notes, which is how it learns that a repo it added is waiting.
+        | SessionEvent.RepoTrustAsked a ->
+            proj |> causedNote a.MessageId a.CausedBy a.Actor (Act.RepoTrustAsked a) envelope
+        | SessionEvent.RepoTrusted t -> proj |> noted t.MessageId t.Actor (Act.RepoTrusted t) envelope
         | SessionEvent.RepoConfigRefused r ->
             proj |> causedNote r.MessageId r.CausedBy r.Actor (Act.RepoConfigRefused r) envelope
         | SessionEvent.RepoConfigWarned w ->
@@ -827,22 +832,19 @@ module ConversationProjection =
                 | Choice2Of2 (s: WorkSandboxStopped) -> running |> List.filter (fun r -> r.Sandbox <> s.Sandbox))
             []
 
-/// What a person in this session still has to decide about.
+/// Which repos wait for somebody here to trust them with their GitHub, and by which routes.
 ///
-/// Folded from the events by BOTH sides — the Process to know what to gate, a client to know
-/// what to offer — so the prompt somebody sees and the sandbox that is waiting are two
+/// Folded from the events by BOTH sides — the Process to know what is held, a client to know
+/// which card to show — so the card somebody sees and the sandbox that is waiting are two
 /// readings of one log rather than two answers that can disagree.
 ///
-/// A repo is pending when the last thing it was recorded as asking for is sensitive, and no
-/// approval since names exactly that set. "Exactly" is the whole rule: a repo that widens
-/// what it asks for is a new decision, not one the old yes silently covers.
-module RepoApprovals =
+/// A repo waits from the fold's last ask (`RepoTrustAsked`) until somebody here trusts it
+/// (`RepoTrusted`), or until it leaves the session.
+module RepoTrustWaits =
 
-    /// What each repo was last recorded as asking for, and whether anybody still has to
-    /// decide about it. A fold state rather than a function over the whole log, because a
-    /// client sees the log in PAGES and re-reading all of it per page is the cost this
-    /// projection exists to avoid.
-    type Pending = private Pending of Map<string, RepoRef * string list * bool>
+    /// A fold state rather than a function over the whole log, because a client sees the log
+    /// in PAGES and re-reading all of it per page is the cost this projection exists to avoid.
+    type Pending = private Pending of Map<string, RepoRef * ConnectionRoute list>
 
     let empty : Pending = Pending Map.empty
 
@@ -851,26 +853,16 @@ module RepoApprovals =
         |> List.fold
             (fun state event ->
                 match event with
-                | SessionEvent.RepoCapabilitiesChanged c ->
-                    Map.add (RepoRef.value c.Repo) (c.Repo, c.Granted, c.Sensitive) state
-                | SessionEvent.RepoCapabilitiesApproved a ->
-                    match Map.tryFind (RepoRef.value a.Repo) state with
-                    // Approval settles the set it NAMES. An approval of something else leaves
-                    // the ask standing, which is what makes a widening a fresh decision rather
-                    // than one an old yes silently covers.
-                    | Some (repo, granted, _) when granted = a.Granted ->
-                        Map.add (RepoRef.value a.Repo) (repo, granted, false) state
-                    | _ -> state
+                | SessionEvent.RepoTrustAsked a -> Map.add (RepoRef.value a.Repo) (a.Repo, a.Routes) state
+                | SessionEvent.RepoTrusted t -> Map.remove (RepoRef.value t.Repo) state
+                | SessionEvent.RepoRemoved r -> Map.remove (RepoRef.value r.Repo) state
                 | _ -> state)
             state
         |> Pending
 
     /// Who is still waiting on somebody, in a stable order.
-    let waiting (Pending state) : (RepoRef * string list) list =
-        state
-        |> Map.toList
-        |> List.choose (fun (_, (repo, granted, pending)) -> if pending then Some (repo, granted) else None)
-        |> List.sortBy (fun (repo, _) -> RepoRef.value repo)
+    let waiting (Pending state) : (RepoRef * ConnectionRoute list) list =
+        state |> Map.toList |> List.map snd |> List.sortBy (fun (repo, _) -> RepoRef.value repo)
 
     /// The whole log at once — the Process's reading, where there are no pages.
-    let pending (events: SessionEvent list) : (RepoRef * string list) list = apply empty events |> waiting
+    let pending (events: SessionEvent list) : (RepoRef * ConnectionRoute list) list = apply empty events |> waiting

@@ -126,11 +126,14 @@ module Frames =
                         [ "kind", Encode.string "releaseTerminalLease"; "terminalId", Codec.terminalId.Encode id ]
                 | ReattachTerminal id ->
                     Encode.object [ "kind", Encode.string "reattachTerminal"; "terminalId", Codec.terminalId.Encode id ]
-                | ApproveRepoCapabilities (repo, granted) ->
+                | TrustRepo (repo, shown, ticked) ->
+                    let routes (routes: ConnectionRoute list) =
+                        Encode.list (routes |> List.map (ConnectionRoute.name >> Encode.string))
                     Encode.object
-                        [ "kind", Encode.string "approveRepoCapabilities"
+                        [ "kind", Encode.string "trustRepo"
                           "repo", Codec.repoRef.Encode repo
-                          "granted", Encode.list (granted |> List.map Encode.string) ]
+                          "shown", routes shown
+                          "ticked", routes ticked ]
                 | AddRepo (repo, branch) ->
                     Encode.object
                         [ "kind", Encode.string "addRepo"
@@ -140,11 +143,13 @@ module Frames =
             Decode.field "kind" Decode.string
             |> Decode.andThen (function
                 | "interruptAgentTurn" -> Decode.field "agentTurnId" Codec.agentTurnId.Decode |> Decode.map InterruptAgentTurn
-                | "approveRepoCapabilities" ->
-                    Decode.map2
-                        (fun repo granted -> ApproveRepoCapabilities (repo, granted))
+                | "trustRepo" ->
+                    let routes = Decode.list (Codec.viaSmartCtor ConnectionRoute.parse Decode.string)
+                    Decode.map3
+                        (fun repo shown ticked -> TrustRepo (repo, shown, ticked))
                         (Decode.field "repo" Codec.repoRef.Decode)
-                        (Decode.field "granted" (Decode.list Decode.string))
+                        (Decode.field "shown" routes)
+                        (Decode.field "ticked" routes)
                 | "addRepo" ->
                     Decode.map2
                         (fun repo branch -> AddRepo (repo, branch))

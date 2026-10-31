@@ -1791,7 +1791,7 @@ do
         | ClientEffect.InterruptTerminal _
         | ClientEffect.ReattachTerminal _
         | ClientEffect.InterruptTurn _
-        | ClientEffect.ApproveRepoCapabilities _ -> ()
+        | ClientEffect.TrustRepo _ -> ()
         // The listing's next page, answered here because this harness has no session to
         // ask: a page arrives with two more rows and no cursor after it, which is what
         // the browser tier needs in order to watch REACHING the foot bring rows in

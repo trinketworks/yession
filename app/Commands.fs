@@ -123,7 +123,8 @@ let private encodeArgs (values: string list) : string = Codec.toString CommandGa
 ///
 /// The verb answers with the item it recorded, when it recorded one, so a sandbox the fold
 /// brings up for this repo can say it came up because of it.
-let private andRefold
+let private refoldingAs
+    (cause: RepoRef -> MessageId option -> CredentialFor -> FoldCause)
     (services: CommandServices)
     (invocation: GatedInvocation)
     (repo: RepoRef)
@@ -134,10 +135,29 @@ let private andRefold
         // Whoever the verb ran on the authority of: a sandbox the fold starts from a file it
         // picks up is started on THEIR authority, as the verb itself was.
         | Ok (answer, recordedAs) ->
-            do! services.Refold (FoldCause.Changed (repo, recordedAs)) (Authority.credential invocation.Authority)
+            let credential = Authority.credential invocation.Authority
+            do! services.Refold (cause repo recordedAs credential) credential
             return Ok answer
         | Error e -> return Error e
     }
+
+let private andRefold services invocation repo outcome =
+    refoldingAs (fun repo recordedAs _ -> FoldCause.Changed (repo, recordedAs)) services invocation repo outcome
+
+/// `andRefold`, for the one verb that OFFERS its person's trust: adding a repo. When their own
+/// record already trusts it with everything it asks, the fold runs it with their GitHub and
+/// asks nobody. Removing a repo or switching its branch offers nothing (`FoldCause.Offered`).
+/// The agent's add is its turn's person's, as every other credential of its turn is.
+let private andRefoldOffering services invocation repo outcome =
+    refoldingAs
+        (fun repo recordedAs credential ->
+            match CredentialFor.person credential with
+            | Some person -> FoldCause.Offered (repo, recordedAs, person)
+            | None -> FoldCause.Changed (repo, recordedAs))
+        services
+        invocation
+        repo
+        outcome
 
 /// Invalidate a query once a command has actually changed its answer.
 let private andPublish
@@ -286,7 +306,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                     | Error e -> return Error (sprintf "not a repo name: %s" e)
                     | Ok repo ->
                         return!
-                            andRefold services invocation repo (
+                            andRefoldOffering services invocation repo (
                             andPublish services Repos.queryName (
                                 async {
                                     match! service.AddRepo (repoCaller invocation) repo with

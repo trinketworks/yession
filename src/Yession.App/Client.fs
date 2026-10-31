@@ -271,7 +271,7 @@ module Client =
             | ClientEffect.ReadTranscript (terminal, read, fromSeq) -> connected (fun c -> c.ReadTranscript terminal read fromSeq)
             | ClientEffect.OpenTerminal (title, sandbox) -> ask (OpenTerminal (title, sandbox))
             | ClientEffect.InterruptTurn turn -> ask (InterruptAgentTurn turn)
-            | ClientEffect.ApproveRepoCapabilities (repo, granted) -> ask (ApproveRepoCapabilities (repo, granted))
+            | ClientEffect.TrustRepo (repo, shown, ticked) -> ask (TrustRepo (repo, shown, ticked))
             | ClientEffect.Launch (LaunchEffect.Start target) ->
                 connected (fun c ->
                     dispatch (LaunchMsg (LaunchSent (c.Ask (AddRepo (target.Repo, target.Branch)), target))))

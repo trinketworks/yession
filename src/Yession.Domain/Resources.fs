@@ -56,42 +56,6 @@ type ResourceMount =
       At : string
       Mode : ResourceMountMode }
 
-/// How a forwarded connection reaches a sandbox — the MECHANISM, which is the session's and
-/// not the provider's: `Git` is the git gateway (a sandbox's git sends its requests there,
-/// and each block's are answered with its act's credential), `Api` is the credential proxy (a
-/// sandbox's HTTPS to the provider's API is answered there, with a stand-in swapped for the
-/// credential). Two, because those are the two ways this session has of lending a credential
-/// without handing it over; a provider offers whichever of them it has hosts for.
-///
-/// Closed, so a route an operator misspells is refused where the file is read rather than
-/// quietly forwarding nothing — and named rather than implied, so a sandbox that needs a
-/// repository's git is not also a sandbox whose every API call carries somebody's token.
-[<RequireQualifiedAccess>]
-type ConnectionRoute =
-    | Git
-    | Api
-
-module ConnectionRoute =
-
-    let all : ConnectionRoute list = [ ConnectionRoute.Git; ConnectionRoute.Api ]
-
-    /// The word a file writes and a grant prints.
-    let name (route: ConnectionRoute) : string =
-        match route with
-        | ConnectionRoute.Git -> "git"
-        | ConnectionRoute.Api -> "api"
-
-    let parse (raw: string) : Result<ConnectionRoute, string> =
-        match all |> List.tryFind (fun route -> name route = raw.Trim().ToLowerInvariant ()) with
-        | Some route -> Ok route
-        | None ->
-            Error (
-                sprintf
-                    "'%s' is not a route. A connection is forwarded by %s"
-                    raw
-                    (all |> List.map name |> String.concat " or ")
-            )
-
 /// What one granted variable holds. Text is set as written; the other two are things only
 /// the session can supply, and supplies through the same machinery a repo's declaration uses
 /// (`WorkSandboxes`): a composed value has its `${proxy.…}` provided before the sandbox is

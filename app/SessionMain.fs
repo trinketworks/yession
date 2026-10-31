@@ -520,6 +520,11 @@ let mutable private connectionStatus : Map<ConnectionId, ConnectionStatus> = Map
 let private connectionsClient =
     controlChannel |> Option.map (fun (url, secret) -> ControlClient.connections url secret)
 
+// The people here's records (the store's third family): where each one's trust in a repo is
+// kept across their sessions. The Manager never reads them; `RepoTrusts` does.
+let private recordsClient =
+    controlChannel |> Option.map (fun (url, secret) -> ControlClient.records url secret)
+
 // The repo manager (Plan 14): the agent's verbs, and — since Plan 15 — the `repos`
 // query. Constructed once the event log exists (inside the boot async), so a
 // module-level cell carries it to the per-turn dispatcher.
@@ -677,6 +682,39 @@ let private resolveGitHubToken : CredentialFor -> Async<string option> =
         (connectionsClient |> Option.map (fun client -> client.Resolve))
         ambientGitHubToken
         (eprintfn "[session %s] the connected github credential did not resolve: %s" (SessionId.value sessionId))
+
+/// One owner's OWN connected GitHub, for a repo's sandbox: `GitHubConnection.ownTokenOver`
+/// holds the rule.
+let private resolveOwnGitHubToken : CredentialOwner -> Async<string option> =
+    GitHubConnection.ownTokenOver
+        (fun () -> connectionStatus)
+        (connectionsClient |> Option.map (fun client -> client.Resolve))
+        (eprintfn "[session %s] the connected github credential did not resolve: %s" (SessionId.value sessionId))
+
+/// Each person's trust in a repo, read from and written to their own record, with the repo
+/// named by the id GitHub gives it. Asked with the owner's own GitHub, because whether they can
+/// see a private repo is theirs to answer.
+let private repoTrustsOver (githubApi: string) : RepoTrusts =
+    match recordsClient with
+    | None -> RepoTrusts.none "this session has no Manager to keep anybody's trust in"
+    | Some records ->
+        RepoTrusts.over
+            records.Read
+            records.Write
+            (fun owner repo ->
+                async {
+                    let! token = resolveOwnGitHubToken owner
+                    match! GitHubRepos.idOver githubApi token repo with
+                    | Ok id -> return Ok id
+                    | Error failure ->
+                        return
+                            Error (
+                                sprintf
+                                    "GitHub could not identify %s: %s"
+                                    (RepoRef.value repo)
+                                    (GitHubRepos.LookupFailure.describe failure)
+                            )
+                })
 
 /// A repo network verb failed while spending a connected credential.
 ///
@@ -970,6 +1008,8 @@ Async.StartImmediate (
         // second read of the same variable is a second default, and the two would disagree
         // the first time one moved.
         let githubApi = Interop.envOr "YESSION_GITHUB_API_URL" "https://api.github.com"
+        // One reader of everybody's trust, for the fold that asks and the loans that spend.
+        let repoTrusts = repoTrustsOver githubApi
         // The git gateway: how every git in this session reaches github.com without holding a
         // credential — a work sandbox's, and the repo manager's own clone and fetch, so it
         // starts before the repo manager does (`GitGateway`, rule 21).
@@ -1392,6 +1432,25 @@ Async.StartImmediate (
                     fun authority sandbox terminal block routes lentInto ->
                         async {
                             let owner = Authority.credential authority
+                            // What may be lent, and whose. A session's own sandbox lends the
+                            // act's credential by every route it forwards, as every GitHub verb
+                            // spends it. A REPO's sandbox runs that repo's code, so it is lent
+                            // only what the act's person trusts the repo with — their record,
+                            // read for each block — and only their own GitHub: never the
+                            // session's, the deployment's on their behalf, or the ambient token.
+                            let! routes, resolve =
+                                async {
+                                    match SandboxRef.scope sandbox with
+                                    | SessionOwned -> return routes, (fun () -> resolveGitHubToken owner)
+                                    | RepoOwned repo ->
+                                        match CredentialFor.person owner with
+                                        | None -> return [], (fun () -> async { return None })
+                                        | Some person ->
+                                            let! granted = repoTrusts.Granted (RepoTrust.ownerOf person) repo routes
+                                            return
+                                                routes |> List.filter (fun route -> GrantedRoutes.allows route granted),
+                                                (fun () -> resolveOwnGitHubToken (GrantedRoutes.owner granted))
+                                }
                             // By `git`: the loan its git carries on every request to the
                             // gateway, answered there with the credential of the block's act —
                             // and the commit identity behind that same credential. The push a
@@ -1411,7 +1470,7 @@ Async.StartImmediate (
                                                     (GitGateway.Routed.Sandbox sandbox)
                                                     (GitGateway.Borrower.Terminal terminal)
                                                     { Owner = owner
-                                                      Resolve = fun () -> resolveGitHubToken owner
+                                                      Resolve = resolve
                                                       Refused = fun () -> reportGitHubNetworkFailure owner "the git gateway was answered 401"
                                                       Spent =
                                                         fun repo ->
@@ -1445,7 +1504,7 @@ Async.StartImmediate (
                                         lentInto
                                         terminal
                                         { CredentialProxy.Lender.Owner = owner
-                                          CredentialProxy.Lender.Resolve = fun () -> resolveGitHubToken owner
+                                          CredentialProxy.Lender.Resolve = resolve
                                           CredentialProxy.Lender.Refused =
                                             fun () -> reportGitHubNetworkFailure owner "the credential proxy was answered 401" }
                             return BlockEnv.merge git api
@@ -1488,6 +1547,7 @@ Async.StartImmediate (
         repoSandboxes <-
             RepoSandboxes.create
                 (fun () -> reposService)
+                repoTrusts
                 (fun () -> workSandboxes)
                 host.RunGated
                 log
@@ -1504,6 +1564,7 @@ Async.StartImmediate (
                 // refusal is for — and `capabilitiesOn` has already answered the empty one.
                 (RepoSandboxes.capabilitiesOn
                     (Sandboxes.limitsHere SandboxRuntime.repoWorkBackend)
+                    GitHubConnection.connectionName
                     (fun uses wants ->
                         match resourceProfile with
                         | None -> grantsFor uses wants |> Result.map (fun _ -> ResourceClosure.empty)
@@ -1516,7 +1577,7 @@ Async.StartImmediate (
         // services are composed here.
         host.SetCommandDispatch (Commands.dispatch commandServices)
         // Consent reaches the fold that knows what each repo asks for.
-        host.SetApproveCapabilities (fun actor repo granted -> repoSandboxes.Approve actor repo granted)
+        host.SetTrustRepo (fun person repo shown ticked -> repoSandboxes.Trust person repo shown ticked)
         // A person's first repo goes through the same gate the agent's `add_repo` does.
         host.SetLaunchRepo (Commands.launchRepo telemetry.Tracer commandServices host.RunGated host.ResumeGated)
         // The reverse leg starts LAST, after the query registry exists and the Host is up:

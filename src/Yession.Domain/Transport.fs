@@ -67,14 +67,14 @@ type SessionCommand =
     /// tool call that produced the stream in the first place, and only when the provider
     /// declared that asking again is safe. A new terminal arrives as `TerminalOpened`.
     | ReattachTerminal of TerminalId
-    /// Consent to what a repo's file asks this session for (Plan 27).
+    /// A person's answer to a repo's trust card: whether its code may run with their GitHub,
+    /// and by which routes.
     ///
-    /// Carries the set the person was SHOWN, not just the repo. A capability set is authored
-    /// by whoever can push to the checkout and can change between the screen being drawn and
-    /// the button being pressed — so the Process compares what arrives against what is asked
-    /// now, and refuses if they differ. Approving something other than what you read is the
-    /// failure this exists to prevent, and it would be the easy one to build.
-    | ApproveRepoCapabilities of repo: RepoRef * granted: string list
+    /// Carries what the card SHOWED beside what was ticked, because the answer is about those
+    /// routes and no others: a route the card did not show stays as their record has it, and one
+    /// it showed and they left unticked is answered no. So a repo that asks for more after the
+    /// card was drawn has asked for something nobody answered, and asks again.
+    | TrustRepo of repo: RepoRef * shown: ConnectionRoute list * ticked: ConnectionRoute list
     /// Put the first repo into this session (the launch surface's act): clone it, and start
     /// on `branch` when one other than its default is named.
     ///

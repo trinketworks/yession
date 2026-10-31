@@ -650,6 +650,38 @@ type QueriesViewState =
       /// The latest value per query name. Absent = not answered yet.
       Values : Map<string, QueryValue> }
 
+/// One reader's hand on the trust cards (`RepoTrustWaits`): the routes they unticked, and the
+/// cards they put off. Keyed by repo, and each put-off card by what it showed, so a card that
+/// asks for something new is a new card rather than one this reader already put away.
+[<RequireQualifiedAccess>]
+type TrustCards =
+    { Unticked : Map<string, Set<ConnectionRoute>>
+      PutOff : Map<string, ConnectionRoute list> }
+
+module TrustCards =
+
+    let empty : TrustCards = { Unticked = Map.empty; PutOff = Map.empty }
+
+    /// Every route a card shows starts ticked: a person trusting a repo usually means the
+    /// whole of what it asks, and taking one away is the act that needs a hand.
+    let ticked (repo: RepoRef) (shown: ConnectionRoute list) (cards: TrustCards) : ConnectionRoute list =
+        let unticked = Map.tryFind (RepoRef.value repo) cards.Unticked |> Option.defaultValue Set.empty
+        shown |> List.filter (fun route -> not (Set.contains route unticked))
+
+    let toggle (repo: RepoRef) (route: ConnectionRoute) (cards: TrustCards) : TrustCards =
+        let key = RepoRef.value repo
+        let unticked = Map.tryFind key cards.Unticked |> Option.defaultValue Set.empty
+        let next = if Set.contains route unticked then Set.remove route unticked else Set.add route unticked
+        { cards with Unticked = Map.add key next cards.Unticked }
+
+    let putOff (repo: RepoRef) (shown: ConnectionRoute list) (cards: TrustCards) : TrustCards =
+        { cards with PutOff = Map.add (RepoRef.value repo) shown cards.PutOff }
+
+    /// The cards this reader still has to answer: every repo waiting for trust, except one
+    /// they put off while it asked for exactly this.
+    let showing (waiting: (RepoRef * ConnectionRoute list) list) (cards: TrustCards) : (RepoRef * ConnectionRoute list) list =
+        waiting |> List.filter (fun (repo, shown) -> Map.tryFind (RepoRef.value repo) cards.PutOff <> Some shown)
+
 /// One copy to the clipboard, as its confirmation shows it: the box it came out of, and which
 /// copy this is. The count is what makes a second copy of the same box a new moment, so its
 /// wait starts again rather than the first copy's deadline taking the second's confirmation
@@ -711,7 +743,7 @@ module Refusal =
         | ReleaseTerminalLease _
         | ReattachTerminal _ -> true
         | InterruptAgentTurn _
-        | ApproveRepoCapabilities _
+        | TrustRepo _
         | AddRepo _ -> false
 
     /// Where `refusal` is drawn: in the pane while the pane is open and the refusal is one
@@ -2072,11 +2104,14 @@ type ClientModel =
       GitHub        : GitHubViewState
       /// The generated read surface (Plan 15), driven by the /queries stream.
       Queries       : QueriesViewState
-      /// Repos whose sensitive capability set is waiting on somebody here (Plan 27).
+      /// Repos whose sandboxes wait for somebody here to trust them with their GitHub.
       ///
-      /// Folded from the same events the Process gates on, so what a person is asked and
+      /// Folded from the same events the Process holds them on, so what a person is asked and
       /// what a sandbox is waiting for are two readings of one log rather than two answers.
-      Approvals     : RepoApprovals.Pending
+      TrustWaits    : RepoTrustWaits.Pending
+      /// This reader's own hand on those cards: what they unticked, and which they put off.
+      /// View state, local to this client: the answer reaches the session as one command.
+      TrustCards    : TrustCards
       /// The launch surface's state — choosing the session's first repo. View state, local
       /// to this client: choosing is one person's act on one screen, and what it produces
       /// reaches everyone through the log.
@@ -2723,9 +2758,15 @@ type ClientMsg =
     /// Ask the session to cancel the running agent turn (Step 17). The outcome arrives as
     /// events: `AgentTurnInterrupted` on success, or nothing if the turn already finished.
     | InterruptTurnMsg of AgentTurnId
-    /// Consent to what a repo asks for (Plan 27). Carries the set that is on screen, so the
-    /// session can refuse if the file moved between the screen and the button.
-    | ApproveRepoCapabilitiesMsg of RepoRef * granted: string list
+    /// Tick or untick one route on a repo's trust card.
+    | ToggleTrustRouteMsg of RepoRef * ConnectionRoute
+    /// Answer a repo's trust card: what it showed, and what was ticked. The session writes the
+    /// reader's answer to their own record, and starts the repo with their GitHub when nobody's
+    /// trust runs it yet.
+    | TrustRepoMsg of RepoRef * shown: ConnectionRoute list * ticked: ConnectionRoute list
+    /// Put a repo's trust card away for now, decided nothing. It comes back when the repo asks
+    /// for something else.
+    | NotNowTrustMsg of RepoRef * shown: ConnectionRoute list
 
 /// What a message asks of the world outside the model, as a value `ClientModel.update` returns
 /// beside the next model.
@@ -2746,7 +2787,7 @@ type ClientEffect =
     | InterruptTerminal of TerminalId
     | OpenTerminal of title: string * sandbox: SandboxRef
     | InterruptTurn of AgentTurnId
-    | ApproveRepoCapabilities of RepoRef * granted: string list
+    | TrustRepo of RepoRef * shown: ConnectionRoute list * ticked: ConnectionRoute list
     | Launch of LaunchEffect
     | Claude of ClaudeCall
     | GitHub of GitHubCall
@@ -2939,7 +2980,8 @@ module ClientModel =
           PageFault = None
           Synced = (SyncedSessionState.empty CollabText.ylmish)
           Conversation = ConversationProjection.empty
-          Approvals = RepoApprovals.empty
+          TrustWaits = RepoTrustWaits.empty
+          TrustCards = TrustCards.empty
           Launch = Launch.empty
           Repos = Repos.ReposProjection.empty
           Timeline = TimelineProjection.empty
@@ -5294,7 +5336,7 @@ module ClientModel =
                 Conversation = conversation
                 Launch = launch
                 Repos = freshEvents |> List.fold (fun proj e -> Repos.ReposProjection.applyEvent proj e.Event) model.Repos
-                Approvals = RepoApprovals.apply model.Approvals (freshEvents |> List.map (fun e -> e.Event))
+                TrustWaits = RepoTrustWaits.apply model.TrustWaits (freshEvents |> List.map (fun e -> e.Event))
                 Timeline = timeline
                 Agent = agent
                 Environment = environment
@@ -5975,7 +6017,10 @@ module ClientModel =
         | ReleaseTerminalMsg _
         | ReattachTerminalMsg _
         | InterruptTerminalMsg _
-        | ApproveRepoCapabilitiesMsg _ -> model
+        | TrustRepoMsg _ -> model
+        // The reader's own hand on a trust card, kept here because nobody else's screen has it.
+        | ToggleTrustRouteMsg (repo, route) -> { model with TrustCards = TrustCards.toggle repo route model.TrustCards }
+        | NotNowTrustMsg (repo, shown) -> { model with TrustCards = TrustCards.putOff repo shown model.TrustCards }
         // `update` hands these to `Uploads` and the attachment rules beside it, which say both
         // halves — the state and the effects — at once; they reach here from nowhere else.
         | UploadPickedMsg _
@@ -6230,7 +6275,7 @@ module ClientModel =
                 | None -> []
             | OpenTerminalMsg (title, sandbox) -> [ ClientEffect.OpenTerminal (title, sandbox) ]
             | InterruptTurnMsg turn -> [ ClientEffect.InterruptTurn turn ]
-            | ApproveRepoCapabilitiesMsg (repo, granted) -> [ ClientEffect.ApproveRepoCapabilities (repo, granted) ]
+            | TrustRepoMsg (repo, shown, ticked) -> [ ClientEffect.TrustRepo (repo, shown, ticked) ]
             | LaunchMsg launchMsg -> Launch.update launchMsg model.Launch |> snd |> List.map ClientEffect.Launch
             | ClaudePressedMsg press -> ClaudePress.call press model.Claude |> Result.toList |> List.map ClientEffect.Claude
             | GitHubPressedMsg press -> GitHubPress.call press model.GitHub |> Result.toList |> List.map ClientEffect.GitHub

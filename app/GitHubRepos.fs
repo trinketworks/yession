@@ -299,6 +299,13 @@ let canonicalOver (apiBase: string) (token: string option) (repo: RepoRef) : Asy
         | Error failure -> return Error failure
     }
 
+/// A repository's GitHub id: the number a rename or a transfer keeps, and that a new repository
+/// created under an old name does not get. A person's trust in a repository is kept under it
+/// (`RepoTrust.recordName`), so trust given to one repository never passes to whatever later
+/// takes its name.
+let idOver (apiBase: string) (token: string option) (repo: RepoRef) : Async<Result<int64, LookupFailure>> =
+    read (Decode.field "id" Decode.int64) (sprintf "%s/repos/%s" (apiBase.TrimEnd '/') (RepoRef.value repo)) token
+
 /// The branches a repository has, a page at a time — read the way the repo listing is, and
 /// with the same cursor, since "which page" is the whole of what either needs to carry.
 ///
