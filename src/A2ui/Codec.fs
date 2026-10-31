@@ -239,6 +239,10 @@ module Codec =
         | "not" -> only [ "value" ] (Decode.field "value" dBool) |> Decode.map Not
         | other -> Decode.fail (sprintf "the basic catalog has no function %s" other)
 
+    /// A call in a slot that takes any type: how a `${name(...)}` in a `formatString` template
+    /// is read, once its arguments are written out as JSON.
+    let callDecoder : Decoder<FunctionCall> = functionCall ReturnType.Any
+
     let private dStringList =
         dynamic { Type = ReturnType.Array; Literal = Decode.list Decode.string; ObjectsAreLiteral = false }
 
