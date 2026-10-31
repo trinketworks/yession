@@ -1023,6 +1023,50 @@ module SyncedStateSync =
                     let queue : Yjs.Y.Map<obj> = doc.getMap "pending"
                     ids |> List.iter (fun id -> queue.delete (QueueId.value id))),
                 processOrigin)
+
+    /// Apply the agent's A2UI messages to the doc's surfaces, all of them or none.
+    ///
+    /// The messages fold over the surfaces the doc holds NOW (`A2ui.Surfaces.applyAll`), so an
+    /// `updateDataModel` lands on whatever the people here have answered so far, and a message
+    /// that does not apply refuses the whole call before anything is written. What changed is
+    /// then written in ONE transaction under the process origin: a surface's entry only when its
+    /// catalog or components changed, a data field only when its value did. A field nobody
+    /// touched keeps the answer a person may be typing into it.
+    let applySurfaceMessages (doc: Yjs.Y.Doc) (messages: A2ui.ServerToClient list) : Result<unit, A2ui.SurfaceError> =
+        let before = (ofDoc doc).Surfaces
+        A2ui.Surfaces.applyAll before messages
+        |> Result.map (fun after ->
+            let fieldsOf (surface: A2ui.Surface option) =
+                surface |> Option.map (fun s -> dataFields s.DataModel |> Map.ofList) |> Option.defaultValue Map.empty
+            doc.transact (
+                (fun _ ->
+                    let surfaces : Yjs.Y.Map<obj> = doc.getMap "surfaces"
+                    let data : Yjs.Y.Map<obj> = doc.getMap "surfaceData"
+                    // A field of a surface this call touched that the result no longer has. A key
+                    // of a surface the doc does not hold is somebody else's to explain.
+                    for key in mapKeys data do
+                        match SurfaceDataKey.parse key with
+                        | Some (id, field) when Map.containsKey id before || Map.containsKey id after ->
+                            if not (Map.containsKey field (fieldsOf (Map.tryFind id after))) then data.delete key
+                        | _ -> ()
+                    for KeyValue (id, _) in before do
+                        if not (Map.containsKey id after) then surfaces.delete id
+                    for KeyValue (id, surface) in after do
+                        let components = componentsText surface.Components
+                        let was = Map.tryFind id before
+                        let unchanged =
+                            was |> Option.exists (fun w -> w.CatalogId = surface.CatalogId && componentsText w.Components = components)
+                        if not unchanged then
+                            let entry : Yjs.Y.Map<obj> = Yjs.Y.Map.Create ()
+                            surfaces.set (id, box entry) |> ignore
+                            entry.set ("catalog", box surface.CatalogId) |> ignore
+                            entry.set ("components", box components) |> ignore
+                        let held = fieldsOf was
+                        for KeyValue (field, value) in fieldsOf (Some surface) do
+                            if Map.tryFind field held <> Some value then
+                                data.set (SurfaceDataKey.make id field, box (A2ui.Codec.toString A2ui.Codec.encodeJsonValue value)) |> ignore),
+                processOrigin))
+
     /// Remove every terminal composer slot whose command line is empty, returning the keys
     /// dropped. The boot-time repair `removeEmptyDrafts` performs for message drafts, for
     /// the same reason and under the same safety argument: at boot no peer is connected, so
