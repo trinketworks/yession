@@ -4720,10 +4720,10 @@ module View =
     /// and the pane's body while it is selected.
     ///
     /// It has been the pane's other face behind a toggle nobody could read, and then a boxed
-    /// popover hung under the head's name; the second made the pane three stacked layers,
-    /// and gave it a second way to make a terminal at its foot. As a page it is one more
-    /// place in the one row the pane is navigated by, and the way to make something is that
-    /// row's `+` and nothing here. Choosing from it is choosing a tab.
+    /// popover hung under the head's name; the second made the pane three stacked layers.
+    /// Choosing from it is choosing a tab. It is also the one place a terminal is made: New
+    /// terminal on its Terminals heading, as Upload files is on its Files heading — the strip's
+    /// `+` and its menu, and the empty pane's own button, were the same act in two more places.
     ///
     /// The terminals are in the order they were opened, the open ones first and the closed
     /// ones folded under one row that unfolds in place (`ClientModel.listSections`). A
@@ -4982,16 +4982,98 @@ module View =
                   {(sections.FileRows |> List.map artifactRow) @ (sections.UploadRows |> List.map uploadRow)}
                 </div>"""
         let empty =
-            if List.isEmpty sections.OpenRows && Option.isNone sections.ClosedFold
-               && List.isEmpty sections.FileRows && List.isEmpty sections.UploadRows then
+            if List.isEmpty sections.OpenRows && Option.isNone sections.ClosedFold then
                 html $"""<span class="{Style.contentListEmptyWord}">{Dom.Text.nothingOpenedYet}</span>"""
             else Lit.nothing
         let opened =
             if List.isEmpty sections.OpenRows then Lit.nothing
             else html $"""<div role="list" aria-label="{Dom.Text.terminalsHeading}">{sections.OpenRows |> List.map row}</div>"""
+        // Everywhere a terminal can start, and the one New terminal will use. The places are
+        // the session's own and each work sandbox started here; with only the first, there is
+        // nothing to choose and the link that chooses is not drawn.
+        let places = ClientModel.sandboxRows model
+        let place = ClientModel.startIn model
+        let placeName (sandbox: SandboxRef) =
+            if sandbox = SandboxRef.defaultRef then Dom.Text.aTerminal
+            else SandboxName.value (SandboxRef.name sandbox)
+        // The terminals under a heading of their own, which carries the one way to make one,
+        // and — when there is a choice — where it will start, the way the repo picker's row
+        // carries its branch: the name as a link, into a list that changes it.
+        let terminals =
+            let count =
+                match List.length sections.OpenRows with
+                | 0 -> Lit.nothing
+                | n -> html $"""<span class="{Style.listCount}">{string n}</span>"""
+            let startIn =
+                if List.length places < 2 then Lit.nothing
+                else
+                    html $"""
+                        <button type="button" class="{Style.startInLink}" data-start-in="{SandboxRef.render place}"
+                                aria-label="{Dom.Text.startInNamed (placeName place)}"
+                                @click={Ev(fun _ -> dispatch (ChoosingStartInMsg true))}>
+                          <span class="{Style.startInWord}">{Dom.Text.startInWord}</span>
+                          <span class="{Style.startInName}">{placeName place}</span>
+                          {Icon.right}
+                        </button>"""
+            html $"""
+                <div class="{Style.listSectionHeadFirst}">
+                  <div class="{Style.listSectionLabel}" data-list-section="{Dom.Text.terminalsHeading}">
+                    <span>{Dom.Text.terminalsHeading}</span>
+                    {count}
+                  </div>
+                  <div class="{Style.listSectionActs}">
+                    <button type="button" class="{Style.terminalNew}" data-terminal-new="{SandboxRef.render place}"
+                            aria-label="{Dom.Text.newTerminalIn (SandboxRef.render place)}"
+                            @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("", place)))}>{Icon.plus}{Dom.Text.aNewTerminal}</button>
+                    {startIn}
+                  </div>
+                </div>"""
+        // The list of places, in the sheet in place of what it lists: the repo picker's
+        // branch pane, in this sheet's rows. Choosing one goes back, and New terminal then
+        // starts there.
+        let choosingPlace () =
+            let choice (sandbox: SandboxRef) =
+                let chosen = sandbox = place
+                // What tells two repos' `dev` apart, and what the file said either is for.
+                let beneath =
+                    [ (match SandboxRef.scope sandbox with
+                       | SessionOwned -> None
+                       | RepoOwned repo -> Some (RepoRef.value repo))
+                      ClientModel.sandboxPurpose sandbox model ]
+                    |> List.choose id
+                let note =
+                    if List.isEmpty beneath then Lit.nothing
+                    else html $"""<span class="{Style.startInNote}">{String.concat " · " beneath}</span>"""
+                let isDefault =
+                    if sandbox = SandboxRef.defaultRef then
+                        html $"""<span class="{Style.startInDefault}">{Dom.Text.defaultPlace}</span>"""
+                    else Lit.nothing
+                html $"""
+                    <li class="{Style.startInRow}">
+                      <button type="button" class="{Style.startInChoice}" data-start-in-choice="{SandboxRef.render sandbox}"
+                              aria-pressed="{if chosen then "true" else "false"}"
+                              aria-label="{Dom.Text.newTerminalIn (SandboxRef.render sandbox)}"
+                              @click={Ev(fun _ -> dispatch (StartInMsg sandbox))}>
+                        <span class="{Style.startInMark}" aria-hidden="true">{if chosen then Icon.check else Lit.nothing}</span>
+                        <span class="{Style.startInWho}">
+                          <span class="{Style.startInChoiceName}">{placeName sandbox}</span>
+                          {note}
+                        </span>
+                        {isDefault}
+                      </button>
+                    </li>"""
+            html $"""
+                <div class="{Style.startInHead}">
+                  <button type="button" class="{Style.startInBack}" data-start-in-back
+                          aria-label="{Dom.Text.backToList}" title="{Dom.Text.backToList}"
+                          @click={Ev(fun _ -> dispatch (ChoosingStartInMsg false))}>{Icon.left}</button>
+                  <span id="start-in-heading">{Dom.Text.startInHeading}</span>
+                </div>
+                <ul aria-labelledby="start-in-heading">{places |> List.map choice}</ul>"""
         // Under the sheet, the pane goes on showing, dimmed: the sheet is a layer over it, not
         // a place. Pressed, the scrim puts the sheet away — a duplicate of the list button and
         // of Escape, so out of the tree and the Tab order, as the phone's grab edge is.
+        let listed = html $"""{terminals}{opened}{closed}{empty}{files}"""
         html $"""
             <button type="button" class="{Style.allSheetScrim}" tabindex="-1" aria-hidden="true"
                     aria-label="{Dom.Text.switchTerminal}" data-pane-sheet-scrim
@@ -5000,10 +5082,7 @@ module View =
                  id="{Dom.paneSheetId}" data-pane-panel="{allKey}">
               <div class="{Style.allPage}" data-content-list aria-label="{Dom.Text.terminalsAndFiles}"
                    @paste={Ev(pasted)} @dragover={Ev(dragged)} @dragleave={Ev(left)} @drop={Ev(dropped)}>
-                {opened}
-                {closed}
-                {empty}
-                {files}
+                {if model.ChoosingStartIn && List.length places > 1 then choosingPlace () else listed}
               </div>
             </div>"""
 
@@ -5043,26 +5122,6 @@ module View =
         // A command's or a stretch's preview is not an item of the pivot (F3): it is laid over
         // its terminal, whose tab stays selected.
         let onTerminal (terminal: TerminalId) = selected = Some terminal && Option.isNone shownFile
-        // The empty pane — nothing open, nothing previewed, `all` not up — is where a session
-        // with nothing is sent, and it carries its own press to make something. So it is the
-        // one state the pivot's `+` stays away from: one door per state.
-        let empty = not onAll && Option.isNone previewing && Option.isNone selected
-        // What pressing `+` does. One place to put a terminal and no other kind of new thing
-        // yet, so it MAKES one — a menu whose only entry is the thing you asked for is a tap
-        // for nothing, and that is the shape of every session with no repo. A choice, and it
-        // asks.
-        //
-        // The rule is "something new, and if there is more than one kind, which one", which is
-        // what a `+` means everywhere; the control says which it will do through
-        // `aria-haspopup` rather than leaving a reader to find out by pressing. When uploading
-        // an artifact joins the menu there is always a choice, and this collapses to always
-        // asking without the rule changing.
-        let places = ClientModel.sandboxRows model
-        let pressingNew () =
-            match places with
-            | [ only ] -> dispatch (OpenTerminalMsg ("", only))
-            | _ -> dispatch TogglePaneMenuMsg
-        let newAsks = List.length places > 1
         // Who else has this terminal open, on its item — the answer to "am I the only one
         // looking at this", which a reader has no other way to learn. Keyed by `ViewRef`, so a
         // terminal, a preview of one of its blocks and an artifact all ask one question of one
@@ -5252,7 +5311,7 @@ module View =
                      aria-selected="{if on then "true" else "false"}" tabindex="{stopAt key on}" title="{name}"
                      @keydown={Ev(Events.key activateKey)}
                      @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}">{name}</span>{dismiss}</div>"""
-        // The door to every terminal and file: a button at the strip's end, beside `+`, that
+        // The door to every terminal and file: a button at the strip's end that
         // drops the list down as a sheet over whatever the pane is showing. Not a tab: the
         // list is not a place the pane goes to, and the tab under it stays selected. Pressed
         // again, or Escape, puts it away.
@@ -5391,59 +5450,6 @@ module View =
                  // still stand, but this reader is watching a recording: the composer says so
                  // where the command line would be (`terminalComposer`).
                  else terminalComposer actions dispatch model view.TerminalId}"""
-        // Somewhere new to put something — the menu the pivot's `+` hangs. A MENU and not a
-        // section of a list, which is what this was and what made it unreadable: a row that
-        // MAKES a thing was drawn in the list's own row, same grid, same type, same divider,
-        // so it was pixel-identical to a row that SELECTS one and a heading word was carrying
-        // the whole difference.
-        //
-        // Two doors, because the intent is settled before the gesture. Somebody who wants a
-        // shell in `dev` has no use for a list of what is running, and somebody after an
-        // hour-old build has no use for a list of sandboxes. One surface answering both made
-        // each of them read the other's rows.
-        let newMenu (placed: string) =
-            let entry (sandbox: SandboxRef) =
-                let own = sandbox = SandboxRef.defaultRef
-                let label = if own then Dom.Text.aTerminal else SandboxName.value (SandboxRef.name sandbox)
-                // What tells two repos' `dev` apart, and what the file said either is for.
-                // Under the name, because a menu is read down its left edge.
-                let beneath =
-                    let said =
-                        [ (match SandboxRef.scope sandbox with
-                           | SessionOwned -> None
-                           | RepoOwned repo -> Some (RepoRef.value repo))
-                          ClientModel.sandboxPurpose sandbox model ]
-                        |> List.choose id
-                    if List.isEmpty said then Lit.nothing
-                    else html $"""<span class="{Style.menuEntryNote}">{String.concat " · " said}</span>"""
-                html $"""
-                    <button type="button" role="menuitem" class="{Style.menuEntryStacked}"
-                            data-sandbox-new="{SandboxRef.render sandbox}"
-                            aria-label="{Dom.Text.newTerminalIn (SandboxRef.render sandbox)}"
-                            @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("", sandbox)))}>
-                      <span class="{Style.menuEntryName}">{label}</span>
-                      {beneath}
-                    </button>"""
-            html $"""
-                <button type="button" class="{Style.itemMenuBackdrop}" tabindex="-1"
-                        aria-label="{Dom.Text.dismissMenu}"
-                        @click={Ev(fun _ -> dispatch ClosePaneMenuMsg)}></button>
-                <div class="{placed}" role="menu" data-pane-new-menu
-                     aria-label="{Dom.Text.openSomethingNew}">
-                  {places |> List.map entry}
-                </div>"""
-        // Escape shuts the menu wherever focus is inside it, and hands focus back to the door
-        // it hangs from — on the wrapper, so it fires from an entry, and on the door itself.
-        //
-        // And it is SPENT here. The pane's own Escape (below) steps back off `all`, and it
-        // asks whether the menu is open — but the close above re-renders before the key
-        // reaches it, so it asked the new model, found no menu, and took the `all` page away
-        // from under the door focus was being handed back to.
-        let shutsOnEscape (e: Browser.Types.KeyboardEvent) =
-            if e.key = "Escape" && model.PaneMenu then
-                e.stopPropagation ()
-                dispatch ClosePaneMenuMsg
-                dispatch (MoveMsg DomMove.FocusPaneNew)
         let body () =
             match previewing, selected with
             // A preview, laid over the selected terminal: the thing itself. Not the terminal's
@@ -5469,18 +5475,9 @@ module View =
                       {previewBody preview}
                     </div>"""
             // The empty pane wears the terminal's own symbol — an idle prompt, display-sized —
-            // and the one press that fills it. It briefly WAS the list, on the reading that a
-            // session with nothing open is one list with its sections empty; but the list
-            // answers what EXISTS, and "nothing, and here is a button" is not an answer to
-            // that question. This is where a session with nothing is sent, so this is what
-            // carries the way to make something.
-            //
-            // The same press as the pivot's `+`, and the ONLY one while this shows (P1-4): the
-            // pivot offers its `+` in every state but this one (`empty`), so an empty pane is
-            // one call to action rather than a button and a glyph that did the same thing.
-            // Which is why the menu hangs from HERE when the press asks, with the promise said
-            // through `aria-haspopup` like the `+` says it — the cursor stays on the control
-            // that was pressed, and the menu opens under it.
+            // and says where a terminal is started from. It held a press of its own, and the
+            // strip a `+` with a menu; with the sheet's New terminal those were one act in
+            // three places, so the sheet's is the one and this points at it.
             //
             // The prompt is `text-heading`, not the `text-[28px] leading-8` it was: the same
             // 28/32 the step already holds, written as two numbers off the ramp
@@ -5490,13 +5487,7 @@ module View =
                 html $"""
                     <div class="{Style.terminalEmpty}">
                       <span class="font-terminal text-heading text-ink-faint select-none" aria-hidden="true">$</span>
-                      <div class="{Style.terminalEmptyNewCell}" @keydown={Ev(Events.key shutsOnEscape)}>
-                        <button type="button" class="{Style.paneActPrimary}" data-terminal-new
-                                aria-haspopup="{if newAsks then "menu" else "false"}"
-                                aria-expanded="{if model.PaneMenu then "true" else "false"}"
-                                @click={Ev(fun _ -> pressingNew ())}>{Dom.Text.aNewTerminal}</button>
-                        {if model.PaneMenu then newMenu Style.paneNewMenuUnder else Lit.nothing}
-                      </div>
+                      <p class="{Style.terminalEmptyHint}" data-pane-empty-hint>{Dom.Text.emptyPaneHint}</p>
                     </div>"""
             | None, Some terminal ->
                 let inner =
@@ -5585,26 +5576,6 @@ module View =
                       {paneActionsView (ClientModel.tabKey terminal) (terminalVerbs dispatch model terminal)}
                     </div>"""
             | None, None -> Lit.nothing
-        // The pivot's one `+`, outside the scroller, so it is where it was last time whatever
-        // the pivot holds, and inside a positioned cell of its own, because a menu hung inside
-        // an `overflow-x-auto` box is a menu clipped to that box.
-        //
-        // In every state but the empty pane (P1-4), whose own button is this same press;
-        // offering both put two New terminal controls on one screen, and a reader has to work
-        // out that they are one act.
-        let newCell =
-            if empty then Lit.nothing
-            else
-                let named = if newAsks then Dom.Text.openSomethingNew else Dom.Text.aNewTerminal
-                html $"""
-                    <div class="{Style.terminalTabNewCell}" @keydown={Ev(Events.key shutsOnEscape)}>
-                      <button type="button" class="{Style.terminalTabNew}" data-pane-new
-                              aria-haspopup="{if newAsks then "menu" else "false"}"
-                              aria-expanded="{if model.PaneMenu then "true" else "false"}"
-                              aria-label="{named}" title="{named}"
-                              @click={Ev(fun _ -> pressingNew ())}>+</button>
-                      {if model.PaneMenu then newMenu Style.paneNewMenu else Lit.nothing}
-                    </div>"""
         // The tabs, each in its own place (F2): terminals, then files. A command's preview is
         // named under the pivot, not in it (F3). In the order `ClientModel.stripTabs` gives,
         // which is the order the arrow walk moves along (`ClientModel.tabWalk`).
@@ -5622,7 +5593,6 @@ module View =
                     </div>
                   </div>
                   {listButton}
-                  {newCell}
                   <button type="button" class="{Style.paneStripAct}" aria-label="{Dom.Text.backToChat}"
                           title="{Dom.Text.backToChat}" data-content-toggle="hide"
                           @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.right}</button>
@@ -5647,14 +5617,14 @@ module View =
               <div class="{Style.terminalResize}" data-term-resize role="separator" tabindex="0"
                    aria-orientation="vertical" aria-label="Resize the content column"
                    aria-valuemin="{PaneSplit.narrowest}" aria-valuenow="{split.Width}" aria-valuemax="{split.Widest}"></div>
-              <!-- Escape anywhere in the pane steps back one item: off `all` to what it was
-                   laid over, or a preview down, as its close does — but not while the menu is
-                   open over it, whose own Escape is about the menu and runs first, on the
-                   element it hangs from. -->
+              <!-- Escape anywhere in the pane steps back one item: off the sheet's list of
+                   places to its list, off `all` to what it was laid over, or a preview down,
+                   as its close does. -->
               <div class="{Style.terminalPane}"
                    @keydown={Ev(Events.key (fun e ->
-                                    if e.key = "Escape" && not model.PaneMenu then
-                                        if onAll then dispatch CloseSwitcherMsg
+                                    if e.key = "Escape" then
+                                        if onAll && model.ChoosingStartIn then dispatch (ChoosingStartInMsg false)
+                                        elif onAll then dispatch CloseSwitcherMsg
                                         else previewing |> Option.iter closePreview))}>
                 {pivot}
                 <div class="{Style.paneUnderStrip}">

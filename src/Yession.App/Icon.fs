@@ -82,6 +82,8 @@ module Icon =
     let private closePath = "M4 4 L12 12 M12 4 L4 12"
     let private upPath = "M8 12.5 L8 4 M4.25 7.75 L8 4 L11.75 7.75"
     let private downPath = "M8 3.5 L8 12 M4.25 8.25 L8 12 L11.75 8.25"
+    /// Make one more: the sheet's New terminal.
+    let private plusPath = "M8 3.5 L8 12.5 M3.5 8 L12.5 8"
     /// The head of a cause's mark alone, tip at the foot of the box. The corner that opens a
     /// chain and the links that continue it both draw their line as one-pixel boxes on the
     /// gutter's centre, so no stem here can sit a sub-pixel off it.
@@ -196,6 +198,7 @@ module Icon =
     /// "this opens".
     let up = stroked upPath
     let down = stroked downPath
+    let plus = stroked plusPath
     /// A lighter stroke than the chevrons': a cause's marks say how acts are linked, and
     /// recede behind the controls beside them — `Weight.display`, because the word they
     /// travel with is set extralight.
