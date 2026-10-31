@@ -216,12 +216,12 @@ One vocabulary. Things arrive by sliding a little and fading in, at `pace`, ease
 is a tilt: in fast, back with a hair of overshoot. A pressed control is *held* (see State).
 
 A wait is a beat (`animate-beat`), not a spinner. A beating dot animates its colour between a
-role and its dim, never its opacity. The one thing that goes round is the attention mark's
-arc, Pending's (see Attention): it is not a wait on the reader but work under way, and its arc
-is always at its ink. Working beats too, on the same clock, but it is the agent's own diamond
-and it is the SIZE that beats, never the colour: the mark's ink still owes the surface 3:1 at
-every frame, same as the arc does by only turning. `motion-reduce` rides every one: it keeps
-the fill and drops the geometry.
+role and its dim, never its opacity. Two things go round rather than beat, because they are
+work under way and not a wait on the reader: the attention mark's arc, Pending's (see
+Attention), always at its own ink; and a line round Working's own diamond, same ink as the
+fill it rides (never a second colour arriving), tracing the edge it belongs to rather than
+turning a ring. Both owe the surface 3:1 at every frame of their travel, the same floor a
+beat keeps. `motion-reduce` rides every one: it keeps the fill and drops the geometry.
 
 ### State
 
@@ -247,7 +247,7 @@ carry a rank (WCAG 1.4.1).
 |---|---|---|---|---|
 | Wrong | disc in a ring, the whole box | `err` | the ring draws round and the core springs in, once | nothing moves until a person fixes it: sign in again, a PR conflicted or failed |
 | Wanted | disc | `green` | the arc closes and fills, then a halo breathes out three times | a person's turn: the agent is waiting |
-| Working | solid diamond | `agent` | beats in place, 1.4s, for as long as the turn does | the agent at work: a turn is running |
+| Working | solid diamond, a little larger than the other marks' radius | `agent` | a line runs once round its edge, 1.6s, for as long as the turn does | the agent at work: a turn is running |
 | Pending | quarter arc on a faint track | `ink-dim` | goes round, 1.6s, for as long as the work does | a machine's work, needs nobody: a command the agent left running, checks, the queue, a launch |
 | Absent | empty ring | `ink-dim` | none | no agent, chosen knowingly |
 | Rest | point | `ink-faint` | none | nothing to say: stopped, or everything watched is fine |
@@ -269,7 +269,7 @@ greyscale and a blur. They share one 12px box, centre and the chrome's 1.5px str
 mark is larger than a status's 6px dot because its shape carries the rank.
 
 Motion goes only where a state is live or asks. Working and Pending keep going because the work does,
-one beating and one going round. Wanted asks a few times and then sits still, so a session left
+one tracing its edge and one going round. Wanted asks a few times and then sits still, so a session left
 waiting does not nag. Wrong never fidgets: a mark that kept moving would read as a spinner, not
 a fault. What moves is geometry, never the ink the meaning rests on. `motion-reduce` keeps every
 still face.
