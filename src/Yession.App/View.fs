@@ -5326,25 +5326,21 @@ module View =
                      aria-selected="{if on then "true" else "false"}" tabindex="{stopAt key on}" title="{name}"
                      @keydown={Ev(Events.key activateKey)}
                      @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}">{name}</span>{dismiss}</div>"""
-        // The door to every terminal and file: a button at the strip's end that
+        // The door to every terminal and file: a button at the strip's head that
         // drops the list down as a sheet over whatever the pane is showing. Not a tab: the
         // list is not a place the pane goes to, and the tab under it stays selected. Pressed
         // again, or Escape, puts it away.
         //
-        // It carries how many terminals the list holds. Down, it wears the sheet's ground,
-        // flush with it — the sheet's tab — and the selected tab goes quiet under it, so the
-        // strip has one lit thing and it is the thing in front.
+        // Down, it wears the sheet's ground and runs through the strip's rule into it — the
+        // sheet's tab — and the selected tab goes quiet under it, so the strip has one lit
+        // thing and it is the thing in front.
         let listButton =
-            let count = List.length model.Terminals.Terminals
-            let figure =
-                if count = 0 then Lit.nothing
-                else html $"""<span aria-hidden="true">{string count}</span>"""
             html $"""
                 <button type="button" class="{if onAll then Style.paneListButtonOn else Style.paneListButton}"
                         data-pane-switcher aria-controls="{Dom.paneSheetId}"
                         aria-expanded="{if onAll then "true" else "false"}"
-                        aria-label="{Dom.Text.switchTerminalCount count}" title="{Dom.Text.switchTerminal}"
-                        @click={Ev(fun _ -> dispatch ToggleSwitcherMsg)}>{Icon.list}{figure}</button>"""
+                        aria-label="{Dom.Text.switchTerminal}" title="{Dom.Text.switchTerminal}"
+                        @click={Ev(fun _ -> dispatch ToggleSwitcherMsg)}>{Icon.list}</button>"""
         let previewBody (preview: Preview) =
             match preview.Subject with
             | PreviewSubject.Block (terminalId, blockId) -> paneBlockView model preview terminalId blockId
@@ -5591,12 +5587,12 @@ module View =
         let pivot =
             html $"""
                 <div class="{Style.panePivotRow}">
+                  {listButton}
                   <div class="{Style.panePivotList}" role="tablist" aria-label="{Dom.Text.paneItems}" data-pane-pivot>
                     <div class="{Style.panePivotScroller}" data-pane-strip>
                       {strip}
                     </div>
                   </div>
-                  {listButton}
                   <button type="button" class="{Style.paneStripAct}" aria-label="{Dom.Text.backToChat}"
                           title="{Dom.Text.backToChat}" data-content-toggle="hide"
                           @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.right}</button>

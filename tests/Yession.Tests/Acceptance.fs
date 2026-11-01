@@ -2728,18 +2728,6 @@ let private terminalListTests =
             let fold = System.Text.RegularExpressions.Regex.Match(html, "<button[^>]*data-list-closed-fold[^>]*>").Value
             Expect.stringContains fold "aria-expanded=\"false\"" "a fold, shut, over the closed terminal"
 
-        // On a phone one tab fits the strip, so the list button's figure is the only thing on
-        // screen saying there are others — and a screen reader hears the same number in its
-        // name, closed terminals counted, as the list under it lists them.
-        testCase "the list button's name says how many terminals the list holds" <| fun () ->
-            let html = Support.render closedTerminalModel
-            let button = System.Text.RegularExpressions.Regex.Match(html, "<button[^>]*data-pane-switcher[^>]*>").Value
-            let label = System.Text.RegularExpressions.Regex.Match(button, "aria-label=\"([^\"]*)\"").Groups.[1].Value
-            Expect.equal
-                label
-                (Dom.Text.switchTerminalCount (List.length closedTerminalModel.Terminals.Terminals))
-                "the name counts every terminal, open or not"
-
         // A kill is two presses (`KillArmed`). What the second press confirms has to be said by
         // the control the keyboard is on, so its accessible name names the act and the
         // terminal — a screen reader hears what a sighted reader sees on the row.

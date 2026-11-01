@@ -4370,9 +4370,8 @@ module Style =
     /// header's rule stopped dead at the pane's divider instead of running on into it.
     let panePivotRow =
         cls [ "shrink-0 h-band flex items-stretch bg-bg phone:h-band-phone"; Stroke.dividerBottom ]
-    /// The tablist: `all`, then the scroller of tabs. `all` stays put at the row's head however
-    /// many tabs follow it. `min-w-0` so the scroller is what gives way when the names outgrow
-    /// the row.
+    /// The tablist: the scroller of tabs, after the list button at the row's head. `min-w-0`
+    /// so the scroller is what gives way when the names outgrow the row.
     let panePivotList = "flex-1 min-w-0 flex items-stretch"
     /// The tabs' own scroll box, and nothing else that moves.
     ///
@@ -4444,16 +4443,20 @@ module Style =
     let paneStripAct =
         cls [ "shrink-0 self-center w-touch h-touch grid place-items-center bg-transparent border-0 cursor-pointer p-0"
               "text-ink-dim hover:text-ink hover:bg-surface transition-colors motion-reduce:transition-none"; focusRingInset ]
-    /// The list button: the list's glyph and how many terminals it holds — on a phone only
-    /// one tab fits, and the count is the one clue that there are others. As tall as the
-    /// strip, at least as wide, its figures in the tabs' type so they read as one line.
+    /// The list button: the list's glyph, at the strip's head. At least a touch square. Its
+    /// right edge is a hairline only while the sheet is down, so it is always 1px there and
+    /// the tabs beside it do not move when it opens.
     let private paneListButtonBase =
-        cls [ "shrink-0 self-center h-touch min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5 border-0 cursor-pointer"
-              "font-ui font-normal text-small tabular-nums transition-colors motion-reduce:transition-none"; focusRingInset ]
-    let paneListButton = cls [ paneListButtonBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
-    /// The same with its sheet down: the sheet's own ground (`allSheet`), flush with it, so
-    /// the button reads as the sheet's tab and is the one lit thing in the strip.
-    let paneListButtonOn = cls [ paneListButtonBase; "bg-surface text-ink" ]
+        cls [ "shrink-0 min-w-touch px-3 phone:px-2 inline-flex items-center justify-center border-0 border-r cursor-pointer"
+              "transition-colors motion-reduce:transition-none"; focusRingInset ]
+    let paneListButton =
+        cls [ paneListButtonBase; "self-center h-touch border-transparent bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
+    /// The same with its sheet down: a tab. It fills the strip's height and one pixel more
+    /// (`-mb-px`), so its ground covers the strip's rule (`panePivotRow`) and runs straight
+    /// into the sheet's (`allSheet`, `surface`) — the open tab and the page under it read as
+    /// one surface. A hairline on its right closes the tab's side against the strip.
+    let paneListButtonOn =
+        cls [ paneListButtonBase; "self-stretch -mb-px border-hair bg-surface text-ink" ]
 
     /// Everything under the strip — the toolbar, the body, and the list's sheet when it is down,
     /// which is laid over the first two from the strip's edge.
