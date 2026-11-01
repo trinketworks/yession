@@ -2977,6 +2977,9 @@ module Style =
               "inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer"; focusRing ]
 
     let askRows = "flex flex-col divide-y divide-hair"
+    /// Rows under a note rather than under the field: the note's line stands apart from them
+    /// by the field's own step (`askField`), so the ramp down the card is the launch's.
+    let askRowsAfterNote = "mt-6 phone:mt-4"
     let askRow = cls [ "flex flex-col transition-colors"; rowLift ]
     let askRowHeld = "flex flex-col transition-colors bg-surface-2"
     /// The button is the whole row, so the whole row is the hit target; the LINE inside it is
@@ -3001,6 +3004,10 @@ module Style =
     /// says where it is. Drawn on every row and filled only on the held one — a cell that
     /// appeared with the tick would move every name out from under the pointer that chose it.
     let askRowMark = "-ml-rail w-5 shrink-0 self-center text-blue"
+    /// A row whose name is WORDS rather than an identifier — a route on the trust card, "push
+    /// and fetch". `askRowName`'s step and ink without its terminal face, which is for the
+    /// repository and branch names that are ids.
+    let askRowWords = "text-body text-ink truncate min-w-0"
     /// What the provider said about the repository, when there is room for it. There is not, on
     /// a phone: held to 45% of a 326px column it took 147px off a name that is the only thing
     /// on the row anybody is choosing between, so the name was cut while its description kept

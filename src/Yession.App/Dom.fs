@@ -927,6 +927,18 @@ module Dom =
         let repoPickerUnlisted = "could not list your repositories here. Search github, or paste a link."
         let repoPickerConnect = "Connect GitHub"
         let repoPickerCloning = "cloning…"
+        // The trust card: the launch card's anatomy, asking the repo's next question.
+        let trustTitle = "Do you trust this repo?"
+        /// Under the question, before the rows: what saying yes means.
+        let trustWhy = "Its code, on any branch or pull request, runs in its sandboxes with your GitHub."
+        let trustRouteGit = "push and fetch"
+        let trustRouteGitDetail = "git, with your token"
+        let trustRouteApi = "GitHub API"
+        let trustRouteApiDetail = "gh, pull requests, Actions"
+        let trustAnswer = "Trust"
+        /// The way out's accessible name and tooltip. Says what the press does: nothing is
+        /// decided, and only this reader stops being asked until the repo asks for more.
+        let trustLater = "not now: ask me again when it asks for more"
         /// What stands where history this device does not hold would be (Plan 20). Said only
         /// while nothing is coming to fill it — see `View.chat` — so it is a fact about this
         /// client's own store rather than a complaint about the network.

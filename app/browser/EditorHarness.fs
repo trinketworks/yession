@@ -28,6 +28,7 @@ open Yession.App.Collab
 open Yession.Domain.Chat
 open Yession.Domain.Content
 open Yession.Domain.Sandboxes
+open Yession.Domain.Repos
 open Yession.Domain.Tools
 open Yession.Domain.Access
 open Fable.BrowserExtras
@@ -1588,6 +1589,18 @@ let private launchCloningModel : ClientModel =
                 Selected = Some launchRepo
                 Stage = Cloning { LaunchTarget.Repo = launchRepo; LaunchTarget.Branch = None } } }
 
+/// The launch's next question: the repo just chosen, still cloning, asks to be trusted with the
+/// reader's GitHub — so the trust card stands where the launch card stood (`View.askSlot`).
+let private launchTrustModel : ClientModel =
+    let asked =
+        SessionEvent.RepoTrustAsked
+            { RepoTrustAsked.MessageId = MessageId.create "msg-trust-asked" |> expect
+              RepoTrustAsked.Repo = launchRepo
+              RepoTrustAsked.Routes = [ ConnectionRoute.Git; ConnectionRoute.Api ]
+              RepoTrustAsked.Actor = ActorRef.Configured launchRepo
+              RepoTrustAsked.CausedBy = None }
+    { launchCloningModel with TrustWaits = RepoTrustWaits.apply RepoTrustWaits.empty [ asked ] }
+
 /// Connected, the log read through, nothing said — and the opening question already answered
 /// "none", so no card stands over the empty conversation.
 let private emptyModel : ClientModel =
@@ -2119,6 +2132,7 @@ do
           "launch-branch", (fun () -> show launchBranchModel)
           "launch-unavailable", (fun () -> show launchUnavailableModel)
           "launch-cloning", (fun () -> show launchCloningModel)
+          "launch-trust", (fun () -> show launchTrustModel)
           "terminal-closed",
           (fun () ->
               let doneId = TerminalId.create "term-done" |> expect
