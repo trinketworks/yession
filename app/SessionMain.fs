@@ -715,6 +715,7 @@ let private repoTrustsOver (githubApi: string) : RepoTrusts =
                                     (GitHubRepos.LookupFailure.describe failure)
                             )
                 })
+            (fun owner -> GitHubConnection.ownsConnection connectionStatus owner)
 
 /// A repo network verb failed while spending a connected credential.
 ///

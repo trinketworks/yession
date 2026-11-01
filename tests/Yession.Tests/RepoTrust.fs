@@ -39,7 +39,7 @@ let private records () =
                 (key id)
                 { StoredRecord.Value = value
                   StoredRecord.Revision = revision
-                  StoredRecord.UpdatedAt = System.DateTimeOffset.UnixEpoch }
+                  StoredRecord.UpdatedAt = System.DateTimeOffset (1970, 1, 1, 0, 0, 0, System.TimeSpan.Zero) }
                 kept
     let read (id: RecordId) = async { return Ok (Map.tryFind (key id) kept) }
     let write (id: RecordId) (expected: int option) (value: string) =
@@ -57,7 +57,7 @@ let private identified (id: int64) = fun (_: CredentialOwner) (_: RepoRef) -> as
 
 let private trustsOver () =
     let read, write, put, interfere = records ()
-    RepoTrusts.over read write (identified 42L), put, interfere
+    RepoTrusts.over read write (identified 42L) (fun _ -> true), put, interfere
 
 let tests =
     testList "Repo trust" [
@@ -137,10 +137,18 @@ let tests =
                 Expect.equal (GrantedRoutes.routes granted) Set.empty "nothing lent"
             }
 
+        testCaseAsync "a person with no GitHub of their own cannot trust a repo" <|
+            async {
+                let read, write, _, _ = records ()
+                let trusts = RepoTrusts.over read write (identified 42L) (fun _ -> false)
+                let! answered = trusts.Answer alice repo both both
+                Expect.isError answered "nothing to trust it with"
+            }
+
         testCaseAsync "a repository GitHub cannot identify lends nothing" <|
             async {
                 let read, write, _, _ = records ()
-                let trusts = RepoTrusts.over read write (fun _ _ -> async { return Error "not found" })
+                let trusts = RepoTrusts.over read write (fun _ _ -> async { return Error "not found" }) (fun _ -> true)
                 let! granted = trusts.Granted alice repo [ ConnectionRoute.Git ]
                 Expect.equal (GrantedRoutes.routes granted) Set.empty "nothing lent"
             }

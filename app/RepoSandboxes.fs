@@ -212,7 +212,7 @@ let capabilitiesOn
                 |> Set.toList
                 |> List.choose (fun leaf ->
                     match leaf with
-                    | Connection (name, route) when name = ConnectionName.value github -> Some route
+                    | ResourceLeaf.Connection (name, route) when name = ConnectionName.value github -> Some route
                     | _ -> None)
                 |> List.distinct
                 |> List.sort })

@@ -157,6 +157,10 @@ let tokenOver
         | _ -> return ambient ()
     }
 
+/// Whether this owner has a GitHub of their own connected, as far as the session has heard.
+let ownsConnection (heard: Map<ConnectionId, ConnectionStatus>) (owner: CredentialOwner) : bool =
+    Map.containsKey { ConnectionId.Scope = CredentialOwner.scope owner; ConnectionId.Name = secretName } heard
+
 /// The token a repo's sandbox may be lent of one owner's GitHub: their OWN connected credential
 /// and nothing else. Not the session's, not the deployment's on their behalf, and not the
 /// ambient `GITHUB_TOKEN`: a repo runs with the GitHub of somebody who trusts it, their trust

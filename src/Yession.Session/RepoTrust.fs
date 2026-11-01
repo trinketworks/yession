@@ -170,6 +170,10 @@ module RepoTrusts =
         (read: RecordId -> Async<Result<StoredRecord option, string>>)
         (write: RecordId -> int option -> string -> Async<Result<RecordWrite, string>>)
         (identify: CredentialOwner -> RepoRef -> Async<Result<int64, string>>)
+        // Whether this owner has a GitHub of their own connected here. Trusting a repo means it
+        // runs with yours, so a person with none has nothing to trust it with, and an answer
+        // from them would make a repo that runs with nobody's.
+        (connected: CredentialOwner -> bool)
         : RepoTrusts =
         // A repository's id is asked once per session. It is the same answer every time, and a
         // loan asks at every command.
@@ -205,29 +209,32 @@ module RepoTrusts =
             (ticked: Set<ConnectionRoute>)
             : Async<Result<RepoTrust, string>> =
             async {
-                match! idOf owner repo with
-                | Error reason -> return Error reason
-                | Ok id ->
-                    let target = RepoTrust.recordOf owner id
-                    let rec attempt (left: int) =
-                        async {
-                            match! read target with
-                            | Error reason -> return Error reason
-                            | Ok stored ->
-                                let next = RepoTrust.answer repo shown ticked (decoded stored)
-                                match! write target (stored |> Option.map (fun s -> s.Revision)) (RepoTrust.toText next) with
+                if not (connected owner) then
+                    return Error "Connect a GitHub of your own first. A repo you trust runs with it."
+                else
+                    match! idOf owner repo with
+                    | Error reason -> return Error reason
+                    | Ok id ->
+                        let target = RepoTrust.recordOf owner id
+                        let rec attempt (left: int) =
+                            async {
+                                match! read target with
                                 | Error reason -> return Error reason
-                                | Ok (RecordWrite.Written _) -> return Ok next
-                                | Ok (RecordWrite.Stale _) when left > 1 -> return! attempt (left - 1)
-                                | Ok (RecordWrite.Stale _) ->
-                                    return
-                                        Error (
-                                            sprintf
-                                                "your trust in %s kept changing in another session while this one wrote it. Answer again."
-                                                (RepoRef.value repo)
-                                        )
-                        }
-                    return! attempt attempts
+                                | Ok stored ->
+                                    let next = RepoTrust.answer repo shown ticked (decoded stored)
+                                    match! write target (stored |> Option.map (fun s -> s.Revision)) (RepoTrust.toText next) with
+                                    | Error reason -> return Error reason
+                                    | Ok (RecordWrite.Written _) -> return Ok next
+                                    | Ok (RecordWrite.Stale _) when left > 1 -> return! attempt (left - 1)
+                                    | Ok (RecordWrite.Stale _) ->
+                                        return
+                                            Error (
+                                                sprintf
+                                                    "your trust in %s kept changing in another session while this one wrote it. Answer again."
+                                                    (RepoRef.value repo)
+                                            )
+                            }
+                        return! attempt attempts
             }
         { RepoTrusts.Read = readTrust
           RepoTrusts.Answer = answer
