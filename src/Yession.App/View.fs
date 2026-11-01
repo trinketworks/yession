@@ -4664,53 +4664,20 @@ module View =
         | PreviewSubject.Stretch _ -> []
         | PreviewSubject.Content ref -> [ contentDownloadLink ref ]
 
-    /// A terminal's kill (P0-5; P2-2): two presses in one place (`KillArmed`) — the first arms,
-    /// the second kills, by `ClientModel.killPress`. ONE button whichever face it wears, so the
-    /// element a keyboard pressed is the element it confirms on and focus never moves between
-    /// the two. Armed, it says what it will end and what is running there. Escape, the wait
-    /// (`ClientModel.armedMs`), or focus leaving it takes it back.
-    ///
-    /// On the list's row only: a tab's × closes the tab and ends nothing. It wears the stop
-    /// mark and the word `stop`, the interrupt's face, because it is the same act on a whole
-    /// terminal. Absent, not disabled, where the terminal cannot be stopped.
-    let private killControl
-        (dispatch: ClientMsg -> unit)
-        (model: ClientModel)
-        (face: string)
-        (armedFace: string)
-        (glyph: TemplateResult)
-        (view: TerminalView)
-        : TemplateResult =
+    /// A terminal's stop (P0-5; P2-2): one press ends it (`ClientModel.killPress`). It wears
+    /// the stop mark and the word `stop`, the interrupt's face, because it is the same act on
+    /// a whole terminal. Absent, not disabled, where the terminal cannot be stopped.
+    let private killControl (dispatch: ClientMsg -> unit) (model: ClientModel) (view: TerminalView) : TemplateResult =
         if not (ClientModel.affordances view model).CanKill then Lit.nothing
         else
-            let id = TerminalId.value view.TerminalId
             let name = TerminalName.display model.Terminals view
-            let armed = model.KillArmed = Some view.TerminalId
-            let running = Projection.runningBlock view |> Option.map BlockLabel.ofBlock
-            // Nothing running is a fact worth saying, not an absence: it is what makes a kill
-            // cheap.
-            let says = running |> Option.defaultValue Dom.Text.killIdle
-            let klass, label, content =
-                if armed then
-                    armedFace,
-                    Dom.Text.confirmKill name running,
-                    html $"""{Dom.Text.killConfirm}<span class="{Style.killArmedRunning}">{says}</span>"""
-                else face, Dom.Text.killTerminal name, glyph
             html $"""
-                <button type="button" class="{klass}" data-terminal-close="{id}"
-                        data-terminal-close-armed="{if armed then "true" else "false"}"
-                        aria-label="{label}" title="{Dom.Text.killTerminal name}"
+                <button type="button" class="{Style.terminalListKill}" data-terminal-close="{TerminalId.value view.TerminalId}"
+                        aria-label="{Dom.Text.killTerminal name}" title="{Dom.Text.killTerminal name}"
                         @click={Ev(fun (e: Browser.Types.Event) ->
-                                      // Not the tab's press too: a × is not a way to select.
+                                      // Not the row's press too: a stop is not a way to select.
                                       e.stopPropagation ()
-                                      dispatch (KillPressedMsg view.TerminalId))}
-                        @keydown={Ev(Events.key (fun e ->
-                                      if armed && e.key = "Escape" then
-                                          // Escape here is about the arming, and only that: the
-                                          // switcher or the preview around it stays.
-                                          e.stopPropagation ()
-                                          dispatch (ArmKillMsg None)))}
-                        @focusout={Ev(fun _ -> if armed then dispatch (ArmKillMsg None))}>{content}</button>"""
+                                      dispatch (KillPressedMsg view.TerminalId))}>{Icon.stop}{Dom.Text.kill}</button>"""
 
     /// The `all` item's key: its pivot item's id and its panel's, as a terminal's tab key is
     /// theirs.
@@ -4776,7 +4743,7 @@ module View =
             if TabStrip.claimsRow pressed.key then
                 pressed.preventDefault ()
                 dispatch (WalkListMsg (pressed.key, from))
-        let row (view: TerminalView) =
+        let row (aboveFold: bool) (view: TerminalView) =
             let id = TerminalId.value view.TerminalId
             let name = TerminalName.display model.Terminals view
             let affords = ClientModel.affordances view model
@@ -4822,8 +4789,13 @@ module View =
                         <button type="button" class="{Style.terminalListAct}" data-terminal-list-dismiss="{id}"
                                 aria-label="{Dom.Text.dismissTab name}" title="{Dom.Text.dismissTab name}"
                                 @click={Ev(fun _ -> dispatch (DismissTabMsg view.TerminalId))}>{Dom.Text.putAway}</button>"""
+            // A terminal that ended while the list holds it above the fold says so where its
+            // stop was, so a stop's press is answered on the row it was made on. A device
+            // stream's `attach` says enough already. Under the fold, the heading says it.
+            let stopped =
+                if not aboveFold || view.IsOpen || affords.CanReattach then Lit.nothing
+                else html $"""<span class="{Style.terminalListStopped}" data-terminal-stopped="{id}">{Dom.Text.stopped}</span>"""
             let nameClass = if view.IsOpen then Style.terminalListName else Style.terminalListNameClosed
-            let killWord = html $"""{Icon.stop}{Dom.Text.kill}"""
             // What it is doing or last did, and where, under the name: nine rows of `term N`
             // say which is which, and this says which is the one you want.
             // The row's button holds both lines, so a row is pressed anywhere on them; its
@@ -4854,7 +4826,7 @@ module View =
                     </span>
                     {subtitle}
                   </button>
-                  <span class="{Style.terminalListVerbs}">{reattach}{putAway}{killControl dispatch model Style.terminalListKill Style.btnKillArmed killWord view}</span>
+                  <span class="{Style.terminalListVerbs}">{reattach}{putAway}{stopped}{killControl dispatch model view}</span>
                 </div>"""
         // A file's row, in the same shape as a terminal's. Reachability is the whole point of
         // it: a file is otherwise findable only by its chip in a message, so one shared two
@@ -4964,7 +4936,7 @@ module View =
                 let shown = Option.isSome fold.UnfoldedRows
                 let unfolded =
                     match fold.UnfoldedRows with
-                    | Some rows -> html $"""<div role="list" aria-label="{Dom.Text.closedHeading}">{rows |> List.map row}</div>"""
+                    | Some rows -> html $"""<div role="list" aria-label="{Dom.Text.closedHeading}">{rows |> List.map (row false)}</div>"""
                     | None -> Lit.nothing
                 html $"""
                     <button type="button" class="{Style.listClosedFold}" data-list-closed-fold
@@ -5005,7 +4977,7 @@ module View =
             else Lit.nothing
         let opened =
             if List.isEmpty sections.OpenRows then Lit.nothing
-            else html $"""<div role="list" aria-label="{Dom.Text.terminalsHeading}">{sections.OpenRows |> List.map row}</div>"""
+            else html $"""<div role="list" aria-label="{Dom.Text.terminalsHeading}">{sections.OpenRows |> List.map (row true)}</div>"""
         // Everywhere a terminal can start, and the one New terminal will use. The places are
         // the session's own and each work sandbox started here; with only the first, there is
         // nothing to choose and the link that chooses is not drawn.

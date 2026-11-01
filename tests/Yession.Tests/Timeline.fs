@@ -3169,17 +3169,10 @@ let private listTests =
             let offered model = (Support.render model).Contains (Dom.attr Dom.Hooks.terminalStop "term-a")
             Expect.equal (offered running, offered finished) (true, false) "while make runs, and not after"
 
-        testCase "arming a kill asks nothing of the session" <| fun () ->
-            // The first press is a question to the person, not a request: nothing leaves.
+        testCase "one press on a stop ends the terminal" <| fun () ->
             let _, effects =
-                ClientModel.update (ArmKillMsg (Some terminalA)) (clientOf [ at 1L 0.0 (opened terminalA "build") ])
-            Expect.equal effects [] "no kill sent on the first press"
-
-        testCase "confirming an armed kill ends the terminal" <| fun () ->
-            let armed =
-                clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ArmKillMsg (Some terminalA))
-            let _, effects = ClientModel.update (CloseTerminalMsg terminalA) armed
-            Expect.isTrue (List.contains (ClientEffect.CloseTerminal terminalA) effects) "the second press is the kill"
+                ClientModel.update (KillPressedMsg terminalA) (clientOf [ at 1L 0.0 (opened terminalA "build") ])
+            Expect.isTrue (List.contains (ClientEffect.CloseTerminal terminalA) effects) "the press is the kill"
 
         // Stop and Ctrl-C in an empty command line both send this; the model is where it is
         // decided whether there is anything to stop.
@@ -3209,14 +3202,6 @@ let private listTests =
                       at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 3) ]
             let _, effects = ClientModel.update (InterruptTerminalMsg terminalA) idle
             Expect.equal effects [] "nothing sent"
-
-        testCase "a kill armed over a terminal that closes is taken back" <| fun () ->
-            // Somebody else ended it, or it exited: the armed control has nothing left to end,
-            // and must not stand primed over the recording.
-            let armed =
-                clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ArmKillMsg (Some terminalA))
-            let closed = armed |> thenFolded [ at 2L 1.0 (closedNow terminalA) ]
-            Expect.isNone closed.KillArmed "nothing armed over a closed terminal"
 
         testCase "a terminal is recorded for this reader whichever way its transcript arrived" <| fun () ->
             // A LIVE terminal's length arrives as a catch-up hint before any chunk is
@@ -3334,32 +3319,17 @@ let private listTests =
 
         // --- A terminal's stop, on its row of the list (P2-2) ---------------------------------
 
-        testCase "a stop arms on its first press" <| fun () ->
+        testCase "a stop ends the terminal on its first press" <| fun () ->
             let model = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
-            Expect.equal (ClientModel.killPress terminalA model) (Some (ArmKillMsg (Some terminalA))) "the first press asks"
+            Expect.equal (ClientModel.killPress terminalA model) (Some (CloseTerminalMsg terminalA)) "one press kills"
 
-        testCase "a stop ends the terminal on the press after the arming" <| fun () ->
-            let armed =
-                clientOf [ at 1L 0.0 (opened terminalA "build") ]
-                |> Support.step (ShowInPaneMsg (Reading terminalA))
-                |> Support.step (ArmKillMsg (Some terminalA))
-            Expect.equal (ClientModel.killPress terminalA armed) (Some (CloseTerminalMsg terminalA)) "the second press kills"
-
-        testCase "a press on another terminal's kill arms that one instead" <| fun () ->
-            // One slot: a press elsewhere is a new question, never the confirm of the first.
-            let armed =
-                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
-                |> Support.step (ArmKillMsg (Some terminalA))
-            Expect.equal (ClientModel.killPress terminalB armed) (Some (ArmKillMsg (Some terminalB))) "B asked, A not killed"
-
-        // The page draws at most once a frame, so a control can be pressed twice before it is
-        // drawn again. Each press is judged by the model it lands on, not the one it was drawn
-        // from: two presses in a row end the terminal however the drawing kept up.
-        testCase "two presses on a kill end the terminal, each judged by the model it lands on" <| fun () ->
+        // The page draws at most once a frame, so a stop can be pressed twice before the close
+        // that answers the first arrives. A double-click is one stop, not two kills.
+        testCase "a second press before the close lands sends nothing more" <| fun () ->
             let model = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
             let asked, _ = ClientModel.update (KillPressedMsg terminalA) model
             let _, effects = ClientModel.update (KillPressedMsg terminalA) asked
-            Expect.isTrue (List.contains (ClientEffect.CloseTerminal terminalA) effects) "the second press ended it"
+            Expect.equal effects [] "the first press already asked"
 
         testCase "a closed terminal has no kill to press" <| fun () ->
             let model = clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (closedNow terminalA) ]
@@ -5693,12 +5663,6 @@ let private revealTests =
         testCase "the tab already selected is not revealed again" <| fun () ->
             let model = twoOpen () |> Support.step (ShowInPaneMsg (Reading terminalB))
             Expect.isFalse (reveals (ShowInPaneMsg (Reading terminalB)) model) "the strip stays where the reader has it"
-
-        // Arming the × widens the tab, and a strip that scrolled the grown tab whole into view
-        // slid the armed kill out from under the second press.
-        testCase "a kill armed on the selected tab reveals nothing" <| fun () ->
-            let model = twoOpen () |> Support.step (ShowInPaneMsg (Reading terminalB))
-            Expect.isFalse (reveals (KillPressedMsg terminalB) model) "the confirm stays under the press"
 
         testCase "the column opening reveals the tab selected behind it" <| fun () ->
             let model = twoOpen () |> Support.step (ShowInPaneMsg (Reading terminalB)) |> Support.step ToggleContentMsg

@@ -467,7 +467,7 @@ module Style =
     //     site adopts it by setting `aria-busy` from the model, and `whenReady`/`whenBusy`
     //     swap the word inside it.
     //   * ARMED — a destructive act one press from done. ONE way, whatever weight it arms
-    //     from: the `err` FILL at rest (`btnIconBareDangerArmed`, `btnKillArmed`). A touch
+    //     from: the `err` FILL at rest (`btnIconBareDangerArmed`). A touch
     //     has no hover, so the state a phone must see is worn rather than revealed. The fill
     //     is not the surface's verb, so principle 3 does not count it, and it is a fill and
     //     not a red WORD, so the one-red-word budget is untouched either.
@@ -879,32 +879,6 @@ module Style =
     /// Un-arms itself back to `btnIconBareDanger` on its own (`armedMs`), so a
     /// press nobody confirms cannot leave a row looking primed for ever.
     let btnIconBareDangerArmed = cls [ btnIconBareBase; "cursor-pointer bg-err text-bg" ]
-    /// A terminal's kill, ARMED (`View.killControl`): the same state as the one above, so the
-    /// same way of drawing it — the `err` FILL at rest (docs/visual-design.md, State). A touch
-    /// has no hover to hold the warning up, so what a phone has to see is worn.
-    ///
-    /// It was a red WORD on a transparent box, which made two armed faces for one state: a
-    /// fill on the queue's delete, a reddened word here. Principle 5 allows one way per job,
-    /// and the doctrine names which — so the word's box fills. The reason to avoid the fill is
-    /// also gone: #1376 settled that an armed `err` fill is a different mark from the
-    /// surface's blue verb, which principle 3 counts alone; and a fill is not a red word, so
-    /// the one-red-word budget it used to spend is handed back to the surface.
-    ///
-    /// What it still says is what it will end: `kill`, then what is running there, in the
-    /// pane's light lowercase rather than a slab of capitals, because the fill is the alarm
-    /// and the sentence inside it is only the fact. The command after it is what tells it
-    /// from the unarmed word reddening under the pointer. The row verb's height, so the row
-    /// does not move; wider, growing leftwards from its right edge, so the second press lands
-    /// where the first did. `px-2` and not the unarmed verb's `px-1`: a fill has an edge, and
-    /// a word 4px from a painted edge reads as a word that overflowed it.
-    let btnKillArmed =
-        cls [ "h-6 shrink-0 inline-flex items-center gap-1.5 px-2 cursor-pointer"; bareBox
-              "font-ui font-normal text-body lowercase whitespace-nowrap"
-              "bg-err text-bg transition-colors"; focusRing ]
-    /// What the armed kill says is running, inside it: the command as typed — case kept — cut
-    /// short rather than allowed to push the row's name out of its column.
-    let killArmedRunning =
-        "font-terminal text-code normal-case tracking-normal truncate max-w-[7rem]"
     /// A bare verb's thumb target, on a phone and only there: the box pads out to
     /// `spacing-touch`, so the BORDER box is 44px — which is what a finger lands on and what
     /// the focus ring is drawn round — while the glyph, centred in the content box the padding
@@ -4727,6 +4701,10 @@ module Style =
               caps; "whitespace-nowrap transition-colors"; focusRing ]
     let terminalListAct = cls [ terminalListActBase; "text-ink-dim hover:text-ink" ]
     let terminalListKill = cls [ terminalListActBase; "text-ink-dim hover:text-err" ]
+    /// A stopped row's word where its stop was: the verb's box and caps, so the row does not
+    /// move, in `ink-faint` because it is a state and not a thing to press.
+    let terminalListStopped =
+        cls [ "h-6 px-1 shrink-0 inline-flex items-center justify-center"; caps; "whitespace-nowrap text-ink-faint" ]
 
     /// The row's verbs, at its right edge, WORN — on EVERY row, at rest.
     ///

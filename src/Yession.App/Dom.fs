@@ -355,11 +355,11 @@ module Dom =
         let startInList = "data-start-in-list"
         /// The list of places' way back to the sheet's terminals and files.
         let startInBack = "data-start-in-back"
-        /// A terminal's stop, on its row of the list (P2-2). On both of its faces — the word
-        /// that arms and the word that confirms — because they are one control in one place.
+        /// A terminal's stop, on its row of the list (P2-2).
         let terminalClose = "data-terminal-close"
-        /// Beside `terminalClose`: `"true"` while the kill is armed, one press from done.
-        let terminalCloseArmed = "data-terminal-close-armed"
+        /// What a stopped row wears in its stop's place while the list holds it above the
+        /// fold (`View.allPage`).
+        let terminalStopped = "data-terminal-stopped"
         let terminalId = "data-terminal-id"
         /// The scrolling block history — the surface that stays pinned to its newest line.
         let terminalScrollback = "data-terminal-scrollback"
@@ -693,15 +693,8 @@ module Dom =
         // wearing `aria-pressed` could not.
         let itemActions = "More actions"
 
-        // A terminal's kill, armed: the word it confirms with, and what it says is running in
-        // the terminal it would end — the command, or that nothing is.
-        let killConfirm = "Stop"
         let killIdle = "idle"
         let killTerminal (title: string) : string = "Stop " + title
-        let confirmKill (title: string) (running: string option) : string =
-            match running with
-            | Some command -> sprintf "Confirm: stop %s, running %s" title command
-            | None -> sprintf "Confirm: stop %s, idle" title
         let makeChapter = "Make chapter"
         let removeChapter = "Remove chapter"
         let dismissMenu = "Close menu"
@@ -1007,6 +1000,9 @@ module Dom =
         /// The `all` page's row verbs, as the words they are drawn as — the accessible names
         /// above say which terminal each is about.
         let kill = "stop"
+        /// What a row says in its stop's place once its terminal has ended, while the list
+        /// still holds it above the fold.
+        let stopped = "stopped"
         let reattach = "attach"
         let putAway = "put away"
         /// The list's fold over its closed terminals, and its name for a screen reader. Said
