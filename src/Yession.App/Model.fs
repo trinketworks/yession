@@ -682,6 +682,24 @@ module TrustCards =
     let showing (waiting: (RepoRef * ConnectionRoute list) list) (cards: TrustCards) : (RepoRef * ConnectionRoute list) list =
         waiting |> List.filter (fun (repo, shown) -> Map.tryFind (RepoRef.value repo) cards.PutOff <> Some shown)
 
+/// One question waiting on this reader, in the slot above the composer (`ClientModel.asks`).
+/// Every one is drawn: the front one as its card, the rest as a line each above it.
+[<RequireQualifiedAccess>]
+type Ask =
+    /// Which repository is this session for? (`ClientModel.launchOffered`)
+    | Launch
+    /// Do you trust this repo, with what it asks for? (`TrustCards.showing`)
+    | Trust of RepoRef * shown: ConnectionRoute list
+
+module Ask =
+
+    /// The name an ask keeps while it waits: what the reader brings forward by, and what
+    /// still names it once a repo asks for more than it did.
+    let key (ask: Ask) : string =
+        match ask with
+        | Ask.Launch -> "launch"
+        | Ask.Trust (repo, _) -> "trust:" + RepoRef.value repo
+
 /// One copy to the clipboard, as its confirmation shows it: the box it came out of, and which
 /// copy this is. The count is what makes a second copy of the same box a new moment, so its
 /// wait starts again rather than the first copy's deadline taking the second's confirmation
@@ -2126,6 +2144,9 @@ type ClientModel =
       /// This reader's own hand on those cards: what they unticked, and which they put off.
       /// View state, local to this client: the answer reaches the session as one command.
       TrustCards    : TrustCards
+      /// The ask this reader brought to the front of the slot (`Ask.key`), when they did.
+      /// One reader's: what stands in front on one screen is not a fact about the session.
+      AskFront      : string option
       /// The launch surface's state — choosing the session's first repo. View state, local
       /// to this client: choosing is one person's act on one screen, and what it produces
       /// reaches everyone through the log.
@@ -2272,6 +2293,9 @@ type DomMove =
     /// composer to offer. Where a notice in the conversation column hands the keyboard when
     /// it goes from under it.
     | FocusComposer
+    /// Onto the question of the card at the front of the ask slot, after the reader brought
+    /// it there from its line.
+    | FocusAsk
     /// Onto whichever control now stands where the nav toggle that was pressed went: the
     /// column's own collapse when it is `shown`, the header's reopen when it is not.
     | FocusNavToggle of shown: bool
@@ -2794,6 +2818,8 @@ type ClientMsg =
     /// Put a repo's trust card away for now, decided nothing. It comes back when the repo asks
     /// for something else.
     | NotNowTrustMsg of RepoRef * shown: ConnectionRoute list
+    /// Bring a waiting ask to the front of the slot (`Ask.key`): its line above the card.
+    | BringAskForwardMsg of key: string
 
 /// What a message asks of the world outside the model, as a value `ClientModel.update` returns
 /// beside the next model.
@@ -3011,6 +3037,7 @@ module ClientModel =
           Conversation = ConversationProjection.empty
           TrustWaits = RepoTrustWaits.empty
           TrustCards = TrustCards.empty
+          AskFront = None
           Launch = Launch.empty
           Repos = Repos.ReposProjection.empty
           Timeline = TimelineProjection.empty
@@ -3144,6 +3171,25 @@ module ClientModel =
     /// and `Launch.anchor`'s beside it, say why a live read is the wrong read for this.
     let launchOffered (model: ClientModel) : bool =
         Launch.offered (launchBegun model) model.Synced.LaunchDismissed model.Launch
+
+    /// Every question waiting on this reader, oldest first. The launch is the session's first
+    /// question, so it is oldest whenever it stands; repos waiting to be trusted follow in the
+    /// order they asked (`RepoTrustWaits.waiting`).
+    let asks (model: ClientModel) : Ask list =
+        let launch = if launchOffered model then [ Ask.Launch ] else []
+        let trust =
+            TrustCards.showing (RepoTrustWaits.waiting model.TrustWaits) model.TrustCards
+            |> List.map Ask.Trust
+        launch @ trust
+
+    /// The ask whose card stands in the slot: the one this reader brought forward while it
+    /// still waits, else the oldest. One that was answered or put away hands the front back
+    /// to the oldest rather than leaving the slot to nothing.
+    let frontAsk (model: ClientModel) : Ask option =
+        let waiting = asks model
+        model.AskFront
+        |> Option.bind (fun key -> waiting |> List.tryFind (fun ask -> Ask.key ask = key))
+        |> Option.orElse (List.tryHead waiting)
 
     /// Whether this client has read the log through to where the session says it ends — the
     /// moment a remembered strip can be checked against what the session has, and the launch
@@ -6071,6 +6117,7 @@ module ClientModel =
         // The reader's own hand on a trust card, kept here because nobody else's screen has it.
         | ToggleTrustRouteMsg (repo, route) -> { model with TrustCards = TrustCards.toggle repo route model.TrustCards }
         | NotNowTrustMsg (repo, shown) -> { model with TrustCards = TrustCards.putOff repo shown model.TrustCards }
+        | BringAskForwardMsg key -> { model with AskFront = Some key }
         // `update` hands these to `Uploads` and the attachment rules beside it, which say both
         // halves — the state and the effects — at once; they reach here from nowhere else.
         | UploadPickedMsg _
@@ -6400,6 +6447,9 @@ module ClientModel =
             // The press that moved the sheet to or from its places leaves with what it was on.
             | ChoosingStartInMsg _
             | StartInMsg _ -> [ ClientEffect.Move DomMove.FocusStartIn ]
+            // The line pressed is gone — its ask is the card now — so the keyboard goes to
+            // that card's question rather than being left on `body`.
+            | BringAskForwardMsg _ -> [ ClientEffect.Move DomMove.FocusAsk ]
             // Down the list's rows, by the order it draws them: the walk is the model's, and only
             // the focus it lands is the document's.
             | WalkListMsg (key, from) -> walkList key from model |> Option.map ClientEffect.Move |> Option.toList
