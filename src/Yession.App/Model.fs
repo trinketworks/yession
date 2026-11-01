@@ -713,7 +713,8 @@ module Refusal =
         | InterruptAgentTurn _
         | ApproveRepoCapabilities _
         | AddRepo _
-        | PressSurfaceButton _ -> false
+        | PressSurfaceButton _
+        | DismissSurface _ -> false
 
     /// Where `refusal` is drawn: in the pane while the pane is open and the refusal is one
     /// of its verbs' — that is where the press was — and in the conversation otherwise,
@@ -2404,6 +2405,10 @@ type ClientMsg =
     /// (`""` at the root). A request of the session (`PressSurfaceButton`), which reads the
     /// answer from the doc itself; it reaches everyone as `SurfaceActionTaken`.
     | PressSurfaceMsg of surfaceId: string * componentId: string * scope: string
+    /// Somebody dismissed an agent's surface without answering it. A request of the session
+    /// (`DismissSurface`), which takes it down for everyone; it reaches everyone as
+    /// `SurfaceDismissed`.
+    | DismissSurfaceMsg of surfaceId: string
     /// This client sent the session a command, under this request id. Dispatched by the one
     /// verb that sends commands (`Client.Connection.Ask`), BEFORE the command leaves, so no
     /// answer can arrive ahead of the record of what it answers.
@@ -2750,6 +2755,7 @@ type ClientEffect =
     | InterruptTurn of AgentTurnId
     | ApproveRepoCapabilities of RepoRef * granted: string list
     | PressSurface of surfaceId: string * componentId: string * scope: string
+    | DismissSurface of surfaceId: string
     | Launch of LaunchEffect
     | Claude of ClaudeCall
     | GitHub of GitHubCall
@@ -5981,7 +5987,8 @@ module ClientModel =
         | ReattachTerminalMsg _
         | InterruptTerminalMsg _
         | ApproveRepoCapabilitiesMsg _
-        | PressSurfaceMsg _ -> model
+        | PressSurfaceMsg _
+        | DismissSurfaceMsg _ -> model
         // `update` hands these to `Uploads` and the attachment rules beside it, which say both
         // halves — the state and the effects — at once; they reach here from nowhere else.
         | UploadPickedMsg _
@@ -6238,6 +6245,7 @@ module ClientModel =
             | InterruptTurnMsg turn -> [ ClientEffect.InterruptTurn turn ]
             | ApproveRepoCapabilitiesMsg (repo, granted) -> [ ClientEffect.ApproveRepoCapabilities (repo, granted) ]
             | PressSurfaceMsg (surfaceId, componentId, scope) -> [ ClientEffect.PressSurface (surfaceId, componentId, scope) ]
+            | DismissSurfaceMsg surfaceId -> [ ClientEffect.DismissSurface surfaceId ]
             | LaunchMsg launchMsg -> Launch.update launchMsg model.Launch |> snd |> List.map ClientEffect.Launch
             | ClaudePressedMsg press -> ClaudePress.call press model.Claude |> Result.toList |> List.map ClientEffect.Claude
             | GitHubPressedMsg press -> GitHubPress.call press model.GitHub |> Result.toList |> List.map ClientEffect.GitHub

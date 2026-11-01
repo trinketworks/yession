@@ -52,3 +52,32 @@ module SurfaceActionTaken =
             if a.Context = "{}" then sprintf "event %s on surface %s" a.Name a.SurfaceId
             else sprintf "event %s on surface %s with context %s" a.Name a.SurfaceId a.Context
         answers @ [ Phrase.text sent ]
+
+/// Somebody took down a surface the agent showed without answering it. Every surface can be
+/// dismissed, whatever buttons the agent drew, because a question nobody wants to answer must
+/// not hold the dock until the agent next runs.
+///
+/// A reply like a press is, so it is on the log and owes the agent a turn (`SurfaceAnswered`):
+/// the agent asked something and has to learn it will not get the answer. The surface is gone
+/// by the time anyone reads the line back, so what it was about is kept here.
+[<RequireQualifiedAccess>]
+type SurfaceDismissed =
+    { MessageId : MessageId
+      SurfaceId : string
+      /// The surface's first line of text as people saw it (`A2ui.Project.title`), when it had one.
+      Title : string option
+      By : Principal }
+
+module SurfaceDismissed =
+
+    /// "dismissed “Which branch?”", or the surface's id when it said nothing.
+    let phrase (d: SurfaceDismissed) : Phrase =
+        match d.Title with
+        | Some title -> Phrase.deed "dismissed" [ Segment.Text (sprintf "“%s”" title) ]
+        | None -> Phrase.deed "dismissed" [ Segment.Text (sprintf "surface %s" d.SurfaceId) ]
+
+    /// The surface's id, which is the agent's name for it, when the headline used its title.
+    let particulars (d: SurfaceDismissed) : Phrase list =
+        match d.Title with
+        | Some _ -> [ Phrase.text (sprintf "surface %s, now taken down" d.SurfaceId) ]
+        | None -> [ Phrase.text "now taken down" ]

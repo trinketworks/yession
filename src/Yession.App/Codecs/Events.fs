@@ -1462,6 +1462,21 @@ module Events =
                     | None -> fromContext ()
                   Yession.Domain.Surfaces.SurfaceActionTaken.By = get.Required.Field "by" Codec.principal.Decode }) }
 
+    let private surfaceDismissed : Codec<Yession.Domain.Surfaces.SurfaceDismissed> =
+        { Encode =
+            fun (d: Yession.Domain.Surfaces.SurfaceDismissed) ->
+                Encode.object
+                    [ "messageId", Codec.messageId.Encode d.MessageId
+                      "surfaceId", Encode.string d.SurfaceId
+                      "title", Encode.option Encode.string d.Title
+                      "by", Codec.principal.Encode d.By ]
+          Decode =
+            Decode.object (fun get ->
+                { Yession.Domain.Surfaces.SurfaceDismissed.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
+                  Yession.Domain.Surfaces.SurfaceDismissed.SurfaceId = get.Required.Field "surfaceId" Decode.string
+                  Yession.Domain.Surfaces.SurfaceDismissed.Title = get.Optional.Field "title" Decode.string
+                  Yession.Domain.Surfaces.SurfaceDismissed.By = get.Required.Field "by" Codec.principal.Decode }) }
+
     let private commandRefused : Codec<CommandRefused> =
         { Encode =
             fun (p: CommandRefused) ->
@@ -1705,6 +1720,8 @@ module Events =
                     Encode.object [ "type", Encode.string "tabClosed"; "payload", tabClosed.Encode p ]
                 | SessionEvent.SurfaceActionTaken p ->
                     Encode.object [ "type", Encode.string "surfaceActionTaken"; "payload", surfaceActionTaken.Encode p ]
+                | SessionEvent.SurfaceDismissed p ->
+                    Encode.object [ "type", Encode.string "surfaceDismissed"; "payload", surfaceDismissed.Encode p ]
                 | SessionEvent.CommandRefused p ->
                     Encode.object [ "type", Encode.string "commandRefused"; "payload", commandRefused.Encode p ]
                 | SessionEvent.GatedCommandFailed p ->
@@ -1798,6 +1815,8 @@ module Events =
                     Decode.field "payload" artifactShared.Decode |> Decode.map SessionEvent.ArtifactShared
                 | "surfaceActionTaken" ->
                     Decode.field "payload" surfaceActionTaken.Decode |> Decode.map SessionEvent.SurfaceActionTaken
+                | "surfaceDismissed" ->
+                    Decode.field "payload" surfaceDismissed.Decode |> Decode.map SessionEvent.SurfaceDismissed
                 | "commandRefused" -> Decode.field "payload" commandRefused.Decode |> Decode.map SessionEvent.CommandRefused
                 | "gatedCommandFailed" -> Decode.field "payload" gatedCommandFailed.Decode |> Decode.map SessionEvent.GatedCommandFailed
                 | "toolUseStarted" -> Decode.field "payload" toolUseStarted.Decode |> Decode.map ToolUseStarted

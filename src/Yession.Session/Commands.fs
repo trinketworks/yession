@@ -42,6 +42,8 @@ module SessionCommands =
         // A button pressed on an agent's surface. `Ok` means the answer is on the record; the
         // turn it owes runs when the scheduler next looks.
         (pressSurface: Principal -> string -> string -> string -> Async<Result<unit, string>>)
+        // A surface taken down unanswered. `Ok` means it is gone and the dismissal is on the record.
+        (dismissSurface: Principal -> string -> Async<Result<unit, string>>)
         // Who a peer is. A `Principal`, because every peer is one, and the two acts above
         // are a PERSON's — consent to what a repo asks for, a repo brought in on their
         // credential — which the type then says outright rather than a check inside each.
@@ -134,6 +136,10 @@ module SessionCommands =
             // A person's answer, so a person's act: the turn it owes runs on their credential.
             | PressSurfaceButton (surfaceId, componentId, scope) ->
                 match! pressSurface (principalFor peerId) surfaceId componentId scope with
+                | Ok () -> return CommandAccepted
+                | Error reason -> return CommandRejected reason
+            | DismissSurface surfaceId ->
+                match! dismissSurface (principalFor peerId) surfaceId with
                 | Ok () -> return CommandAccepted
                 | Error reason -> return CommandRejected reason
         }

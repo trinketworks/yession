@@ -70,7 +70,8 @@ and WakeReason =
     /// Attribution, never payload, like the rest: what changed arrives as the timeline note
     /// the transition already folded into, so the reason names only which pull request.
     | PrChanged of PrRef
-    /// Somebody pressed a button on a surface the agent showed (`SurfaceActionTaken`).
+    /// Somebody replied to a surface the agent showed: pressed one of its buttons
+    /// (`SurfaceActionTaken`) or dismissed it (`SurfaceDismissed`).
     ///
     /// Owned by whoever pressed it, which meets the rule above from the other side: nobody
     /// queued work, but a person here answered the agent's question, and an answer is that

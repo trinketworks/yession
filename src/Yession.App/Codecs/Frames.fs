@@ -141,7 +141,9 @@ module Frames =
                         [ "kind", Encode.string "pressSurfaceButton"
                           "surfaceId", Encode.string surfaceId
                           "componentId", Encode.string componentId
-                          "scope", Encode.string scope ])
+                          "scope", Encode.string scope ]
+                | DismissSurface surfaceId ->
+                    Encode.object [ "kind", Encode.string "dismissSurface"; "surfaceId", Encode.string surfaceId ])
           Decode =
             Decode.field "kind" Decode.string
             |> Decode.andThen (function
@@ -175,6 +177,7 @@ module Frames =
                         (Decode.field "surfaceId" Decode.string)
                         (Decode.field "componentId" Decode.string)
                         (Decode.field "scope" Decode.string)
+                | "dismissSurface" -> Decode.field "surfaceId" Decode.string |> Decode.map DismissSurface
                 | other -> Decode.fail (sprintf "Unknown session command: %s" other)) }
 
     let private sessionCommandResult : Codec<SessionCommandResult> =

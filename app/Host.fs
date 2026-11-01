@@ -530,6 +530,22 @@ let startFull
                     return Ok ()
             }
 
+        /// A person took a surface down unanswered. What it was about is read before it goes,
+        /// because the record outlives it.
+        let dismissSurface (by: Principal) (surfaceId: string) : Async<Result<unit, string>> =
+            async {
+                let surfaces = (SyncedStateSync.ofDoc doc).Surfaces
+                match SurfaceTool.dismissal surfaces (mintMessageId ()) by surfaceId with
+                | Error reason -> return Error reason
+                | Ok dismissed ->
+                    match SyncedStateSync.applySurfaceMessages doc [ A2ui.DeleteSurface surfaceId ] with
+                    | Error _ -> return Error (sprintf "there is no surface '%s'" surfaceId)
+                    | Ok () ->
+                        let! _ = log.Append (Principal.toActor by) (SessionEvent.SurfaceDismissed dismissed)
+                        wakeScheduler ()
+                        return Ok ()
+            }
+
         // The gate for structured commands (Plan 15, stage 3b; Plan 23): every command
         // passes the classifier on its way to the dispatch table, and hands back the same
         // `QueueId` a terminal command does — which is what lets ONE `check_pending` serve
@@ -1073,6 +1089,7 @@ let startFull
                         approveCapabilities
                         launchRepo
                         pressSurface
+                        dismissSurface
                         principalFor
                   OnPresence =
                     fun payload ->
