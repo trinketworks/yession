@@ -1554,7 +1554,7 @@ module View =
                     // id` names the one fragment either host binds.
                     html $"""
                         <article class="{Style.queueItem}" data-queue-id="{QueueId.value id}" data-queue-author="{PeerId.value entry.Author}" data-queue-order="{string entry.Order}">
-                          <button type="button" class="{Style.queueSummary}" data-queue-summary="{QueueId.value id}" data-queue-open="{QueueId.value id}" @click={Ev(fun _ -> dispatch (OpenQueueEditMsg id))}>
+                          <button type="button" class="{Style.queueSummary}" aria-label="Edit queued message" data-queue-summary="{QueueId.value id}" data-queue-open="{QueueId.value id}" @click={Ev(fun _ -> dispatch (OpenQueueEditMsg id))}>
                             <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model (PeerRef entry.Author) ]}"></span>
                             <span class="{Style.queueSummaryBody}" data-rich-body="{BodyKey.queued id}" data-rich-readonly="true"></span>
                           </button>
