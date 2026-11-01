@@ -1125,10 +1125,6 @@ module Dom =
         let all = "all"
         /// Its title: what it does, and the key that does it too.
         let switchTerminal = "Every terminal and file (Ctrl+` or ⌘`)"
-        /// The list button's name: how many terminals, which is what its figure says, then
-        /// what it does.
-        let switchTerminalCount (terminals: int) =
-            sprintf "%d %s. %s" terminals (if terminals = 1 then "terminal" else "terminals") switchTerminal
         /// The `all` page's own name, as a list.
         let terminalsAndFiles = "Terminals and files"
         /// The list's terminals above its fold, as a list.
