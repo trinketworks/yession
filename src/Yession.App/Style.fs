@@ -677,18 +677,6 @@ module Style =
               "group-aria-busy/open:text-blue group-aria-busy/open:underline"
               focusRing ]
 
-    /// The mark that says a record link LEAVES (the session serves its own origin). Fainter
-    /// than the faintest ink (`opacity-70` over `ink-faint`, safe because this is decorative
-    /// — `aria-hidden`, and never the only way a reader learns the link leaves): it is a
-    /// signpost, not a second status. `inline-flex` so the idle nudge below has a box a
-    /// transform actually applies to (a bare inline element ignores `transform`). The nudge
-    /// itself — a 1px lift toward the corner the mark points at, and a rest, slow and mostly
-    /// still — is `animate-leave-nudge` (app/tokens.css; the keyframe and why it moves this
-    /// little are in app/tailwind.css). `Icon.leavesSm` is the mark; the gap and the ink are
-    /// all this carries otherwise.
-    let recordLinkMark =
-        cls [ "inline-flex ml-1 text-ink-faint opacity-70"; "animate-leave-nudge motion-reduce:animate-none" ]
-
     /// The hit area for a listed record's whole cell — the state word beside the name
     /// included, not just the name's own glyphs. `block` so the link's box is the cell's full
     /// width rather than the text it wraps; colour and hover stay on the name text itself
@@ -705,19 +693,11 @@ module Style =
     /// pointer does on every other held control.
     let recordRowLink = cls [ "group/open block no-underline aria-busy:cursor-progress"; focusRing ]
 
-    /// A listed record's name and its leaves mark (`recordLinkMark`), as two flex children
-    /// rather than one truncating block: on a narrow row (a phone) something has to give, and
-    /// it must be the NAME, never the mark that says the link leaves — that is exactly the
-    /// fact a reader on a thumb's-width row most needs, and a single truncating block let the
-    /// browser clip it away first since it sat last. `min-w-0` so this box can itself shrink
-    /// inside whatever fixed-width cell holds it.
-    let recordRowName = "flex items-baseline min-w-0"
-
-    /// The name's own box inside `recordRowName`: `flex-1` takes what the mark beside it
-    /// leaves, `min-w-0` lets that shrink below its content's width, and `truncate` is what
-    /// clips there — a row that changes height when a session is renamed is a list you
-    /// cannot keep your place in, so this still clips rather than wraps.
-    let recordRowNameText = "flex-1 min-w-0 truncate"
+    /// A listed record's name. `block` so `truncate` has a box the cell's width actually
+    /// constrains (its parent, `recordRowLink`, is the only other box in the cell, and a bare
+    /// inline span ignores a width) — a row that changes height when a session is renamed is
+    /// a list you cannot keep your place in, so this clips rather than wraps.
+    let recordRowNameText = "block truncate"
 
     /// The roster's mark column (`ManagerUi.Col.mark`): the row's attention mark, at every
     /// width, as the session page wears its worst standing under the chevron. The column is
@@ -730,12 +710,30 @@ module Style =
     /// not baseline, so an unfolded row keeps its mark on the name's line.
     let recordMarkCell = "py-0.5 align-top"
 
-    /// The mark's press: a thumb's 44px, grown LEFT into the page's gutter rather than right
-    /// into the name, so the mark stays on the rail and the name's own target is untouched.
-    /// It unfolds the row (`aria-expanded`). No ground of its own: a ground would hang 12px
-    /// into the gutter, off the rail every other edge on the page keeps, and the unfolded
-    /// lines under it already say the row is open.
-    let recordMarkPress = cls [ "relative -ml-3 w-11 h-11 pl-3 flex items-center bg-transparent border-0 cursor-pointer"; focusRing ]
+    /// The mark's own box: a thumb's 44px, grown LEFT into the page's gutter rather than
+    /// right into the name, so the mark stays on the rail and the name's own target is
+    /// untouched. No press of its own — the row's disclosure is `recordChevronPress`, at the
+    /// row's trailing edge — so this is attention's colour alone, not a control: `aria-hidden`
+    /// at the call site, same as the dot it wraps.
+    let recordMarkSeatWrap = "relative -ml-3 w-11 h-11 pl-3 flex items-center"
+
+    /// The row's disclosure: a thumb's whole 44px at the row's TRAILING edge, which is the
+    /// one legible "tap to expand" on a phone — the mark beside the name is attention's
+    /// colour alone now (`recordMarkSeatWrap`), and the glyph that used to sit here saying
+    /// the name's link leaves is gone, not replaced; this is the row's one press. A column of
+    /// its own (`ManagerUi.Col.chevron`), so it lands at the table's own right edge at every
+    /// width, not just where a phone happens to hide the columns after it. It unfolds the row
+    /// (`aria-expanded`); no ground of its own, for the same reason the mark never wore one —
+    /// the unfolded lines under it already say the row is open.
+    let recordChevronPress =
+        cls [ "w-11 h-11 flex items-center justify-center bg-transparent border-0 cursor-pointer"
+              "text-ink-faint hover:text-ink transition-colors"; focusRing ]
+
+    /// The chevron itself: `Icon.right`, the fold's own disclosure-over-one mark (never
+    /// `rights`, `caret` or a text glyph — principle 5, one mark per job), turned by the same
+    /// `data-expanded` the mark's slide reads below, so the two always agree without a second
+    /// state to drift from the first.
+    let recordChevronMark = cls [ "block"; Motion.turn; "[[data-expanded]_&]:rotate-90" ]
 
     /// The row's mark, which RIDES when the row unfolds: down a track to the first unfolded
     /// line, which is the one it ranks first, so that line says its word with no mark of its
