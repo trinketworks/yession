@@ -304,7 +304,98 @@ let private answered : Yession.Domain.Surfaces.SurfaceActionTaken =
       Component = "go"
       Name = "submit"
       Context = "{\"choice\":[\"main\"]}"
+      Responses = [ "main" ]
       By = ada }
+
+/// A form whose options read differently from their values, with a field and a box beside the
+/// choice, and two buttons: one that sends all three, and one that sends nothing.
+let private formSurface (data: (string * Json) list) : Surface =
+    surfaceOf
+        [ plain
+              "choice"
+              (ComponentKind.ChoicePicker (
+                  None,
+                  Some ChoiceVariant.MultipleSelection,
+                  [ { Label = Literal "Guard regex"; Value = "regex" }; { Label = Literal "Draw chips"; Value = "chips" } ],
+                  Bound "/choice",
+                  None,
+                  None,
+                  []
+              ))
+          plain "note" (ComponentKind.TextField (Literal "Why", Some (Bound "/note"), None, None, []))
+          plain "urgent" (ComponentKind.CheckBox (Literal "Do it today", Bound "/urgent", []))
+          plain "sendLabel" (ComponentKind.Text (Literal "Send", None))
+          plain
+              "send"
+              (ComponentKind.Button (
+                  "sendLabel",
+                  None,
+                  Action.Event ("send", [ "choice", Bound "/choice"; "note", Bound "/note"; "urgent", Bound "/urgent"; "kind", Literal (JString "form") ]),
+                  []
+              ))
+          plain "skipLabel" (ComponentKind.Text (Literal "Not now", None))
+          plain "skip" (ComponentKind.Button ("skipLabel", None, Action.Event ("skip", []), [])) ]
+        data
+
+let private projectionTests =
+    testList "Text projection" [
+        testCase "an answer reads as the labels the person saw, the field by its label, and a ticked box by its" <| fun () ->
+            let surface = formSurface [ "choice", branches [ "regex"; "chips" ]; "note", JString "both slow"; "urgent", JBool true ]
+            Expect.equal
+                (Project.responses (Map.ofList [ "f", surface ]) "f" "send" "")
+                [ "Guard regex"; "Draw chips"; "Why: both slow"; "Do it today" ]
+                "no values, no JSON, and the agent's own literal is not an answer"
+
+        testCase "an empty field and an unticked box answer nothing" <| fun () ->
+            let surface = formSurface [ "choice", branches [ "regex" ]; "note", JString ""; "urgent", JBool false ]
+            Expect.equal (Project.responses (Map.ofList [ "f", surface ]) "f" "send" "") [ "Guard regex" ] "only the choice"
+
+        testCase "a button that carries no answer answers with its caption" <| fun () ->
+            Expect.equal (Project.responses (Map.ofList [ "f", formSurface [] ]) "f" "skip" "") [ "Not now" ] "what was pressed"
+
+        testCase "a value no input holds reads as itself" <| fun () ->
+            let row = plain "approve" (ComponentKind.Button ("label", None, Action.Event ("approve", [ "name", Bound "name" ]), []))
+            let surface = surfaceOf [ row ] [ "items", JArray [ JObject [ "name", JString "a" ]; JObject [ "name", JString "b" ] ] ]
+            Expect.equal (Project.responses (Map.ofList [ "l", surface ]) "l" "approve" "/items/1") [ "b" ] "the item's name, as text"
+
+        testCase "one answer is on the line after the verb" <| fun () ->
+            Expect.equal
+                (Act.deed (Act.SurfaceActionTaken answered) |> Yession.Domain.Phrase.said)
+                "responded main"
+                "the answer itself"
+
+        testCase "several answers are counted on the line and listed under it" <| fun () ->
+            let many = { answered with Responses = [ "Guard regex"; "Draw chips" ] }
+            Expect.equal (Act.deed (Act.SurfaceActionTaken many) |> Yession.Domain.Phrase.said) "responded with 2 answers" "counted"
+            Expect.equal
+                (Act.particulars (Act.SurfaceActionTaken many) |> List.map Yession.Domain.Phrase.said)
+                [ "Guard regex"; "Draw chips"; "event submit on surface pick with context {\"choice\":[\"main\"]}" ]
+                "each answer, then what the agent acts on"
+
+        testCase "the timeline unfolds several answers as a list, and keeps them off the line" <| fun () ->
+            let many = { answered with Responses = [ "Guard regex"; "Draw chips" ] }
+            let item : ConversationItem =
+                { MessageId = messageId
+                  Author = Yession.Domain.Principal.toActor ada
+                  Content = ItemContent.Act (Act.SurfaceActionTaken many)
+                  Status = ConversationItemStatus.Complete
+                  Offset = Yession.Domain.EventOffset.create 1L |> expect
+                  Woke = None
+                  CausedBy = None }
+            let model = ClientModel.init (peer "ada" "Ada")
+            let model =
+                { model with
+                    Link = SessionLink.Current
+                    Session = Some (Yession.Domain.SessionId.create "demo-session" |> expect)
+                    Conversation = { model.Conversation with Recent = [ item ] } }
+            let line = Support.render model
+            Expect.stringContains line "with 2 answers" "the line counts them"
+            Expect.isFalse (line.Contains "data-surface-responses") "and the list waits in the fold"
+            let opened = Support.behindFold (FoldKey.Act messageId) model
+            let list = opened.Substring (opened.IndexOf "data-surface-responses")
+            Expect.stringContains list "Guard regex" "the first answer"
+            Expect.stringContains list "Draw chips" "and the second"
+    ]
 
 let private pressTests =
     testList "Press" [
@@ -361,16 +452,25 @@ let private pressTests =
         testCase "an answer is the agent's to read in the timeline" <| fun () ->
             Expect.equal
                 (Act.sentence (Act.SurfaceActionTaken answered) |> Yession.Domain.Phrase.said)
-                "pressed submit on surface pick ({\"choice\":[\"main\"]})"
-                "what was pressed and what it carried"
+                "responded main (event submit on surface pick with context {\"choice\":[\"main\"]})"
+                "the answer as people read it, then what the agent acts on"
 
         testCase "an answer on the wire is the shape it will always be" <| fun () ->
             let pinned =
-                """{"type":"surfaceActionTaken","payload":{"messageId":"m1","surfaceId":"pick","component":"go","name":"submit","context":"{\"choice\":[\"main\"]}","by":{"kind":"peer","peerId":"ada"}}}"""
+                """{"type":"surfaceActionTaken","payload":{"messageId":"m1","surfaceId":"pick","component":"go","name":"submit","context":"{\"choice\":[\"main\"]}","responses":["main"],"by":{"kind":"peer","peerId":"ada"}}}"""
             Expect.equal
                 (Yession.Codecs.Codec.fromString Yession.App.Codecs.Events.sessionEvent pinned)
                 (Ok (Yession.Domain.SessionEvent.SurfaceActionTaken answered))
                 "the durable form decodes to the event"
+
+        // Recorded before the event kept its responses. The surface is long gone, so there are
+        // no labels; the context's values are the next best thing, and still not JSON.
+        testCase "an answer recorded before responses reads as its values" <| fun () ->
+            let older =
+                """{"type":"surfaceActionTaken","payload":{"messageId":"m1","surfaceId":"pick","component":"go","name":"submit","context":"{\"choice\":[\"regex\"]}","by":{"kind":"peer","peerId":"ada"}}}"""
+            match Yession.Codecs.Codec.fromString Yession.App.Codecs.Events.sessionEvent older with
+            | Ok (Yession.Domain.SessionEvent.SurfaceActionTaken a) -> Expect.equal a.Responses [ "regex" ] "the value, as text"
+            | other -> failwithf "expected an answer, got %A" other
 
         testCase "a turn woken by an answer round-trips" <| fun () ->
             let started =
@@ -410,4 +510,5 @@ let tests =
         viewTests
         toolTests
         pressTests
+        projectionTests
     ]

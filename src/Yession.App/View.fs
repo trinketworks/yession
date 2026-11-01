@@ -2888,6 +2888,17 @@ module View =
                     Phrase.deed "starting" [ Segment.Text "sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ], [], [ toldRow act ]
                 | Act.FileChanged { FileChanged.Diff = Some diff } -> Act.deed act, [], fileChangeFacts act diff
                 | Act.RepoCapabilitiesChanged c -> Act.deed act, [], capabilityFacts act c
+                // One answer is on the title ("responded main"). Several are a list in the
+                // fold, as the person saw them, above what the agent was told.
+                | Act.SurfaceActionTaken a ->
+                    let answers =
+                        match a.Responses with
+                        | []
+                        | [ _ ] -> []
+                        | many ->
+                            let rows = many |> List.map (fun r -> html $"""<li class="{Style.actNoteDetail}">{r}</li>""")
+                            [ html $"""<ul class="{Style.actNoteShown}" data-surface-responses>{rows}</ul>""" ]
+                    Act.deed act, [], answers @ [ toldRow act ]
                 | _ -> Act.deed act, actNoteParticulars by act, [ toldRow act ]
             // The fold (`foldArrow`/`foldBody`): the particulars under the title, behind the
             // arrow on the gutter. While the act is still RUNNING the gutter holds the mark
