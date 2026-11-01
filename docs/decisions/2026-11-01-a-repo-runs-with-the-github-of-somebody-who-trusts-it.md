@@ -87,4 +87,4 @@ restarts.
   until somebody who has one answers.
 - Rule 25 of §5 says this.
 - What this does not cover is in [GAPS](../GAPS.md#security--trust): the agent's own sandbox, taking
-  trust back, pull requests from forks, the card's place, and a truster who does not come back.
+  trust back, pull requests from forks, the card's reader, and a truster who does not come back.

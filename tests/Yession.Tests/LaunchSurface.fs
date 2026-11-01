@@ -82,6 +82,25 @@ let private launch (msg: LaunchMsg) (model: ClientModel) = Support.step (LaunchM
 let private offeredTests =
     testList "when it is offered" [
 
+        // The slot above the composer asks one thing at a time. A repo waiting to be trusted is
+        // the question the launch led to, so it is the one standing there — never both cards,
+        // two questions in one place with two buttons that commit.
+        testCase "a repo waiting to be trusted takes the launch card's place" <| fun () ->
+            let asked =
+                SessionEvent.RepoTrustAsked
+                    { RepoTrustAsked.MessageId = MessageId.create "asked" |> expect
+                      RepoTrustAsked.Repo = hello
+                      RepoTrustAsked.Routes = [ ConnectionRoute.Git; ConnectionRoute.Api ]
+                      RepoTrustAsked.Actor = ActorRef.Configured hello
+                      RepoTrustAsked.CausedBy = None }
+            let offered = clientAt 1L fresh
+            let waiting = { offered with TrustWaits = RepoTrustWaits.apply RepoTrustWaits.empty [ asked ] }
+            let html = render waiting
+            Expect.equal
+                (html.Contains "data-repo-trust=\"octo/hello\"", html.Contains "data-repo-picker=")
+                (true, false)
+                "the trust card stands in the slot, and the launch card does not stand beside it"
+
         testCase "a connected client that has read an empty log to its end is offered it" <| fun () ->
             Expect.isTrue (ClientModel.launchOffered (clientAt 1L fresh)) "offered"
             Expect.stringContains (render (clientAt 1L fresh)) "data-repo-picker=\"choosing\"" "and it is rendered"

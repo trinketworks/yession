@@ -589,53 +589,6 @@ module View =
             | None ->
                 html $"""<div class="{Style.person}" data-agent-presence="unknown"><span class="{Style.cls [ Style.avatar; Style.agentAvatarAbsent; Style.personAvatar ]}"></span><span class="text-ink-faint">agent</span></div>"""
 
-        // Which repos wait for somebody here to trust them with their GitHub (`RepoTrustWaits`).
-        //
-        // Beside the agent's own prompt rather than in the settings drawer: a sandbox that is
-        // not running is a thing somebody is waiting on RIGHT NOW, and a decision parked behind
-        // a disclosure is a decision nobody makes. Every reader sees it, because whoever answers
-        // is whose GitHub the repo runs with; the session refuses a reader with none of their own.
-        //
-        // The answer carries what the card SHOWED beside what is ticked. It answers those routes
-        // and no others, so a repo that asks for more after the card was drawn asks again.
-        let trustCards =
-            TrustCards.showing (RepoTrustWaits.waiting model.TrustWaits) model.TrustCards
-            |> List.map (fun (repo, shown) ->
-                let ticked = TrustCards.ticked repo shown model.TrustCards
-                let routeLabel (route: ConnectionRoute) =
-                    match route with
-                    | ConnectionRoute.Git -> "Push and fetch"
-                    | ConnectionRoute.Api -> "API (gh, pull requests, Actions)"
-                let routeRow (route: ConnectionRoute) =
-                    let on = List.contains route ticked
-                    html $"""
-                        <button type="button" role="checkbox" aria-checked="{if on then "true" else "false"}"
-                                class="{if on then Style.surfaceChoiceChosen else Style.surfaceChoice}"
-                                data-repo-trust-route="{ConnectionRoute.name route}"
-                                @click={Ev(fun _ -> dispatch (ToggleTrustRouteMsg (repo, route)))}>
-                          <span class="{Style.surfaceChoiceMark}" aria-hidden="true">{if on then Icon.check else Lit.nothing}</span>
-                          <span class="{Style.surfaceChoiceLabel}">{routeLabel route}</span>
-                        </button>"""
-                html $"""
-                    <div class="{Style.cls [ Style.noAgentBlock; "min-w-0" ]}" data-repo-trust="{RepoRef.value repo}">
-                      <div class="{Style.person}">
-                        <span class="{Style.cls [ Style.givesWay; "text-ink-faint" ]}">{RepoRef.value repo}</span>
-                      </div>
-                      <div class="{Style.noAgentPrompt}">
-                        <span class="{Style.noAgentEdge}"></span>
-                        <div class="{Style.noAgentBody}">
-                          <p class="w-full min-w-0 whitespace-normal">Do you trust this repo?</p>
-                          <p class="{Style.cls [ Style.label; "w-full min-w-0 whitespace-normal" ]}">Its code, on any branch or pull request, runs in its sandboxes with your GitHub.</p>
-                          <div class="{Style.cls [ Style.surfaceChoices; "w-full" ]}">{shown |> List.map routeRow}</div>
-                          <button type="button" class="{Style.cls [ Style.btn; Style.noAgentAction; "w-full min-w-0" ]}"
-                                  data-repo-trust-answer="{RepoRef.value repo}"
-                                  @click={Ev(fun _ -> dispatch (TrustRepoMsg (repo, shown, ticked)))}>Trust</button>
-                          <button type="button" class="{Style.cls [ Style.btn; Style.noAgentAction; "w-full min-w-0" ]}"
-                                  data-repo-trust-later="{RepoRef.value repo}"
-                                  @click={Ev(fun _ -> dispatch (NotNowTrustMsg (repo, shown)))}>Not now</button>
-                        </div>
-                      </div>
-                    </div>""")
         // Everyone else who is here, and WHERE when they are somewhere. The same roster row as
         // yours and the agent's — avatar, name, right-aligned slot — so the section is one list
         // rather than a list with an appendix, and a collaborator moving from the composer to a
@@ -668,7 +621,6 @@ module View =
               <div class="{Style.person}"><span class="{Style.cls [ Style.avatar; Entity.actorMark model (PeerRef model.Peer.PeerId); Style.personAvatar ]}"></span><span class="truncate" data-display-name>{model.Peer.DisplayName}</span><span class="{Style.personYou}">you</span></div>
               {peerRows}
               {agentRow}
-              {trustCards}
             </section>"""
 
     /// Something still under way, said by a beating dot; the word is for screen readers. Live,
@@ -2503,6 +2455,88 @@ module View =
                 <div class="{Style.askActions}"><div class="{Style.askActionsLine}">{actionsRow}</div></div>
               </div>
             </section>"""
+
+    /// A repo waiting for somebody here to trust it with their GitHub (`RepoTrustWaits`), as the
+    /// SAME ask card the launch surface is (`askCard`), in the same slot: docked above the
+    /// composer, the blue lead, the question in the head with the way out in its gutter, rows
+    /// to hold, one button that commits. It is the launch's next question — the repo somebody
+    /// just chose asking whether it may run with their GitHub — so it stands where the first
+    /// one stood rather than in the roster, where a decision sat beside the people list and
+    /// read as one of them.
+    ///
+    /// Every reader sees it, because whoever answers is whose GitHub the repo runs with; the
+    /// session refuses a reader with none of their own. One card at a time, oldest first: the
+    /// slot holds one question, and the next repo's stands there once this one is answered.
+    ///
+    /// The answer carries what the card SHOWED beside what is ticked. It answers those routes
+    /// and no others, so a repo that asks for more after the card was drawn asks again. The ×
+    /// is "not now": it decides nothing, and only this reader stops being asked.
+    let private trustCard (dispatch: ClientMsg -> unit) (repo: RepoRef) (shown: ConnectionRoute list) (model: ClientModel) : TemplateResult =
+        let name = RepoRef.value repo
+        let ticked = TrustCards.ticked repo shown model.TrustCards
+        let routeRow (route: ConnectionRoute) =
+            let on = List.contains route ticked
+            let label, detail =
+                match route with
+                | ConnectionRoute.Git -> Dom.Text.trustRouteGit, Dom.Text.trustRouteGitDetail
+                | ConnectionRoute.Api -> Dom.Text.trustRouteApi, Dom.Text.trustRouteApiDetail
+            html $"""
+                <li class="{if on then Style.askRowHeld else Style.askRow}">
+                  <button type="button" class="{Style.askRowButton}" role="checkbox"
+                          aria-checked="{if on then "true" else "false"}"
+                          data-repo-trust-route="{ConnectionRoute.name route}"
+                          @click={Ev(fun _ -> dispatch (ToggleTrustRouteMsg (repo, route)))}>
+                    <span class="{Style.askRowLine}">
+                      <span class="{Style.askRowMark}" aria-hidden="true">{if on then Icon.check else Lit.nothing}</span>
+                      <span class="{Style.askRowWords}">{label}</span>
+                      <span class="{Style.askRowDescription}">{detail}</span>
+                    </span>
+                  </button>
+                </li>"""
+        let later =
+            html $"""
+                <button type="button" class="{Style.askWay}" data-repo-trust-later="{name}"
+                        aria-label="{Dom.Text.trustLater}" title="{Dom.Text.trustLater}"
+                        @click={Ev(fun _ -> dispatch (NotNowTrustMsg (repo, shown)))}>{Icon.close}</button>"""
+        html $"""
+            <section class="{Style.ask}" data-repo-trust="{name}" aria-labelledby="repo-trust-title">
+              <div class="{Style.askLeadBar}" aria-hidden="true"></div>
+              <div class="{Style.askBody}">
+                <div class="{Style.askTrack}">
+                  <div class="{Style.askPaneHere}">
+                    <div class="{Style.askHead}">
+                      <div class="{Style.askHeadLine}">
+                        {later}
+                        <div class="{Style.askHeadWords}">
+                          <span class="{Style.askSubject}">{name}</span>
+                          <h2 id="repo-trust-title" class="{Style.askQuestion}">{Dom.Text.trustTitle}</h2>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="{Style.askScroll}">
+                      <div class="{Style.askNote}"><div class="{Style.askNoteLine}"><p class="{Style.small}">{Dom.Text.trustWhy}</p></div></div>
+                      <ul class="{Style.cls [ Style.askRows; Style.askRowsAfterNote ]}">{shown |> List.map routeRow}</ul>
+                    </div>
+                  </div>
+                </div>
+                <div class="{Style.askActions}">
+                  <div class="{Style.askActionsLine}">
+                    <button type="button" class="{Style.askStart}" data-repo-trust-answer="{name}"
+                            @click={Ev(fun _ -> dispatch (TrustRepoMsg (repo, shown, ticked)))}>
+                      <span class="{Style.whenReady}">{Dom.Text.trustAnswer}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>"""
+
+    /// What stands in the ask slot above the composer, if anything: a repo waiting to be
+    /// trusted first, because it is the question the launch's answer led to, then the launch.
+    let private askSlot (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+        match TrustCards.showing (RepoTrustWaits.waiting model.TrustWaits) model.TrustCards with
+        | (repo, shown) :: _ -> trustCard dispatch repo shown model
+        | [] when ClientModel.launchOffered model -> askCard actions dispatch model
+        | [] -> Lit.nothing
 
     /// Who did something, as the transcript heads what they said: their square and their name
     /// in the caps voice, the agent's in blue. One face wherever an author heads what follows —
@@ -5662,7 +5696,7 @@ module View =
               <div class="{Style.chatColumn}">
                 <div class="{Style.launchArea}">
                   {chat actions dispatch model}
-                  {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
+                  {askSlot actions dispatch model}
                 </div>
                 <div class="{Style.dock}">
                   {model.Synced.Surfaces |> Map.toList |> List.map (fun (id, surface) -> SurfaceView.view dispatch id surface)}

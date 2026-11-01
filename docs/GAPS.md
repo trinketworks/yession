@@ -51,10 +51,9 @@ The last section holds trust boundaries as sharp as the first section's.
 - **A repo whose truster does not come back waits for them.** After a restart, a repo runs again only
   when the person it ran with signs in to the session again. Nobody else is asked, so nobody else
   can start it short of removing the repo and adding it again.
-- **The trust card is the same for every reader, and it sits in the roster.** It shows every route
-  the repo asks for, also to a reader whose own record already answers them, and pressing Trust is
-  then the one-tap start. It is not yet the next page of the launch surface, or a card in the
-  timeline where `add_repo` was said.
+- **The trust card is the same for every reader.** It stands in the launch card's slot above the
+  composer, one repo at a time. It shows every route the repo asks for, also to a reader whose own
+  record already answers them, and pressing Trust is then the one-tap start.
 - **A Manager route that changes state trusts a request that names no origin.** The
   request-origin rule (`ManagerUi.requestOrigin`, [§5 rule 24](technical-design.md#5-architectural-invariants))
   accepts `Sec-Fetch-Site: same-origin` or `none`, or, without it, an `Origin` whose host and
