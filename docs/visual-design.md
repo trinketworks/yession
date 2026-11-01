@@ -112,7 +112,14 @@ A status is text in its colour, and it leads with a mark: a dot if it has settle
 mark (see Motion) if it is still under way. It is never a filled or boxed badge. A verb never
 leads with a mark. So the mark, not a tone, says that a word cannot be pressed: a tone is one
 step of grey that a blur or a greyscale print hides, and principle 2 blurs the screen.
-*Test: a caps word with a leading mark is a status. A caps word without one can be pressed.*
+
+The one exception is a status said TWICE on the same row at the same width: the Manager
+roster's `running` and `stopped`, in the wide screen's own status column, beside the row's own
+rank mark (the spin or the ring, on the rail every width shares). The rail already carries the
+mark; running and stopped there are plain text, because a second mark would say nothing the
+first did not.
+*Test: a caps word with a leading mark is a status. A caps word without one can be pressed,
+unless its row already carries a mark that ranks it.*
 
 A status names a state. A reason says why. A reason is body text in the body voice, with no
 mark and no caps. A surface may carry both, the state first and the reason under it.

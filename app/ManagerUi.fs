@@ -75,18 +75,21 @@ module private Col =
 /// status column (`Col.status`). A phone reads the same words in the row's unfolded lines
 /// (`rowSays`), behind the mark that ranks them.
 ///
-/// A STATUS, in the product's one voice for one: the caps label step, in its role's colour,
-/// leading with a dot (docs/visual-design.md, Colour — "a status is text in its colour, and it
-/// leads with a dot", and the dot is what says the word cannot be pressed). It was 13px
-/// lowercase with no mark, which is the voice of a sentence, and read as something to press
-/// beside the bare verbs in the same row.
+/// A STATUS, in the product's one voice for one: the caps label step, in its role's colour
+/// (docs/visual-design.md, Colour — "a status is text in its colour, and it leads with a
+/// mark"). It was 13px lowercase with no mark, which is the voice of a sentence, and read as
+/// something to press beside the bare verbs in the same row.
 ///
-/// The roles are the doctrine's, not this page's: `running` is LIVE, so green, and its dot
-/// beats; `starting` is a wait, so `ink-dim` with a beating dot; `stopped` is a settled record,
-/// `archived` one step further back again, both still; a launch that failed or an exit is
-/// WRONG, so it is the one red word in its row. The word is always there beside the colour, so
-/// nothing rests on colour alone (WCAG 2.0 SC 1.4.1). The name above carries the same fact by
-/// weight of ink (`nameText`), which is what lets a blurred screen find what is live.
+/// Running and stopped are the exception: this page's own roster already says "running" by the
+/// row's own spin mark (`recordMarkCell`, at every width) and "stopped" by nothing under way at
+/// all, so the word here carries no second mark of its own — plain text is unambiguous and a
+/// mark beside it would only repeat what the rail already drew. Every other state here still
+/// leads with one, because it is the only place that state is said at this width: `starting` is
+/// a wait, so `ink-dim` with the spin mark; a launch that failed or an exit is WRONG, so it is
+/// the one red word in its row, leading with a dot; `archived` one step further back again,
+/// also a dot. The word is always there beside the colour, so nothing rests on colour alone
+/// (WCAG 2.0 SC 1.4.1). The name above carries the same fact by weight of ink (`nameText`),
+/// which is what lets a blurred screen find what is live.
 ///
 /// The red words are counted per ROW, which is the surface a row's hover tone, its rail of
 /// verbs and its one record make it. A registry of twenty exited sessions is twenty records,
@@ -115,7 +118,7 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
     // longer start is true and useless. A step fainter than `stopped`: it is the one state
     // nothing can be done to without first being undone.
     | Some _, _ -> line Style.statusFaint (dotMark Style.statusDot) Dom.Manager.statusArchived "archived" nothing
-    | None, ProcessManager.NotRunning -> line Style.statusWait (dotMark Style.statusDot) Dom.Manager.statusStopped "stopped" nothing
+    | None, ProcessManager.NotRunning -> line Style.statusWait nothing Dom.Manager.statusStopped "stopped" nothing
     | None, ProcessManager.Running _ ->
         // Each standing in the tone the SESSION gave it: the Manager never learns what a
         // standing is about, so a colour it chose would be one it guessed. Worst first, so
@@ -126,7 +129,7 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
             Standing.byConcern view.Standings
             |> List.map (fun s ->
                 html $"""<span> · </span><span class="{Style.attentionInk s.Attention}" data-session-standing="{s.Facet}">{s.Word}</span>""")
-        line Style.statusOk Icon.spinLead Dom.Manager.statusRunning "running" (html $"""{standings}""")
+        line Style.statusOk nothing Dom.Manager.statusRunning "running" (html $"""{standings}""")
     | None, ProcessManager.Launching ->
         line Style.statusWait Icon.spinLead Dom.Manager.statusStarting "starting" nothing
     | None, ProcessManager.LaunchFailed reason ->
@@ -211,6 +214,12 @@ let private nameText (view: ProcessManager.SessionView) : TemplateResult =
 /// one bordered rectangle is Declare, which is the hierarchy spent in the order of scarcity it
 /// asks for (docs/visual-design.md, Hierarchy of controls).
 ///
+/// Stop and Start lead with `Icon.stop`/`Icon.play`, the same two glyphs the chat's interrupt
+/// and a closed terminal's replay wear — one shape for "end the thing running" and one for
+/// "run the thing again" wherever either is offered, this row included. Archive and Unarchive
+/// stay bare words: neither owns a glyph anywhere else, and one would be invented just for
+/// this row.
+///
 /// An ARCHIVED row offers Unarchive and nothing else. The lifecycle verb comes first and
 /// Archive after it, so Stop and Start take turns in one place: a press on Stop that lands
 /// leaves Start under the same finger, which is the act that undoes it, and never Archive.
@@ -233,12 +242,12 @@ let private actions (view: ProcessManager.SessionView) : TemplateResult =
             match view.Status with
             | ProcessManager.Running _ ->
                 html $"""<button type="button" class="{Style.btnBareDanger}" data-stop="{id}" data-post="{posts SessionVerb.Stop}"
-                                 aria-label="Stop {name}">Stop</button>"""
+                                 aria-label="Stop {name}">{Icon.stop}Stop</button>"""
             | ProcessManager.NotRunning
             | ProcessManager.LaunchFailed _
             | ProcessManager.Exited _ ->
                 html $"""<button type="button" class="{Style.btnBare}" data-start="{id}" data-post="{posts SessionVerb.Launch}"
-                                 aria-label="Start {name}">Start</button>"""
+                                 aria-label="Start {name}">{Icon.play}Start</button>"""
             // Nothing to stop until there is a child, and nothing to start while one is
             // coming up: a launch in flight ends on its own bound, either way.
             | ProcessManager.Launching -> html $""""""

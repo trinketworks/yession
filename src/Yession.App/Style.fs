@@ -948,11 +948,13 @@ module Style =
     /// icon that is the only thing a row offers a thumb.
     let btnIconBareTouch = cls [ btnIconBare; hitTouch ]
 
-    /// The borderless verb as a WORD rather than an icon, for a row whose verb has no glyph
-    /// that says it (stop, unarchive). Same rule, same box height, same ink as the icon form;
-    /// the caps voice, because that is the one voice a bare verb speaks in.
+    /// The borderless verb as a WORD, for a row whose verb has no glyph of its own (archive,
+    /// unarchive) or wears one borrowed from wherever else it is offered (`ManagerUi.actions`'
+    /// Stop and Start, `Icon.stop`/`Icon.play`) — the `gap-1` is spent only when there is a
+    /// second child to space from the word. Same rule, same box height, same ink as the icon
+    /// form; the caps voice, because that is the one voice a bare verb speaks in.
     let private btnBareBase =
-        cls [ "h-6 px-1 shrink-0 inline-flex items-center font-ui"; caps; bareBox
+        cls [ "h-6 px-1 shrink-0 inline-flex items-center gap-1 font-ui"; caps; bareBox
               "transition-colors"; focusRing ]
     let btnBare = cls [ btnBareBase; bareInk ]
     let btnBareDanger = cls [ btnBareBase; bareInkDanger ]
