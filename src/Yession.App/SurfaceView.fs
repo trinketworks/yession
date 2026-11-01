@@ -270,13 +270,20 @@ module SurfaceView =
             html $"""
                 <p class="{Style.surfaceUnsupported}" data-surface-component="{c.Id}" data-surface-unsupported="{name}">{Dom.Text.surfaceUnsupported name}</p>"""
 
-    /// One surface, from its `root` component. A surface whose root has not arrived yet is not
-    /// drawn: there is nothing to answer.
+    /// One surface, from its `root` component, beside the app's own ×: every
+    /// surface can be taken down unanswered, whatever buttons the agent drew
+    /// (`DismissSurfaceMsg`). A surface whose root has not arrived yet is not drawn: there is
+    /// nothing to answer.
     let view (dispatch: ClientMsg -> unit) (surfaceId: string) (surface: Surface) : TemplateResult =
         if not (Map.containsKey "root" surface.Components) then Lit.nothing
         else
             let canvas = { SurfaceId = surfaceId; Components = surface.Components; Dispatch = dispatch }
             html $"""
                 <section class="{Style.agentSurface}" data-surface="{surfaceId}" aria-label="{Dom.Text.agentSurface}">
-                  {draw canvas Set.empty "root" (Evaluate.root surface.DataModel)}
+                  <div class="{Style.surfaceBody}">
+                    <div class="{Style.surfaceContent}">{draw canvas Set.empty "root" (Evaluate.root surface.DataModel)}</div>
+                    <button type="button" class="{Style.btnIcon}" data-surface-dismiss
+                            aria-label="{Dom.Text.surfaceDismissLabel}" title="{Dom.Text.surfaceDismissLabel}"
+                            @click={Ev(fun _ -> dispatch (DismissSurfaceMsg surfaceId))}>{Icon.close}</button>
+                  </div>
                 </section>"""

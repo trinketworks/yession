@@ -503,6 +503,89 @@ let private pressTests =
                 "one request, naming the button"
     ]
 
+/// What the session records when Ada dismisses the example's surface.
+let private dismissed : Yession.Domain.Surfaces.SurfaceDismissed =
+    { MessageId = messageId
+      SurfaceId = "pick"
+      Title = Some "Which branch should I rebase onto?"
+      By = ada }
+
+let private dismissTests =
+    testList "Dismiss" [
+        testCase "every surface offers a dismiss, whatever buttons the agent drew" <| fun () ->
+            let page = render (withSurface (surfaceOf [ plain "root" (ComponentKind.Text (Literal "No buttons here", None)) ] []))
+            Expect.isTrue ((tagWith Dom.Hooks.surfaceDismiss page).StartsWith "<button") "a control of the app's own"
+
+        testCase "dismissing asks the session" <| fun () ->
+            Expect.equal
+                (ClientModel.update (DismissSurfaceMsg "ask") (withSurface (choiceSurface [])) |> snd)
+                [ ClientEffect.DismissSurface "ask" ]
+                "one request, naming the surface"
+
+        testCase "a dismissal round-trips as a command" <| fun () ->
+            let codec = Yession.App.Codecs.Frames.session Yession.Codecs.Codec.string
+            let frame =
+                Yession.Domain.Link.Command (
+                    Yession.Domain.Link.Request (Yession.Domain.RequestId.fresh (), Yession.Domain.Link.DismissSurface "pick"))
+            Expect.equal
+                (Yession.Codecs.Codec.fromString codec (Yession.Codecs.Codec.toString codec frame))
+                (Ok frame)
+                "round-trip"
+
+        testCase "a surface's title is its first line of text, not a button's caption" <| fun () ->
+            let surface =
+                surfaceOf
+                    [ plain "root" (ComponentKind.Column (Static [ "go"; "card" ], None, None))
+                      plain "goLabel" (ComponentKind.Text (Literal "Go", None))
+                      plain "go" (ComponentKind.Button ("goLabel", None, Action.Event ("go", []), []))
+                      plain "card" (ComponentKind.Card "q")
+                      plain "q" (ComponentKind.Text (Literal "Ship it?", None)) ]
+                    []
+            Expect.equal (Project.title (Map.ofList [ "s", surface ]) "s") (Some "Ship it?") "the question in the card"
+
+        testCase "a surface that says nothing has no title" <| fun () ->
+            Expect.equal (Project.title (Map.ofList [ "f", formSurface [] ]) "f") None "no root, nothing drawn"
+
+        testCaseAsync "the session records what the surface was about" <| async {
+            let doc = Y.Doc.Create ()
+            let! _ = show doc Yession.Session.SurfaceTool.example
+            Expect.equal
+                (Yession.Session.SurfaceTool.dismissal (surfacesIn doc) messageId ada "pick")
+                (Ok dismissed)
+                "the example's question"
+        }
+
+        testCase "a surface that is gone is not dismissed" <| fun () ->
+            Expect.equal
+                (Yession.Session.SurfaceTool.dismissal Map.empty messageId ada "pick")
+                (Error "there is no surface 'pick'")
+                "the surface named"
+
+        testCase "a dismissal owes the agent a turn, as whoever dismissed it" <| fun () ->
+            Expect.equal
+                (AgentWake.pendingReason [ Yession.Domain.SessionEvent.SurfaceDismissed dismissed ])
+                (Some (SurfaceAnswered "pick", ada))
+                "owed to Ada"
+
+        testCase "a dismissal reads as the question, then the surface the agent named" <| fun () ->
+            Expect.equal
+                (Act.sentence (Act.SurfaceDismissed dismissed) |> Yession.Domain.Phrase.said)
+                "dismissed “Which branch should I rebase onto?” (surface pick, now taken down)"
+                "no JSON, and the agent's id for it"
+            Expect.equal
+                (Act.sentence (Act.SurfaceDismissed { dismissed with Title = None }) |> Yession.Domain.Phrase.said)
+                "dismissed surface pick (now taken down)"
+                "the id when there is nothing to quote"
+
+        testCase "a dismissal on the wire is the shape it will always be" <| fun () ->
+            let pinned =
+                """{"type":"surfaceDismissed","payload":{"messageId":"m1","surfaceId":"pick","title":"Which branch should I rebase onto?","by":{"kind":"peer","peerId":"ada"}}}"""
+            Expect.equal
+                (Yession.Codecs.Codec.fromString Yession.App.Codecs.Events.sessionEvent pinned)
+                (Ok (Yession.Domain.SessionEvent.SurfaceDismissed dismissed))
+                "the durable form decodes to the event"
+    ]
+
 let tests =
     testList "Agent surfaces" [
         syncTests
@@ -511,4 +594,5 @@ let tests =
         toolTests
         pressTests
         projectionTests
+        dismissTests
     ]

@@ -3846,6 +3846,10 @@ module Style =
     let agentSurface =
         cls [ "shrink-0 flex flex-col gap-3 py-4 px-4 wide:px-rail bg-surface"
               "max-h-[calc(var(--visual-h,100dvh)/2)] overflow-y-auto overscroll-contain" ]
+    /// What the agent drew, with the app's × beside it at the top: the dismiss every surface
+    /// has, apart from the agent's own buttons and on no line of its own.
+    let surfaceBody = "flex items-start gap-3 min-w-0"
+    let surfaceContent = "flex-1 min-w-0"
     let surfaceColumn = "flex flex-col gap-3 min-w-0"
     let surfaceRow = "flex flex-wrap items-center gap-3 min-w-0"
     /// A card inside a surface: one step up the greys, which is what nesting is said with.

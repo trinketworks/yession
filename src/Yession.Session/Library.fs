@@ -66,6 +66,7 @@ module Bootstrap =
         | SessionEvent.TabOpened _ -> "tab-opened"
         | SessionEvent.TabClosed _ -> "tab-closed"
         | SessionEvent.SurfaceActionTaken _ -> "surface-action-taken"
+        | SessionEvent.SurfaceDismissed _ -> "surface-dismissed"
         | SessionEvent.CommandRefused _ -> "command-refused"
         | SessionEvent.GatedCommandFailed _ -> "gated-command-failed"
         | SessionEvent.ToolUseStarted _ -> "tool-use-started"

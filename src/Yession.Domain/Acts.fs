@@ -51,6 +51,7 @@ type Act =
     | FileChanged of FileChanged
     | ArtifactShared of ArtifactShared
     | SurfaceActionTaken of Surfaces.SurfaceActionTaken
+    | SurfaceDismissed of Surfaces.SurfaceDismissed
     | CommandRefused of CommandRefused
     | GatedCommandFailed of GatedCommandFailed
     | CredentialSpent of GitCredentialSpent
@@ -98,6 +99,7 @@ module Act =
         | Act.FileChanged f -> FileChanged.phrase f
         | Act.ArtifactShared a -> ArtifactShared.phrase a
         | Act.SurfaceActionTaken a -> Surfaces.SurfaceActionTaken.phrase a
+        | Act.SurfaceDismissed d -> Surfaces.SurfaceDismissed.phrase d
         | Act.CommandRefused c -> CommandRefused.phrase c
         | Act.GatedCommandFailed c -> GatedCommandFailed.phrase c
         | Act.CredentialSpent g -> GitCredentialSpent.deed g
@@ -140,6 +142,7 @@ module Act =
         | Act.FileChanged _
         | Act.ArtifactShared _
         | Act.SurfaceActionTaken _
+        | Act.SurfaceDismissed _
         | Act.CommandRefused _
         | Act.GatedCommandFailed _
         | Act.McpServerAvailable _
@@ -195,6 +198,7 @@ module Act =
         | Act.CredentialSpent g -> GitCredentialSpent.particulars g
         | Act.ArtifactShared a -> ArtifactShared.particulars a
         | Act.SurfaceActionTaken a -> Surfaces.SurfaceActionTaken.particulars a
+        | Act.SurfaceDismissed d -> Surfaces.SurfaceDismissed.particulars d
         | Act.ShellProfileSet p -> ShellProfileSet.particulars p
         | Act.RepoRemoved _
         | Act.RepoBranchSwitched _
@@ -255,6 +259,7 @@ module Act =
         // reader asks about them separately.
         | Act.ArtifactShared a -> ArtifactShared.verb a, "artifact", "artifacts"
         | Act.SurfaceActionTaken _ -> "answered", "surface", "surfaces"
+        | Act.SurfaceDismissed _ -> "dismissed", "surface", "surfaces"
         | Act.CommandRefused _ -> "refused", "command", "commands"
         | Act.GatedCommandFailed _ -> "failed", "command", "commands"
         | Act.CredentialSpent _ -> "spent", "credential", "credentials"

@@ -408,7 +408,7 @@ module Prompting =
             "You are running because a pull request watched here changed state. The conversation above says how. Say what it means for what you were doing. Then continue."
         | SurfaceAnswered surfaceId ->
             sprintf
-                "You are running because a person pressed a button on surface %s, which you showed with show_surface. The conversation above says who pressed it and what it carried. Act on the answer. If the question is settled, take the surface down with deleteSurface."
+                "You are running because a person replied to surface %s, which you showed with show_surface. The conversation above says who replied. If they pressed a button, it says what the button carried. Act on the answer. If the question is settled, take the surface down with deleteSurface. If they dismissed the surface, it is already gone. Do not show it again unless they ask."
                 surfaceId
         // Simplified Technical English, as the tool answers are: one term for the terminal's
         // state ("cannot run commands") and one for what became of its queue ("refused"). The
