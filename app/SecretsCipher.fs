@@ -101,6 +101,12 @@ let aadFor (scope: SecretScope) (name: SecretName) : string =
 let connectionAadFor (id: ConnectionId) : string =
     sprintf "yession-connection:1:%s:%s" (SecretScope.describe id.Scope) (SecretName.value id.Name)
 
+/// The AAD binding a RECORD's ciphertext to its entry: a third prefix, so a ciphertext moved
+/// into the records file from either credential family, or onto another owner or name, fails
+/// GCM authentication instead of opening as somebody else's record.
+let recordAadFor (id: RecordId) : string =
+    sprintf "yession-record:1:%s" (RecordId.describe id)
+
 /// Import a raw KEK as a NON-EXTRACTABLE AES-GCM key and return the cipher over it.
 let importKey (kekB64u: string) : Async<Cipher> =
     async {

@@ -1254,6 +1254,7 @@ let private startConnectionsServer (callers: (string * Control.ControlCaller) li
                         dummyRegister
                         None
                         (Some api)
+                        None
                         hub.Register
                         (fun _ _ -> "")
                         (fun _ _ -> false)

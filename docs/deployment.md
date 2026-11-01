@@ -234,17 +234,23 @@ yession-manager --secrets durable     # persistence required, or refuse to boot
 
 Unknown names fail the boot, as for `--auth`.
 
-Durable secrets are one AES-256-GCM file in the data directory. The key comes from the macOS
-Keychain, the Windows Credential Manager, or the Linux Secret Service. There is no key file and
-no key variable.
+Durable secrets are one AES-256-GCM file in the data directory, `secrets.json`. The key comes from
+the macOS Keychain, the Windows Credential Manager, or the Linux Secret Service. There is no key
+file and no key variable. Beside it, `records.json` holds what sessions keep for a person across
+their sessions, sealed under the same key
+([ADR](decisions/2026-11-01-records-are-a-third-family-of-the-store.md)). A Manager that cannot
+read `records.json` (a newer build wrote it, or another key sealed it) says so at boot as
+`yession.secrets.records_refused`, leaves it as it is, and opens the credentials without it.
 
 **Roll back only with the file you had.** The file has a schema version. A Manager refuses a
 `secrets.json` that a newer build wrote, and says so. A Manager from before the version 2
 schema (generic secrets and connection credentials kept apart,
 [ADR](decisions/2026-10-26-secrets-and-connections-are-two-families.md)) cannot: it reads the
 newer file and, at its first write, drops every connected credential. Before an upgrade, copy
-`secrets.json` out of the data directory. If you roll back (one `nix` command), put that copy
-back in the same step. The Manager makes no copy itself: a copy would outlive Disconnect.
+`secrets.json` and `records.json` out of the data directory. If you roll back (one `nix`
+command), put those copies back in the same step. The Manager makes no copy itself: a copy would
+outlive Disconnect. A Manager from before records does not read `records.json` and does not
+change it.
 
 #### Upgrading past v14.4.1-beta.1
 

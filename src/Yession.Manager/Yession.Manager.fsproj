@@ -15,6 +15,7 @@
     <Compile Include="McpWire.fs" />
     <Compile Include="State.fs" />
     <Compile Include="SecretsState.fs" />
+    <Compile Include="RecordsState.fs" />
     <Compile Include="BrokerState.fs" />
     <Compile Include="ControlWire.fs" />
     <!-- Where each control call goes: the one spelling of the paths both ends use. -->

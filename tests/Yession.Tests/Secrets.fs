@@ -160,6 +160,46 @@ let private connectionPolicyTests =
             Expect.equal (CredentialOwner.scope LocalOwner) LocalScope "local scope"
     ]
 
+// --- Records: the third family's policy rows ---------------------------------------------
+
+let private recordOf (owner: CredentialOwner) (n: string) : RecordId =
+    { RecordId.Owner = owner; RecordId.Name = RecordName.create n |> expect }
+let private recordActions = [ ReadRecord; WriteRecord ]
+let private onRecord subject action owner : Request =
+    { Subject = subject; Access = RecordAccess (action, recordOf owner "repo-trust/v1/github/42") }
+
+let private recordPolicyTests =
+    testList "record policy rows" [
+        testCase "a user signed in to the session: their records read and write" <| fun () ->
+            for action in recordActions do
+                permits (sprintf "%A bound" action) (onRecord callerA action (UserOwner alice))
+
+        testCase "a user not signed in to the session: their records are refused" <| fun () ->
+            for action in recordActions do
+                denies (sprintf "%A other user" action) (onRecord callerA action (UserOwner bob))
+
+        testCase "before anyone signs in, no user's records are reachable" <| fun () ->
+            for action in recordActions do
+                denies (sprintf "%A before login" action) (onRecord callerANoUsers action (UserOwner alice))
+
+        testCase "the deployment's records: a launch granted unattributed access reads and writes" <| fun () ->
+            for action in recordActions do
+                permits (sprintf "%A unattributed" action) (onRecord callerALocal action LocalOwner)
+
+        testCase "the deployment's records: an attributed launch is refused" <| fun () ->
+            for action in recordActions do
+                denies (sprintf "%A attributed" action) (onRecord callerA action LocalOwner)
+
+        testCase "a record name of lowercase letters, digits and separators is accepted" <| fun () ->
+            Expect.isOk (RecordName.create "repo-trust/v1/github_x.y-42") "accepted"
+
+        testCase "a record name with a character outside the allowed set is refused" <| fun () ->
+            Expect.isError (RecordName.create "repo trust") "a space is refused"
+
+        testCase "a record name over the length limit is refused" <| fun () ->
+            Expect.isError (RecordName.create (String.replicate (RecordName.maxLength + 1) "a")) "too long"
+    ]
+
 // --- Step 2: the envelope + wire codecs -------------------------------------------------
 
 open Yession.Manager
@@ -285,8 +325,10 @@ let private subtle : KeyExport = Fable.Core.Util.jsNative
 let private exportRawKey (key: CryptoKey) : Fable.Core.JS.Promise<Fable.Core.JS.ArrayBuffer> =
     subtle.exportKey (KeyFormat.Raw, key)
 
-let private freshPath (label: string) =
-    sprintf "tests/Yession.Tests/out/.data/%s-%d.secrets.json" label (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+/// A durable store's two files, named fresh for each call.
+let private freshFiles (label: string) : SecretStore.StoreFiles =
+    let stem = sprintf "tests/Yession.Tests/out/.data/%s-%d" label (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+    { Secrets = stem + ".secrets.json"; Records = stem + ".records.json" }
 
 let private sid (scope: SecretScope) (n: string) : SecretId =
     { Scope = scope; Name = SecretName.create n |> expect }
@@ -364,9 +406,9 @@ let private cipherTests =
             }
     ]
 
-let private openDurable path (keyStore: KeyStore.KeyStore) =
+let private openDurable (files: SecretStore.StoreFiles) (keyStore: KeyStore.KeyStore) =
     async {
-        let! opened = SecretStore.openStore (Some path) keyStore
+        let! opened = SecretStore.openStore (Some files) keyStore
         return expect (opened |> Result.mapError SecretStore.OpenError.describe)
     }
 
@@ -381,8 +423,8 @@ let private storeTests =
     testList "secret store" [
         testCaseAsync "set → list yields metadata; resolve returns the value; delete removes" <|
             async {
-                let path = freshPath "roundtrip"
-                let! store = openDurable path (KeyStore.inMemory ())
+                let files = freshFiles "roundtrip"
+                let! store = openDurable files (KeyStore.inMemory ())
                 let id = sid (SessionScope sessionA) "deploy-token"
                 let! set = store.Secrets.Set id "hunter2"
                 Expect.equal (expect set).Id id "metadata identifies the secret"
@@ -397,15 +439,15 @@ let private storeTests =
 
         testCaseAsync "the KEK is durable in the key store before first use, and reopening decrypts" <|
             async {
-                let path = freshPath "reopen"
+                let files = freshFiles "reopen"
                 let keyStore = KeyStore.inMemory ()
-                let! store = openDurable path keyStore
+                let! store = openDurable files keyStore
                 let! kek = keyStore.Get ()
                 Expect.isTrue (expect kek |> Option.isSome) "KEK persisted at open, before any entry"
                 let id = sid (SessionScope sessionA) "deploy-token"
                 let! _ = store.Secrets.Set id "hunter2"
                 // A fresh store over the same file + key store (a Manager restart).
-                let! reopened = openDurable path keyStore
+                let! reopened = openDurable files keyStore
                 let! resolved = reopened.Secrets.Resolve id
                 Expect.equal (expect resolved) (Some "hunter2") "survives the restart"
                 Expect.isTrue reopened.Durable "durable mode"
@@ -413,28 +455,28 @@ let private storeTests =
 
         testCaseAsync "the value on disk is ciphertext only" <|
             async {
-                let path = freshPath "atrest"
-                let! store = openDurable path (KeyStore.inMemory ())
+                let files = freshFiles "atrest"
+                let! store = openDurable files (KeyStore.inMemory ())
                 let! _ = store.Secrets.Set (sid (SessionScope sessionA) "deploy-token") "hunter2-at-rest"
-                let onDisk = Fs.readText path
+                let onDisk = Fs.readText files.Secrets
                 Expect.isFalse (onDisk.Contains "hunter2-at-rest") "no plaintext at rest"
                 Expect.isTrue (onDisk.Contains "deploy-token") "metadata is cleartext by design"
             }
 
         testCaseAsync "a corrupt file fails the open loudly" <|
             async {
-                let path = freshPath "corrupt"
-                Fs.writeTextAtomic path "{ not json"
-                let! opened = SecretStore.openStore (Some path) (KeyStore.inMemory ())
+                let files = freshFiles "corrupt"
+                Fs.writeTextAtomic files.Secrets "{ not json"
+                let! opened = SecretStore.openStore (Some files) (KeyStore.inMemory ())
                 Expect.isError opened "corrupt store must not look empty"
             }
 
         testCaseAsync "a file a newer build wrote is refused, not read as this build's newest" <|
             async {
-                let path = freshPath "newer"
+                let files = freshFiles "newer"
                 let file = SecretsFile.empty "k"
-                Fs.writeTextAtomic path ((SecretsCodec.toString file).Replace ("\"version\": 2", "\"version\": 3"))
-                let! opened = SecretStore.openStore (Some path) (KeyStore.inMemory ())
+                Fs.writeTextAtomic files.Secrets ((SecretsCodec.toString file).Replace ("\"version\": 2", "\"version\": 3"))
+                let! opened = SecretStore.openStore (Some files) (KeyStore.inMemory ())
                 match opened with
                 | Error (SecretStore.WrittenByNewerBuild (_, 3)) -> ()
                 | other -> failwithf "expected WrittenByNewerBuild 3, got %A" other
@@ -442,11 +484,11 @@ let private storeTests =
 
         testCaseAsync "a file sealed by a different key fails distinctly" <|
             async {
-                let path = freshPath "wrongkek"
-                let! first = openDurable path (KeyStore.inMemory ())
+                let files = freshFiles "wrongkek"
+                let! first = openDurable files (KeyStore.inMemory ())
                 let! _ = first.Secrets.Set (sid (SessionScope sessionA) "deploy-token") "v"
                 // A key store holding a different KEK (the first one is lost).
-                let! reopened = SecretStore.openStore (Some path) (KeyStore.random ())
+                let! reopened = SecretStore.openStore (Some files) (KeyStore.random ())
                 match reopened with
                 | Error (SecretStore.SealedByDifferentKey _ as e) ->
                     Expect.isTrue ((SecretStore.OpenError.describe e).Contains "sealed by a different key") "distinct wording"
@@ -458,13 +500,13 @@ let private storeTests =
             async {
                 // A locked macOS keychain reads as empty: the real KEK is still there, and
                 // a minted one would overwrite it once the keychain unlocked.
-                let path = freshPath "lockedkeychain"
-                let! first = openDurable path (KeyStore.inMemory ())
+                let files = freshFiles "lockedkeychain"
+                let! first = openDurable files (KeyStore.inMemory ())
                 let! _ = first.Secrets.Set (sid (SessionScope sessionA) "deploy-token") "v"
                 let mutable sets = 0
                 let empty = KeyStore.inMemory ()
                 let counting = { empty with Set = fun value -> async { sets <- sets + 1; return! empty.Set value } }
-                let! reopened = SecretStore.openStore (Some path) counting
+                let! reopened = SecretStore.openStore (Some files) counting
                 match reopened with
                 | Error (SecretStore.KeyStoreFailure detail) ->
                     Expect.isTrue (detail.Contains "has no key") "says the key is missing"
@@ -478,10 +520,10 @@ let private storeTests =
 
         testCaseAsync "a corrupt file with no key fails as corrupt without minting a key" <|
             async {
-                let path = freshPath "corruptnokey"
-                Fs.writeTextAtomic path "{ not json"
+                let files = freshFiles "corruptnokey"
+                Fs.writeTextAtomic files.Secrets "{ not json"
                 let keyStore = KeyStore.inMemory ()
-                let! opened = SecretStore.openStore (Some path) keyStore
+                let! opened = SecretStore.openStore (Some files) keyStore
                 match opened with
                 | Error (SecretStore.CorruptStore _) -> ()
                 | other -> failwithf "expected CorruptStore, got %A" (other |> Result.map ignore)
@@ -491,9 +533,9 @@ let private storeTests =
 
         testCaseAsync "the boot open waits out a key store with no key, and opens once the key is back" <|
             async {
-                let path = freshPath "waitforkey"
+                let files = freshFiles "waitforkey"
                 let real = KeyStore.inMemory ()
-                let! first = openDurable path real
+                let! first = openDurable files real
                 let id = sid (SessionScope sessionA) "deploy-token"
                 let! _ = first.Secrets.Set id "hunter2"
                 let! kek = real.Get ()
@@ -505,7 +547,7 @@ let private storeTests =
                     { real with
                         Get = fun () -> async { reads <- reads + 1; return if reads < 3 then Ok None else Ok (expect kek) }
                         Set = fun value -> async { sets <- sets + 1; return! real.Set value } }
-                let! opened = SecretStore.openStoreWaiting 1 (fun _ -> waits <- waits + 1) (Some path) locking
+                let! opened = SecretStore.openStoreWaiting 1 (fun _ -> waits <- waits + 1) (Some files) locking
                 let store = expect (opened |> Result.mapError SecretStore.OpenError.describe)
                 let! resolved = store.Secrets.Resolve id
                 Expect.equal (expect resolved) (Some "hunter2") "the real key opened the file"
@@ -517,9 +559,9 @@ let private storeTests =
 
         testCaseAsync "the boot open does not wait on a corrupt file" <|
             async {
-                let path = freshPath "waitcorrupt"
-                Fs.writeTextAtomic path "{ not json"
-                let! opened = SecretStore.openStoreWaiting 1 (fun _ -> failwith "must not wait") (Some path) (KeyStore.inMemory ())
+                let files = freshFiles "waitcorrupt"
+                Fs.writeTextAtomic files.Secrets "{ not json"
+                let! opened = SecretStore.openStoreWaiting 1 (fun _ -> failwith "must not wait") (Some files) (KeyStore.inMemory ())
                 Expect.isError opened "fails at once"
             }
 
@@ -535,8 +577,8 @@ let private storeTests =
 
         testCaseAsync "interleaved sets both land (encryption completes before the read-modify-write)" <|
             async {
-                let path = freshPath "interleave"
-                let! store = openDurable path (KeyStore.inMemory ())
+                let files = freshFiles "interleave"
+                let! store = openDurable files (KeyStore.inMemory ())
                 let a = store.Secrets.Set (sid (SessionScope sessionA) "one") "1"
                 let b = store.Secrets.Set (sid (SessionScope sessionA) "two") "2"
                 let! _ = [ a; b ] |> Async.Parallel
@@ -569,13 +611,13 @@ let private keyringTests =
         testCaseAsync "a whole SecretStore runs durable over the real keyring" <|
             async {
                 let keyStore = KeyStore.keyring "yession-test" ("store-" + Yession.Host.Interop.randomSecret ())
-                let path = freshPath "keyring"
-                let! store = openDurable path keyStore
+                let files = freshFiles "keyring"
+                let! store = openDurable files keyStore
                 Expect.isTrue store.Durable "durable over the OS store"
                 let id = sid (SessionScope sessionA) "deploy-token"
                 let! _ = store.Secrets.Set id "keyring-held"
                 // Reopen: the KEK comes back from the credential manager and decrypts.
-                let! reopened = openDurable path keyStore
+                let! reopened = openDurable files keyStore
                 let! resolved = reopened.Secrets.Resolve id
                 Expect.equal (expect resolved) (Some "keyring-held") "KEK survives via the OS store"
             }
@@ -635,13 +677,13 @@ let private execTests =
         testCaseAsync "a whole SecretStore runs durable over a helper, and the key survives a reopen" <|
             async {
                 let keyStore = KeyStore.exec (storingHelper "store")
-                let path = freshPath "exec"
-                let! store = openDurable path keyStore
+                let files = freshFiles "exec"
+                let! store = openDurable files keyStore
                 Expect.isTrue store.Durable "durable over the helper"
                 Expect.isTrue store.KekMinted "the Manager minted the key; the helper only kept it"
                 let id = sid (SessionScope sessionA) "deploy-token"
                 let! _ = store.Secrets.Set id "helper-held"
-                let! reopened = openDurable path keyStore
+                let! reopened = openDurable files keyStore
                 Expect.isFalse reopened.KekMinted "the second open loaded it"
                 let! resolved = reopened.Secrets.Resolve id
                 Expect.equal (expect resolved) (Some "helper-held") "KEK survives via the helper"
@@ -670,7 +712,7 @@ let private execTests =
                     waited <- waited + 1
                     Expect.equal (SecretStore.OpenError.kind e) "keystore" "the wait is for the key store"
                     TestFiles.write (helper + ".ready") ""
-                let! opened = SecretStore.openStoreWaiting 1 waitedOn (Some (freshPath "flaky")) store
+                let! opened = SecretStore.openStoreWaiting 1 waitedOn (Some (freshFiles "flaky")) store
                 let store = expect (opened |> Result.mapError SecretStore.OpenError.describe)
                 Expect.equal waited 1 "waited once, then the helper answered"
                 Expect.isTrue store.Durable "and the store is durable"
@@ -679,7 +721,7 @@ let private execTests =
         testCaseAsync "a helper that answers nonsense is a key store failure, not a key" <|
             async {
                 let store = KeyStore.exec (helperScript "garbage" "echo 'not a payload'")
-                let! opened = SecretStore.openStore (Some (freshPath "garbage")) store
+                let! opened = SecretStore.openStore (Some (freshFiles "garbage")) store
                 match opened with
                 | Error (SecretStore.KeyStoreFailure detail) ->
                     Expect.isTrue (detail.Contains "malformed") (sprintf "the payload shape is checked: %s" detail)
@@ -827,44 +869,44 @@ let private familyTests =
 
         testCaseAsync "a version 1 file's broker envelope opens as a connection credential" <|
             async {
-                let path = freshPath "v1-connection"
+                let files = freshFiles "v1-connection"
                 let keyStore = KeyStore.random ()
                 let envelope = BrokeredCredentialCodec.toString (BrokeredStatic "ghp_kept")
-                do! writeV1 path keyStore [ UserScope alice, githubName, envelope ]
-                let! store = openDurable path keyStore
+                do! writeV1 files.Secrets keyStore [ UserScope alice, githubName, envelope ]
+                let! store = openDurable files keyStore
                 let! resolved = (brokerOver store).Resolve (githubAt (UserScope alice))
                 Expect.equal (expect resolved |> snd) "ghp_kept" "the credential survives the split"
             }
 
         testCaseAsync "a version 1 file's broker envelope is no longer a generic secret" <|
             async {
-                let path = freshPath "v1-not-generic"
+                let files = freshFiles "v1-not-generic"
                 let keyStore = KeyStore.random ()
                 let envelope = BrokeredCredentialCodec.toString (BrokeredStatic "ghp_kept")
-                do! writeV1 path keyStore [ SessionScope sessionA, githubName, envelope ]
-                let! store = openDurable path keyStore
+                do! writeV1 files.Secrets keyStore [ SessionScope sessionA, githubName, envelope ]
+                let! store = openDurable files keyStore
                 let! got = resolveIn store sessionA githubName
                 Expect.isError got "a reference does not reach it"
             }
 
         testCaseAsync "a version 1 file's generic secret stays generic" <|
             async {
-                let path = freshPath "v1-generic"
+                let files = freshFiles "v1-generic"
                 let keyStore = KeyStore.random ()
-                do! writeV1 path keyStore [ SessionScope sessionA, name, "hunter2" ]
-                let! store = openDurable path keyStore
+                do! writeV1 files.Secrets keyStore [ SessionScope sessionA, name, "hunter2" ]
+                let! store = openDurable files keyStore
                 let! got = resolveIn store sessionA name
                 Expect.equal (expect got) "hunter2" "the session's secret resolves as before"
             }
 
         testCaseAsync "a sorted version 1 file opens again under this build's rules" <|
             async {
-                let path = freshPath "v1-reopen"
+                let files = freshFiles "v1-reopen"
                 let keyStore = KeyStore.random ()
                 let envelope = BrokeredCredentialCodec.toString (BrokeredStatic "ghp_kept")
-                do! writeV1 path keyStore [ UserScope alice, githubName, envelope ]
-                let! _ = openDurable path keyStore
-                let! reopened = openDurable path keyStore
+                do! writeV1 files.Secrets keyStore [ UserScope alice, githubName, envelope ]
+                let! _ = openDurable files keyStore
+                let! reopened = openDurable files keyStore
                 let! resolved = (brokerOver reopened).Resolve (githubAt (UserScope alice))
                 Expect.equal (expect resolved |> snd) "ghp_kept" "the written-back file holds the credential"
             }
@@ -892,7 +934,12 @@ let private auditTests =
 let private postControl (url: string) (secret: string) (body: string) : Async<TestHttp.Reply> =
     TestHttp.post [ "x-yession-control", secret ] "application/json" body url
 
-let private startControlServer (callers: (string * Control.ControlCaller) list) (api: Control.SecretsApi option) (onUnauthorized: string -> unit) =
+let private startControlServerWith
+    (callers: (string * Control.ControlCaller) list)
+    (api: Control.SecretsApi option)
+    (records: Control.RecordsApi option)
+    (onUnauthorized: string -> unit)
+    =
     async {
         let table = Map.ofList callers
         let dummyRegister (_: string) (_: SessionId) (_: string) : Yession.Oidc.RegisterClientResponse =
@@ -908,6 +955,7 @@ let private startControlServer (callers: (string * Control.ControlCaller) list) 
                         dummyRegister
                         api
                         None
+                        records
                         (fun _ _ -> Subscription.none)
                         (fun _ _ -> "")
                         (fun _ _ -> false)
@@ -921,6 +969,9 @@ let private startControlServer (callers: (string * Control.ControlCaller) list) 
                 server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
         return listening, sprintf "http://127.0.0.1:%d" (serverPort listening)
     }
+
+let private startControlServer (callers: (string * Control.ControlCaller) list) (api: Control.SecretsApi option) (onUnauthorized: string -> unit) =
+    startControlServerWith callers api None onUnauthorized
 
 let private caller sessionId users : Control.ControlCaller =
     { SessionId = sessionId; Users = users; Local = false }
@@ -1150,15 +1201,250 @@ let private secretsModeTests =
             async {
                 // The other half of "connect once": the KEK is stable, so a Manager that
                 // restarts opens the same entries rather than an empty store.
-                let path = freshPath "restart"
+                let files = freshFiles "restart"
                 let keyStore = KeyStore.inMemory ()
                 let id = sid LocalScope "claude-code"
-                let! before = openDurable path keyStore
+                let! before = openDurable files keyStore
                 let! _ = before.Secrets.Set id "token-value"
-                let! after = openDurable path keyStore
+                let! after = openDurable files keyStore
                 let! resolved = after.Secrets.Resolve id
                 Expect.equal (expect resolved) (Some "token-value") "the entry survived the reopen"
                 Expect.equal after.EntriesAtOpen 1 "and was there at open, not written again"
+            }
+    ]
+
+// --- Records: the third family's store, wire and routes ----------------------------------
+
+let private aliceRecord = recordOf (UserOwner alice) "repo-trust/v1/github/42"
+
+/// A store holding one record of alice's, at revision 1.
+let private storeWithRecord (value: string) =
+    async {
+        let! store = openEphemeral ()
+        let! written = store.Records.Write aliceRecord None value
+        expect written |> ignore
+        return store
+    }
+
+/// A records file a newer build wrote, beside no secrets file.
+let private newerRecordsFile (files: SecretStore.StoreFiles) =
+    Fs.writeTextAtomic files.Records "{ \"version\": 2, \"kekId\": \"k\", \"records\": [] }"
+
+let private recordStoreTests =
+    testList "records" [
+        testCaseAsync "a written record reads back with its value and first revision" <|
+            async {
+                let! store = storeWithRecord "first"
+                let! read = store.Records.Read aliceRecord
+                Expect.equal (expect read |> Option.map (fun r -> r.Value, r.Revision)) (Some ("first", 1)) "read back"
+            }
+
+        testCaseAsync "a record nobody wrote reads as none" <|
+            async {
+                let! store = openEphemeral ()
+                let! read = store.Records.Read aliceRecord
+                Expect.equal (expect read) None "no record"
+            }
+
+        testCaseAsync "a write at the stored revision replaces the record" <|
+            async {
+                let! store = storeWithRecord "first"
+                let! written = store.Records.Write aliceRecord (Some 1) "second"
+                Expect.equal (expect written) (RecordWrite.Written 2) "the next revision"
+            }
+
+        testCaseAsync "a write at an older revision is told the stored one" <|
+            async {
+                let! store = storeWithRecord "first"
+                let! _ = store.Records.Write aliceRecord (Some 1) "second"
+                let! late = store.Records.Write aliceRecord (Some 1) "late"
+                Expect.equal (expect late) (RecordWrite.Stale (Some 2)) "stale"
+            }
+
+        testCaseAsync "a stale write leaves the record as it was" <|
+            async {
+                let! store = storeWithRecord "first"
+                let! _ = store.Records.Write aliceRecord None "late"
+                let! read = store.Records.Read aliceRecord
+                Expect.equal (expect read |> Option.map (fun r -> r.Value)) (Some "first") "unchanged"
+            }
+
+        testCaseAsync "a write that expects no record, over one that exists, is stale" <|
+            async {
+                let! store = storeWithRecord "first"
+                let! second = store.Records.Write aliceRecord None "second"
+                Expect.equal (expect second) (RecordWrite.Stale (Some 1)) "stale"
+            }
+
+        testCaseAsync "a value over the length limit is refused" <|
+            async {
+                let! store = openEphemeral ()
+                let! written =
+                    store.Records.Write aliceRecord None (String.replicate (SecretStore.RecordLimits.maxValueLength + 1) "x")
+                Expect.isError written "refused"
+            }
+
+        testCaseAsync "an owner at the record limit cannot add another" <|
+            async {
+                let! store = openEphemeral ()
+                for i in 1 .. SecretStore.RecordLimits.maxRecordsPerOwner do
+                    let! written = store.Records.Write (recordOf (UserOwner alice) (sprintf "r/%d" i)) None "v"
+                    expect written |> ignore
+                let! extra = store.Records.Write (recordOf (UserOwner alice) "r/extra") None "v"
+                Expect.isError extra "refused"
+            }
+
+        testCaseAsync "an owner at the record limit can still replace one of theirs" <|
+            async {
+                let! store = openEphemeral ()
+                for i in 1 .. SecretStore.RecordLimits.maxRecordsPerOwner do
+                    let! written = store.Records.Write (recordOf (UserOwner alice) (sprintf "r/%d" i)) None "v"
+                    expect written |> ignore
+                let! replaced = store.Records.Write (recordOf (UserOwner alice) "r/1") (Some 1) "w"
+                Expect.equal (expect replaced) (RecordWrite.Written 2) "replaced"
+            }
+
+        testCaseAsync "a record survives a reopen" <|
+            async {
+                let files = freshFiles "record-reopen"
+                let keyStore = KeyStore.inMemory ()
+                let! store = openDurable files keyStore
+                let! _ = store.Records.Write aliceRecord None "kept"
+                let! reopened = openDurable files keyStore
+                let! read = reopened.Records.Read aliceRecord
+                Expect.equal (expect read |> Option.map (fun r -> r.Value)) (Some "kept") "read after the restart"
+            }
+
+        testCaseAsync "a record's value is ciphertext on disk" <|
+            async {
+                let files = freshFiles "record-atrest"
+                let! store = openDurable files (KeyStore.inMemory ())
+                let! _ = store.Records.Write aliceRecord None "plain-record-value"
+                Expect.isFalse ((Fs.readText files.Records).Contains "plain-record-value") "no plaintext at rest"
+            }
+
+        testCaseAsync "records are kept in their own file, apart from the secrets" <|
+            async {
+                let files = freshFiles "record-ownfile"
+                let! store = openDurable files (KeyStore.inMemory ())
+                let! _ = store.Records.Write aliceRecord None "v"
+                Expect.isFalse (Fs.exists files.Secrets) "a record write leaves the secrets file alone"
+            }
+
+        testCaseAsync "a ciphertext moved onto another owner's record does not open" <|
+            async {
+                let! cipher = SecretsCipher.importKey (SecretsCipher.generateKek ())
+                let! iv, ct = cipher.Encrypt (SecretsCipher.recordAadFor aliceRecord) "v"
+                let bobs = recordOf (UserOwner bob) "repo-trust/v1/github/42"
+                let! moved = cipher.Decrypt (SecretsCipher.recordAadFor bobs) iv ct
+                Expect.isError moved "bob's AAD does not open alice's ciphertext"
+            }
+
+        testCaseAsync "a records file a newer build wrote refuses every records call" <|
+            async {
+                let files = freshFiles "record-newer"
+                newerRecordsFile files
+                let! store = openDurable files (KeyStore.inMemory ())
+                let! read = store.Records.Read aliceRecord
+                Expect.isError read "refused"
+            }
+
+        testCaseAsync "a records file a newer build wrote leaves the secrets usable" <|
+            async {
+                let files = freshFiles "record-newer-secrets"
+                newerRecordsFile files
+                let! store = openDurable files (KeyStore.inMemory ())
+                let id = sid (SessionScope sessionA) "deploy-token"
+                let! _ = store.Secrets.Set id "hunter2"
+                let! resolved = store.Secrets.Resolve id
+                Expect.equal (expect resolved) (Some "hunter2") "the credentials open without the records"
+            }
+
+        testCaseAsync "a refused records file is not written over" <|
+            async {
+                let files = freshFiles "record-newer-kept"
+                newerRecordsFile files
+                let before = Fs.readText files.Records
+                let! store = openDurable files (KeyStore.inMemory ())
+                let! _ = store.Records.Write aliceRecord None "v"
+                Expect.equal (Fs.readText files.Records) before "the newer build's file is as it was"
+            }
+
+        testCaseAsync "a key store with no key over a records file fails rather than minting one" <|
+            async {
+                // A record can be written before any secret, so the records file alone has to
+                // stop a locked keychain from being read as a first run.
+                let files = freshFiles "record-nokey"
+                let! store = openDurable files (KeyStore.inMemory ())
+                let! _ = store.Records.Write aliceRecord None "v"
+                let! reopened = SecretStore.openStore (Some files) (KeyStore.inMemory ())
+                match reopened with
+                | Error (SecretStore.KeyStoreFailure _) -> ()
+                | other -> failwithf "expected KeyStoreFailure, got %A" (other |> Result.map ignore)
+            }
+    ]
+
+let private recordWireTests =
+    testList "record wire codecs" [
+        testCase "a stale outcome with no record round-trips" <| fun () ->
+            let encoded = ControlWire.toString ControlWire.recordWrite (RecordWrite.Stale None)
+            Expect.equal (ControlWire.fromString ControlWire.recordWrite encoded) (Ok (RecordWrite.Stale None)) "round trip"
+
+        testCase "a write that expects no record round-trips" <| fun () ->
+            let request : ControlWire.WriteRecordRequest =
+                { Target = aliceRecord; Expected = None; Value = "{\"a\":1}" }
+            let encoded = ControlWire.toString ControlWire.writeRecordRequest request
+            Expect.equal (ControlWire.fromString ControlWire.writeRecordRequest encoded) (Ok request) "round trip"
+
+        testCase "a read that found nothing round-trips" <| fun () ->
+            let response : ControlWire.ReadRecordResponse = { Record = None }
+            let encoded = ControlWire.toString ControlWire.readRecordResponse response
+            Expect.equal (ControlWire.fromString ControlWire.readRecordResponse encoded) (Ok response) "round trip"
+
+        testCase "the deployment's record round-trips as its owner" <| fun () ->
+            let request : ControlWire.ReadRecordRequest = { Target = recordOf LocalOwner "a/b" }
+            let encoded = ControlWire.toString ControlWire.readRecordRequest request
+            Expect.equal (ControlWire.fromString ControlWire.readRecordRequest encoded) (Ok request) "round trip"
+    ]
+
+/// A control server whose records handlers sit over `store`, with session A's launch signed
+/// in to by alice, and session B's by nobody.
+let private recordsServer (store: SecretStore.SecretStore) =
+    startControlServerWith
+        [ "secret-a", caller sessionA (Set.singleton alice)
+          "secret-b", caller sessionB Set.empty ]
+        None
+        (Some (ProcessManager.recordsApiFor ignore store.Records))
+        ignore
+
+let private recordRouteTests =
+    testList "records control routes" [
+        testCaseAsync "a session reads back a record it wrote for a user signed in to it" <|
+            async {
+                let! store = openEphemeral ()
+                let! _, url = recordsServer store
+                let records = ControlClient.records (ControlEndpoint.Address url) "secret-a"
+                let! _ = records.Write aliceRecord None "trusted"
+                let! read = records.Read aliceRecord
+                Expect.equal (expect read |> Option.map (fun r -> r.Value)) (Some "trusted") "read back over the wire"
+            }
+
+        testCaseAsync "a stale write answers stale over the wire" <|
+            async {
+                let! store = storeWithRecord "first"
+                let! _, url = recordsServer store
+                let records = ControlClient.records (ControlEndpoint.Address url) "secret-a"
+                let! written = records.Write aliceRecord None "second"
+                Expect.equal (expect written) (RecordWrite.Stale (Some 1)) "stale"
+            }
+
+        testCaseAsync "a session nobody signed in to cannot read a user's record" <|
+            async {
+                let! store = storeWithRecord "alice's"
+                let! _, url = recordsServer store
+                let records = ControlClient.records (ControlEndpoint.Address url) "secret-b"
+                let! read = records.Read aliceRecord
+                Expect.isError read "refused"
             }
     ]
 
@@ -1175,7 +1461,11 @@ let tests =
         resolutionTests
         familyTests
         auditTests
+        recordPolicyTests
+        recordStoreTests
+        recordWireTests
         Tag.needs "OS keyring" [ Tag.Keyring ] (fun () -> keyringTests)
         Tag.needs "helper key store" [ Tag.Ports ] (fun () -> execTests)
         Tag.needs "Secrets control routes" [ Tag.Ports ] (fun () -> routeTests)
+        Tag.needs "Records control routes" [ Tag.Ports ] (fun () -> recordRouteTests)
     ]

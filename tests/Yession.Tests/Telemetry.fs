@@ -343,6 +343,9 @@ let private auditTests =
     let sessionId = SessionId.create "audit-sess" |> expect
     let name = SecretName.create "deploy-token" |> expect
     let id : SecretId = { Scope = SessionScope sessionId; Name = name }
+    let record : RecordId =
+        { RecordId.Owner = UserOwner (UserId.create "alice" |> expect)
+          RecordId.Name = RecordName.create "repo-trust/v1/github/42" |> expect }
     let stringAttr key (r: SecretStore.Audit.Record) =
         match Map.tryFind key r.Attributes with
         | Some (SecretStore.Audit.StringValue s) -> Some s
@@ -358,7 +361,10 @@ let private auditTests =
                   SecretStore.Audit.authzDeny sessionId (SecretAccess (SetSecret, SecretResource id)) "why", "yession.authz.deny", 13
                   SecretStore.Audit.inject sessionId name "session", "yession.secret.inject", 9
                   SecretStore.Audit.injectMiss sessionId name "none left", "yession.secret.inject", 13
-                  SecretStore.Audit.storeOpen "durable" "in-memory" true 0, "yession.secrets.store_open", 9
+                  SecretStore.Audit.storeOpen "durable" "in-memory" true 0 0, "yession.secrets.store_open", 9
+                  SecretStore.Audit.recordWrite sessionId record "written", "yession.record.write", 9
+                  SecretStore.Audit.recordWrite sessionId record "failed", "yession.record.write", 13
+                  SecretStore.Audit.recordsRefused "a newer build wrote it", "yession.secrets.records_refused", 17
                   // The two ways to an in-memory store part company on SEVERITY: the
                   // operator's own choice is information, a host that could not offer a
                   // credential manager is a warning.
