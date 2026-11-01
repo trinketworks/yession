@@ -23,17 +23,6 @@ open Yession.Domain
 // one thing while a backend materialises another is the failure this shape exists to make
 // unrepresentable.
 
-/// Whether a leaf is one a person should be told about: what the operator marked, joined
-/// with the floor of its kind (`ResourceLeaf.floor`).
-///
-/// A join semilattice with `Sensitive` on top, and that IS the masking defence: nothing in
-/// this module lowers a value, so there is no operation an operator could reach for that
-/// would quiet a leaf by wrapping it in something friendlier.
-[<RequireQualifiedAccess>]
-type Sensitivity =
-    | Ordinary
-    | Sensitive
-
 /// How a mount is attached.
 ///
 /// Deliberately NOT `MountMode`, which this namespace already owns (`Environment.fs`) for a
@@ -157,10 +146,6 @@ type ResourceLeaf =
     | Connection of name: string * route: ConnectionRoute
 
 /// One resource as the operator declared it: either a thing, or a name for several things.
-///
-/// Sensitivity rides on the `Leaf` arm and nowhere else, so "a composite declared sensitive"
-/// has no representation at all. That refusal is the compiler's — not a decoder case, and
-/// not a test that could only prove it compiles.
 [<RequireQualifiedAccess>]
 type ResourceDecl =
     /// Primitives declared directly. A LIST, because the things that make one resource work
@@ -169,7 +154,7 @@ type ResourceDecl =
     /// would be three names for one idea, none of which means anything alone.
     ///
     /// Composition is for combining resources that DO mean something alone.
-    | Leaf of leaves: ResourceLeaf list * sensitivity: Sensitivity
+    | Leaf of leaves: ResourceLeaf list
     | Composition of ResourceName list
 
 /// What two leaves can collide ON. Same target, different leaf, is not a resource.
@@ -243,32 +228,6 @@ module ResourceLeaf =
         | Volume (name, at, access) -> sprintf "vol:%s>%s:%s" name at (mode access)
         | Connection (name, route) -> sprintf "conn:%s/%s" name (ConnectionRoute.name route)
 
-    /// The least sensitivity a leaf of this kind can have, whatever its declaration says.
-    ///
-    /// The approval prompt asks the person a sandbox's commands run for, so it is the right
-    /// question only about what is THEIRS. A connection is: it is spent as them. So a
-    /// connection is `Sensitive`, and an operator who forgot `sensitive: true` on one is not
-    /// a reason to skip asking.
-    ///
-    /// Not a volume or a socket, deliberately (security review, finding 9c). Both reach past
-    /// the sandbox — a volume is shared with every session on the host, a socket is a door
-    /// into a host process — but they are the OPERATOR's: the harm lands on other sessions,
-    /// not on the person who would be asked, who does not own them and will say yes. So
-    /// that decision is the operator's, written in the profile: a volume states its mode
-    /// (`OperatorProfile`), and either kind can be marked `sensitive: true`.
-    ///
-    /// A FLOOR, joined with the declaration rather than replacing it, so it only raises.
-    /// Applied where a closure is built (`ResourceClosure`), so each path to a closure has it.
-    let floor (leaf: ResourceLeaf) : Sensitivity =
-        match leaf with
-        | Connection _ -> Sensitivity.Sensitive
-        | Volume _
-        | Socket _
-        | Mount _
-        | Endpoint _
-        | Variable _
-        | Exec _ -> Sensitivity.Ordinary
-
     /// Every colliding pair in a set of leaves.
     ///
     /// REPORTS, and never refuses. The sentence belongs to whoever knows whose mistake it
@@ -285,83 +244,78 @@ module ResourceLeaf =
             // the sentence built from it does not depend on iteration order.
             | first :: rest -> rest |> List.map (fun other -> first, other))
 
-/// What a selection resolves to.
+/// What a selection resolves to: the leaves it grants, and the names it reached on the way.
 ///
-/// A map keyed by LEAF rather than a set of (leaf, sensitivity) pairs, and the difference is
-/// a security property: the same leaf reached through a sensitive name and an ordinary one
-/// must come out sensitive. Storing pairs would let one grant appear twice wearing two
-/// marks, and a prompt rendering the set would show the quiet one.
+/// A SET of leaves, so a grant reached through two names is one grant, shown once. Nothing
+/// rides beside a leaf, because nothing about a grant depends on the name it was reached
+/// through: even whether it asks anybody is a fact about its kind (`asksItsUser`).
 type ResourceClosure =
     private
-        { Grants : Map<ResourceLeaf, Sensitivity>
+        { Grants : Set<ResourceLeaf>
           Reached : Set<ResourceName> }
 
 module ResourceClosure =
 
-    let empty : ResourceClosure = { Grants = Map.empty; Reached = Set.empty }
+    let empty : ResourceClosure = { Grants = Set.empty; Reached = Set.empty }
 
-    let leaves (closure: ResourceClosure) : Set<ResourceLeaf> =
-        closure.Grants |> Map.toList |> List.map fst |> Set.ofList
+    let leaves (closure: ResourceClosure) : Set<ResourceLeaf> = closure.Grants
 
     let names (closure: ResourceClosure) : Set<ResourceName> = closure.Reached
 
-    let sensitiveLeaves (closure: ResourceClosure) : Set<ResourceLeaf> =
-        closure.Grants
-        |> Map.toList
-        |> List.filter (fun (_, sensitivity) -> sensitivity = Sensitivity.Sensitive)
-        |> List.map fst
-        |> Set.ofList
-
-    let isSensitive (closure: ResourceClosure) : bool =
-        closure.Grants |> Map.exists (fun _ sensitivity -> sensitivity = Sensitivity.Sensitive)
-
-    /// The join: leaves union, sensitivity max. The ONLY combiner in this module, which is
-    /// what leaves masking no path to take — there is nowhere for a composition to express
-    /// "and quieter than that".
+    /// The join: leaves union, names union. The ONLY combiner in this module.
     let union (left: ResourceClosure) (right: ResourceClosure) : ResourceClosure =
-        let grants =
-            right.Grants
-            |> Map.fold
-                (fun acc leaf sensitivity ->
-                    match Map.tryFind leaf acc with
-                    | Some Sensitivity.Sensitive -> acc
-                    | _ when sensitivity = Sensitivity.Sensitive -> Map.add leaf sensitivity acc
-                    | Some _ -> acc
-                    | None -> Map.add leaf sensitivity acc)
-                left.Grants
-        { Grants = grants; Reached = Set.union left.Reached right.Reached }
+        { Grants = Set.union left.Grants right.Grants
+          Reached = Set.union left.Reached right.Reached }
 
-    /// Each leaf at the join of what was declared and its kind's floor (`ResourceLeaf.floor`).
-    let private ofLeaves (name: ResourceName) (leaves: ResourceLeaf list) (sensitivity: Sensitivity) : ResourceClosure =
-        let joined leaf =
-            match sensitivity, ResourceLeaf.floor leaf with
-            | Sensitivity.Sensitive, _
-            | _, Sensitivity.Sensitive -> Sensitivity.Sensitive
-            | Sensitivity.Ordinary, Sensitivity.Ordinary -> Sensitivity.Ordinary
-        { Grants = leaves |> List.map (fun leaf -> leaf, joined leaf) |> Map.ofList
-          Reached = Set.singleton name }
+    let internal single (name: ResourceName) (leaves: ResourceLeaf list) : ResourceClosure =
+        { Grants = Set.ofList leaves; Reached = Set.singleton name }
 
-    let internal single = ofLeaves
+    /// Whether a grant of this kind asks (`asksItsUser`). A match over every kind rather than
+    /// a test for one, so a new primitive does not compile until somebody has said whose
+    /// decision it is.
+    let private asks (leaf: ResourceLeaf) : bool =
+        match leaf with
+        | Connection _ -> true
+        | Volume _
+        | Socket _
+        | Mount _
+        | Endpoint _
+        | Variable _
+        | Exec _ -> false
 
-    /// How a sensitive grant is marked, wherever one is shown to a person.
+    /// Whether this selection waits for a person to approve it: exactly when it holds a
+    /// connection.
     ///
-    /// One function rather than the two `sprintf`s it replaced, because a surface that
-    /// renders a leaf without the mark is a surface that under-states — and the second
-    /// renderer (what a host makes of the same leaf, below) is where that would have
-    /// happened. The mark belongs to the leaf, not to the sentence around it.
+    /// A connection is spent as the session's user, whoever each command runs for, so it is
+    /// theirs to approve. Everything else a profile grants is the OPERATOR's, decided by
+    /// granting it or not. A volume and a socket reach past the sandbox (a volume is shared
+    /// with every session on the host, a socket is a door into a host process), but the harm
+    /// lands on other sessions, not on the person who would be asked, who does not own them
+    /// and will say yes (security review, finding 9c). So the operator decides them in the
+    /// profile, a volume with its mode (`OperatorProfile`), and the session's user is not
+    /// asked (invariant 25).
     ///
-    /// A PREFIX, and it was a trailing `(sensitive)`. A grant can be followed by what this
-    /// host made of it (`~>`, below), and a mark at the end of that lands on the host's
-    /// answer rather than on the grant it is about — the stranding this function exists to
-    /// prevent, arriving by the one author who is not a person. It also sorts: `!` precedes
-    /// every character a grant can start with, so any list of these opens with the grants
-    /// somebody has to decide about.
-    let mark (sensitivity: Sensitivity) (line: string) : string =
-        match sensitivity with
-        | Sensitivity.Sensitive -> "!" + line
-        | Sensitivity.Ordinary -> line
+    /// Read off the leaves' kinds and nothing else, so no name a connection is reached
+    /// through can quiet it, and no declaration can make anything else ask.
+    let asksItsUser (closure: ResourceClosure) : bool = closure.Grants |> Set.exists asks
 
-    /// What a selection NAMES, one line per leaf, sensitive ones marked.
+    /// One grant as a person is shown it: its notation (`ResourceLeaf.describe`), opened by
+    /// `!` when it is a grant that asks (`asksItsUser`).
+    ///
+    /// One function for both renderers, the selection's own words below and what a host
+    /// makes of them (`RealisedClosure.describeOn`), because a surface that renders a leaf
+    /// without the mark is a surface that under-states. The mark belongs to the leaf, not to
+    /// the sentence around it.
+    ///
+    /// A PREFIX. A grant can be followed by what this host made of it (`~>`, below), and a
+    /// mark at the end of that would land on the host's answer rather than on the grant it
+    /// is about. It also sorts: `!` precedes every character a grant can start with, so any
+    /// list of these opens with the grants somebody has to decide about.
+    let mark (leaf: ResourceLeaf) : string =
+        let line = ResourceLeaf.describe leaf
+        if asks leaf then "!" + line else line
+
+    /// What a selection NAMES, one line per leaf, each as `mark` writes it.
     ///
     /// Here rather than in a view, because "a leaf that materialises is a leaf that was
     /// shown" is the invariant this module exists for, and a view cannot be reached by the
@@ -372,10 +326,7 @@ module ResourceClosure =
     /// `RealisedClosure.describeOn` instead — this is the right answer for an operator
     /// reading their own vocabulary and the wrong one to consent against.
     let describe (closure: ResourceClosure) : string list =
-        closure.Grants
-        |> Map.toList
-        |> List.map (fun (leaf, sensitivity) -> mark sensitivity (ResourceLeaf.describe leaf))
-        |> List.sort
+        closure.Grants |> Set.toList |> List.map mark |> List.sort
 
 /// A distinction a host is able to MAKE about a grant.
 ///
@@ -451,10 +402,9 @@ type LeafRealisation =
 /// What one host makes of a set of leaves: what is actually held, and every place that
 /// differs from what was asked.
 ///
-/// LEAVES and not a closure, which applying this is what settled. Sensitivity is not
-/// something a host can change, whoever resolved the selection still holds it, and the copy
+/// LEAVES and not a closure, which applying this is what settled. The copy of the closure
 /// that used to live here was a second answer to "what was asked for" that nothing kept equal
-/// to the first. A policy builder has only leaves in hand anyway.
+/// to the first, and a policy builder has only leaves in hand anyway.
 type RealisedClosure =
     private { Outcomes : Map<ResourceLeaf, LeafRealisation> }
 
@@ -549,9 +499,8 @@ module RealisedClosure =
     /// the whole selection are two questions, and a coarsened socket that read one way in a
     /// consent prompt and another in the timeline would be two answers to the one that
     /// matters.
-    /// Takes the leaf ALREADY described, so that a mark put on the grant stays on the grant:
-    /// `!sock:/run/docker.sock ~> sock:*`, never a line with the mark stranded past what the
-    /// host had to say.
+    /// Takes the leaf ALREADY described, so that a mark put on the grant stays on the grant
+    /// (`ResourceClosure.mark`), never stranded past what the host had to say.
     ///
     /// ONE operator for both outcomes, reading "so the sandbox gets": what follows it is
     /// either the wider grant, or `nothing` and why. Two operators would be two things to
@@ -583,20 +532,12 @@ module RealisedClosure =
     /// and the sandbox holds every socket. So the lines a person says yes to
     /// are these, and what they bind to changes when the host does.
     ///
-    /// The mark rides through unchanged. A coarsened sensitive leaf is MORE worth marking
-    /// than it was, never less, and losing it here would be the masking this module refuses
-    /// everywhere else — arriving by the one author who is not a person.
+    /// Each grant is named as the selection's own lines name it (`ResourceClosure.mark`),
+    /// mark included, and then followed by whatever this host made of it.
     let describeOn (limits: HostLimits) (closure: ResourceClosure) : string list =
-        let realised = of' limits (ResourceClosure.leaves closure)
-        let sensitive = ResourceClosure.sensitiveLeaves closure
-        realised.Outcomes
+        (of' limits (ResourceClosure.leaves closure)).Outcomes
         |> Map.toList
-        |> List.map (fun (leaf, outcome) ->
-            let named =
-                ResourceClosure.mark
-                    (if Set.contains leaf sensitive then Sensitivity.Sensitive else Sensitivity.Ordinary)
-                    (ResourceLeaf.describe leaf)
-            line named outcome)
+        |> List.map (fun (leaf, outcome) -> line (ResourceClosure.mark leaf) outcome)
         |> List.sort
 
 /// The legend for the notation the three renderers above write: what a kind is, said once,
@@ -655,19 +596,22 @@ module GrantNotation =
     /// everything up to its first colon, read off `describe` rather than off the shape
     /// beside it. Derived, so the legend cannot come to promise a token nothing writes.
     ///
-    /// The leading `!` comes off first: a sensitive grant is still a grant of its kind, and
-    /// an entry that stopped applying the moment the operator marked something would be
-    /// missing from exactly the line somebody is deciding about.
+    /// The leading `!` comes off first: a marked grant is still a grant of its kind, and an
+    /// entry that stopped applying to a marked line would be missing from exactly the line
+    /// somebody is deciding about.
     let private writes (line: string) (leaf: ResourceLeaf) : bool =
         let written = ResourceLeaf.describe leaf
         let token = written.Substring (0, written.IndexOf ':' + 1)
         (line.TrimStart '!').StartsWith token
 
-    /// The two marks, which are not kinds: one is what the operator said about a grant, the
-    /// other what this host made of it. Last, because that is the order a line is read in.
+    /// The two marks, which are not kinds: one is who decides a grant, the other what this
+    /// host made of it. Last, because that is the order a line is read in.
     let private marks : ((string -> bool) * (string * string)) list =
         [ (fun (line: string) -> line.StartsWith "!"),
-          ("!GRANT", "sensitive. The operator says this grant is worth being told about")
+          ("!GRANT",
+           "spent as whoever each command runs for, which only a connection is. A repository \
+            that asks for it waits for a person to approve it. The operator decides every \
+            other grant")
           (fun (line: string) -> line.Contains " ~> "),
           ("GRANT ~> OTHER",
            "this host cannot scope GRANT. The sandbox gets OTHER instead. * is any grant of \
@@ -767,7 +711,7 @@ module ResourceProfile =
         // have been refused. Total rather than an exception, because a partial function here
         // is a crash in a fold every client runs.
         | None -> ResourceClosure.empty
-        | Some (ResourceDecl.Leaf (leaves, sensitivity)) -> ResourceClosure.single name leaves sensitivity
+        | Some (ResourceDecl.Leaf leaves) -> ResourceClosure.single name leaves
         | Some (ResourceDecl.Composition children) ->
             children
             |> List.fold

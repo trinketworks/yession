@@ -30,7 +30,7 @@ module OperatorProfile =
     let private fileKeys = [ "version"; "resources"; "always"; "agent"; "sandboxes"; "container" ]
     let private containerKeys = [ "mem_limit"; "pids_limit"; "cgroup_parent" ]
     let private agentKeys = [ "guidance"; "prompt" ]
-    let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "connection"; "sensitive" ]
+    let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "connection" ]
     let private mountKeys = [ "from"; "at"; "mode" ]
     let private volumeKeys = [ "name"; "at"; "mode"; "maintain" ]
     let private maintainKeys = [ "pin"; "every" ]
@@ -133,8 +133,8 @@ module OperatorProfile =
     /// `mode` has no default ON PURPOSE (security review, finding 9c). A writable volume
     /// lets one repository change what every other session on the host builds from. That is
     /// the operator's decision, not the session user's: the user does not own the volume,
-    /// is not the one harmed, and so is not asked (`ResourceLeaf.floor`). A default would
-    /// make the decision without anyone writing it down.
+    /// is not the one harmed, and so is not asked (`ResourceClosure.asksItsUser`). A default
+    /// would make the decision without anyone writing it down.
     let private volume : Decoder<ResourceLeaf> =
         noUnknownKeys volumeKeys
         |> Decode.andThen (fun () ->
@@ -205,11 +205,27 @@ module OperatorProfile =
                         "a connection names the routes that forward it. Write `connection: { %s }` with the routes this resource grants"
                         (names |> List.map (sprintf "%s: [git, api]") |> String.concat ", ")))
 
+    /// `sensitive` marked a resource as one to ask about. Whether a grant asks is its kind's
+    /// to say now (`ResourceClosure.asksItsUser`), so the key is refused whatever its value,
+    /// and BY NAME rather than left to `noUnknownKeys`: a file carrying it says something
+    /// about who is asked, and "unknown key: sensitive" would leave its operator to work out
+    /// what became of that.
+    let private noSensitiveKey : Decoder<unit> =
+        Decode.keys
+        |> Decode.andThen (fun keys ->
+            failIf
+                (List.contains "sensitive" keys)
+                (sprintf
+                    "a resource is no longer marked sensitive. A connection is always asked about, because it is spent as the person who is asked. Everything else %s grants is the operator's to decide. Remove 'sensitive'"
+                    FileName)
+                (Decode.succeed ()))
+
     /// A leaf declares primitives directly, and may declare several: the things that make one
     /// resource work are usually more than one — a cache is a mount and an endpoint and the
     /// variable pointing a tool at it — and none of the three means anything alone.
     let private leaf : Decoder<ResourceDecl> =
-        noUnknownKeys leafKeys
+        noSensitiveKey
+        |> Decode.andThen (fun () -> noUnknownKeys leafKeys)
         |> Decode.andThen (fun () ->
             Decode.object (fun get ->
                 let mounts = get.Optional.Field "mount" (Decode.oneOf [ Decode.list mount; mount |> Decode.map List.singleton ])
@@ -225,32 +241,22 @@ module OperatorProfile =
                 let variables =
                     get.Optional.Field "env" (Decode.keyValuePairs variableValue)
                     |> Option.defaultValue []
-                // What the operator declares. It can only RAISE a leaf: a volume, a
-                // connection or a socket is sensitive whatever this says (`ResourceLeaf.floor`).
-                let sensitivity =
-                    if get.Optional.Field "sensitive" Decode.bool |> Option.defaultValue false then
-                        Sensitivity.Sensitive
-                    else Sensitivity.Ordinary
-                let leaves =
-                    (mounts |> Option.defaultValue [] |> List.map Mount)
-                    @ (sockets |> List.map Socket)
-                    @ (endpoints |> List.map Endpoint)
-                    @ (variables |> List.map Variable)
-                    @ (execs |> List.map Exec)
-                    @ volumes
-                    @ connections
-                leaves, sensitivity))
-        |> Decode.andThen (fun (leaves, sensitivity) ->
+                (mounts |> Option.defaultValue [] |> List.map Mount)
+                @ (sockets |> List.map Socket)
+                @ (endpoints |> List.map Endpoint)
+                @ (variables |> List.map Variable)
+                @ (execs |> List.map Exec)
+                @ volumes
+                @ connections))
+        |> Decode.andThen (fun leaves ->
             // A resource that grants nothing is a name that reads as configuration and is
             // none — the same failure an unknown key would be, arriving by a different route.
             failIf
                 (List.isEmpty leaves)
                 "this resource grants nothing. Name at least one of: mount, socket, endpoint, env, exec, volume or connection"
-                (Decode.succeed (ResourceDecl.Leaf (leaves, sensitivity))))
+                (Decode.succeed (ResourceDecl.Leaf leaves)))
 
-    /// An ARRAY is a composition. Sensitivity is deliberately not a key here: a composite is
-    /// sensitive exactly when something it reaches is, computed rather than declared, so that
-    /// wrapping a dangerous leaf in a friendly name cannot quiet it.
+    /// An ARRAY is a composition.
     let private composition : Decoder<ResourceDecl> =
         Decode.list Decode.string
         |> Decode.andThen (fun names ->

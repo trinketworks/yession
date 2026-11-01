@@ -593,9 +593,9 @@ module View =
         //
         // Beside the agent's own prompt rather than in the settings drawer: a sandbox that is
         // not running is a thing somebody is waiting on RIGHT NOW, and a decision parked
-        // behind a disclosure is a decision nobody makes. Only sensitive sets appear — the
-        // operator decides which those are, and a prompt for every repo is a prompt people
-        // learn to dismiss without reading.
+        // behind a disclosure is a decision nobody makes. Only sets holding a connection appear
+        // (`ResourceClosure.asksItsUser`) — a connection is spent as the person asked, and a
+        // prompt for every repo is a prompt people learn to dismiss without reading.
         //
         // The button carries the set that is ON SCREEN. If the file moved under the reader,
         // the Process refuses rather than approving something they did not read.
