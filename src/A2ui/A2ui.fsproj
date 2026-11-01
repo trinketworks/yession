@@ -5,8 +5,10 @@
     catalog as types, the codec that is the one door between them and JSON, and the pure
     core a renderer and a server both need (data model pointers, `formatString`'s
     expressions, the catalog's functions, the fold over a surface's messages). Nothing in
-    it is ours, so it is not `Yession.*`, and it refers to nothing of ours: it sits beside
-    `Yession.Codecs` in the order, below the App and the Session that will both speak it.
+    it is ours, so it is not `Yession.*`. It sits beside `Yession.Codecs` in the order,
+    below the App and the Session that both speak it, and like it refers only to the
+    domain: an agent writes the patterns `regex` runs, and the domain's matcher is the one
+    that cannot backtrack (`TerminalPattern.fs` says why a `RegExp` cannot be bounded).
 
     The spec's own schemas, test cases and conformance suites pin it
     (`tests/Yession.Tests/A2ui.fs`, over the copies in `tests/fixtures/a2ui`).
@@ -28,6 +30,10 @@
   <ItemGroup>
     <PackageReference Include="Thoth.Json" />
     <PackageReference Include="Thoth.Json.Net" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Yession.Domain\Yession.Domain.fsproj" />
   </ItemGroup>
 
 </Project>

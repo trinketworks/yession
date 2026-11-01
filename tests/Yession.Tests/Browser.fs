@@ -6877,12 +6877,12 @@ let editorTests =
                 Expect.isFalse shown (sprintf "%s is not on the all page" name)
             }
 
-        // Where New terminal starts one is the repo picker's branch link: it opens a list of
-        // places IN the sheet, in place of its terminals and files. Driven from the keyboard
-        // throughout, because the press removes the control it was on, and the floor's rule
-        // about a DOM swap that removes what had focus says the cursor goes somewhere real:
-        // onto the ticked place, and back onto the link when Escape returns to the list.
-        editorCase "the sheet's start-in link opens the places in the sheet, and focus follows" <| fun page ->
+        // Where New terminal starts one is the repo picker's branch link. On a wide screen it
+        // unfolds the places under the Terminals heading, with the rest of the sheet still
+        // round them, and pressed again it folds them. Driven from the keyboard, because the
+        // floor's rule about a DOM swap says the cursor goes somewhere real: onto the ticked
+        // place, and back onto the link when Escape folds the list.
+        editorCase "on a wide screen the start-in link unfolds the places under the heading, and focus follows" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! switcherDown page
@@ -6890,17 +6890,50 @@ let editorTests =
 
                 do! awaitU (page.Locator("#shell [data-start-in]").First.PressAsync "Enter")
                 do! waitVisible "the list of places" page "#shell [data-start-in-choice]"
-                // In the sheet, in place of what it lists.
-                do! waitAbsent "#shell [data-terminal-new] to be gone" page "#shell [data-terminal-new]"
+                // Under the heading, not in place of it: New terminal is still there.
+                do! waitVisible "New terminal beside the places" page "#shell [data-terminal-new]"
                 do! Wait.until
                         "focus on the ticked place"
                         (fun () -> Read.focused page "[data-start-in-choice][aria-pressed='true']")
                         id
 
-                // Escape steps back to the list, not off the sheet.
+                // Escape folds the list, not the sheet.
                 do! awaitU (page.Keyboard.PressAsync "Escape")
-                do! waitVisible "the sheet's list again" page "#shell [data-terminal-new]"
+                do! waitAbsent "the places folded" page "#shell [data-start-in-choice]"
+                do! waitVisible "the sheet still up" page "#shell [data-terminal-new]"
                 do! Wait.until "focus on [data-start-in]" (fun () -> Read.focused page "[data-start-in]") id
+
+                // The link is the fold's own control: pressed twice, it opens and shuts.
+                do! awaitU (page.ClickAsync "#shell [data-start-in]")
+                do! waitVisible "the places again" page "#shell [data-start-in-choice]"
+                do! awaitU (page.ClickAsync "#shell [data-start-in]")
+                do! waitAbsent "the places folded by the link" page "#shell [data-start-in-choice]"
+                return ()
+            }
+
+        // On a phone the places are a PAGE: nothing of the sheet beside them, and the sheet
+        // run to the pane's foot, so the terminal it is laid over does not show under it. A
+        // sheet as tall as its rows left the terminal on screen below a list that, on a phone,
+        // is somewhere you went.
+        editorCaseIn 390 844 "on a phone the start-in link opens the places as a page over the whole pane" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! switcherDown page
+                do! awaitU (page.ClickAsync "#shell [data-start-in]")
+                do! waitVisible "the list of places" page "#shell [data-start-in-choice]"
+                do! Wait.until "New terminal out of sight" (fun () -> Read.visible page "#shell [data-terminal-new]") not
+
+                let! boxes = boxesOf page [ "#shell #pane-sheet"; "#shell [data-content-panel]" ]
+                match boxes with
+                | [ sheet; pane ] ->
+                    Expect.isTrue
+                        (abs (sheet.Bottom - pane.Bottom) <= 1.0)
+                        (sprintf "the page reaches the pane's foot: sheet ends at %d, pane at %d" (px sheet.Bottom) (px pane.Bottom))
+                | _ -> failwith "two boxes measured"
+
+                // Its back arrow is the way back to the sheet's list.
+                do! awaitU (page.ClickAsync "#shell [data-start-in-back]")
+                do! waitVisible "the sheet's list again" page "#shell [data-terminal-new]"
                 return ()
             }
 

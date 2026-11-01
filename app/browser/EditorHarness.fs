@@ -1791,7 +1791,8 @@ do
         | ClientEffect.ReattachTerminal _
         | ClientEffect.InterruptTurn _
         | ClientEffect.TrustRepo _
-        | ClientEffect.PressSurface _ -> ()
+        | ClientEffect.PressSurface _
+        | ClientEffect.DismissSurface _ -> ()
         // The listing's next page, answered here because this harness has no session to
         // ask: a page arrives with two more rows and no cursor after it, which is what
         // the browser tier needs in order to watch REACHING the foot bring rows in

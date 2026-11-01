@@ -78,6 +78,29 @@ module Project =
             | Some said -> said
             | None -> Evaluate.read at path |> Option.map answers |> Option.defaultValue []
 
+    /// What a surface is about, as a person read it: its first line of text in drawing order
+    /// from `root`, not counting a button's caption, which names an answer rather than the
+    /// question. None for a surface that says nothing.
+    let title (surfaces: Map<string, Surface>) (surfaceId: string) : string option =
+        match Map.tryFind surfaceId surfaces with
+        | None -> None
+        | Some surface ->
+            let rec first (seen: Set<string>) (id: string) (at: Scope) : string option =
+                match Map.tryFind id surface.Components with
+                | Some c when not (Set.contains id seen) ->
+                    let seen = Set.add id seen
+                    let within list = Evaluate.children at list |> List.tryPick (fun (child, scope) -> first seen child scope)
+                    match c.Kind with
+                    | ComponentKind.Text (text, _) -> said at text
+                    | ComponentKind.Card child -> first seen child at
+                    | ComponentKind.Row (list, _, _)
+                    | ComponentKind.Column (list, _, _)
+                    | ComponentKind.List (list, _, _) -> within list
+                    | _ -> None
+                | Some _
+                | None -> None
+            first Set.empty "root" (Evaluate.root surface.DataModel)
+
     /// What pressing button `componentId` answered, as a person reads it: one line per answer.
     /// An answer is a value the button's context reads from the data model, said the way the
     /// input that holds it showed it. A context value written into the button itself is the

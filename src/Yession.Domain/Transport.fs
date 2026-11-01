@@ -98,6 +98,10 @@ type SessionCommand =
     /// ACCEPTED means the answer is on the record (`SurfaceActionTaken`) and the agent owes a
     /// turn for it; what the agent does with it reaches everyone the usual way.
     | PressSurfaceButton of surfaceId: string * componentId: string * scope: string
+    /// Take down a surface the agent showed, without answering it. Any surface, whatever
+    /// buttons the agent drew. ACCEPTED means it is gone for everybody and the dismissal is on
+    /// the record (`SurfaceDismissed`), which owes the agent a turn.
+    | DismissSurface of surfaceId: string
 
 type SessionCommandResult =
     | CommandAccepted

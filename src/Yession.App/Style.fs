@@ -3846,6 +3846,10 @@ module Style =
     let agentSurface =
         cls [ "shrink-0 flex flex-col gap-3 py-4 px-4 wide:px-rail bg-surface"
               "max-h-[calc(var(--visual-h,100dvh)/2)] overflow-y-auto overscroll-contain" ]
+    /// What the agent drew, with the app's × beside it at the top: the dismiss every surface
+    /// has, apart from the agent's own buttons and on no line of its own.
+    let surfaceBody = "flex items-start gap-3 min-w-0"
+    let surfaceContent = "flex-1 min-w-0"
     let surfaceColumn = "flex flex-col gap-3 min-w-0"
     let surfaceRow = "flex flex-wrap items-center gap-3 min-w-0"
     /// A card inside a surface: one step up the greys, which is what nesting is said with.
@@ -4804,19 +4808,48 @@ module Style =
     /// it starts sits at the row's right end, as the branch sits on the repo picker's row.
     let listSectionActs = "flex items-center phone:border-b phone:border-hair"
     let terminalNew = cls [ listSectionActBase; "phone:flex-1"; focusRingInset ]
-    /// Where New terminal starts one, and the way to choose: the repo picker's branch link —
-    /// the place's name in the terminal face, then the chevron, because it goes somewhere.
+    /// Where New terminal starts one, and the way to choose: the repo picker's branch link.
     /// Shown only while there is more than one place.
-    let startInLink = cls [ listSectionActBase; focusRingInset ]
+    ///
+    /// ONE voice, the prose face at the small step: "in" dim, the place blue, on one shared
+    /// baseline (`startInWords`), and the chevron at the caps line's 12px, centred on the line
+    /// rather than on the 44px box. It was three voices — "IN" in caps, the name in the
+    /// terminal face at another size, a 14px chevron — each centred on its own box, so no two
+    /// sat on one line.
+    let startInLink =
+        cls [ "h-11 shrink-0 inline-flex items-center gap-1.5 px-3 bg-transparent border-0 cursor-pointer"
+              "font-ui font-light text-small text-blue hover:text-blue-up-1 transition-colors motion-reduce:transition-none"
+              focusRingInset ]
+    let startInWords = "inline-flex items-baseline gap-1.5"
     let startInWord = "text-ink-dim"
-    let startInName = "font-terminal text-small normal-case tracking-normal"
-    /// "default" is no name a repo declared, so it is not written in the terminal face.
-    let startInNameDefault = "font-ui font-light text-small normal-case tracking-normal"
+    /// A sandbox's name, in the terminal face; "default" is no name a repo declared, so it
+    /// keeps the prose face of the words around it.
+    let startInName = "font-terminal"
+    /// Where the choice goes, said by the chevron: on a phone the places are a page of their
+    /// own (`right`); on a wide screen they unfold beneath the heading (`caret`, turned while
+    /// open). Each is drawn on its screen only.
+    let startInPageMark = "inline-flex wide:hidden"
+    let startInFoldMark = "inline-flex phone:hidden transition-transform motion-reduce:transition-none"
+    let startInFoldMarkOpen = cls [ startInFoldMark; "rotate-180" ]
 
-    /// The list of places, in the sheet in place of its terminals and files: its head (the
-    /// way back, and what the list is for), then one row per place, the chosen one ticked.
+    /// While the places are chosen from, the rest of the sheet. On a phone the places are a
+    /// page and nothing else shows; on a wide screen they unfold under the Terminals heading,
+    /// with the sheet still round them.
+    let startInBeside = "contents"
+    let startInBesideChoosing = "contents phone:hidden"
+    /// The sheet while its places are a page: on a phone it runs to the pane's foot, so the
+    /// terminal it was laid over is not glimpsed under a page that is not a layer.
+    let allSheetChoosing = cls [ allSheet; "phone:bottom-0" ]
+
+    /// The list of places. On a phone, a page in the sheet: its head (the way back, and what
+    /// the list is for), then one row per place, the chosen one ticked. On a wide screen the
+    /// same rows unfold under the heading whose link opened them, on a well a step down the
+    /// ground (`panel` under the sheet's `surface`), because they are nested in that section
+    /// and must not read as more terminals; the head is the heading itself, so it is not
+    /// drawn twice.
+    let startInList = "wide:bg-panel"
     let startInHead =
-        cls [ "h-11 flex items-center gap-1 pr-3 select-none text-ink-dim border-b border-hair"; caps ]
+        cls [ "h-11 flex items-center gap-1 pr-3 select-none text-ink-dim border-b border-hair wide:hidden"; caps ]
     let startInBack =
         cls [ "h-11 w-11 shrink-0 inline-flex items-center justify-center bg-transparent border-0 cursor-pointer"
               "text-blue hover:text-blue-up-1 transition-colors motion-reduce:transition-none"; focusRingInset ]

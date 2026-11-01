@@ -157,6 +157,8 @@ type SessionEvent =
     // Somebody answered a surface the agent showed, by pressing its button. A turn is owed
     // for it (`AgentWake`): the agent asked, and this is the reply.
     | SurfaceActionTaken of Surfaces.SurfaceActionTaken
+    // Somebody took a surface down without answering it. Owed a turn like an answer.
+    | SurfaceDismissed of Surfaces.SurfaceDismissed
     // The approval gate's refusal (Plan 15, stage 3). Only the refusal: an approval is
     // recorded on the event of the command it released.
     | CommandRefused of CommandRefused

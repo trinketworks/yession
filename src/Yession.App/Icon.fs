@@ -238,6 +238,10 @@ module Icon =
     /// away, and the content list's closed-terminals fold. The small box, because every one
     /// of those sits on a caps line.
     let caret = strokedOn grid Weight.chrome box12 "block shrink-0" caretPath
+    /// `right` in `caret`'s small box: the disclosure to a page of its own, riding a line of
+    /// small text beside `caret` on the same control (`Style.startInLink`), so the two
+    /// chevrons a screen chooses between are one size.
+    let rightSm = strokedOn grid Weight.chrome box12 "block shrink-0" rightPath
     /// Retire this session from the working list. A row-riding verb that needs no word: it is
     /// rendered only on a row that can be archived, and an archived row wears the word
     /// `Unarchive` instead.

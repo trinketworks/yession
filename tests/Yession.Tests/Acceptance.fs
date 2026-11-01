@@ -2864,7 +2864,6 @@ let private paneNewTests =
             Expect.isTrue
                 (html.Contains (Dom.Text.newTerminalIn "octo/hello:dev"))
                 "and every row says the whole act"
-            Expect.isFalse (html.Contains Dom.Hooks.terminalNew) "in place of the terminals, not beside them"
 
         testCase "a place chosen is where New terminal starts the next one" <| fun () ->
             let dev = SandboxRef.parse "octo/hello:dev" |> expect

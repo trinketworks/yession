@@ -5018,9 +5018,11 @@ module View =
             | SessionOwned -> SandboxName.value (SandboxRef.name sandbox)
             | RepoOwned repo -> sprintf "%s:%s" (RepoRef.repo repo) (SandboxName.value (SandboxRef.name sandbox))
         let isDefault (sandbox: SandboxRef) = sandbox = SandboxRef.defaultRef
+        let choosing = model.ChoosingStartIn && List.length places > 1
         // The terminals under a heading of their own, which carries the one way to make one,
         // and — when there is a choice — where it will start, the way the repo picker's row
-        // carries its branch: the name as a link, into a list that changes it.
+        // carries its branch: the name as a link, into a list that changes it. Pressed again
+        // while the list is unfolded under it, it folds the list away.
         let terminals =
             let count =
                 match List.length sections.OpenRows with
@@ -5032,10 +5034,14 @@ module View =
                     html $"""
                         <button type="button" class="{Style.startInLink}" data-start-in="{SandboxRef.render place}"
                                 aria-label="{Dom.Text.startInNamed (placeName place)}"
-                                @click={Ev(fun _ -> dispatch (ChoosingStartInMsg true))}>
-                          <span class="{Style.startInWord}">{Dom.Text.startInWord}</span>
-                          <span class="{if isDefault place then Style.startInNameDefault else Style.startInName}">{placeName place}</span>
-                          {Icon.right}
+                                aria-expanded="{if choosing then "true" else "false"}"
+                                @click={Ev(fun _ -> dispatch (ChoosingStartInMsg (not choosing)))}>
+                          <span class="{Style.startInWords}">
+                            <span class="{Style.startInWord}">{Dom.Text.startInWord}</span>
+                            <span class="{if isDefault place then "" else Style.startInName}">{placeName place}</span>
+                          </span>
+                          <span class="{Style.startInPageMark}" aria-hidden="true">{Icon.rightSm}</span>
+                          <span class="{if choosing then Style.startInFoldMarkOpen else Style.startInFoldMark}" aria-hidden="true">{Icon.caret}</span>
                         </button>"""
             html $"""
                 <div class="{Style.listSectionHeadFirst}">
@@ -5050,9 +5056,10 @@ module View =
                     {startIn}
                   </div>
                 </div>"""
-        // The list of places, in the sheet in place of what it lists: the repo picker's
-        // branch pane, in this sheet's rows. Choosing one goes back, and New terminal then
-        // starts there.
+        // The list of places: on a phone, a page in the sheet in place of what it lists, the
+        // repo picker's branch pane in this sheet's rows; on a wide screen, the same rows
+        // unfolded under the heading, with the rest of the sheet still round them. Choosing
+        // one folds it, and New terminal then starts there.
         let choosingPlace () =
             let choice (sandbox: SandboxRef) =
                 let chosen = sandbox = place
@@ -5075,18 +5082,26 @@ module View =
                       </button>
                     </li>"""
             html $"""
-                <div class="{Style.startInHead}">
-                  <button type="button" class="{Style.startInBack}" data-start-in-back
-                          aria-label="{Dom.Text.backToList}" title="{Dom.Text.backToList}"
-                          @click={Ev(fun _ -> dispatch (ChoosingStartInMsg false))}>{Icon.left}</button>
-                  <span id="start-in-heading">{Dom.Text.startInHeading}</span>
-                </div>
-                <ul aria-labelledby="start-in-heading">{places |> List.map choice}</ul>"""
+                <div class="{Style.startInList}" data-start-in-list>
+                  <div class="{Style.startInHead}">
+                    <button type="button" class="{Style.startInBack}" data-start-in-back
+                            aria-label="{Dom.Text.backToList}" title="{Dom.Text.backToList}"
+                            @click={Ev(fun _ -> dispatch (ChoosingStartInMsg false))}>{Icon.left}</button>
+                    <span>{Dom.Text.startInHeading}</span>
+                  </div>
+                  <ul aria-label="{Dom.Text.startInHeading}">{places |> List.map choice}</ul>
+                </div>"""
         // Under the sheet, the pane goes on showing, dimmed: the sheet is a layer over it, not
         // a place. Pressed, the scrim puts the sheet away — a duplicate of the list button and
         // of Escape, so out of the tree and the Tab order, as the phone's grab edge is. Docked,
         // there is nothing under it, so no scrim.
-        let listed = html $"""{terminals}{opened}{closed}{empty}{files}"""
+        let beside = if choosing then Style.startInBesideChoosing else Style.startInBeside
+        let listed =
+            html $"""
+                <div class="{beside}">{terminals}</div>
+                {if choosing then choosingPlace () else Lit.nothing}
+                <div class="{beside}">{opened}{closed}{empty}{files}</div>"""
+        let sheet = if choosing then Style.allSheetChoosing else Style.allSheet
         let scrim =
             if docked then Lit.nothing
             else
@@ -5096,11 +5111,11 @@ module View =
                             @click={Ev(fun _ -> dispatch CloseSwitcherMsg)}></button>"""
         html $"""
             {scrim}
-            <div class="{if docked then Style.allDocked else Style.allSheet}" role="region" tabindex="-1" aria-label="{Dom.Text.terminalsAndFiles}"
+            <div class="{if docked then Style.allDocked else sheet}" role="region" tabindex="-1" aria-label="{Dom.Text.terminalsAndFiles}"
                  id="{Dom.paneSheetId}" data-pane-panel="{allKey}">
               <div class="{Style.allPage}" data-content-list aria-label="{Dom.Text.terminalsAndFiles}"
                    @paste={Ev(pasted)} @dragover={Ev(dragged)} @dragleave={Ev(left)} @drop={Ev(dropped)}>
-                {if model.ChoosingStartIn && List.length places > 1 then choosingPlace () else listed}
+                {listed}
               </div>
             </div>"""
 

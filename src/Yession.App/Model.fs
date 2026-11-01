@@ -745,7 +745,8 @@ module Refusal =
         | InterruptAgentTurn _
         | TrustRepo _
         | AddRepo _
-        | PressSurfaceButton _ -> false
+        | PressSurfaceButton _
+        | DismissSurface _ -> false
 
     /// Where `refusal` is drawn: in the pane while the pane is open and the refusal is one
     /// of its verbs' — that is where the press was — and in the conversation otherwise,
@@ -2439,6 +2440,10 @@ type ClientMsg =
     /// (`""` at the root). A request of the session (`PressSurfaceButton`), which reads the
     /// answer from the doc itself; it reaches everyone as `SurfaceActionTaken`.
     | PressSurfaceMsg of surfaceId: string * componentId: string * scope: string
+    /// Somebody dismissed an agent's surface without answering it. A request of the session
+    /// (`DismissSurface`), which takes it down for everyone; it reaches everyone as
+    /// `SurfaceDismissed`.
+    | DismissSurfaceMsg of surfaceId: string
     /// This client sent the session a command, under this request id. Dispatched by the one
     /// verb that sends commands (`Client.Connection.Ask`), BEFORE the command leaves, so no
     /// answer can arrive ahead of the record of what it answers.
@@ -2791,6 +2796,7 @@ type ClientEffect =
     | InterruptTurn of AgentTurnId
     | TrustRepo of RepoRef * shown: ConnectionRoute list * ticked: ConnectionRoute list
     | PressSurface of surfaceId: string * componentId: string * scope: string
+    | DismissSurface of surfaceId: string
     | Launch of LaunchEffect
     | Claude of ClaudeCall
     | GitHub of GitHubCall
@@ -6023,7 +6029,8 @@ module ClientModel =
         | ReattachTerminalMsg _
         | InterruptTerminalMsg _
         | TrustRepoMsg _
-        | PressSurfaceMsg _ -> model
+        | PressSurfaceMsg _
+        | DismissSurfaceMsg _ -> model
         // The reader's own hand on a trust card, kept here because nobody else's screen has it.
         | ToggleTrustRouteMsg (repo, route) -> { model with TrustCards = TrustCards.toggle repo route model.TrustCards }
         | NotNowTrustMsg (repo, shown) -> { model with TrustCards = TrustCards.putOff repo shown model.TrustCards }
@@ -6283,6 +6290,7 @@ module ClientModel =
             | InterruptTurnMsg turn -> [ ClientEffect.InterruptTurn turn ]
             | TrustRepoMsg (repo, shown, ticked) -> [ ClientEffect.TrustRepo (repo, shown, ticked) ]
             | PressSurfaceMsg (surfaceId, componentId, scope) -> [ ClientEffect.PressSurface (surfaceId, componentId, scope) ]
+            | DismissSurfaceMsg surfaceId -> [ ClientEffect.DismissSurface surfaceId ]
             | LaunchMsg launchMsg -> Launch.update launchMsg model.Launch |> snd |> List.map ClientEffect.Launch
             | ClaudePressedMsg press -> ClaudePress.call press model.Claude |> Result.toList |> List.map ClientEffect.Claude
             | GitHubPressedMsg press -> GitHubPress.call press model.GitHub |> Result.toList |> List.map ClientEffect.GitHub

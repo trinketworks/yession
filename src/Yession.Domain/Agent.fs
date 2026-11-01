@@ -1358,6 +1358,9 @@ module AgentWake =
                 // A person answered a surface. Owed as whoever pressed (`SurfaceAnswered`).
                 | SessionEvent.SurfaceActionTaken a ->
                     background, lastAgent, pendingCommands, better (SurfaceAnswered a.SurfaceId, a.By) owed
+                // Dismissing is a reply too: the agent learns its question will not be answered.
+                | SessionEvent.SurfaceDismissed d ->
+                    background, lastAgent, pendingCommands, better (SurfaceAnswered d.SurfaceId, d.By) owed
                 // Unwatching clears what that pull request owed. A person who has just said
                 // they no longer care must not get a turn about it a moment later.
                 | SessionEvent.PrUnwatched p ->

@@ -350,6 +350,9 @@ module Dom =
         /// One per place in that list, carrying that sandbox's rendered ref — which is what
         /// makes two repos both declaring `dev` tellable apart in a selector.
         let startInChoice = "data-start-in-choice"
+        /// The list of places itself: a page on a phone, unfolded under the heading on a wide
+        /// screen.
+        let startInList = "data-start-in-list"
         /// The list of places' way back to the sheet's terminals and files.
         let startInBack = "data-start-in-back"
         /// A terminal's stop, on its row of the list (P2-2). On both of its faces — the word
@@ -482,6 +485,8 @@ module Dom =
         let surfaceChoice = "data-surface-choice"
         /// A component this renderer does not draw yet, carrying the catalog's name for it.
         let surfaceUnsupported = "data-surface-unsupported"
+        /// The app's own control that takes a surface down unanswered, on every surface.
+        let surfaceDismiss = "data-surface-dismiss"
         /// The call's outcome, in the SAME tokens a block's status uses (`running` / `ok` /
         /// `failed`) rather than a parallel vocabulary meaning the same three things.
         let chatToolStatus = "data-chat-tool-status"
@@ -672,9 +677,10 @@ module Dom =
         let catchingUp = "Catching up"
         let upToDate = "Up to date"
 
-        // An agent's surface: what it is called to a screen reader, and what it says in place
-        // of a component this app does not draw yet.
+        // An agent's surface: what it is called to a screen reader, what its × says, and what
+        // it says in place of a component this app does not draw yet.
         let agentSurface = "From the agent"
+        let surfaceDismissLabel = "Dismiss this without answering"
         let surfaceUnsupported (kind: string) : string =
             sprintf "The agent put a %s here, which this app does not show yet." kind
 
@@ -1218,7 +1224,7 @@ module Dom =
         let turnWokeIntegrationLost = "The agent started on its own. A terminal where the agent had work cannot run commands."
         let turnWokePrChanged = "The agent started this on its own: a pull request watched here changed state."
         let turnWokeCutOff = "The agent started this on its own. The session stopped during its previous turn. The agent is resuming that turn."
-        let turnWokeSurfaceAnswered = "The agent started this because a person pressed a button on a surface it showed."
+        let turnWokeSurfaceAnswered = "The agent started this because a person replied to a surface it showed."
         /// Stands where the quoted message would be when the ref points past the loaded page —
         /// the reply is real, its cause simply is not on screen yet.
         let replyRefMissing = "earlier message"
