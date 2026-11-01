@@ -734,6 +734,7 @@ let private offering : ResourceName list * ResourceName list -> Result<RepoSandb
             |> expect
         RepoSandboxes.capabilitiesOn
             HostLimits.unlimited
+            (ConnectionName.create "github" |> expect)
             (fun uses wants -> ResourceProfile.resolve profile.Resources (ResourceProfile.selected profile.Resources uses wants))
             selection
 

@@ -5377,7 +5377,6 @@ let private sandboxCauseTests =
                     { Repos.RepoCapabilitiesChanged.MessageId = message "c"
                       Repos.RepoCapabilitiesChanged.Repo = hello
                       Repos.RepoCapabilitiesChanged.Granted = [ "path:/nix:ro" ]
-                      Repos.RepoCapabilitiesChanged.Sensitive = false
                       Repos.RepoCapabilitiesChanged.Actor = ActorRef.Configured hello
                       Repos.RepoCapabilitiesChanged.CausedBy = Some (Cause.Item (message "a")) }
             let events = [ at 1L 0.0 (repoAdded "a" "octo/hello"); at 2L 1.0 (repoAdded "b" "octo/other"); at 3L 2.0 asks ]

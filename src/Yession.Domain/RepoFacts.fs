@@ -263,13 +263,13 @@ module RepoCapabilitiesApproved =
     let phrase (a: RepoCapabilitiesApproved) : Phrase =
         Phrase.deed "approved" [ Segment.Text "what "; Segment.Ref (EntityRef.Repo a.Repo); Segment.Text " asks for" ]
 
-/// What a route lets a repo's code do with somebody's GitHub, in a person's words.
-let private routeWords (route: ConnectionRoute) : string =
-    match route with
-    | ConnectionRoute.Git -> "push and fetch"
-    | ConnectionRoute.Api -> "the API"
-
 module RepoTrustAsked =
+
+    /// What a route lets a repo's code do with somebody's GitHub, in a person's words.
+    let private routeWords (route: ConnectionRoute) : string =
+        match route with
+        | ConnectionRoute.Git -> "push and fetch"
+        | ConnectionRoute.Api -> "the API"
 
     let phrase (a: RepoTrustAsked) : Phrase =
         Phrase.deed
