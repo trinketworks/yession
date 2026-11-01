@@ -128,6 +128,61 @@ let tests =
             | Ok answer -> Expect.isTrue answer "found, well inside the budget"
             | Error fault -> failwithf "the budget stopped an ordinary match: %s" fault
 
+        testCase "a count repeats what precedes it that many times" <| fun () ->
+            Expect.isTrue (matches "^\\d{5}$" "12345") "exactly five"
+            Expect.isFalse (matches "^\\d{5}$" "1234") "not four"
+            Expect.isFalse (matches "^\\d{5}$" "123456") "nor six"
+            Expect.isTrue (matches "^[0-9]{2,3}$" "123") "a range takes its maximum"
+            Expect.isFalse (matches "^[0-9]{2,3}$" "1234") "and no more"
+            Expect.isTrue (matches "^a{2,}$" "aaaaaa") "an open count has no maximum"
+            Expect.isFalse (matches "^a{2,}$" "a") "but keeps its minimum"
+            Expect.isTrue (matches "^(ab){2}$" "abab") "a group counts as one"
+
+        testCase "a brace that is not a count is the character itself" <| fun () ->
+            // As a `RegExp` reads it, so a JSON-ish pattern does not turn into a refusal.
+            Expect.isTrue (matches "a{x}" "a{x}") "a word in braces"
+            Expect.isTrue (matches "{" "{") "a lone brace"
+
+        testCase "a nest of counts that would write out a huge program is refused" <| fun () ->
+            Expect.stringContains (refusal "((a{1000}){1000}){1000}") "counts" "it says the counts are the cause"
+            Expect.stringContains (refusal "a{1001}") "above 1000" "and a single count has a cap"
+            Expect.stringContains (refusal "a{3,2}") "minimum is above its maximum" "and an inverted count is named"
+
+        testCase "a count cannot bring back catastrophic backtracking" <| fun () ->
+            // The exponential shape from the first case, with a count on the outside. Still
+            // one pass.
+            let evil = String.replicate 30 "a"
+            Expect.isFalse (matches "(a+){2,}$" (evil + "b")) "no match, answered"
+
+        testCase "the negated escapes match everything their letter does not" <| fun () ->
+            Expect.isTrue (matches "^\\D+$" "abc") "not digits"
+            Expect.isFalse (matches "\\D" "123") "so no digit"
+            Expect.isTrue (matches "^\\S+$" "abc") "not space"
+            Expect.isFalse (matches "\\W" "abc_1") "word characters are all word"
+
+        testCase "an escape inside a class is the set it names" <| fun () ->
+            Expect.isTrue (matches "^[\\d.]+$" "2024.01") "digits and a dot"
+            Expect.isFalse (matches "^[\\d.]+$" "v2024") "and nothing else"
+            Expect.isTrue (matches "^[^\\s]+$" "abc") "negated, with a set inside"
+
+        testCase "a letter escape outside the subset is refused, and named" <| fun () ->
+            // In a `RegExp`, `\b` is a word boundary. Reading it as the letter `b` would match
+            // something else entirely and say nothing.
+            Expect.stringContains (refusal "\\bword\\b") "`\\b`" "named by its letter"
+            Expect.stringContains (refusal "[\\p]") "`\\p`" "inside a class too"
+
+        testCase "text anchors bind to the whole text, not to a line" <| fun () ->
+            let whole (pattern: string) (text: string) =
+                match Pattern.compileAnchored TextAnchors pattern with
+                | Error reason -> failwithf "expected %s to compile, got: %s" pattern reason
+                | Ok compiled ->
+                    match Pattern.matches compiled text with
+                    | Ok answer -> answer
+                    | Error fault -> failwithf "the matcher would not answer: %s" fault
+            Expect.isTrue (whole "^\\d{5}$" "12345") "a whole value"
+            Expect.isFalse (whole "^\\d{5}$" "12345\nabc") "a second line does not pass the check"
+            Expect.isFalse (whole "^abc" "x\nabc") "a start is the text's start"
+
         testCase "a pattern longer than the cap is refused rather than run" <| fun () ->
             // Linear in the pattern as well as the input, so the bound is what keeps the work
             // per character something a person can reason about.

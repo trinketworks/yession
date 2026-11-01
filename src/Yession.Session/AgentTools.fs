@@ -945,7 +945,7 @@ module AgentTools =
                   and! until =
                       waitFor
                           "hold the read until this exact text appears, e.g. \"login: \". This is literal text. For a pattern, use wait_for_pattern"
-                          "hold the read until output matches this pattern, e.g. \"[#$>] $\" for a shell prompt. The pattern can use literal text, `.`, `[classes]`, `*`, `+`, `?`, `|`, groups, and `^`/`$` anchored to a LINE. It cannot use backreferences, lookaround or non-greedy quantifiers"
+                          "hold the read until output matches this pattern, e.g. \"[#$>] $\" for a shell prompt. The pattern can use literal text, `.`, `[classes]`, the escapes \\d \\w \\s and \\D \\W \\S, `*`, `+`, `?`, counts {n} {n,} {n,m} up to 1000, `|`, groups, and `^`/`$` anchored to a LINE. It cannot use backreferences, lookaround or non-greedy quantifiers"
                           "how long to hold the read. After that time, the answer gives what the terminal said instead. Default 10"
                           10.0
                   return until |> Result.map (fun until -> terminal, from, until)
