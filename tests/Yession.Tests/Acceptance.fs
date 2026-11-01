@@ -2859,7 +2859,7 @@ let private paneNewTests =
         testCase "with a choice the sheet says where New terminal starts one" <| fun () ->
             let html = Support.render (sheet (withSandbox "octo/hello:dev"))
             Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.startIn "default")) "where it starts, as a link"
-            Expect.isTrue (html.Contains (Dom.Text.startInNamed Dom.Text.aTerminal)) "named for the place and the act"
+            Expect.isTrue (html.Contains (Dom.Text.startInNamed Dom.Text.defaultPlace)) "named for the place and the act"
 
         testCase "the list of places names every place, scope and all" <| fun () ->
             let html =
@@ -2868,9 +2868,9 @@ let private paneNewTests =
                 |> Support.render
             Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.startInChoice "default")) "this session's own"
             Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.startInChoice "octo/hello:dev")) "and the repo's"
-            Expect.isTrue (html.Contains "octo/hello") "which repo declared it, because two may declare one name"
-            // Named for what choosing it leads to, scope included. The visible label is the
-            // short name, so without this a row is called "dev" and a second repo's is too.
+            Expect.isTrue (html.Contains ">hello:dev<") "its name carries the repo's, because two may declare one name"
+            // Named for what choosing it leads to, scope included. The visible label leaves the
+            // owner out, so without this two owners' `hello:dev` would be called the same.
             Expect.isTrue
                 (html.Contains (Dom.Text.newTerminalIn "octo/hello:dev"))
                 "and every row says the whole act"

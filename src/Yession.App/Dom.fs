@@ -1050,10 +1050,8 @@ module Dom =
         let commandDidNotStart = "did not start"
         /// The sheet's way to make a terminal.
         let aNewTerminal = "new terminal"
-        /// The name of this session's own sandbox where a place is chosen. "default" is a
-        /// word about configuration, and nobody opening a shell is thinking about
-        /// configuration — so it is the note beside that name, not the name.
-        let aTerminal = "terminal"
+        /// The name of this session's own sandbox where a place is chosen. It is not a
+        /// sandbox name a repo declared, so the face writes it apart from those.
         let defaultPlace = "default"
         /// New terminal's accessible name: the whole act, with the scope, since two repos may
         /// both declare `dev`. It CONTAINS the visible label, which is what keeps a voice
@@ -1064,7 +1062,7 @@ module Dom =
         let startInWord = "in"
         let startInNamed (place: string) = sprintf "New terminals start in %s. Choose where" place
         /// The heading over the list of places, and its way back.
-        let startInHeading = "start a terminal in"
+        let startInHeading = "start a terminal in sandbox"
         let backToList = "Back to terminals and files"
         /// The hidden pane's edge tab (P1-4): what the column holds, counted, so that a
         /// session with work in it says so with the pane shut. With none open it is still the
