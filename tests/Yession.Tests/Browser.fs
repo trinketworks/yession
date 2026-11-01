@@ -328,27 +328,6 @@ let private waitTextIn (what: string) (page: IPage) (selector: string) (text: st
 let private waitOwnText (what: string) (page: IPage) (selector: string) (text: string) : Async<unit> =
     Wait.until what (fun () -> Probe.ownTexts page selector) (List.contains text)
 
-/// Open a terminal the way a person does (Plan 20, stage 1): press the strip's `+` — or, in an
-/// empty pane, its own button, which is the one door there (P1-4) — and take the choice if one
-/// is offered.
-///
-/// Whether one IS offered depends on the session — with one place to put a terminal the door
-/// makes one, and with a repo's sandbox up it opens a menu. So this reads the answer off the
-/// control rather than guessing or waiting to see: `aria-haspopup` is exactly the promise the
-/// door makes to a reader, which makes it the right thing for a test to believe too, and it is
-/// rendered before any press so there is no race to lose.
-let private openNewTerminal (page: IPage) : Async<unit> =
-    async {
-        let door = "[data-pane-new], [data-terminal-new]"
-        do! waitVisible "the door to a new terminal" page door
-        let! popup = Read.attr page door "aria-haspopup"
-        let asks = popup = Some "menu"
-        do! awaitU (page.Locator(door).First.ClickAsync ())
-        if asks then
-            do! waitVisible "the default sandbox on the new terminal's menu" page "[data-sandbox-new='default']"
-            do! awaitU (page.Locator("[data-sandbox-new='default']").First.ClickAsync ())
-    }
-
 /// A block that ran and finished, whatever it ran.
 let private finishedBlock = "[data-terminal-block][data-terminal-block-status='ok']"
 
@@ -360,6 +339,17 @@ let private switcherDown (page: IPage) : Async<unit> =
         let shut = "[data-pane-switcher][aria-expanded='false']"
         let! n = Read.count page shut
         if n > 0 then do! awaitU (page.Locator(shut).First.DispatchEventAsync "click")
+    }
+
+/// Open a terminal the way a person does: bring the list's sheet down and press New terminal
+/// on its Terminals heading, which starts one in the session's own sandbox unless somebody
+/// chose another place.
+let private openNewTerminal (page: IPage) : Async<unit> =
+    async {
+        do! switcherDown page
+        let door = "[data-terminal-new='default']"
+        do! waitVisible "New terminal on the sheet" page door
+        do! awaitU (page.Locator(door).First.ClickAsync ())
     }
 
 /// The session this shell says it is, off its `<meta>`.
@@ -3944,22 +3934,23 @@ let editorTests =
                 Expect.isEmpty faults "the ring is drawn wholly inside the strip's box"
             }
 
-        // One door per state. The pane used to offer a `+` on its strip, "+ New terminal" at
-        // the foot of its switcher, and an empty pane's own button — two of them on one screen
-        // at once, a reader left to work out they were one act. At most one control that
-        // makes a terminal is ON SCREEN in the pane, whatever it shows: more tabs than fit,
-        // the `all` page, an empty pane, and `all` over an empty pane. Counted by what is
-        // painted at each control's centre, so one present but covered is not a door, and one
-        // a reader can see is — which is the only count that means anything to them.
+        // One door. The pane has offered a `+` on its strip, "+ New terminal" at the foot of its
+        // switcher, and an empty pane's own button — two of them on one screen at once, a
+        // reader left to work out they were one act. Now the list's New terminal is the
+        // only one: on screen exactly while the list is — dropped as the sheet, or docked as
+        // an empty pane's body — and nowhere else. Counted at more tabs than fit, the `all`
+        // page, and an empty pane, which is the list docked. Counted by
+        // what is painted at each control's centre, so one present but covered is not a door,
+        // and one a reader can see is — which is the only count that means anything to them.
         //
         // The empty pane is reached the way a reader reaches it: every terminal ends, each
         // tab stays where it stood, closed, and the reader puts them away one × at a time —
         // each landing the pane on the next, until there is nothing left to be on.
-        editorCase "at most one way to make a terminal is on screen in the pane, in every state" <| fun page ->
+        editorCase "the sheet's New terminal is the one way to make a terminal on screen" <| fun page ->
             async {
                 let doors (state: string) =
                     async {
-                        let! n = Probe.paintedCount page "#shell [data-content-panel] [data-pane-new], #shell [data-content-panel] [data-terminal-new]"
+                        let! n = Probe.paintedCount page "#shell [data-content-panel] [data-terminal-new]"
                         return sprintf "%s: %d" state n
                     }
                 let closed (id: string) =
@@ -3984,13 +3975,13 @@ let editorTests =
                     do! waitVisible "a closed tab's way to put it away" page "#shell [data-pane-tab-dismiss]"
                     do! awaitU (page.ClickAsync "#shell [data-pane-tab-dismiss]")
                     do! waitCount (sprintf "%d tabs left" left) page "#shell [data-terminal-closed-tab]" left
-                do! waitVisible "the empty pane's way to make a terminal" page "#shell [data-terminal-new]"
+                do! waitVisible "the list, docked in the empty pane" page "#shell [data-content-list]"
+                do! waitAbsent "no scrim over a docked list" page "#shell [data-pane-sheet-scrim]"
                 let! empty = doors "an empty pane"
-                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                do! waitVisible "the all page, over an empty pane" page "#shell [data-content-list]"
-                let! emptyListing = doors "the all page over an empty pane"
-                let seen = [ many; listing; empty; emptyListing ]
-                Expect.equal seen (seen |> List.map (fun said -> said.Substring (0, said.LastIndexOf ':') + ": 1")) "one door in each"
+                Expect.equal
+                    [ many; listing; empty ]
+                    [ "more tabs than fit: 0"; "the all page: 1"; "an empty pane: 1" ]
+                    "one door, on the list"
             }
 
         // A closed tab stays until it is put away (F2; desktop journey, finding 16): its × does
@@ -4204,19 +4195,16 @@ let editorTests =
                 Expect.isTrue (whole.Length >= 3) (sprintf "three whole tabs or more, got %A in %A" whole shape)
             }
 
-        // The room came partly from the `+`, which a phone's row no longer carries — and making
-        // a terminal is still a press away: the `all` page, the door to everything, offers it.
-        // Counted by what is painted at each door's centre, so the `+` the stylesheet hides
-        // is not one, and exactly one is: this is the one state the phone's pane had a door in
-        // before, and it must still have one, not two.
+        // Making a terminal is a press away on a phone too: the `all` page, the door to
+        // everything, offers it. Counted by what is painted at each door's centre, so exactly
+        // one is, not none and not two.
         editorCaseIn 390 844 "on a phone the all page offers the one way to make a terminal" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 do! waitVisible "the all page" page "#shell [data-content-list]"
                 do! Probe.settled page
-                let! doors =
-                    Probe.paintedCount page "#shell [data-content-panel] [data-pane-new], #shell [data-content-panel] [data-terminal-new]"
+                let! doors = Probe.paintedCount page "#shell [data-content-panel] [data-terminal-new]"
                 Expect.equal doors 1 "one door to a new terminal on the all page"
             }
 
@@ -6889,107 +6877,63 @@ let editorTests =
                 Expect.isFalse shown (sprintf "%s is not on the all page" name)
             }
 
-        // The strip's door (Plan 20, stage 1), and the whole point of the shape: it opens a
-        // MENU over the pane, where the list toggle beside it opens a destination that
-        // replaces the strip. Two acts, two kinds of surface — which is what a heading word
-        // over identical rows could not say, and what a browser is needed to confirm, because
-        // in the markup a menu and a list are both elements with entries in them.
-        //
-        // Driven from the keyboard throughout. The door opens a surface rather than acting, so
-        // it owes a reader the Escape that shuts it and the cursor back on the control that
-        // opened it — the floor's rule about a DOM swap that removes what had focus.
-        editorCase "the strip's door opens a menu over the pane, and gives focus back when it shuts" <| fun page ->
+        // Where New terminal starts one is the repo picker's branch link: it opens a list of
+        // places IN the sheet, in place of its terminals and files. Driven from the keyboard
+        // throughout, because the press removes the control it was on, and the floor's rule
+        // about a DOM swap that removes what had focus says the cursor goes somewhere real:
+        // onto the ticked place, and back onto the link when Escape returns to the list.
+        editorCase "the sheet's start-in link opens the places in the sheet, and focus follows" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! waitVisible "the pane's tab strip" page "#shell [role='tablist']"
+                do! switcherDown page
+                do! waitVisible "where New terminal starts one" page "#shell [data-start-in]"
 
-                do! awaitU (page.Locator("#shell [data-pane-new]").First.PressAsync "Enter")
-                do! waitVisible "the menu of things to open" page "#shell [data-pane-new-menu]"
+                do! awaitU (page.Locator("#shell [data-start-in]").First.PressAsync "Enter")
+                do! waitVisible "the list of places" page "#shell [data-start-in-choice]"
+                // In the sheet, in place of what it lists.
+                do! waitAbsent "#shell [data-terminal-new] to be gone" page "#shell [data-terminal-new]"
+                do! Wait.until
+                        "focus on the ticked place"
+                        (fun () -> Read.focused page "[data-start-in-choice][aria-pressed='true']")
+                        id
 
-                // OVER the pane, not instead of it: the tabs are still there and still a
-                // tablist, which is exactly how this differs from the list.
-                do! waitVisible "the pane's tab strip, under the menu" page "#shell [role='tablist']"
-                do! waitAbsent "#shell [data-content-list] to be gone" page "#shell [data-content-list]"
-
-                // Its entries are real controls a keyboard can reach.
-                do! awaitU (page.Locator("#shell [data-sandbox-new]").First.FocusAsync ())
-                let! onEntry = Read.focused page "[data-sandbox-new]"
-                Expect.isTrue onEntry "a place takes focus without a pointer"
-
-                // Escape from inside the menu shuts it and hands the cursor back, rather than
-                // leaving it on `body` where the entry used to be.
+                // Escape steps back to the list, not off the sheet.
                 do! awaitU (page.Keyboard.PressAsync "Escape")
-                do! waitAbsent "#shell [data-pane-new-menu] to be gone" page "#shell [data-pane-new-menu]"
-                do! Wait.until "focus on [data-pane-new]" (fun () -> Read.focused page "[data-pane-new]") id
+                do! waitVisible "the sheet's list again" page "#shell [data-terminal-new]"
+                do! Wait.until "focus on [data-start-in]" (fun () -> Read.focused page "[data-start-in]") id
                 return ()
             }
 
-        // The same door from the EMPTY pane (P1-4), where the strip offers no `+` and the
-        // empty pane's own button is the one way to make something — so the menu hangs from
-        // that button, and Escape hands the cursor back to it rather than to a `+` that is not
-        // on the page. The harness's pane is emptied by its terminals ending with none of them
-        // chosen: their closed tabs stay in the strip (F2), and a pane with nothing chosen
-        // lands only on a terminal that still runs (`ClientModel.selectedTerminal`).
-        editorCase "the empty pane's door opens the menu under itself, and gives focus back when it shuts" <| fun page ->
-            async {
-                let closed (id: string) =
-                    Yession.Domain.SessionEvent.TerminalClosed
-                        { Yession.Domain.Terminals.TerminalClosed.TerminalId = harnessTerminal id
-                          Yession.Domain.Terminals.TerminalClosed.Reason = "closed by a peer"
-                          Yession.Domain.Terminals.TerminalClosed.By = None }
-                do! foldHarness page [ 90L, closed "term-harness"; 91L, closed "term-live" ]
-                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! waitVisible "the empty pane's way to make a terminal" page "#shell [data-terminal-new]"
-
-                do! awaitU (page.Locator("#shell [data-terminal-new]").First.PressAsync "Enter")
-                do! waitVisible "the menu of things to open" page "#shell [data-pane-new-menu]"
-                do! awaitU (page.Locator("#shell [data-sandbox-new]").First.FocusAsync ())
-
-                do! awaitU (page.Keyboard.PressAsync "Escape")
-                do! waitAbsent "#shell [data-pane-new-menu] to be gone" page "#shell [data-pane-new-menu]"
-                do! Wait.until "focus on [data-terminal-new]" (fun () -> Read.focused page "[data-terminal-new]") id
-                return ()
-            }
-
-        // (A phone's door used to be the `all` page's, standing in for a `+` the strip hid
-        // there; the strip's `+` is the one door on every screen now, and the case above is it.)
-
-        // The menu fits the screen it is on. Only a browser can answer it and the markup is
-        // innocent either way: the menu's entries carry what a repo's file says its sandbox is
+        // The list of places fits the screen it is on. Only a browser can answer it and the markup is
+        // innocent either way: a place's row carries what a repo's file says its sandbox is
         // FOR, which is a whole sentence — 170 characters in this repository's own
-        // `yession.yaml` — and a box with a minimum width and no maximum grows to its widest
-        // entry. Hung from `right-0`, that growth goes LEFT: measured on a 375px phone, a
-        // 962px menu starting 599px off the side of the screen, its text cut off mid-word.
+        // `yession.yaml` — and the menu that listed them once grew to its widest entry: measured
+        // on a 375px phone, 962px, starting 599px off the side of the screen.
         //
-        // What is asserted is that it fits, not what it measures: the width is design and may
-        // move, where staying on the screen is the promise. The long descriptions live in the
-        // harness fixture, because the version of this that shipped broken was green against
-        // a fixture that said "day-to-day work".
-        //
-        // The menu measured is the one the strip's `+` hangs, the one door on a phone too.
-        editorCaseIn 375 812 "the menu of things to open fits the phone it is on" <| fun page ->
+        // What is asserted is that every row fits, not what it measures. The long descriptions
+        // live in the harness fixture, because the version of this that shipped broken was
+        // green against a fixture that said "day-to-day work".
+        editorCaseIn 375 812 "the list of places fits the phone it is on" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-pane-new]")
-                do! waitVisible "the menu of things to open" page "#shell [data-pane-new-menu]"
+                do! switcherDown page
+                do! awaitU (page.ClickAsync "#shell [data-start-in]")
+                do! waitVisible "the list of places" page "#shell [data-start-in-choice]"
 
                 // The note is what can push it wide, so a fixture that stopped carrying a long
-                // one would make this pass over nothing. A NAME can push it too, by about
-                // 50px, and is left to: `SandboxName` caps at 40 characters, so that growth is
-                // bounded and small, and a menu sized to its longest name reads better than a
-                // name with its end cut off.
-                let! entries = Read.texts page "#shell [data-pane-new-menu] [role='menuitem']"
+                // one would make this pass over nothing.
+                let! entries = Read.texts page "#shell [data-start-in-choice]"
                 let longestNote = entries |> List.map (fun e -> e.Trim().Length) |> List.fold max 0
                 Expect.isTrue
                     (longestNote > 90)
-                    (sprintf "an entry says what its sandbox is for, at length; longest is %d" longestNote)
+                    (sprintf "a place says what its sandbox is for, at length; longest is %d" longestNote)
 
-                let! menu = boxesOf page [ "#shell [data-pane-new-menu]" ]
+                let! rows = boxesOf page [ "#shell [data-start-in-choice]" ]
                 let! window = Probe.window page
-                let m = menu.Head
-                Expect.isTrue
-                    (m.Left >= 0.0 && m.Right <= window.InnerWidth)
-                    (sprintf "the menu is on the screen: left %d, right %d, in a %.0fpx screen" (px m.Left) (px m.Right) window.InnerWidth)
+                for r in rows do
+                    Expect.isTrue
+                        (r.Left >= 0.0 && r.Right <= window.InnerWidth)
+                        (sprintf "the place is on the screen: left %d, right %d, in a %.0fpx screen" (px r.Left) (px r.Right) window.InnerWidth)
                 return ()
             }
 

@@ -406,6 +406,10 @@ module Prompting =
             "You are running because your previous turn was cut off. The session stopped while that turn was running. What you were in the middle of did not finish. Nothing that you waited for reported back to that turn. Before you continue, check where things actually stand. A command may have stopped half-way. A push may not have landed. Then continue from where you stopped. Say that you are resuming."
         | PrChanged _ ->
             "You are running because a pull request watched here changed state. The conversation above says how. Say what it means for what you were doing. Then continue."
+        | SurfaceAnswered surfaceId ->
+            sprintf
+                "You are running because a person pressed a button on surface %s, which you showed with show_surface. The conversation above says who pressed it and what it carried. Act on the answer. If the question is settled, take the surface down with deleteSurface."
+                surfaceId
         // Simplified Technical English, as the tool answers are: one term for the terminal's
         // state ("cannot run commands") and one for what became of its queue ("refused"). The
         // session knows only that the marks stopped, so the cause is said with "may".

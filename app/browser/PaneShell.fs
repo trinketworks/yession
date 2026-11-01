@@ -93,10 +93,12 @@ let private toCommandLine (terminal: Yession.Domain.TerminalId) : unit =
 /// frame after the render that shut it, it is there.
 let private toPaneReopen () : unit = focusOn (find "[data-content-toggle=\"show\"]")
 
-/// Onto the empty pane's press, or the strip's `+` when the pane is not empty after all — the
-/// same act from the other place it is offered.
+/// Onto the docked list's New terminal, once the pane is empty: the press that fills it. The
+/// list button if that has not drawn.
 let private toPaneEmpty () : unit =
-    find "[data-terminal-new]" |> Option.orElseWith (fun () -> find "[data-pane-new]") |> focusOn
+    find "[data-content-list] [data-terminal-new]"
+    |> Option.orElseWith (fun () -> find "[data-pane-switcher]")
+    |> focusOn
 
 /// Onto one terminal's row on the `all` page, or the page's pivot item when it has gone since.
 let private toSwitcherRow (terminal: Yession.Domain.TerminalId) : unit =
@@ -130,10 +132,9 @@ let private toSwitcher () : unit =
         |> focusOn
 
 /// Onto the pivot's selected item, once the `all` page has gone: the terminal it
-/// was laid over. With nothing under it the pane is empty, and its press is what is there.
+/// was laid over. With nothing under it the pane is empty, and the list button is what is there.
 let private toPivot () : unit =
     find "[data-pane-pivot] [role=\"tab\"][aria-selected=\"true\"]"
-    |> Option.orElseWith (fun () -> find "[data-terminal-new]")
     |> Option.orElseWith (fun () -> find "[data-pane-switcher]")
     |> focusOn
 
@@ -479,17 +480,12 @@ let jumpToLatest (surface: Yession.App.TailSurface) : unit =
 let private toItemActions (messageId: string) : unit =
     focusOn (find (sprintf "[data-item-actions=\"%s\"]" messageId))
 
-/// Onto the door the menu of new things hangs from: the strip's `+`, the empty pane's button
-/// when the pane is empty — the strip offers no `+` then (P1-4), and the empty pane's press is
-/// the same act — or, on a phone, the `all` page's, which stands in for the `+` there.
-///
-/// The SHOWN one. A screen offers one door, but over the `all` page the document holds two —
-/// the `+` and the page's, each hidden by the stylesheet wherever the other shows — and a
-/// `display: none` control takes no focus, so the first in the document would strand it.
-let private toPaneNew () : unit =
-    let doors = document.querySelectorAll "[data-pane-new], [data-terminal-new]"
-    [ for i in 0 .. doors.length - 1 -> doors.[i] :?> HTMLElement ]
-    |> List.tryFind (fun door -> door.getBoundingClientRect().width > 0.0)
+/// Onto where a terminal will start: the ticked place while the sheet lists the places, else
+/// the link that opens that list, else New terminal beside it.
+let private toStartIn () : unit =
+    find "[data-start-in-choice][aria-pressed=\"true\"]"
+    |> Option.orElseWith (fun () -> find "[data-start-in]")
+    |> Option.orElseWith (fun () -> find "[data-terminal-new]")
     |> focusOn
 
 /// Onto the message composer's field — this peer's own, the one that is not read-only — or,
@@ -606,7 +602,7 @@ and private place (asked: Yession.App.DomMove) : unit =
         if stranded [] || onPanel then place inner
     | Yession.App.DomMove.FocusChat subject -> toChatItem subject
     | Yession.App.DomMove.FocusItemActions messageId -> toItemActions (Yession.Domain.MessageId.value messageId)
-    | Yession.App.DomMove.FocusPaneNew -> toPaneNew ()
+    | Yession.App.DomMove.FocusStartIn -> toStartIn ()
     | Yession.App.DomMove.FocusComposer -> toComposer ()
     // Not placements, and nothing guards one: made as `move` makes them.
     | Yession.App.DomMove.RevealBlock _

@@ -14,12 +14,13 @@ open Lit
 ///
 /// An input writes its answer into the shared data model (`EditSurfaceMsg`), which is the
 /// spec's two-way binding with everybody in the session on the other end of it. A button
-/// shows whether its checks pass; pressing it reaches the agent in a later change, with the
-/// Session's side of it.
+/// shows whether its checks pass, and a ready one asks the session to record its answer
+/// (`PressSurfaceMsg`), which wakes the agent.
 [<RequireQualifiedAccess>]
 module SurfaceView =
 
-    let private kindName (kind: ComponentKind) : string =
+    /// The catalog's name for a component, as the agent wrote it.
+    let kindName (kind: ComponentKind) : string =
         match kind with
         | ComponentKind.Text _ -> "Text"
         | ComponentKind.Image _ -> "Image"
@@ -39,6 +40,30 @@ module SurfaceView =
         | ComponentKind.ChoicePicker _ -> "ChoicePicker"
         | ComponentKind.Slider _ -> "Slider"
         | ComponentKind.DateTimeInput _ -> "DateTimeInput"
+
+    /// Whether this module draws a component, rather than saying it cannot. What the agent's
+    /// tool refuses by (`SurfaceTool`), so the agent is never told a component works that
+    /// people would see as a hole.
+    let draws (kind: ComponentKind) : bool =
+        match kind with
+        | ComponentKind.Text _
+        | ComponentKind.Row _
+        | ComponentKind.Column _
+        | ComponentKind.List _
+        | ComponentKind.Card _
+        | ComponentKind.Divider _
+        | ComponentKind.Button _
+        | ComponentKind.TextField _
+        | ComponentKind.CheckBox _
+        | ComponentKind.ChoicePicker _ -> true
+        | ComponentKind.Image _
+        | ComponentKind.Icon _
+        | ComponentKind.Video _
+        | ComponentKind.AudioPlayer _
+        | ComponentKind.Tabs _
+        | ComponentKind.Modal _
+        | ComponentKind.Slider _
+        | ComponentKind.DateTimeInput _ -> false
 
     /// What one surface's components draw against.
     type private Canvas =
@@ -132,9 +157,17 @@ module SurfaceView =
         | ComponentKind.Divider axis ->
             let face = if axis = Some Direction.Vertical then Style.surfaceDividerVertical else Style.surfaceDivider
             html $"""<div class="{face}" role="separator" data-surface-component="{c.Id}"></div>"""
-        | ComponentKind.Button (child, variant, _, checks) ->
+        | ComponentKind.Button (child, variant, action, checks) ->
             let unmet = failing scope checks
             let ready = List.isEmpty unmet
+            // The press names the button and where it was drawn; the session reads the answer
+            // from the doc. A button that is not ready, or that calls a function here rather
+            // than telling the agent, sends nothing.
+            let press _ =
+                match action with
+                | Action.Event _ when ready -> canvas.Dispatch (PressSurfaceMsg (canvas.SurfaceId, c.Id, scope.Base))
+                | Action.Event _
+                | Action.LocalCall _ -> ()
             let face =
                 match variant, ready with
                 | Some ButtonVariant.Primary, true -> Style.btnPrimary
@@ -144,7 +177,7 @@ module SurfaceView =
                 | _, false -> Style.btnWaiting
             html $"""
                 <button type="button" class="{face}" style="{weight c}" data-surface-component="{c.Id}"
-                        aria-disabled="{if ready then "false" else "true"}">{draw canvas ancestors child scope}</button>{reasons unmet}"""
+                        aria-disabled="{if ready then "false" else "true"}" @click={Ev press}>{draw canvas ancestors child scope}</button>{reasons unmet}"""
         | ComponentKind.TextField (label, value, variant, pattern, checks) ->
             let current = value |> Option.map (textIn scope) |> Option.defaultValue ""
             let target = value |> Option.bind (boundAt scope)

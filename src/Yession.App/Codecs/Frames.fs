@@ -138,7 +138,13 @@ module Frames =
                     Encode.object
                         [ "kind", Encode.string "addRepo"
                           "repo", Codec.repoRef.Encode repo
-                          "branch", Encode.option Encode.string branch ])
+                          "branch", Encode.option Encode.string branch ]
+                | PressSurfaceButton (surfaceId, componentId, scope) ->
+                    Encode.object
+                        [ "kind", Encode.string "pressSurfaceButton"
+                          "surfaceId", Encode.string surfaceId
+                          "componentId", Encode.string componentId
+                          "scope", Encode.string scope ])
           Decode =
             Decode.field "kind" Decode.string
             |> Decode.andThen (function
@@ -168,6 +174,12 @@ module Frames =
                 | "releaseTerminalLease" ->
                     Decode.field "terminalId" Codec.terminalId.Decode |> Decode.map ReleaseTerminalLease
                 | "reattachTerminal" -> Decode.field "terminalId" Codec.terminalId.Decode |> Decode.map ReattachTerminal
+                | "pressSurfaceButton" ->
+                    Decode.map3
+                        (fun surfaceId componentId scope -> PressSurfaceButton (surfaceId, componentId, scope))
+                        (Decode.field "surfaceId" Decode.string)
+                        (Decode.field "componentId" Decode.string)
+                        (Decode.field "scope" Decode.string)
                 | other -> Decode.fail (sprintf "Unknown session command: %s" other)) }
 
     let private sessionCommandResult : Codec<SessionCommandResult> =

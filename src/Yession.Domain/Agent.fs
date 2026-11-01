@@ -1019,7 +1019,12 @@ type ToolCapabilities =
       /// the whole record is resolved per turn: the turn holds a SNAPSHOT, so a set change
       /// mid-turn lands on the next turn and the model's tool list never shifts underneath
       /// it. A server that is down contributes nothing here and fails nothing.
-      Foreign : ToolRegistry list }
+      Foreign : ToolRegistry list
+      /// Tools of the session's own namespace whose body reaches what the domain cannot name:
+      /// `show_surface` writes A2UI surfaces into the session's doc, and the domain references
+      /// neither A2UI nor Yjs (`DomainReferences`). The same seam `Repos.ProviderTools` is for
+      /// GitHub's verbs. Empty where no doc is wired (`AgentCapabilities.none`).
+      Contributed : (ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>)) list }
 
 /// Everything the agent is permitted to do this turn, one record per feature.
 ///
@@ -1094,7 +1099,8 @@ module AgentCapabilities =
               Read = fun _ -> async { return Error "no query capability" } }
           Tools =
             { Record = ToolUseLog.none
-              Foreign = [] }
+              Foreign = []
+              Contributed = [] }
           RunGated =
             fun call ->
                 async { return Error (sprintf "no gate to run %s through in this session" call.Tool) } }
@@ -1190,14 +1196,16 @@ module AgentWake =
     /// gone; a completion is ordinary news.
     ///
     /// A turn cut off outranks them all: the agent was in the middle of something, and every
-    /// other reason is news ABOUT work — this one is the work.
+    /// other reason is news ABOUT work — this one is the work. An answer to a surface comes
+    /// next: a person replied to what the agent asked, and the turn should wear their name.
     let private rank =
         function
         | CutOff _ -> 0
-        | IntegrationLost _ -> 1
-        | StreamEnded _ -> 2
-        | CommandFinished -> 3
-        | PrChanged _ -> 4
+        | SurfaceAnswered _ -> 1
+        | IntegrationLost _ -> 2
+        | StreamEnded _ -> 3
+        | CommandFinished -> 4
+        | PrChanged _ -> 5
 
     /// Whose an act a loss refused is, as a wake runs: the principal behind the AGENT's act,
     /// and nobody for anyone else's. A person's refused command is news to that person, who
@@ -1347,6 +1355,9 @@ module AgentWake =
                 // as whoever's credential the watch was looking with, which for a watch the
                 // agent started is the person whose turn it started in.
                 | SessionEvent.PrTransitioned p -> background, lastAgent, pendingCommands, better (PrChanged p.Pr, p.Watcher) owed
+                // A person answered a surface. Owed as whoever pressed (`SurfaceAnswered`).
+                | SessionEvent.SurfaceActionTaken a ->
+                    background, lastAgent, pendingCommands, better (SurfaceAnswered a.SurfaceId, a.By) owed
                 // Unwatching clears what that pull request owed. A person who has just said
                 // they no longer care must not get a turn about it a moment later.
                 | SessionEvent.PrUnwatched p ->

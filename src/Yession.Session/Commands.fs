@@ -39,6 +39,9 @@ module SessionCommands =
         // The launch surface's act. Answers ADMISSION only — the clone it starts reports
         // through the log — so a function whose `Ok` means "begun", never "done".
         (addRepo: Principal -> RepoRef -> string option -> Async<Result<unit, string>>)
+        // A button pressed on an agent's surface. `Ok` means the answer is on the record; the
+        // turn it owes runs when the scheduler next looks.
+        (pressSurface: Principal -> string -> string -> string -> Async<Result<unit, string>>)
         // Who a peer is. A `Principal`, because every peer is one, and the two acts above
         // are a PERSON's — trust in a repo, a repo brought in on their credential — which the
         // type then says outright rather than a check inside each.
@@ -127,6 +130,11 @@ module SessionCommands =
             | ReattachTerminal terminalId ->
                 match! reattachTerminal terminalId with
                 | Ok _ -> return CommandAccepted
+                | Error reason -> return CommandRejected reason
+            // A person's answer, so a person's act: the turn it owes runs on their credential.
+            | PressSurfaceButton (surfaceId, componentId, scope) ->
+                match! pressSurface (principalFor peerId) surfaceId componentId scope with
+                | Ok () -> return CommandAccepted
                 | Error reason -> return CommandRejected reason
         }
 

@@ -621,6 +621,9 @@ module ConversationProjection =
         // I show them" reads the same record a person does — and the address in the sentence is
         // what an agent quotes back to serve or supersede it.
         | SessionEvent.ArtifactShared a -> proj |> noted a.MessageId a.Actor (Act.ArtifactShared a) envelope
+        // An answer to a surface folds in for the artifact's reason, in the other direction:
+        // the agent's next turn reads what was chosen in the same record a person scrolls.
+        | SessionEvent.SurfaceActionTaken a -> proj |> noted a.MessageId (Principal.toActor a.By) (Act.SurfaceActionTaken a) envelope
         // A tab opened or closed is not something SAID. It is a thing that happened to one
         // column of one screen, and the chat is the record of the conversation — an item
         // reading "opened artifacts/chart.png" under the message that shared it would be the

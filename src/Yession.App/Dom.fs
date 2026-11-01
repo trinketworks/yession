@@ -343,15 +343,15 @@ module Dom =
         /// in the list wears and its running block wears, so a tab you are not showing still
         /// says something is under way there.
         let terminalTabRunning = "data-terminal-tab-running"
-        /// The strip's `+` — the door to making something, which is a different door from
-        /// the list's. It is called `pane-new` rather than `terminal-new` because a terminal
-        /// is only the first kind of thing it will offer.
-        let paneNew = "data-pane-new"
-        /// Its menu, while it is open.
-        let paneNewMenu = "data-pane-new-menu"
-        /// One per place a terminal can be opened, carrying that sandbox's rendered ref —
-        /// which is what makes two repos both declaring `dev` tellable apart in a selector.
-        let sandboxNew = "data-sandbox-new"
+        /// The sheet's New terminal: the one way to make a terminal, under its Terminals heading.
+        let terminalNew = "data-terminal-new"
+        /// Beside it, where the terminal will start, and the way into the list of places.
+        let startIn = "data-start-in"
+        /// One per place in that list, carrying that sandbox's rendered ref — which is what
+        /// makes two repos both declaring `dev` tellable apart in a selector.
+        let startInChoice = "data-start-in-choice"
+        /// The list of places' way back to the sheet's terminals and files.
+        let startInBack = "data-start-in-back"
         /// A terminal's stop, on its row of the list (P2-2). On both of its faces — the word
         /// that arms and the word that confirms — because they are one control in one place.
         let terminalClose = "data-terminal-close"
@@ -1051,20 +1051,22 @@ module Dom =
         /// nothing. The token, and the word a reader sees.
         let commandNotStarted = "not-started"
         let commandDidNotStart = "did not start"
-        /// The strip's `+`, when there is a choice behind it.
-        let openSomethingNew = "Open something new"
-        /// The same control when there is only one thing it could make, and the word the
-        /// empty pane's button carries.
-        let aNewTerminal = "New terminal"
-        /// The menu's entry for this session's own sandbox. "default" is a word about
-        /// configuration, and nobody opening a shell is thinking about configuration.
-        let aTerminal = "terminal"
-        /// A menu entry's name. The visible label is the sandbox's short name, because a
-        /// column of "New terminal in …" is a column of one phrase; the accessible one says
-        /// the whole act and carries the scope, since two repos may both declare `dev` and
-        /// "dev" twice is a menu nobody reading it aloud can use. It CONTAINS the visible
-        /// label, which is what keeps a voice control that hears "dev" able to press it.
+        /// The sheet's way to make a terminal.
+        let aNewTerminal = "new terminal"
+        /// The name of this session's own sandbox where a place is chosen. It is not a
+        /// sandbox name a repo declared, so the face writes it apart from those.
+        let defaultPlace = "default"
+        /// New terminal's accessible name: the whole act, with the scope, since two repos may
+        /// both declare `dev`. It CONTAINS the visible label, which is what keeps a voice
+        /// control that hears "new terminal" able to press it.
         let newTerminalIn (sandbox: string) = sprintf "New terminal in %s" sandbox
+        /// The word before where a new terminal will start, and the link's accessible name,
+        /// which contains "in" and the place as the face shows them.
+        let startInWord = "in"
+        let startInNamed (place: string) = sprintf "New terminals start in %s. Choose where" place
+        /// The heading over the list of places, and its way back.
+        let startInHeading = "start a terminal in sandbox"
+        let backToList = "Back to terminals and files"
         /// The hidden pane's edge tab (P1-4): what the column holds, counted, so that a
         /// session with work in it says so with the pane shut. With none open it is still the
         /// door to making one, and says what kind of thing is behind it. The tab's FACE is the
@@ -1090,7 +1092,7 @@ module Dom =
         let refused = "refused"
         let dismissRefusal = "Dismiss"
         /// What the `all` page says when nothing has been opened. It offers nothing: making
-        /// something is the pivot's `+`, and this answers what exists.
+        /// a terminal is the New terminal on the Terminals heading, and this answers what exists.
         let nothingOpenedYet = "No terminals yet"
         /// The `all` page's verb for sending a file in, and what it says to a screen reader.
         let upload = "upload files"
@@ -1124,10 +1126,6 @@ module Dom =
         let all = "all"
         /// Its title: what it does, and the key that does it too.
         let switchTerminal = "Every terminal and file (Ctrl+` or ⌘`)"
-        /// The list button's name: how many terminals, which is what its figure says, then
-        /// what it does.
-        let switchTerminalCount (terminals: int) =
-            sprintf "%d %s. %s" terminals (if terminals = 1 then "terminal" else "terminals") switchTerminal
         /// The `all` page's own name, as a list.
         let terminalsAndFiles = "Terminals and files"
         /// The list's terminals above its fold, as a list.
@@ -1207,6 +1205,7 @@ module Dom =
         let wokeIntegrationLost = "integration-lost"
         let wokePrChanged = "pr-changed"
         let wokeCutOff = "cut-off"
+        let wokeSurfaceAnswered = "surface-answered"
         /// What a woken turn wears in the chat, in the slot its siblings — *streaming*,
         /// *interrupted* — already occupy. A word rather than a new glyph: this design says
         /// a message's state in one lowercase word, and a mark nobody can decode without a
@@ -1219,6 +1218,7 @@ module Dom =
         let turnWokeIntegrationLost = "The agent started on its own. A terminal where the agent had work cannot run commands."
         let turnWokePrChanged = "The agent started this on its own: a pull request watched here changed state."
         let turnWokeCutOff = "The agent started this on its own. The session stopped during its previous turn. The agent is resuming that turn."
+        let turnWokeSurfaceAnswered = "The agent started this because a person pressed a button on a surface it showed."
         /// Stands where the quoted message would be when the ref points past the loaded page —
         /// the reply is real, its cause simply is not on screen yet.
         let replyRefMissing = "earlier message"
@@ -1311,7 +1311,7 @@ module Dom =
         /// Launch WITHOUT opening: the unfolded row's verb for a stopped, exited or failed
         /// session, which starts it in place and leaves the reader on this page.
         let start = "data-start"
-        /// The row's attention mark, a press that unfolds the row; carries the session id.
+        /// The row's chevron, a press that unfolds the row; carries the session id.
         let rowMark = "data-row-mark"
         /// What a row unfolds to. Present on every row and folded until its row is open.
         let rowDetail = "data-row-detail"

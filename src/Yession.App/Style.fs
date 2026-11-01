@@ -345,8 +345,8 @@ module Style =
     /// longer doing anything (docs/visual-design.md, Colour). Running keeps `statusOk`.
     let statusDone = caps + " text-ink"
     /// A wait: reconnecting, catching up, queued, looking, no agent yet. `ink-dim`, never blue
-    /// — blue is never a status (docs/visual-design.md, Colour). A LIVE thing is `statusOk`
-    /// with `statusDotLive`; a wait still under way leads with `statusDotBeat`.
+    /// — blue is never a status (docs/visual-design.md, Colour). A LIVE thing is `statusOk`;
+    /// both it and a wait still under way lead with the same turning mark, `Icon.spin`.
     ///
     /// A WRONG thing never wears this. It is the one tone a failure may not be quieted into:
     /// this value once carried "a fault that is no longer the newest" as a second meaning, and
@@ -361,13 +361,16 @@ module Style =
     let statusErr = caps + " text-err"
     let statusFaint = caps + " text-ink-faint"
 
-    /// The one disc every mark in the product is drawn as: 6px, round, inline. The point is
+    /// The one disc every SETTLED status's mark is drawn as: 6px, round, inline. The point is
     /// the second of the two primitives and it is always round (docs/visual-design.md, Form);
     /// written once, here, because it had been spelled out at nine sites, each free to arrive
-    /// a pixel off. What a status's mark MEANS is the colour and the motion composed onto it
-    /// below — never its size, and never its shape. The one point that ranks by shape is the
+    /// a pixel off. What a settled status's mark MEANS is the colour composed onto it below —
+    /// never its size, and never its shape. The one other point that ranks by shape is the
     /// attention mark (`attentionMark`, `Icon.attention`), which answers a different question:
-    /// not what state a thing is in, but how much it wants a person.
+    /// not what state a thing is in, but how much it wants a person. A status still UNDER WAY
+    /// is the one further exception, and by kind rather than by taste, same as the attention
+    /// mark: it turns rather than beats (`Icon.spin`), and needs more than a disc's room to
+    /// show that, so it is not drawn from this shape at all.
     let private disc = "inline-block w-1.5 h-1.5 rounded-full"
 
     /// How a mark that LEADS a word sits: in the gutter to its left, on the text's baseline,
@@ -376,15 +379,8 @@ module Style =
 
     /// The small leading dot a status may carry (`bg-current` follows the text colour).
     let statusDot = cls [ disc; "bg-current"; discLead ]
-    /// A wait still under way beats its dot. It beats in COLOUR — the record's ink to its dim
-    /// and back (`beat-wait`) — and never in opacity, which bottomed the mark out at a quarter
-    /// of itself, below the 3:1 a mark owes its surface at every frame of the beat, so a dot
-    /// that meant "still going" was caught reading as no dot at all (docs/visual-design.md,
-    /// Motion). Under reduced motion it stands still in the status's own ink, which is what
-    /// `bg-current` underneath is for.
-    let statusDotBeat = cls [ statusDot; "animate-beat-wait motion-reduce:animate-none" ]
     /// The same dot standing still: a state that has SETTLED, such as a terminal whose last
-    /// command failed, where a beat would claim it is still happening.
+    /// command failed, where motion would claim it is still happening.
     let statusDotSolid = cls [ disc; "bg-current" ]
 
     /// The dot with nothing in it: a state that has ENDED (a terminal that closed). Its ring
@@ -404,12 +400,22 @@ module Style =
     /// one shape may not mean two things. Watching is the rarer meaning and the one with
     /// somewhere else to go, so it is the one to move — not this.
     let statusDotHollow = cls [ disc; Stroke.ring; Stroke.current ]
-    /// A live dot: a command running. It beats in COLOUR, live's green to live's dim and back
-    /// (`beat-live`), never in opacity, so it holds the 3:1 a mark owes its surface at every
-    /// frame. Still and green under reduced motion.
-    let statusDotLive = cls [ disc; "bg-green animate-beat-live motion-reduce:animate-none" ]
-    /// The live dot leading a word or a count on its line, as `statusDot` leads a status.
-    let statusDotLiveLead = cls [ statusDotLive; discLead ]
+
+    /// Still going: a command running, or a wait under way (`Icon.spin`), and Pending's own
+    /// attention mark (`Icon.attention`) — one mark for "still going" everywhere it appears,
+    /// a machine's work included. Always `ink-dim` here; Pending draws the same circle under
+    /// whatever ink `attentionInk` gives it instead, so the word beside the mark (or the
+    /// attention level itself) is what still says which. One 12-unit arc, a quarter of the
+    /// ring, turning. The box is `overflow-visible` for nothing to clip the stroke's round
+    /// caps as they cross the ring's four compass points.
+    let statusSpin = "inline-block w-3 h-3 align-[-2px] text-ink-dim overflow-visible"
+    /// The spin mark leading a word or a count on its line, as `statusDot` leads a settled one.
+    let statusSpinLead = cls [ statusSpin; "mr-1" ]
+    /// The arc's turn, clockwise, at an uneven pace within the lap rather than a constant
+    /// rate — it surges through the middle of each turn and eases through the top, so it
+    /// reads as working at it, never as a gauge ticking round or a thing rocking in place.
+    let statusSpinCw =
+        "origin-center [transform-box:fill-box] animate-status-spin-cw motion-reduce:animate-none"
     /// The settled dot with a halo round it: something has happened that the person reading
     /// has not seen yet (`ClientModel.unseen`). An `outline` rather than a border, so the gap
     /// between the two is the surface it sits on, whichever that is — and so this stays a
@@ -677,18 +683,6 @@ module Style =
               "group-aria-busy/open:text-blue group-aria-busy/open:underline"
               focusRing ]
 
-    /// The mark that says a record link LEAVES (the session serves its own origin). Fainter
-    /// than the faintest ink (`opacity-70` over `ink-faint`, safe because this is decorative
-    /// — `aria-hidden`, and never the only way a reader learns the link leaves): it is a
-    /// signpost, not a second status. `inline-flex` so the idle nudge below has a box a
-    /// transform actually applies to (a bare inline element ignores `transform`). The nudge
-    /// itself — a 1px lift toward the corner the mark points at, and a rest, slow and mostly
-    /// still — is `animate-leave-nudge` (app/tokens.css; the keyframe and why it moves this
-    /// little are in app/tailwind.css). `Icon.leavesSm` is the mark; the gap and the ink are
-    /// all this carries otherwise.
-    let recordLinkMark =
-        cls [ "inline-flex ml-1 text-ink-faint opacity-70"; "animate-leave-nudge motion-reduce:animate-none" ]
-
     /// The hit area for a listed record's whole cell — the state word beside the name
     /// included, not just the name's own glyphs. `block` so the link's box is the cell's full
     /// width rather than the text it wraps; colour and hover stay on the name text itself
@@ -705,19 +699,11 @@ module Style =
     /// pointer does on every other held control.
     let recordRowLink = cls [ "group/open block no-underline aria-busy:cursor-progress"; focusRing ]
 
-    /// A listed record's name and its leaves mark (`recordLinkMark`), as two flex children
-    /// rather than one truncating block: on a narrow row (a phone) something has to give, and
-    /// it must be the NAME, never the mark that says the link leaves — that is exactly the
-    /// fact a reader on a thumb's-width row most needs, and a single truncating block let the
-    /// browser clip it away first since it sat last. `min-w-0` so this box can itself shrink
-    /// inside whatever fixed-width cell holds it.
-    let recordRowName = "flex items-baseline min-w-0"
-
-    /// The name's own box inside `recordRowName`: `flex-1` takes what the mark beside it
-    /// leaves, `min-w-0` lets that shrink below its content's width, and `truncate` is what
-    /// clips there — a row that changes height when a session is renamed is a list you
-    /// cannot keep your place in, so this still clips rather than wraps.
-    let recordRowNameText = "flex-1 min-w-0 truncate"
+    /// A listed record's name. `block` so `truncate` has a box the cell's width actually
+    /// constrains (its parent, `recordRowLink`, is the only other box in the cell, and a bare
+    /// inline span ignores a width) — a row that changes height when a session is renamed is
+    /// a list you cannot keep your place in, so this clips rather than wraps.
+    let recordRowNameText = "block truncate"
 
     /// The roster's mark column (`ManagerUi.Col.mark`): the row's attention mark, at every
     /// width, as the session page wears its worst standing under the chevron. The column is
@@ -730,17 +716,36 @@ module Style =
     /// not baseline, so an unfolded row keeps its mark on the name's line.
     let recordMarkCell = "py-0.5 align-top"
 
-    /// The mark's press: a thumb's 44px, grown LEFT into the page's gutter rather than right
-    /// into the name, so the mark stays on the rail and the name's own target is untouched.
-    /// It unfolds the row (`aria-expanded`). No ground of its own: a ground would hang 12px
-    /// into the gutter, off the rail every other edge on the page keeps, and the unfolded
-    /// lines under it already say the row is open.
-    let recordMarkPress = cls [ "relative -ml-3 w-11 h-11 pl-3 flex items-center bg-transparent border-0 cursor-pointer"; focusRing ]
+    /// The mark's own box: a thumb's 44px, grown LEFT into the page's gutter rather than
+    /// right into the name, so the mark stays on the rail and the name's own target is
+    /// untouched. No press of its own — the row's disclosure is `recordChevronPress`, at the
+    /// row's trailing edge — so this is attention's colour alone, not a control: `aria-hidden`
+    /// at the call site, same as the dot it wraps.
+    let recordMarkSeatWrap = "relative -ml-3 w-11 h-11 pl-3 flex items-center"
+
+    /// The row's disclosure: a thumb's whole 44px at the row's TRAILING edge, which is the
+    /// one legible "tap to expand" on a phone — the mark beside the name is attention's
+    /// colour alone now (`recordMarkSeatWrap`), and the glyph that used to sit here saying
+    /// the name's link leaves is gone, not replaced; this is the row's one press. A column of
+    /// its own (`ManagerUi.Col.chevron`), so it lands at the table's own right edge at every
+    /// width, not just where a phone happens to hide the columns after it. It unfolds the row
+    /// (`aria-expanded`); no ground of its own, for the same reason the mark never wore one —
+    /// the unfolded lines under it already say the row is open.
+    let recordChevronPress =
+        cls [ "w-11 h-11 flex items-center justify-center bg-transparent border-0 cursor-pointer"
+              "text-ink-faint hover:text-ink transition-colors"; focusRing ]
+
+    /// The chevron itself: `Icon.right`, the fold's own disclosure-over-one mark (never
+    /// `rights`, `caret` or a text glyph — principle 5, one mark per job), turned by the same
+    /// `data-expanded` the mark's slide reads below, so the two always agree without a second
+    /// state to drift from the first.
+    let recordChevronMark = cls [ "block"; Motion.turn; "[[data-expanded]_&]:rotate-90" ]
 
     /// The row's mark, which RIDES when the row unfolds: down a track to the first unfolded
     /// line, which is the one it ranks first, so that line says its word with no mark of its
     /// own rather than repeating the one above it (`--spacing-mark-slide`). A wrapper, so the
-    /// mark's own motion (`markOrbit` and its siblings) runs on undisturbed while it travels.
+    /// mark's own motion (`statusSpinCw` and its siblings) runs on undisturbed while it
+    /// travels.
     let recordMarkRider =
         cls [ "relative flex transition-[translate]"; Motion.pace
               "[[data-expanded]_&]:translate-y-(--spacing-mark-slide)" ]
@@ -937,11 +942,13 @@ module Style =
     /// icon that is the only thing a row offers a thumb.
     let btnIconBareTouch = cls [ btnIconBare; hitTouch ]
 
-    /// The borderless verb as a WORD rather than an icon, for a row whose verb has no glyph
-    /// that says it (stop, unarchive). Same rule, same box height, same ink as the icon form;
-    /// the caps voice, because that is the one voice a bare verb speaks in.
+    /// The borderless verb as a WORD, for a row whose verb has no glyph of its own (archive,
+    /// unarchive) or wears one borrowed from wherever else it is offered (`ManagerUi.actions`'
+    /// Stop and Start, `Icon.stop`/`Icon.play`) — the `gap-1` is spent only when there is a
+    /// second child to space from the word. Same rule, same box height, same ink as the icon
+    /// form; the caps voice, because that is the one voice a bare verb speaks in.
     let private btnBareBase =
-        cls [ "h-6 px-1 shrink-0 inline-flex items-center font-ui"; caps; bareBox
+        cls [ "h-6 px-1 shrink-0 inline-flex items-center gap-1 font-ui"; caps; bareBox
               "transition-colors"; focusRing ]
     let btnBare = cls [ btnBareBase; bareInk ]
     let btnBareDanger = cls [ btnBareBase; bareInkDanger ]
@@ -1676,16 +1683,6 @@ module Style =
     // about its own centre (`fill-box`), which for every circle here is the box's (6,6). Motion
     // goes only where a state is live or asks, and `motion-reduce` keeps the still face.
 
-    /// Pending's arc going round its track: the one mark that never stops, because the work
-    /// under it has not. Under reduced motion the arc holds still at three o'clock.
-    let markOrbit = "origin-center [transform-box:fill-box] animate-mark-orbit motion-reduce:animate-none"
-    /// Working's own motion: a highlight running round the solid diamond's own edge, same
-    /// ink as the fill under it (`currentColor`, both) — never a second colour arriving, only
-    /// the edge seeming to give a little where the line passes each point. The fill itself
-    /// never moves: the attention mark's ink owes the surface 3:1 at every frame, the same
-    /// rule `markOrbit`'s arc keeps by staying at its ink and only turning. Reduced motion
-    /// holds the line still, at the diamond's top point.
-    let markRun = "animate-mark-run motion-reduce:animate-none"
     /// Wanted's halo: breathes out three times once the mark has arrived, then is gone, so a
     /// session left waiting an hour does not nag. Reduced motion draws no halo at all.
     let markHalo = "origin-center [transform-box:fill-box] animate-mark-halo motion-reduce:hidden"
@@ -1938,11 +1935,6 @@ module Style =
 
     // --- The status line: what the link is doing, on either mount ---------------------------
 
-    /// A status line's dot, apart from its word: a WAIT beats, in its own ink; a WRONG one is
-    /// red and still (docs/visual-design.md, Colour). Apart, because on both mounts it hangs
-    /// in the gutter and the word starts on the rail — a dot that leads inline pushed every
-    /// status a dot's width off the column it stood in.
-    let statusLineMarkWait = cls [ syncDot; "bg-ink-dim animate-beat-wait motion-reduce:animate-none" ]
     let statusLineMarkWrong = cls [ syncDot; "bg-err" ]
     /// The word: one line, and the part of the row that gives way first.
     let statusLineWord = "min-w-0 truncate whitespace-nowrap"
@@ -2700,9 +2692,18 @@ module Style =
     /// that word (`Glide`). Drawn larger, not laid out larger (`.agent-think-start`), so the
     /// line it stands on is the line the first word will set and nothing moves when it does.
     let agentThinkingStart = agentThinking + " agent-think-start"
-    /// What it turns: the tip and the cube inside it, drawn by `View.thinkingCube`.
+    /// What it turns: the tip and the cube inside it, drawn by `Icon.cube`.
     let agentThinkingTip = "agent-think-tip"
     let agentThinkingCube = "agent-think-cube"
+
+    /// Working's attention mark (`Icon.attention`, `Icon.cube`): the very cube above, turning in
+    /// the attention mark's own 12px box (`.agent-think-mark` in app/tailwind.css) instead of
+    /// the line of text a thought stands on — the agent at work is one claim whether it is read
+    /// inline in the transcript or ranked beside a session's other standings, so it wears the
+    /// one mark rather than a shape of its own (the running stroke round a diamond this mark
+    /// used to draw, `markRun`, is retired with it). `block`, not inline: there is no baseline
+    /// to sit on here.
+    let attentionCube = agentThinking + " agent-think-mark block shrink-0"
 
     /// How many slots the thinking series has and how long each lasts — `think-tip` in
     /// `app/tailwind.css` is ten moves of two seconds. Kept beside `thinkFrom`, the one place
@@ -3464,56 +3465,6 @@ module Style =
     /// it would, if a keyboard ever reached it.
     let itemMenuBackdrop = cls [ "fixed inset-0 z-20 bg-transparent cursor-default select-none"; focusRing ]
 
-    /// The strip's menu of things to open (Plan 20, stage 1). `itemMenu`'s own chrome, because
-    /// it is the same KIND of surface — a short set of acts over the page — and two menus in
-    /// one product differing in their ring and their ground are two menus a reader has to
-    /// learn separately. Hung under its control and wider than that one, because its entries
-    /// carry a second line.
-    /// Capped, and that is the load-bearing part. `min-w` alone let the box grow to its
-    /// widest entry, and an entry carries what a repo's file says its sandbox is FOR —
-    /// whole sentences, 170 characters in this repository's own `yession.yaml`. Measured on
-    /// a 375px phone: a 962px menu, hung from `right-0`, so it reached 599px off the left of
-    /// the screen with its text cut off mid-word. `truncate` on the note could not save it,
-    /// because a flex column with no width to fit into has nothing to truncate against.
-    ///
-    /// 18rem rather than the pane, so the cap holds wherever the menu is: the pane's splitter
-    /// stops at 320px, which this clears with its gutters. The viewport term is the floor
-    /// under that, for a screen narrower than any phone sold.
-    let paneNewMenu =
-        cls [ "absolute right-0 top-full mt-1 z-30 py-1 select-none bg-panel"
-              "min-w-[14rem]"
-              Stroke.ring
-              Stroke.hair ]
-    /// The same menu hung from the empty pane's button (P1-4), which is centred in the
-    /// column rather than at its right edge: so it hangs centred under it, and reads its
-    /// entries from the left whatever the empty state's own alignment.
-    let paneNewMenuUnder =
-        cls [ "absolute left-1/2 -translate-x-1/2 top-full mt-1 z-30 py-1 select-none bg-panel text-left"
-              "min-w-[14rem]"
-              Stroke.ring
-              Stroke.hair ]
-
-    /// An entry carrying a note under its name. The menu's own entry sets the box, the
-    /// padding and the states; this only makes it two lines.
-    /// `min-w-0`, or the column refuses to shrink below its content and the cap above is a
-    /// number the box ignores.
-    let menuEntryStacked = cls [ itemMenuEntry; "flex flex-col gap-0.5" ]
-    /// Its first line — ink, not the dim a one-line entry wears, because a name no brighter
-    /// than its own footnote is not a name.
-    ///
-    /// NOT truncated, though it is a label and labels usually are: a `SandboxName` is capped
-    /// at 40 characters, so the widest a name can make this menu is bounded and small, and
-    /// the menu sizing to its longest name is a better answer than a name with its end cut
-    /// off. Truncating would need the column to shrink, and a `min-w-0` kept for a case that
-    /// cannot arrive is CSS nobody can test.
-    let menuEntryName = "text-body text-ink"
-    /// Which repo declared this place, and what its file said the place is for.
-    ///
-    /// WRAPPED and clamped rather than truncated: a description is prose somebody wrote, and
-    /// an ellipsis after the first four words of a sentence says less than nothing. Two lines
-    /// is what distinguishes one sandbox from another without the menu becoming a document.
-    let menuEntryNote = "line-clamp-2 font-light text-small text-ink-faint"
-
     /// A repo note in the timeline (Plan 14): one quiet act-line, indented past the
     /// avatar gutter so the reading edge lines up with message bodies.
     let actNote = cls [ itemGround; readingColumn; foldRow; "max-md:pl-4" ]
@@ -3775,14 +3726,14 @@ module Style =
               "disabled:text-ink-faint disabled:cursor-default disabled:pointer-events-none" ]
 
     /// While no turn runs and a command does, the leading edge says so: `running` behind
-    /// the live dot every running command wears, pressed to go to that command's chip. The
-    /// dot sits in interrupt's own cell (`trayMark`), so the two states hand off at the same
-    /// width and the dot lands dead centre on the column the transcript's avatars and icons
-    /// stand on, rather than crowding the word off that rail. `gap-3` is `trayInterrupt`'s
-    /// own gutter, so the word lands on the same reading rail whichever state is showing.
-    /// Ink at rest, ink under the hand — it moves the reader, it stops nothing.
+    /// the spin mark (`Icon.spin`) every running command wears, pressed to go to that
+    /// command's chip. The mark sits in interrupt's own cell (`trayMark`), so the two states
+    /// hand off at the same width and it lands dead centre on the column the transcript's
+    /// avatars and icons stand on, rather than crowding the word off that rail. `gap-3` is
+    /// `trayInterrupt`'s own gutter, so the word lands on the same reading rail whichever
+    /// state is showing. Ink at rest, ink under the hand — it moves the reader, it stops
+    /// nothing.
     let trayRunning = cls [ trayVerb; "gap-3 hover:text-ink" ]
-    let trayRunningDot = statusDotLive
 
     /// The way back to the latest message, at the strip's trailing edge whatever stands at
     /// its leading one. Its word ends in the glyph, so no caps tracking trails past the ink.
@@ -4328,7 +4279,7 @@ module Style =
         + Stroke.dividerLeft + " "
         + "wide:transition-[width] wide:duration-200 wide:ease-out wide:[.term-resizing_&]:transition-none "
         + "wide:[.term-closed_&]:w-0 wide:[.term-closed_&]:border-l-0 "
-        + "phone:fixed phone:inset-y-0 phone:right-0 phone:left-5 phone:w-auto phone:border-l-0 "
+        + "phone:fixed phone:inset-y-0 phone:right-0 phone:left-5 phone:w-auto "
         + degradedBarRoom + " "
         + "phone:transition-transform phone:duration-200 phone:ease-out "
         + "phone:[.term-closed_&]:translate-x-[101%] " + reduceColumnMotion
@@ -4402,11 +4353,10 @@ module Style =
     /// chip and the hairline it should run into. `items-stretch`, and no explicit height on
     /// `pivotItemBase` (`min-w-touch` still bounds its width, never its height), lets every
     /// entry fill the row edge to edge instead, so the selected tab's own ground runs all the
-    /// way to the hairline with nothing of the strip's showing between them. The three controls
+    /// way to the hairline with nothing of the strip's showing between them. The controls
     /// outside the scroller (`paneListButtonBase`, `paneStripAct`) keep their own `h-touch`, so
     /// a bare `items-stretch` would snap them to the row's top instead of leaving them centred
-    /// as before — they carry `self-center` for that. The `+` cell's own wrapper (`terminalTabNewCell`)
-    /// already centres its one button with its own `items-center`, so it needs no such tag.
+    /// as before — they carry `self-center` for that.
     ///
     /// `paneToolbar`, where there is one, is now the column's own second row underneath —
     /// `spacing-touch` tall and no longer asked to land on the band. Its hairline is its own,
@@ -4418,10 +4368,10 @@ module Style =
     /// header's rule stopped dead at the pane's divider instead of running on into it.
     let panePivotRow =
         cls [ "shrink-0 h-band flex items-stretch bg-bg phone:h-band-phone"; Stroke.dividerBottom ]
-    /// The tablist: `all`, then the scroller of tabs. `all` stays put at the row's head however
-    /// many tabs follow it. `min-w-0` so the scroller is what gives way when the names outgrow
-    /// the row.
-    let panePivotList = "flex-1 min-w-0 flex items-stretch"
+    /// The tablist: the scroller of tabs, after the list button at the row's head. `min-w-0`
+    /// so the scroller is what gives way when the names outgrow the row. `-mb-px` lets the
+    /// chosen tab reach over the row's rule into the pane (`pivotItemOn`).
+    let panePivotList = "flex-1 min-w-0 flex items-stretch -mb-px"
     /// The tabs' own scroll box, and nothing else that moves.
     ///
     /// When names run past an end, that end fades (`TabStrip.hidden`, written by the browser
@@ -4464,11 +4414,19 @@ module Style =
         cls [ "shrink-0 cursor-pointer min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5"
               "font-ui font-normal text-small whitespace-nowrap transition-colors duration-150 ease-out"
               "motion-reduce:transition-none"; focusRingInset ]
-    let pivotItem = cls [ pivotItemBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
-    let pivotItemOn = cls [ pivotItemBase; "bg-panel text-ink" ]
+    /// The tablist reaches one pixel past the strip, over its rule (`panePivotList`). A tab
+    /// not chosen gives that pixel back (`mb-px`), so the rule still runs under it and under
+    /// the hand. The chosen tab keeps it: its ground covers the rule and runs straight into the
+    /// pane's below, and a hairline on each side closes it — the same open tab the list button
+    /// is with its sheet down (`paneListButtonOn`). `divide-x` already draws its right side
+    /// unless it is last, and nothing draws its left when it is first; `border-r` and
+    /// `first:border-l` cover both.
+    let private pivotItemChosen = "border-r first:border-l border-hair text-ink"
+    let pivotItem = cls [ pivotItemBase; "mb-px bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
+    let pivotItemOn = cls [ pivotItemBase; pivotItemChosen; "bg-panel" ]
     /// The selected tab under a command's preview: the preview's lifted ground, so the tab and
     /// the command lifted out of its terminal read as one piece (`paneToolbarLifted`).
-    let pivotItemLifted = cls [ pivotItemBase; "bg-surface-2 text-ink" ]
+    let pivotItemLifted = cls [ pivotItemBase; pivotItemChosen; "bg-surface-2" ]
     /// A pivot item's name: as much of it as fits, and an ellipsis for the rest — capped so
     /// that at the narrowest pane the splitter allows, the selected item and its × still fit
     /// beside `all` whole. The `all` page writes the name out in full.
@@ -4492,24 +4450,24 @@ module Style =
     let paneStripAct =
         cls [ "shrink-0 self-center w-touch h-touch grid place-items-center bg-transparent border-0 cursor-pointer p-0"
               "text-ink-dim hover:text-ink hover:bg-surface transition-colors motion-reduce:transition-none"; focusRingInset ]
-    /// The list button: the list's glyph and how many terminals it holds — on a phone only
-    /// one tab fits, and the count is the one clue that there are others. As tall as the
-    /// strip, at least as wide, its figures in the tabs' type so they read as one line.
+    /// The list button: the list's glyph, at the strip's head. At least a touch square. Its
+    /// right edge is a hairline only while the sheet is down, so it is always 1px there and
+    /// the tabs beside it do not move when it opens.
     let private paneListButtonBase =
-        cls [ "shrink-0 self-center h-touch min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5 border-0 cursor-pointer"
-              "font-ui font-normal text-small tabular-nums transition-colors motion-reduce:transition-none"; focusRingInset ]
-    let paneListButton = cls [ paneListButtonBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
-    /// The same with its sheet down: the sheet's own ground (`allSheet`), flush with it, so
-    /// the button reads as the sheet's tab and is the one lit thing in the strip.
-    let paneListButtonOn = cls [ paneListButtonBase; "bg-surface text-ink" ]
+        cls [ "shrink-0 min-w-touch px-3 phone:px-2 inline-flex items-center justify-center border-0 border-r cursor-pointer"
+              "transition-colors motion-reduce:transition-none"; focusRingInset ]
+    let paneListButton =
+        cls [ paneListButtonBase; "self-center h-touch border-transparent bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
+    /// The same with its sheet down: a tab. It fills the strip's height and one pixel more
+    /// (`-mb-px`), so its ground covers the strip's rule (`panePivotRow`) and runs straight
+    /// into the sheet's (`allSheet`, `surface`) — the open tab and the page under it read as
+    /// one surface. A hairline on its right closes the tab's side against the strip.
+    let paneListButtonOn =
+        cls [ paneListButtonBase; "self-stretch -mb-px border-hair bg-surface text-ink" ]
 
     /// Everything under the strip — the toolbar, the body, and the list's sheet when it is down,
     /// which is laid over the first two from the strip's edge.
     let paneUnderStrip = "relative flex-1 min-h-0 flex flex-col"
-    let terminalTabNewCell = "relative shrink-0 flex items-center"
-    let terminalTabNew = paneStripAct
-    /// The empty pane's button's cell: the positioning context its menu hangs from.
-    let terminalEmptyNewCell = "relative"
     /// A tab's presence marks: one dot per peer whose caret is in THAT terminal, so a
     /// collaborator typing a command in a terminal you are not looking at is visible from
     /// the pivot rather than only from inside it.
@@ -4563,17 +4521,18 @@ module Style =
     /// The rest tone is `ink-dim`, a step up from the pivot's unchosen names: those are places,
     /// these are acts, and an act should not read as the quietest thing on screen. Both inks
     /// and the blue clear 4.5:1 on every surface (app/tailwind.css, Phase4). A thumb's 44 is the
-    /// ROW's to give where the row holds the act directly (`paneActions`, `terminalEmpty`); an
+    /// ROW's to give where the row holds the act directly (`paneActions`); an
     /// act inside a band line sits in a group of its own there, so it says so itself.
     let private paneActBase =
         cls [ "shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer p-0 no-underline"
               "font-ui font-light lowercase whitespace-nowrap"
               "transition-colors duration-150 ease-out motion-reduce:transition-none"; focusRingFar ]
-    /// There are THREE faces below and no more, one per kind of line a bare verb ends: the
-    /// toolbar's caps, a band line's body, and the empty pane's one door. A fourth, `paneAct`,
-    /// stood here with nothing wearing it — it was "show in <terminal>"'s, and that act went
-    /// when the row became the way in (#1308). A face with no wearer is a face the next author
-    /// reaches for by accident, so it is deleted rather than kept for symmetry.
+    /// There are TWO faces below and no more, one per kind of line a bare verb ends: the
+    /// toolbar's caps and a band line's body. Others stood here with nothing wearing them —
+    /// "show in <terminal>"'s, gone when the row became the way in (#1308), and the empty
+    /// pane's door, gone when the sheet's New terminal became the one way to make one. A face
+    /// with no wearer is a face the next author reaches for by accident, so it is deleted
+    /// rather than kept for symmetry.
     ///
     /// An act in the toolbar: its mark and its word in the caps voice, the face the agent's
     /// interrupt wears — a verb about the whole thing on screen, not a word in a sentence.
@@ -4581,9 +4540,6 @@ module Style =
         cls [ "h-touch px-1.5 shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer no-underline"
               caps; "whitespace-nowrap text-ink-dim hover:text-ink transition-colors motion-reduce:transition-none" ]
     let paneToolbarAct = cls [ paneToolbarFace; focusRingInset ]
-    /// The one act a surface is FOR — the empty pane's way to make a terminal: blue, which is
-    /// what interactive means here, and nothing louder than that.
-    let paneActPrimary = cls [ paneActBase; "text-pivot leading-6 text-blue hover:text-blue-up-1" ]
     /// An act inside a line of the command band (the lease bar, the cannot-run notice): the same word
     /// at the size of the line it sits in, so it reads as part of the sentence it ends.
     let bandAct = cls [ paneActBase; "text-body text-ink-dim hover:text-ink phone:min-h-touch" ]
@@ -4816,26 +4772,70 @@ module Style =
     /// The page's word when there is nothing on it.
     let contentListEmptyWord = "px-3 py-3 font-ui font-light text-body text-ink-faint select-none"
 
-    /// The empty pane: the terminal's own symbol, display-sized, over the one press that
-    /// fills it — a thumb's height on a phone, like every press in this column.
-    let terminalEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center phone:[&_button]:min-h-11"
+    /// The list as the pane's body, when nothing is open to lay it over: the sheet's rows on the
+    /// pane's own ground, filling the pane and scrolling inside it — a page, not a layer, so no
+    /// step up and no rim.
+    let allDocked = cls [ "flex-1 min-h-0 overflow-y-auto overscroll-contain"; focusRingInset ]
 
 
-    /// A section of the sheet's head: what it is called, and its one act. One line on a wide
-    /// screen, the act at its right end and one hairline under both. Two on a phone, the act
-    /// a full-width row of its own under the name, because a thumb lands on a row and not on
-    /// the corner of one. The terminals have none: the list button above them says what they are.
-    let listSectionHead = cls [ "mt-4 flex phone:flex-col wide:items-center wide:border-b wide:border-hair" ]
-    /// What a section is called, in the caps voice, `ink-dim`, with its count beside it.
+    /// A section of the sheet's head: what it is called, and its acts. One line on a wide
+    /// screen, the acts at its right end and one hairline under both. Two on a phone, the acts
+    /// a full-width row of their own under the name, because a thumb lands on a row and not on
+    /// the corner of one.
+    /// The sheet's first head sits at the sheet's top edge; the next is a clear gap below the
+    /// list before it, so the two sections read as two.
+    let listSectionHeadFirst = "flex phone:flex-col wide:items-center wide:border-b wide:border-hair"
+    let listSectionHead = cls [ "mt-8"; listSectionHeadFirst ]
+    /// What a section is called: the pivot's light lowercase at its step, in `ink`, with its
+    /// count beside it. It was the caps voice in `ink-dim`, which is the voice of the closed
+    /// fold and of every verb on the sheet — a heading that read as one more thing to press
+    /// (docs/visual-design.md, Type: caps are for labels and buttons).
     let listSectionLabel =
-        cls [ "h-11 flex items-center gap-2.5 pl-3 pr-1 select-none text-ink-dim wide:flex-1"; caps
+        cls [ "h-11 flex items-center gap-2.5 pl-3 pr-1 select-none wide:flex-1"
+              "font-ui font-extralight text-pivot tracking-[-0.01em] lowercase text-ink"
               "phone:border-b phone:border-hair" ]
     /// A section's act, a blue link like the repo picker's branch (`askRowBranch`): no box,
     /// because the row it stands on is the box.
-    let private listSectionActFace =
+    let private listSectionActBase =
         cls [ caps; "h-11 shrink-0 inline-flex items-center gap-1.5 px-3 bg-transparent border-0 cursor-pointer"
-              "text-blue hover:text-blue-up-1 transition-colors motion-reduce:transition-none"
-              "phone:w-full phone:border-b phone:border-hair" ]
+              "text-blue hover:text-blue-up-1 transition-colors motion-reduce:transition-none" ]
+    let private listSectionActFace = cls [ listSectionActBase; "phone:w-full phone:border-b phone:border-hair" ]
+    /// The terminals' two acts on one line: on a phone, New terminal takes the row and where
+    /// it starts sits at the row's right end, as the branch sits on the repo picker's row.
+    let listSectionActs = "flex items-center phone:border-b phone:border-hair"
+    let terminalNew = cls [ listSectionActBase; "phone:flex-1"; focusRingInset ]
+    /// Where New terminal starts one, and the way to choose: the repo picker's branch link —
+    /// the place's name in the terminal face, then the chevron, because it goes somewhere.
+    /// Shown only while there is more than one place.
+    let startInLink = cls [ listSectionActBase; focusRingInset ]
+    let startInWord = "text-ink-dim"
+    let startInName = "font-terminal text-small normal-case tracking-normal"
+    /// "default" is no name a repo declared, so it is not written in the terminal face.
+    let startInNameDefault = "font-ui font-light text-small normal-case tracking-normal"
+
+    /// The list of places, in the sheet in place of its terminals and files: its head (the
+    /// way back, and what the list is for), then one row per place, the chosen one ticked.
+    let startInHead =
+        cls [ "h-11 flex items-center gap-1 pr-3 select-none text-ink-dim border-b border-hair"; caps ]
+    let startInBack =
+        cls [ "h-11 w-11 shrink-0 inline-flex items-center justify-center bg-transparent border-0 cursor-pointer"
+              "text-blue hover:text-blue-up-1 transition-colors motion-reduce:transition-none"; focusRingInset ]
+    let startInRow = cls [ "flex hover:bg-surface-2"; Stroke.dividerBottom ]
+    let startInChoice =
+        cls [ "min-w-0 flex-1 flex items-center gap-2 pl-3 pr-3 py-2 min-h-11 bg-transparent border-0 cursor-pointer text-left"
+              focusRingInset ]
+    /// The tick's cell is on every row and filled only on the chosen one, so the names do
+    /// not move when the choice does.
+    let startInMark = "w-5 shrink-0 self-center text-blue"
+    let startInWho = "min-w-0 flex-1 flex flex-col gap-0.5"
+    /// The place's name, in the terminal face, as the repo picker writes a branch.
+    let startInChoiceName = "font-terminal text-body text-ink truncate min-w-0"
+    /// The session's own place, "default": in the prose face and dimmer, apart from the
+    /// sandbox names below it.
+    let startInChoiceNameDefault = "font-ui font-light text-body text-ink-dim truncate min-w-0"
+    /// What the place's file said it is for — prose somebody wrote, so wrapped and clamped
+    /// rather than cut after its first words.
+    let startInNote = "line-clamp-2 font-ui font-light text-small text-ink-faint"
 
     /// An artifact's row: the same row as a terminal's, so the two sections read as one list
     /// of things rather than two designs.

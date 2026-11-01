@@ -16,7 +16,9 @@ open Yession.Domain.Content
 /// text), square caps — Metro's geometry, no curves, no fills. `aria-hidden` because every icon
 /// here sits inside a control that carries its own accessible name. The attention mark is the
 /// exception by kind, not by taste: it is a POINT, and the point is always round
-/// (docs/visual-design.md, Form).
+/// (docs/visual-design.md, Form) — Working alone excepted again, which is not an SVG at all but
+/// the agent's own cube (`cube`, `attention`'s Working case), the one mark this module shares
+/// with the transcript rather than drawing for itself.
 ///
 /// A mark is a BOX and a WEIGHT, and the two are not independent: see `Box` and `Weight`.
 module Icon =
@@ -82,6 +84,8 @@ module Icon =
     let private closePath = "M4 4 L12 12 M12 4 L4 12"
     let private upPath = "M8 12.5 L8 4 M4.25 7.75 L8 4 L11.75 7.75"
     let private downPath = "M8 3.5 L8 12 M4.25 8.25 L8 12 L11.75 8.25"
+    /// Make one more: the sheet's New terminal.
+    let private plusPath = "M8 3.5 L8 12.5 M3.5 8 L12.5 8"
     /// The head of a cause's mark alone, tip at the foot of the box. The corner that opens a
     /// chain and the links that continue it both draw their line as one-pixel boxes on the
     /// gutter's centre, so no stem here can sit a sub-pixel off it.
@@ -170,12 +174,6 @@ module Icon =
     /// download. Deliberately not a downward arrow — the arrow is the CONTROL's to wear, and
     /// this is a statement about what the thing is.
     let private filePath = "M4 2.5 L9.5 2.5 L12 5 L12 13.5 L4 13.5 Z M9.5 2.5 L9.5 5 L12 5"
-    /// A link that LEAVES: an arrow out of the corner it points at, drawn as the diagonal and
-    /// the two legs back from its tip. It was the text glyph `↗`, carried by no face this
-    /// build ships, so it rendered as whatever the reader's system had — the same defect
-    /// `replyPath` below records, and the same remedy (principle 5: a glyph where a mark
-    /// exists is the second way).
-    let private leavesPath = "M4.5 11.5 L11.5 4.5 M7 4.5 L11.5 4.5 L11.5 9"
     /// What a reply answers: a line that comes down from where the parent was said and turns
     /// back, with the head on the turn. It was the text glyph `↩`, which is a CURVE — a shape
     /// this vocabulary does not have — carried by no face this build ships, so it rendered as
@@ -196,6 +194,7 @@ module Icon =
     /// "this opens".
     let up = stroked upPath
     let down = stroked downPath
+    let plus = stroked plusPath
     /// A lighter stroke than the chevrons': a cause's marks say how acts are linked, and
     /// recede behind the controls beside them — `Weight.display`, because the word they
     /// travel with is set extralight.
@@ -265,9 +264,6 @@ module Icon =
     /// one pair of marks — a sort that pointed with its own glyphs would be the second way.
     let upSm = strokedInline "align-[-2px]" upPath
     let downSm = strokedInline "align-[-2px]" downPath
-    /// The mark on the name of a record whose link LEAVES this page (`Style.recordLinkMark`).
-    /// Inline beside a body line, like the marks above it.
-    let leavesSm = strokedInline "align-[-1px]" leavesPath
     /// The repository mark at the size an entity wears inline in a sentence: the same box
     /// as a person's small avatar, so a repo and a person referenced side by side sit on one
     /// line at one height.
@@ -289,27 +285,40 @@ module Icon =
         | ContentKind.Image _ -> imageSm
         | ContentKind.Download -> fileSm
 
+    /// What a cube turns: the tip and its six faces (`.agent-think` in `app/tailwind.css` says
+    /// how). The caller supplies the box it turns in and the motion it plays — the transcript's
+    /// own (`Style.agentThinking`, `.agentThinkingStart`) or the attention mark's own
+    /// (`Style.attentionCube`) — because what the mark is on is the caller's to say and so is
+    /// its hook. One cube, because the agent at work is one claim wherever it is read: moved
+    /// here from `View.thinkingCube` now that Working's attention mark needs the very same one.
+    let cube : TemplateResult =
+        html
+            $"""<span class="{Style.agentThinkingTip}"><span class="{Style.agentThinkingCube}"><i></i><i></i><i></i><i></i><i></i><i></i></span></span>"""
+
     /// How much something wants a person (docs/visual-design.md, Attention). A POINT, not an
-    /// icon, so it is round and may be filled. One rule ranks the five: attention is INK, and
-    /// each level carries more of it than the one below, so they read in order in greyscale
-    /// and under a blur. One 12-unit box, centre (6,6), and the chrome's 1.5px stroke:
+    /// icon, so it is round and may be filled — Working alone excepted, which is not drawn to
+    /// this rule at all. One rule ranks the five: attention is INK, and each level carries more
+    /// of it than the one below, so they read in order in greyscale and under a blur. One
+    /// 12-unit box, centre (6,6), and the chrome's 1.5px stroke:
     ///
     /// - Rest: a point, radius 1.75.
     /// - Absent: an empty ring, radius 4.25: a seat with nobody in it.
-    /// - Pending: a quarter of that ring, going round a faint track of the rest of it — a
-    ///   machine's work, needs nobody, so it keeps the shape a wait never gets to use for
-    ///   itself (`Style.attentionInk`).
-    /// - Working: a solid diamond, the agent's own shape and nobody else's (`Style.agentAvatar`'s
-    ///   diamond seen flat, not turned in the hand as the transcript's cube is), a little
-    ///   larger than the other marks' radius because a plain fill reads smaller than a ring
-    ///   of the same reach. A line in the same ink runs once round its edge rather than the
-    ///   diamond going round itself — the agent at work is not a wait on a track, it is the
-    ///   mark's own edge that moves.
+    /// - Pending: the same turning quarter arc that marks "still going" everywhere else
+    ///   (`Icon.spin`, `Style.statusSpinCw`) — a machine's work, needs nobody, so it wears the
+    ///   one mark every other wait wears rather than a shape of its own (`Style.attentionInk`).
+    /// - Working: the agent's own cube (`cube` above), turning in place — the exact mark that
+    ///   turns inline in the transcript while the agent thinks, now ranked among a session's
+    ///   other standings too, because an agent at work is one claim however it is read. Not a
+    ///   point and not `currentColor`: it keeps its own blue always (`--color-agent`), the one
+    ///   exception the box and ink above do not reach.
     /// - Wanted: a disc, radius 4, with a halo that breathes out three times on arrival.
     /// - Wrong: a disc, radius 3, in a ring, radius 5.25: the most ink, the whole box.
     ///
-    /// The rings start at twelve o'clock (`rotate(-90 6 6)`), so an arc or a ring drawing
-    /// round sets off from the top. Motion is `Style`'s (`markOrbit` and its siblings).
+    /// The rings that stand alone (Absent, Wanted, Wrong) start at twelve o'clock
+    /// (`rotate(-90 6 6)`), so drawing one round sets off from the top; Pending's arc is the
+    /// shared spin mark exactly as it is everywhere else, cap and all, so it keeps that mark's
+    /// own rest position instead. Motion is `Style`'s (`statusSpinCw` for Pending), and the
+    /// cube's own (`app/tailwind.css`'s `think-*` keyframes) for Working.
     /// `data-attention` spells the level for a test (`Attention.name`). `aria-hidden`: the word
     /// beside it, or the name of the control it sits in, says the state.
     let attention (level: Yession.Domain.Standings.Attention) =
@@ -324,16 +333,35 @@ module Icon =
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5"></circle></svg>"""
         | Yession.Domain.Standings.Pending ->
             html
-                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.35"></circle><g transform="rotate(-90 6 6)"><circle class="{Style.markOrbit}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 26.7"></circle></g></svg>"""
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle class="{Style.statusSpinCw}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 20.02"></circle></svg>"""
         | Yession.Domain.Standings.Working ->
             html
-                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M6 1.25 L10.75 6 L6 10.75 L1.25 6 Z" fill="currentColor"></path><path class="{Style.markRun}" d="M6 1.25 L10.75 6 L6 10.75 L1.25 6 Z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-dasharray="6.72 20.15"></path></svg>"""
+                $"""<span class="{Style.attentionCube}" data-attention="{name}" aria-hidden="true">{cube}</span>"""
         | Yession.Domain.Standings.Wanted ->
             html
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle class="{Style.markHalo}" cx="6" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="1"></circle><g transform="rotate(-90 6 6)"><circle class="{Style.markClose}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="26.7"></circle></g><circle class="{Style.markFill}" cx="6" cy="6" r="4" fill="currentColor"></circle></svg>"""
         | Yession.Domain.Standings.Wrong ->
             html
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><g transform="rotate(-90 6 6)"><circle class="{Style.markDraw}" cx="6" cy="6" r="5.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="32.99"></circle></g><circle class="{Style.markPop}" cx="6" cy="6" r="3" fill="currentColor"></circle></svg>"""
+
+    /// Still going: one arc, a quarter of a 12-unit ring, turning. One shape for every status
+    /// that says "not settled yet" — a command live now and a wait under way alike
+    /// (`Style.statusSpin`, which used to be two different beating dots, `statusDotLive` and
+    /// `statusDotBeat`, then a pair of arcs passing each other), and Pending's own attention
+    /// mark (`Icon.attention`) wears the very same arc, because a machine's work is the same
+    /// "still going" as any other — the one exception is the ink: a status stays `ink-dim`
+    /// always, so the word beside it (`Style.statusOk`'s green, `Style.statusWait`'s dim ink)
+    /// is what still says whether what is going is live or a wait, while Pending's copy takes
+    /// whatever ink `Style.attentionInk` gives its level. A quarter rather than a half or the
+    /// whole ring, so standing still (`motion-reduce`) it still reads as a broken ring, not one
+    /// Absent's own shape could be mistaken for.
+    let spinPath (extra: string) =
+        html
+            $"""<svg class="{extra}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle class="{Style.statusSpinCw}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 20.02"></circle></svg>"""
+    /// Standing alone, where no word follows on the same line.
+    let spin = spinPath Style.statusSpin
+    /// Leading the status word it belongs to, as `statusDot`'s own lead does for a plain dot.
+    let spinLead = spinPath Style.statusSpinLead
 
     /// GitHub's mark, as GitHub draws it: the one FILLED shape in this file that is not a
     /// point, and the one exception to its vocabulary, because a brand's mark is not ours to redraw in strokes

@@ -33,14 +33,35 @@ type internal PatternInst =
     | PatternLineStart
     /// End of the input or just before a newline.
     | PatternLineEnd
+    /// Start of the input only.
+    | PatternTextStart
+    /// End of the input only.
+    | PatternTextEnd
     | PatternSplit of int * int
     | PatternJmp of int
     | PatternMatch
+
+/// What `^` and `$` bind to. A console is lines, so a terminal wait anchors to a line. A form
+/// field's value is one answer, so a check on it anchors to the whole text, as a `RegExp`
+/// does: `^\d{5}$` must not pass because the value's second line is five digits.
+type PatternAnchors =
+    | LineAnchors
+    | TextAnchors
 
 /// One compiled pattern. Opaque: what a caller does with it is ask whether text matches.
 type Pattern = internal { Program : PatternInst list }
 
 module Pattern =
+
+    /// The largest count `{n,m}` takes. A count is written out in full, so this bounds what
+    /// one quantifier can add to the program.
+    [<Literal>]
+    let MaxCount = 1000
+
+    /// The most instructions a compiled pattern may have. Counts multiply when they nest, so
+    /// the pattern's length alone does not bound the program; this does.
+    [<Literal>]
+    let MaxProgram = 2048
 
     // --- parsing ----------------------------------------------------------------------
     //
@@ -58,6 +79,32 @@ module Pattern =
         | NStar of Node
         | NPlus of Node
         | NOpt of Node
+        | NRepeat of Node * int * int option
+
+    /// What a backslash and the character after it mean, inside a class or out.
+    type private Escape =
+        | EscapedChar of char
+        | EscapedSet of (char -> bool)
+
+    let private isDigit (c: char) = c >= '0' && c <= '9'
+    let private isWord (c: char) = Char.IsLetterOrDigit c || c = '_'
+
+    /// A letter or digit outside the known escapes is refused rather than read as itself. In
+    /// a `RegExp`, `\b` is a word boundary; reading it as the letter b would match something
+    /// else entirely and say nothing.
+    let private escape (letter: char) : Result<Escape, string> =
+        match letter with
+        | 'n' -> Ok (EscapedChar '\n')
+        | 'r' -> Ok (EscapedChar '\r')
+        | 't' -> Ok (EscapedChar '\t')
+        | 'd' -> Ok (EscapedSet isDigit)
+        | 'D' -> Ok (EscapedSet (fun c -> not (isDigit c)))
+        | 'w' -> Ok (EscapedSet isWord)
+        | 'W' -> Ok (EscapedSet (fun c -> not (isWord c)))
+        | 's' -> Ok (EscapedSet Char.IsWhiteSpace)
+        | 'S' -> Ok (EscapedSet (fun c -> not (Char.IsWhiteSpace c)))
+        | c when Char.IsLetterOrDigit c -> Error (sprintf "the escape `\\%c`" c)
+        | c -> Ok (EscapedChar c)
 
     /// What a construct outside the subset is called, so a refusal can name it. A caller told
     /// "unsupported pattern" has to guess which part; one told "a backreference" has learned
@@ -70,43 +117,80 @@ module Pattern =
             | Some '=' | Some '!' -> Some "a lookahead"
             | Some '<' -> Some "a lookbehind"
             | _ -> Some "an extended group"
-        | '\\', Some d when Char.IsDigit d -> Some "a backreference"
+        | '\\', Some d when isDigit d -> Some "a backreference"
         | _ -> None
 
     let private classAt (pattern: string) (start: int) : Result<(char -> bool) * int, string> =
-        // `[^abc]`, `[a-z0-9_]`. A closing bracket immediately after the caret or the opening
-        // is a literal `]`, which is the one piece of folklore worth keeping: `[]]` is a
-        // bracket, not an empty class.
+        // `[^abc]`, `[a-z0-9_]`, `[\d.]`. A closing bracket immediately after the caret or the
+        // opening is a literal `]`, which is the one piece of folklore worth keeping: `[]]` is
+        // a bracket, not an empty class.
         let mutable at = start + 1
         let negated = at < pattern.Length && pattern.[at] = '^'
         if negated then at <- at + 1
-        let ranges = ResizeArray<char * char> ()
+        let members = ResizeArray<char -> bool> ()
         let mutable first = true
         let mutable closed = false
         let mutable failure = None
+        let single (c: char) =
+            if at + 1 < pattern.Length && pattern.[at] = '-' && pattern.[at + 1] <> ']' then
+                let high = pattern.[at + 1]
+                members.Add (fun ch -> ch >= c && ch <= high)
+                at <- at + 2
+            else members.Add (fun ch -> ch = c)
         while not closed && failure.IsNone && at < pattern.Length do
             if pattern.[at] = ']' && not first then
                 closed <- true
                 at <- at + 1
             else
                 first <- false
-                let c =
-                    if pattern.[at] = '\\' && at + 1 < pattern.Length then
-                        at <- at + 1
-                        pattern.[at]
-                    else pattern.[at]
-                if at + 2 < pattern.Length && pattern.[at + 1] = '-' && pattern.[at + 2] <> ']' then
-                    ranges.Add (c, pattern.[at + 2])
-                    at <- at + 3
+                if pattern.[at] = '\\' && at + 1 < pattern.Length then
+                    let escaped = escape pattern.[at + 1]
+                    at <- at + 2
+                    match escaped with
+                    | Error reason -> failure <- Some reason
+                    | Ok (EscapedSet predicate) -> members.Add predicate
+                    | Ok (EscapedChar c) -> single c
                 else
-                    ranges.Add (c, c)
+                    let c = pattern.[at]
                     at <- at + 1
+                    single c
         match failure with
         | Some reason -> Error reason
         | None when not closed -> Error "a character class that is never closed"
         | None ->
-            let inside (c: char) = ranges |> Seq.exists (fun (lo, hi) -> c >= lo && c <= hi)
+            let inside (c: char) = members |> Seq.exists (fun test -> test c)
             Ok ((fun c -> if negated then not (inside c) else inside c), at)
+
+    /// `{n}`, `{n,}` or `{n,m}` starting at `start`, with where it ends. Anything else that
+    /// starts with a brace is not a count, and the brace is the character itself, as a
+    /// `RegExp` reads it.
+    let private countAt (pattern: string) (start: int) : (int * int option * int) option =
+        let digitsFrom (from: int) =
+            let mutable next = from
+            let mutable value = 0
+            while next < pattern.Length && isDigit pattern.[next] do
+                // Saturated, so a long run of digits is "above the cap", not an overflow.
+                value <- min (value * 10 + (int pattern.[next] - int '0')) 100000
+                next <- next + 1
+            if next = from then None else Some (value, next)
+        let closesAt (at: int) = at < pattern.Length && pattern.[at] = '}'
+        match digitsFrom (start + 1) with
+        | None -> None
+        | Some (low, afterLow) when closesAt afterLow -> Some (low, Some low, afterLow + 1)
+        | Some (low, afterLow) when afterLow < pattern.Length && pattern.[afterLow] = ',' ->
+            if closesAt (afterLow + 1) then Some (low, None, afterLow + 2)
+            else
+                digitsFrom (afterLow + 1)
+                |> Option.filter (fun (_, afterHigh) -> closesAt afterHigh)
+                |> Option.map (fun (high, afterHigh) -> (low, Some high, afterHigh + 1))
+        | Some _ -> None
+
+    let private countFault (node: Node) : string option =
+        match node with
+        | NRepeat (_, low, high) when low > MaxCount || high |> Option.exists (fun most -> most > MaxCount) ->
+            Some (sprintf "a count above %d" MaxCount)
+        | NRepeat (_, low, Some most) when low > most -> Some "a count whose minimum is above its maximum"
+        | _ -> None
 
     let private parse (pattern: string) : Result<Node, string> =
         let mutable at = 0
@@ -142,14 +226,18 @@ module Pattern =
                 while more && failure.IsNone && at < pattern.Length do
                     let quantified =
                         match pattern.[at] with
-                        | '*' -> Some (NStar node)
-                        | '+' -> Some (NPlus node)
-                        | '?' -> Some (NOpt node)
+                        | '*' -> Some (NStar node, at + 1)
+                        | '+' -> Some (NPlus node, at + 1)
+                        | '?' -> Some (NOpt node, at + 1)
+                        | '{' ->
+                            countAt pattern at
+                            |> Option.map (fun (low, high, next) -> (NRepeat (node, low, high), next))
                         | _ -> None
                     match quantified with
                     | None -> more <- false
-                    | Some q ->
-                        at <- at + 1
+                    | Some (q, next) ->
+                        at <- next
+                        countFault q |> Option.iter (fail >> ignore)
                         // `a*?` and friends. Simulable, but each one is another rule a caller
                         // has to know, and greedy-only is the smaller promise to keep.
                         if at < pattern.Length && pattern.[at] = '?' then
@@ -190,16 +278,12 @@ module Pattern =
                         at <- at + 1
                         NLineEnd
                     | '\\' when at + 1 < pattern.Length ->
-                        let escaped = pattern.[at + 1]
+                        let escaped = escape pattern.[at + 1]
                         at <- at + 2
                         match escaped with
-                        | 'n' -> NChar (fun c -> c = '\n')
-                        | 'r' -> NChar (fun c -> c = '\r')
-                        | 't' -> NChar (fun c -> c = '\t')
-                        | 'd' -> NChar Char.IsDigit
-                        | 'w' -> NChar (fun c -> Char.IsLetterOrDigit c || c = '_')
-                        | 's' -> NChar Char.IsWhiteSpace
-                        | other -> NChar (fun c -> c = other)
+                        | Ok (EscapedChar c) -> NChar (fun ch -> ch = c)
+                        | Ok (EscapedSet predicate) -> NChar predicate
+                        | Error reason -> fail reason
                     | '\\' -> fail "a trailing backslash"
                     | c ->
                         at <- at + 1
@@ -213,17 +297,40 @@ module Pattern =
 
     // --- compiling --------------------------------------------------------------------
 
-    let private compileNode (node: Node) : PatternInst list =
+    /// How many instructions `node` compiles to, saturated well above `MaxProgram` so nested
+    /// counts cannot overflow the arithmetic that refuses them.
+    let private programSize (node: Node) : int =
+        let capped (n: int) = min n 100000
+        let rec size node =
+            match node with
+            | NEmpty -> 0
+            | NChar _ | NLineStart | NLineEnd -> 1
+            | NConcat (a, b) -> capped (size a + size b)
+            | NAlt (a, b) -> capped (size a + size b + 2)
+            | NStar inner -> capped (size inner + 2)
+            | NPlus inner | NOpt inner -> capped (size inner + 1)
+            | NRepeat (inner, low, high) ->
+                let one = size inner
+                let rest =
+                    match high with
+                    | None -> one + 2
+                    | Some most -> (most - low) * (one + 1)
+                capped (low * one + rest)
+        size node + 1
+
+    let private compileNode (anchors: PatternAnchors) (node: Node) : PatternInst list =
         let program = ResizeArray<PatternInst> ()
         let emit inst =
             program.Add inst
             program.Count - 1
+        let start = match anchors with LineAnchors -> PatternLineStart | TextAnchors -> PatternTextStart
+        let finish = match anchors with LineAnchors -> PatternLineEnd | TextAnchors -> PatternTextEnd
         let rec go node =
             match node with
             | NEmpty -> ()
             | NChar predicate -> emit (PatternChar predicate) |> ignore
-            | NLineStart -> emit PatternLineStart |> ignore
-            | NLineEnd -> emit PatternLineEnd |> ignore
+            | NLineStart -> emit start |> ignore
+            | NLineEnd -> emit finish |> ignore
             | NConcat (a, b) ->
                 go a
                 go b
@@ -249,6 +356,13 @@ module Pattern =
                 let split = emit (PatternSplit (0, 0))
                 go inner
                 program.[split] <- PatternSplit (split + 1, program.Count)
+            | NRepeat (inner, low, high) ->
+                // Written out: the required copies, then either a star or one optional copy
+                // per extra. Still a Thompson program, so still linear to run.
+                for _ in 1 .. low do go inner
+                match high with
+                | None -> go (NStar inner)
+                | Some most -> for _ in low + 1 .. most do go (NOpt inner)
         go node
         emit PatternMatch |> ignore
         List.ofSeq program
@@ -259,18 +373,26 @@ module Pattern =
     [<Literal>]
     let MaxLength = 512
 
-    /// Compile a pattern, or say — by name — which construct put it outside the subset.
-    let compile (pattern: string) : Result<Pattern, string> =
+    /// Compile a pattern with `^` and `$` bound as `anchors` says, or say — by name — which
+    /// construct put it outside the subset.
+    let compileAnchored (anchors: PatternAnchors) (pattern: string) : Result<Pattern, string> =
         if String.IsNullOrEmpty pattern then Error "an empty pattern"
         elif pattern.Length > MaxLength then
             Error (sprintf "a pattern longer than %d characters" MaxLength)
         else
-            parse pattern
-            |> Result.map (fun node -> { Program = compileNode node })
-            |> Result.mapError (fun construct ->
-                sprintf
-                    "%s is not something this matcher supports. It takes literal text, `.`, `[classes]`, `*`, `+`, `?`, `|`, groups and the line anchors `^` and `$`"
-                    construct)
+            match parse pattern with
+            | Error construct ->
+                Error (
+                    sprintf
+                        "%s is not something this matcher supports. It takes literal text, `.`, `[classes]`, the escapes \\d \\w \\s and \\D \\W \\S, `*`, `+`, `?`, counts {n} {n,} {n,m}, `|`, groups and the anchors ^ and $"
+                        construct
+                )
+            | Ok node when programSize node > MaxProgram ->
+                Error (sprintf "a pattern whose counts write out more than %d steps. Use smaller counts" MaxProgram)
+            | Ok node -> Ok { Program = compileNode anchors node }
+
+    /// Compile a pattern whose anchors bind to a line, as a terminal wait reads them.
+    let compile (pattern: string) : Result<Pattern, string> = compileAnchored LineAnchors pattern
 
     // --- running ----------------------------------------------------------------------
 
@@ -318,6 +440,10 @@ module Pattern =
                     if at = 0 || text.[at - 1] = '\n' then addThread states (pc + 1) at
                 | PatternLineEnd ->
                     if at = text.Length || text.[at] = '\n' then addThread states (pc + 1) at
+                | PatternTextStart ->
+                    if at = 0 then addThread states (pc + 1) at
+                | PatternTextEnd ->
+                    if at = text.Length then addThread states (pc + 1) at
                 | PatternMatch -> matched <- true
                 | PatternChar _ -> ()
 

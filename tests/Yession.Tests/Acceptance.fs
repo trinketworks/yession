@@ -229,7 +229,8 @@ let private representativeModel : ClientModel =
       PaneRoom = PaneRoom.unmeasured
       Readers = Map.empty
       ItemMenu = None
-      PaneMenu = false
+      StartIn = SandboxRef.defaultRef
+      ChoosingStartIn = false
       Switcher = false
       ListHeld = Set.empty
       ClosedShown = false
@@ -758,7 +759,7 @@ let private uiChecklistTests =
                   // command.
                   "content panel", Dom.Hooks.contentPanel
                   "terminal tab", Dom.attr Dom.Hooks.terminalTab "term-ui"
-                  "the chooser's door", Dom.Hooks.paneNew
+                  "the list's door", Dom.Hooks.paneSwitcher
                   "terminal block", Dom.attr Dom.Hooks.terminalBlock "block-ui"
                   "terminal block status", Dom.attr Dom.Hooks.terminalBlockStatus Dom.Text.blockOk
                   "terminal block command", "ls -la"
@@ -2040,16 +2041,19 @@ let private uiChecklistTests =
             Expect.isFalse (none.Contains "data-pr-strip") "and a session watching nothing says nothing"
 
         // The attention mark ranks by SHAPE (docs/visual-design.md, Attention): each face is
-        // told apart without its colour. Working alone wears the agent's diamond; Pending
-        // keeps the arc a machine's work always had. What is pinned is what each face draws,
-        // so two levels collapsing into one shape goes red here, and so does the agent's
-        // diamond losing its own motion.
+        // told apart without its colour. Working alone wears the agent's own cube — not a
+        // point at all, the very mark that turns inline in the transcript — and Pending wears
+        // the same quarter-arc spin mark every other "still going" does (`Icon.spin`). What is
+        // pinned is what each face draws, so two levels collapsing into one shape goes red
+        // here, and so does the agent's cube losing its own turn.
         testCase "each attention level draws its own face, and only work under way keeps moving" <| fun () ->
             let levels =
                 [ Standings.Rest; Standings.Absent; Standings.Pending; Standings.Working; Standings.Wanted; Standings.Wrong ]
             let drawn level = Support.renderTemplate (Icon.attention level)
-            // The face, with the box and ink stripped: what is left is the shape alone.
-            let shape (html: string) = html.Substring (html.IndexOf "viewBox")
+            // The face, with the box and ink stripped: what is left is the shape alone. Working
+            // draws a `<span>`, not an `<svg>`, so the split point is `aria-hidden`, which both
+            // kinds of mark carry, rather than `viewBox`, which only one kind does.
+            let shape (html: string) = html.Substring (html.IndexOf "aria-hidden")
             let faces = levels |> List.map (drawn >> shape)
             Expect.equal (List.length (List.distinct faces)) 6 "six levels, six shapes"
             Expect.notEqual
@@ -2063,13 +2067,13 @@ let private uiChecklistTests =
                     (sprintf "data-attention=\"%s\"" (Standings.Attention.name level))
                     "each spells its level for a test"
                 Expect.equal
-                    (html.Contains Yession.App.Style.markOrbit)
+                    (html.Contains Yession.App.Style.statusSpinCw)
                     (level = Standings.Pending)
-                    (sprintf "%s goes round only if it is a machine's wait" (Standings.Attention.name level))
+                    (sprintf "%s spins only if it is a machine's wait" (Standings.Attention.name level))
                 Expect.equal
-                    (html.Contains Yession.App.Style.markRun)
+                    (html.Contains Yession.App.Style.agentThinkingCube)
                     (level = Standings.Working)
-                    (sprintf "%s runs round its edge only if it is the agent's own" (Standings.Attention.name level))
+                    (sprintf "%s turns the agent's own cube only if it is the agent's own" (Standings.Attention.name level))
             // The ones that ask arrive once; the ones that do not, do not.
             let arrives level =
                 let html = drawn level
@@ -2717,18 +2721,6 @@ let private terminalListTests =
             let fold = System.Text.RegularExpressions.Regex.Match(html, "<button[^>]*data-list-closed-fold[^>]*>").Value
             Expect.stringContains fold "aria-expanded=\"false\"" "a fold, shut, over the closed terminal"
 
-        // On a phone one tab fits the strip, so the list button's figure is the only thing on
-        // screen saying there are others — and a screen reader hears the same number in its
-        // name, closed terminals counted, as the list under it lists them.
-        testCase "the list button's name says how many terminals the list holds" <| fun () ->
-            let html = Support.render closedTerminalModel
-            let button = System.Text.RegularExpressions.Regex.Match(html, "<button[^>]*data-pane-switcher[^>]*>").Value
-            let label = System.Text.RegularExpressions.Regex.Match(button, "aria-label=\"([^\"]*)\"").Groups.[1].Value
-            Expect.equal
-                label
-                (Dom.Text.switchTerminalCount (List.length closedTerminalModel.Terminals.Terminals))
-                "the name counts every terminal, open or not"
-
         // A kill is two presses (`KillArmed`). What the second press confirms has to be said by
         // the control the keyboard is on, so its accessible name names the act and the
         // terminal — a screen reader hears what a sighted reader sees on the row.
@@ -2792,28 +2784,24 @@ let private contentListTests =
                 ((listed representativeModel).Contains Dom.Hooks.artifactListRow)
                 "a session that has shared nothing grows no rows"
 
-        // "the sections are named only when there are two kinds to tell apart" was here. The
-        // files' heading now carries the way to add one, so it is there with no file under
-        // it; the terminals have no heading, the list button over them says what they are.
+        // "the sections are named only when there are two kinds to tell apart" was here. Each
+        // heading now carries the way to add one of its kind, so both are there with nothing
+        // under them.
 
-        // What the `all` page is FOR, which is the question the `New` section the list briefly
-        // carried was not an answer to. A census of nothing says there is nothing. Making a
-        // terminal is the pivot's `+` and its menu, never a row here — that would make this
-        // surface the chooser again by a shorter route, and a second door beside the `+`.
-        testCase "an all page with nothing on it says so, and lists no places to open one" <| fun () ->
+        // A census of nothing says there is nothing, and its heading still offers the one way
+        // to make a terminal.
+        testCase "an all page with nothing on it says so, and still offers New terminal" <| fun () ->
             let bare =
                 { representativeModel with
                     Terminals = { representativeModel.Terminals with Terminals = [] }
                     Conversation = ConversationProjection.empty }
             let html = listed bare
             Expect.isTrue (html.Contains Dom.Text.nothingOpenedYet) "it says there is nothing"
-            Expect.isFalse (html.Contains Dom.Hooks.sandboxNew) "and offers nowhere to open one"
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.terminalNew "default")) "and offers New terminal"
     ]
 
-/// The strip's door, which is NOT the list's. Making something and finding something are two
-/// settled intents: somebody who wants a shell in `dev` has no use for a list of what is
-/// running, and somebody after an hour-old build has no use for a list of sandboxes. One
-/// surface answering both made each of them read the other's rows.
+/// The sheet's New terminal, on its Terminals heading, and the list of places it starts one in
+/// — the repo picker's branch link and branch pane, in the sheet's rows.
 let private paneNewTests =
     let withSandbox (name: string) =
         let started : ConversationItem =
@@ -2840,64 +2828,67 @@ let private paneNewTests =
             // it, so a fixture sets the field. One item, so the order says nothing here.
             Conversation = { representativeModel.Conversation with Recent = [ started ] } }
 
-    /// The door's own tag and nothing else. A whole page carries every timeline item's
-    /// actions control, and each of those says `aria-haspopup="menu"` too — so an unscoped
-    /// `Contains` for it is answered by the conversation while the door says the opposite.
-    let doorIn (html: string) : string =
-        let hook = Dom.Hooks.paneNew
-        let rec find (from: int) =
-            match html.IndexOf (hook, from) with
-            | -1 -> failwith "the strip offers no door to something new"
-            // `data-pane-new-menu` carries `data-pane-new` as a prefix: skip the menu's.
-            | at when html.Substring(at).StartsWith (hook + "-") -> find (at + 1)
-            | at -> html.Substring (at, html.IndexOf (">", at) - at)
-        find 0
+    let sheet (model: ClientModel) = model |> Support.step OpenAllMsg
 
-    testList "The strip's door to something new" [
-        testCase "with one place to put a terminal the door makes one rather than asking" <| fun () ->
-            // A menu whose only entry is the thing you asked for is a tap for nothing, and
-            // that is the shape of every session with no repo.
-            let door = doorIn (Support.render representativeModel)
-            Expect.isTrue (door.Contains Dom.Text.aNewTerminal) "the door says it makes one"
-            Expect.isFalse (door.Contains "aria-haspopup=\"menu\"") "and does not promise a menu"
+    testList "The sheet's New terminal" [
+        testCase "the sheet is the one way to make a terminal" <| fun () ->
+            // The strip's `+`, its menu and the empty pane's button were the same act in three
+            // places. The sheet's Terminals heading carries it now, and nothing else does.
+            let shut = Support.render (withSandbox "octo/hello:dev")
+            Expect.isFalse (shut.Contains Dom.Hooks.terminalNew) "nothing makes a terminal with the sheet put away"
+            let html = Support.render (sheet (withSandbox "octo/hello:dev"))
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.terminalNew "default")) "New terminal is on the sheet"
 
-        testCase "with a choice the door says it will ask" <| fun () ->
-            // Said through `aria-haspopup` rather than left for a reader to find out by
-            // pressing — which is the whole of what makes one control doing two things fair.
-            let door = doorIn (Support.render (withSandbox "octo/hello:dev"))
-            Expect.isTrue (door.Contains "aria-haspopup=\"menu\"") "it promises a menu"
-            Expect.isTrue (door.Contains Dom.Text.openSomethingNew) "and is named for the asking"
+        testCase "with one place to put a terminal there is nothing to choose" <| fun () ->
+            // A choice of one is a tap for nothing, and that is the shape of every session
+            // with no repo.
+            let html = Support.render (sheet representativeModel)
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.terminalNew "default")) "New terminal starts in default"
+            Expect.isFalse (html.Contains Dom.Hooks.startIn) "and no link offers a choice"
 
-        testCase "the menu is a menu, not a section of the list" <| fun () ->
-            // The shape IS the fix. A row that makes a thing used to be drawn in the list's
-            // own row — same grid, same type, same divider — so it was pixel-identical to a
-            // row that selects one, and a heading word carried the whole difference.
+        testCase "with a choice the sheet says where New terminal starts one" <| fun () ->
+            let html = Support.render (sheet (withSandbox "octo/hello:dev"))
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.startIn "default")) "where it starts, as a link"
+            Expect.isTrue (html.Contains (Dom.Text.startInNamed Dom.Text.defaultPlace)) "named for the place and the act"
+
+        testCase "the list of places names every place, scope and all" <| fun () ->
             let html =
-                withSandbox "octo/hello:dev"
-                |> Support.step TogglePaneMenuMsg
+                sheet (withSandbox "octo/hello:dev")
+                |> Support.step (ChoosingStartInMsg true)
                 |> Support.render
-            Expect.isTrue (html.Contains Dom.Hooks.paneNewMenu) "the menu is drawn"
-            Expect.isTrue (html.Contains "role=\"menuitem\"") "and its entries are menu items"
-
-        testCase "the menu names every place, scope and all" <| fun () ->
-            let html =
-                withSandbox "octo/hello:dev"
-                |> Support.step TogglePaneMenuMsg
-                |> Support.render
-            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.sandboxNew "default")) "this session's own"
-            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.sandboxNew "octo/hello:dev")) "and the repo's"
-            Expect.isTrue (html.Contains "octo/hello") "which repo declared it, because two may declare one name"
-            // Named for what pressing it DOES, scope included. The visible label is the short
-            // name, so without this an entry is called "dev" and a second repo's is too.
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.startInChoice "default")) "this session's own"
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.startInChoice "octo/hello:dev")) "and the repo's"
+            Expect.isTrue (html.Contains ">hello:dev<") "its name carries the repo's, because two may declare one name"
+            // Named for what choosing it leads to, scope included. The visible label leaves the
+            // owner out, so without this two owners' `hello:dev` would be called the same.
             Expect.isTrue
                 (html.Contains (Dom.Text.newTerminalIn "octo/hello:dev"))
-                "and every entry says the whole act it performs"
+                "and every row says the whole act"
+            Expect.isFalse (html.Contains Dom.Hooks.terminalNew) "in place of the terminals, not beside them"
 
-        testCase "a menu nobody opened is not in the document" <| fun () ->
-            // `ItemMenu`'s rule, for the same reason: a menu kept and hidden is a menu in the
-            // accessibility tree of every session that never asked for one.
-            let html = Support.render (withSandbox "octo/hello:dev")
-            Expect.isFalse (html.Contains Dom.Hooks.paneNewMenu) "not until it is asked for"
+        testCase "a place chosen is where New terminal starts the next one" <| fun () ->
+            let dev = SandboxRef.parse "octo/hello:dev" |> expect
+            let model =
+                sheet (withSandbox "octo/hello:dev")
+                |> Support.step (ChoosingStartInMsg true)
+                |> Support.step (StartInMsg dev)
+            Expect.isFalse model.ChoosingStartIn "choosing goes back to the list"
+            Expect.equal (ClientModel.startIn model) dev "and the place is kept"
+            let html = Support.render model
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.terminalNew "octo/hello:dev")) "New terminal starts there"
+
+        testCase "the sheet comes down on its list, not on the places it was left choosing" <| fun () ->
+            let model =
+                sheet (withSandbox "octo/hello:dev")
+                |> Support.step (ChoosingStartInMsg true)
+                |> Support.step CloseSwitcherMsg
+                |> Support.step OpenAllMsg
+            Expect.isFalse model.ChoosingStartIn "back on the list"
+
+        testCase "a place the session no longer offers falls back to the session's own" <| fun () ->
+            let gone = SandboxRef.parse "octo/gone:dev" |> expect
+            let model = sheet (withSandbox "octo/hello:dev") |> Support.step (StartInMsg gone)
+            Expect.equal (ClientModel.startIn model) SandboxRef.defaultRef "default"
     ]
 
 // The pane's action row: the acts about the thing on screen, in ONE place whatever kind it is.
@@ -3883,7 +3874,6 @@ let private chromeTests =
                 from 0 []
             for hook in
                 [ Dom.Hooks.contentToggle
-                  Dom.Hooks.paneNew
                   Dom.Hooks.paneTabDismiss
                   Dom.Hooks.panePreviewClose
                   Dom.Hooks.terminalReattach

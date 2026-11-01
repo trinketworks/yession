@@ -2,12 +2,15 @@ module Yession.Tests.AgentSurfaces
 
 // An agent's A2UI surface as the App holds it: in the synced state, so in the doc every peer
 // shares; answered through the spec's two-way binding (`EditSurfaceMsg`); and drawn in the dock
-// (`SurfaceView`). Nothing in the product writes a surface yet, so each case writes one the way a
-// peer's update would arrive: straight onto the doc, or straight into the model.
+// (`SurfaceView`). The agent's side writes a surface with `show_surface` (`SurfaceTool`), whose
+// cases run it against a doc; the rest write one the way a peer's update would arrive: straight
+// onto the doc, or straight into the model.
 
 open Fable.Pyxpecto
 open Yjs
 open A2ui
+open Yession.Domain.Agent
+open Yession.Domain.Chat
 open Yession.Domain.Collab
 open Yession.App
 open Yession.App.Collab
@@ -183,9 +186,329 @@ let private viewTests =
                 "nothing to answer yet"
     ]
 
+/// One component of every kind the catalog has, to hold the tool's list against the renderer.
+let private everyKind : ComponentKind list =
+    let text = Literal "x"
+    [ ComponentKind.Text (text, None)
+      ComponentKind.Image (text, None, None, None)
+      ComponentKind.Icon (IconSource.Named "home")
+      ComponentKind.Video text
+      ComponentKind.AudioPlayer (text, None)
+      ComponentKind.Row (Static [], None, None)
+      ComponentKind.Column (Static [], None, None)
+      ComponentKind.List (Static [], None, None)
+      ComponentKind.Card "c"
+      ComponentKind.Tabs []
+      ComponentKind.Modal ("a", "b")
+      ComponentKind.Divider None
+      ComponentKind.Button ("c", None, Action.Event ("e", []), [])
+      ComponentKind.TextField (text, None, None, None, [])
+      ComponentKind.CheckBox (text, Literal false, [])
+      ComponentKind.ChoicePicker (None, None, [], Literal [], None, None, [])
+      ComponentKind.Slider (None, None, 1.0, Literal 0.0, [])
+      ComponentKind.DateTimeInput (text, None, None, None, None, None, []) ]
+
+/// What the agent's call answers, run against a doc.
+let private show (doc: Y.Doc) (messages: string) : Async<string> =
+    async {
+        let _, body = Yession.Session.SurfaceTool.tool (SyncedStateSync.applySurfaceMessages doc)
+        match! body (sprintf "{\"messages\":%s}" messages) with
+        | Ok answer -> return answer.Text
+        | Error e -> return failwithf "the call did not happen: %s" e
+    }
+
+let private message (body: string) : string = sprintf "{\"version\":\"v0.9.1\",%s}" body
+
+let private create (id: string) : string =
+    message (sprintf "\"createSurface\":{\"surfaceId\":\"%s\",\"catalogId\":\"%s\"}" id Codec.BasicCatalogId)
+
+let private surfacesIn (doc: Y.Doc) = (SyncedStateSync.ofDoc doc).Surfaces
+
+let private toolTests =
+    testList "Tool" [
+        testCase "the tool lists exactly the components the app draws" <| fun () ->
+            Expect.equal
+                (everyKind |> List.filter SurfaceView.draws |> List.map SurfaceView.kindName |> List.sort)
+                (List.sort Yession.Session.SurfaceTool.drawnNames)
+                "the description and the refusal go by the same answer"
+
+        // The example is what an agent copies, so it has to be one the session takes.
+        testCaseAsync "the choice example in the description puts a question in front of everybody" <| async {
+            let doc = Y.Doc.Create ()
+            let ada = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+            let! said = show doc Yession.Session.SurfaceTool.example
+            Expect.stringContains said "applied 3 messages" "all three applied"
+            let page = render (ada.Model ())
+            Expect.stringContains page "data-surface=\"pick\"" "a peer draws it"
+            Expect.stringContains (tagWith "data-surface-choice=\"release/2.4\"" page) "aria-checked=\"false\"" "with its choices, none taken"
+            Expect.stringContains (tagWith "data-surface-component=\"go\"" page) "aria-disabled=\"true\"" "and the button waits for one"
+        }
+
+        testCaseAsync "a component the app does not draw is refused, and nothing is written" <| async {
+            let doc = Y.Doc.Create ()
+            let image = message "\"updateComponents\":{\"surfaceId\":\"s\",\"components\":[{\"id\":\"root\",\"component\":\"Image\",\"url\":\"https://example.com/a.png\"}]}"
+            let! said = show doc (sprintf "[%s,%s]" (create "s") image)
+            Expect.stringContains said "REFUSED" "refused"
+            Expect.stringContains said "Image (root)" "naming the component"
+            Expect.stringContains said "ChoicePicker" "and what it may use instead"
+            Expect.equal (surfacesIn doc) Map.empty "the createSurface before it did not land either"
+        }
+
+        testCaseAsync "a message that does not apply refuses the whole call" <| async {
+            let doc = Y.Doc.Create ()
+            let elsewhere = message "\"deleteSurface\":{\"surfaceId\":\"other\"}"
+            let! said = show doc (sprintf "[%s,%s]" (create "s") elsewhere)
+            Expect.stringContains said "there is no surface 'other'" "says which surface is missing"
+            Expect.equal (surfacesIn doc) Map.empty "and wrote nothing"
+        }
+
+        testCaseAsync "something that is not an A2UI message is refused by its place in the list" <| async {
+            let doc = Y.Doc.Create ()
+            let! said = show doc (sprintf "[%s,{\"hello\":1}]" (create "s"))
+            Expect.stringContains said "message 2 is not an A2UI v0.9.1 message" "names the second"
+        }
+
+        // The agent revises a question people are already answering: it moves the field it
+        // names, and the answers it did not name stay where people put them.
+        testCaseAsync "the agent's data update keeps the answers it did not name" <| async {
+            let doc = Y.Doc.Create ()
+            let ada = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+            let! _ = show doc Yession.Session.SurfaceTool.example
+            ada.Dispatch (user (EditSurfaceMsg ("pick", "/note", JString "after lunch")))
+            let! _ = show doc (sprintf "[%s]" (message "\"updateDataModel\":{\"surfaceId\":\"pick\",\"path\":\"/choice\",\"value\":[\"main\"]}"))
+            Expect.equal
+                (surfacesIn doc |> Map.tryFind "pick" |> Option.map (fun s -> s.DataModel))
+                (Some (JObject [ "choice", branches [ "main" ]; "note", JString "after lunch" ]))
+                "both, in the doc everyone reads"
+        }
+
+        testCaseAsync "deleteSurface takes the surface and its answers out of the doc" <| async {
+            let doc = Y.Doc.Create ()
+            let! _ = show doc Yession.Session.SurfaceTool.example
+            let! said = show doc (sprintf "[%s]" (message "\"deleteSurface\":{\"surfaceId\":\"pick\"}"))
+            Expect.stringContains said "applied 1 message." "applied"
+            Expect.equal (surfacesIn doc) Map.empty "no surface"
+            Expect.isFalse
+                ((doc.getMap "surfaceData" : Y.Map<obj>).has (SyncedStateSync.SurfaceDataKey.make "pick" "choice"))
+                "and no answer left behind"
+        }
+    ]
+
+let private ada = Yession.Domain.Principal.Peer (Yession.Domain.PeerId.create "ada" |> expect)
+let private messageId = Yession.Domain.MessageId.create "m1" |> expect
+
+/// What the session records when Ada presses `go` on the example's surface.
+let private answered : Yession.Domain.Surfaces.SurfaceActionTaken =
+    { MessageId = messageId
+      SurfaceId = "pick"
+      Component = "go"
+      Name = "submit"
+      Context = "{\"choice\":[\"main\"]}"
+      Responses = [ "main" ]
+      By = ada }
+
+/// A form whose options read differently from their values, with a field and a box beside the
+/// choice, and two buttons: one that sends all three, and one that sends nothing.
+let private formSurface (data: (string * Json) list) : Surface =
+    surfaceOf
+        [ plain
+              "choice"
+              (ComponentKind.ChoicePicker (
+                  None,
+                  Some ChoiceVariant.MultipleSelection,
+                  [ { Label = Literal "Guard regex"; Value = "regex" }; { Label = Literal "Draw chips"; Value = "chips" } ],
+                  Bound "/choice",
+                  None,
+                  None,
+                  []
+              ))
+          plain "note" (ComponentKind.TextField (Literal "Why", Some (Bound "/note"), None, None, []))
+          plain "urgent" (ComponentKind.CheckBox (Literal "Do it today", Bound "/urgent", []))
+          plain "sendLabel" (ComponentKind.Text (Literal "Send", None))
+          plain
+              "send"
+              (ComponentKind.Button (
+                  "sendLabel",
+                  None,
+                  Action.Event ("send", [ "choice", Bound "/choice"; "note", Bound "/note"; "urgent", Bound "/urgent"; "kind", Literal (JString "form") ]),
+                  []
+              ))
+          plain "skipLabel" (ComponentKind.Text (Literal "Not now", None))
+          plain "skip" (ComponentKind.Button ("skipLabel", None, Action.Event ("skip", []), [])) ]
+        data
+
+let private projectionTests =
+    testList "Text projection" [
+        testCase "an answer reads as the labels the person saw, the field by its label, and a ticked box by its" <| fun () ->
+            let surface = formSurface [ "choice", branches [ "regex"; "chips" ]; "note", JString "both slow"; "urgent", JBool true ]
+            Expect.equal
+                (Project.responses (Map.ofList [ "f", surface ]) "f" "send" "")
+                [ "Guard regex"; "Draw chips"; "Why: both slow"; "Do it today" ]
+                "no values, no JSON, and the agent's own literal is not an answer"
+
+        testCase "an empty field and an unticked box answer nothing" <| fun () ->
+            let surface = formSurface [ "choice", branches [ "regex" ]; "note", JString ""; "urgent", JBool false ]
+            Expect.equal (Project.responses (Map.ofList [ "f", surface ]) "f" "send" "") [ "Guard regex" ] "only the choice"
+
+        testCase "a button that carries no answer answers with its caption" <| fun () ->
+            Expect.equal (Project.responses (Map.ofList [ "f", formSurface [] ]) "f" "skip" "") [ "Not now" ] "what was pressed"
+
+        testCase "a value no input holds reads as itself" <| fun () ->
+            let row = plain "approve" (ComponentKind.Button ("label", None, Action.Event ("approve", [ "name", Bound "name" ]), []))
+            let surface = surfaceOf [ row ] [ "items", JArray [ JObject [ "name", JString "a" ]; JObject [ "name", JString "b" ] ] ]
+            Expect.equal (Project.responses (Map.ofList [ "l", surface ]) "l" "approve" "/items/1") [ "b" ] "the item's name, as text"
+
+        testCase "one answer is on the line after the verb" <| fun () ->
+            Expect.equal
+                (Act.deed (Act.SurfaceActionTaken answered) |> Yession.Domain.Phrase.said)
+                "responded main"
+                "the answer itself"
+
+        testCase "several answers are counted on the line and listed under it" <| fun () ->
+            let many = { answered with Responses = [ "Guard regex"; "Draw chips" ] }
+            Expect.equal (Act.deed (Act.SurfaceActionTaken many) |> Yession.Domain.Phrase.said) "responded with 2 answers" "counted"
+            Expect.equal
+                (Act.particulars (Act.SurfaceActionTaken many) |> List.map Yession.Domain.Phrase.said)
+                [ "Guard regex"; "Draw chips"; "event submit on surface pick with context {\"choice\":[\"main\"]}" ]
+                "each answer, then what the agent acts on"
+
+        testCase "the timeline unfolds several answers as a list, and keeps them off the line" <| fun () ->
+            let many = { answered with Responses = [ "Guard regex"; "Draw chips" ] }
+            let item : ConversationItem =
+                { MessageId = messageId
+                  Author = Yession.Domain.Principal.toActor ada
+                  Content = ItemContent.Act (Act.SurfaceActionTaken many)
+                  Status = ConversationItemStatus.Complete
+                  Offset = Yession.Domain.EventOffset.create 1L |> expect
+                  Woke = None
+                  CausedBy = None }
+            let model = ClientModel.init (peer "ada" "Ada")
+            let model =
+                { model with
+                    Link = SessionLink.Current
+                    Session = Some (Yession.Domain.SessionId.create "demo-session" |> expect)
+                    Conversation = { model.Conversation with Recent = [ item ] } }
+            let line = Support.render model
+            Expect.stringContains line "with 2 answers" "the line counts them"
+            Expect.isFalse (line.Contains "data-surface-responses") "and the list waits in the fold"
+            let opened = Support.behindFold (FoldKey.Act messageId) model
+            let list = opened.Substring (opened.IndexOf "data-surface-responses")
+            Expect.stringContains list "Guard regex" "the first answer"
+            Expect.stringContains list "Draw chips" "and the second"
+    ]
+
+let private pressTests =
+    testList "Press" [
+        testCase "a button whose checks fail sends nothing, and says why" <| fun () ->
+            Expect.equal
+                (Surfaces.press (Map.ofList [ "ask", choiceSurface [] ]) "ask" "submit" "")
+                (Error "Pick at least one branch.")
+                "the check's own message"
+
+        testCase "a ready button sends its event with the context read now" <| fun () ->
+            Expect.equal
+                (Surfaces.press (Map.ofList [ "ask", choiceSurface [ "choice", branches [ "dev" ] ] ]) "ask" "submit" "")
+                (Ok ("submit", [ "choice", branches [ "dev" ] ]))
+                "the name and what the picker holds"
+
+        testCase "something that is not a button is not pressed" <| fun () ->
+            Expect.isError (Surfaces.press (Map.ofList [ "ask", choiceSurface [] ]) "ask" "question" "") "a Text"
+
+        testCase "a button on a surface that is gone is not pressed" <| fun () ->
+            Expect.equal
+                (Surfaces.press Map.empty "ask" "submit" "")
+                (Error "there is no surface 'ask'")
+                "the surface named"
+
+        // A button stamped from a template reads its context under the item it was drawn for,
+        // which is how one surface lists several things to approve, each with its own button.
+        testCase "a button in a template reads relative paths under its item" <| fun () ->
+            let row =
+                plain "approve" (ComponentKind.Button ("label", None, Action.Event ("approve", [ "name", Bound "name" ]), []))
+            let surface =
+                surfaceOf [ row ] [ "items", JArray [ JObject [ "name", JString "a" ]; JObject [ "name", JString "b" ] ] ]
+            Expect.equal
+                (Surfaces.press (Map.ofList [ "list", surface ]) "list" "approve" "/items/1")
+                (Ok ("approve", [ "name", JString "b" ]))
+                "the second item's name"
+
+        testCaseAsync "the session records the answer as the doc holds it" <| async {
+            let doc = Y.Doc.Create ()
+            let! _ = show doc Yession.Session.SurfaceTool.example
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+            p.Dispatch (user (EditSurfaceMsg ("pick", "/choice", branches [ "main" ])))
+            Expect.equal
+                (Yession.Session.SurfaceTool.answer (surfacesIn doc) messageId ada "pick" "go" "")
+                (Ok answered)
+                "the example's button, carrying the choice as JSON"
+        }
+
+        testCase "an answer owes the agent a turn, as whoever pressed" <| fun () ->
+            Expect.equal
+                (AgentWake.pendingReason [ Yession.Domain.SessionEvent.SurfaceActionTaken answered ])
+                (Some (SurfaceAnswered "pick", ada))
+                "owed to Ada"
+
+        testCase "an answer is the agent's to read in the timeline" <| fun () ->
+            Expect.equal
+                (Act.sentence (Act.SurfaceActionTaken answered) |> Yession.Domain.Phrase.said)
+                "responded main (event submit on surface pick with context {\"choice\":[\"main\"]})"
+                "the answer as people read it, then what the agent acts on"
+
+        testCase "an answer on the wire is the shape it will always be" <| fun () ->
+            let pinned =
+                """{"type":"surfaceActionTaken","payload":{"messageId":"m1","surfaceId":"pick","component":"go","name":"submit","context":"{\"choice\":[\"main\"]}","responses":["main"],"by":{"kind":"peer","peerId":"ada"}}}"""
+            Expect.equal
+                (Yession.Codecs.Codec.fromString Yession.App.Codecs.Events.sessionEvent pinned)
+                (Ok (Yession.Domain.SessionEvent.SurfaceActionTaken answered))
+                "the durable form decodes to the event"
+
+        // Recorded before the event kept its responses. The surface is long gone, so there are
+        // no labels; the context's values are the next best thing, and still not JSON.
+        testCase "an answer recorded before responses reads as its values" <| fun () ->
+            let older =
+                """{"type":"surfaceActionTaken","payload":{"messageId":"m1","surfaceId":"pick","component":"go","name":"submit","context":"{\"choice\":[\"regex\"]}","by":{"kind":"peer","peerId":"ada"}}}"""
+            match Yession.Codecs.Codec.fromString Yession.App.Codecs.Events.sessionEvent older with
+            | Ok (Yession.Domain.SessionEvent.SurfaceActionTaken a) -> Expect.equal a.Responses [ "regex" ] "the value, as text"
+            | other -> failwithf "expected an answer, got %A" other
+
+        testCase "a turn woken by an answer round-trips" <| fun () ->
+            let started =
+                Yession.Domain.SessionEvent.AgentTurnStarted
+                    { AgentTurnId = Yession.Domain.AgentTurnId.create "t1" |> expect
+                      Cause = TurnCause.Woke (SurfaceAnswered "pick") }
+            let codec = Yession.App.Codecs.Events.sessionEvent
+            Expect.equal
+                (Yession.Codecs.Codec.fromString codec (Yession.Codecs.Codec.toString codec started))
+                (Ok started)
+                "round-trip"
+
+        testCase "a press round-trips as a command" <| fun () ->
+            let codec = Yession.App.Codecs.Frames.session Yession.Codecs.Codec.string
+            let frame =
+                Yession.Domain.Link.Command (
+                    Yession.Domain.Link.Request (
+                        Yession.Domain.RequestId.fresh (),
+                        Yession.Domain.Link.PressSurfaceButton ("pick", "go", "/items/1")))
+            Expect.equal
+                (Yession.Codecs.Codec.fromString codec (Yession.Codecs.Codec.toString codec frame))
+                (Ok frame)
+                "round-trip"
+
+        testCase "pressing a ready button asks the session" <| fun () ->
+            let model = withSurface (choiceSurface [ "choice", branches [ "main" ] ])
+            Expect.equal
+                (ClientModel.update (PressSurfaceMsg ("ask", "submit", "")) model |> snd)
+                [ ClientEffect.PressSurface ("ask", "submit", "") ]
+                "one request, naming the button"
+    ]
+
 let tests =
     testList "Agent surfaces" [
         syncTests
         modelTests
         viewTests
+        toolTests
+        pressTests
+        projectionTests
     ]

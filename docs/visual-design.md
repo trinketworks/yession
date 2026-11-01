@@ -76,19 +76,22 @@ which no thumb has, may share the step. The mark is what a reader finds at rest.
 mean three things:
 
 - `blue` is interactive, and it is the agent. The agent's own marks (its diamond, its caret,
-  the cube that turns while it thinks) wear `agent`, one tone under `blue`, so a reader can
-  tell the agent from a thing to press. Text in either is the interactive blue, because a
-  shade under it would fall below the text floor on the panels.
+  and the cube that turns while it thinks — the same cube Working's attention mark wears, see
+  Attention) wear `agent`, one tone under `blue`, so a reader can tell the agent from a thing to
+  press. Text in either is the interactive blue, because a shade under it would fall below the
+  text floor on the panels.
 - `green` is live, and it is the people.
 - `err` is wrong.
 
 Blue is never a status, with one exception: the attention mark of an agent at work (Working,
 see Attention) wears the agent's own blue, because it is a mark of the agent, and that blue is
-the tone a control never wears. A wait is `ink-dim` text: reconnecting, catching up, queued, looking
-and no agent yet. A wait leads with a dot. The dot beats if the wait is live.
+the tone a control never wears. A wait is `ink-dim` text: reconnecting, catching up, queued,
+looking and no agent yet. A wait leads with the spin mark (see Motion): a quarter arc, always grey,
+turning in place rather than beating.
 
-Live is `green` text: a running command, a connected peer, a session that runs. A record of
-something that finished is `ink`.
+Live is `green` text: a running command, a connected peer, a session that runs. It leads with
+the same spin mark a wait does — one shape for "still going", whichever of the two it is — and
+the word beside it, not the mark, says which. A record of something that finished is `ink`.
 
 Wrong is `err`. The one red word on a surface is the newest wrong thing. An older wrong thing
 is a record and wears `ink-dim`. A repeated row, or a repeated item in the conversation, is a
@@ -106,15 +109,22 @@ content out is a fade. It never crosses text, because faded glyphs fall under th
 floor. Where a surface holds more than fits, it says so with a control or a rule.
 *Test: find every mask and every fade. No glyph is under one.*
 
-A status is text in its colour, and it leads with a dot. It is never a filled or boxed badge.
-A verb never leads with a mark. So the dot, not a tone, says that a word cannot be pressed: a
-tone is one step of grey that a blur or a greyscale print hides, and principle 2 blurs the
-screen.
-*Test: a caps word with a dot is a status. A caps word without one can be pressed.*
+A status is text in its colour, and it leads with a mark: a dot if it has settled, or the spin
+mark (see Motion) if it is still under way. It is never a filled or boxed badge. A verb never
+leads with a mark. So the mark, not a tone, says that a word cannot be pressed: a tone is one
+step of grey that a blur or a greyscale print hides, and principle 2 blurs the screen.
+
+The one exception is a status said TWICE on the same row at the same width: the Manager
+roster's `running` and `stopped`, in the wide screen's own status column, beside the row's own
+rank mark (the spin or the ring, on the rail every width shares). The rail already carries the
+mark; running and stopped there are plain text, because a second mark would say nothing the
+first did not.
+*Test: a caps word with a leading mark is a status. A caps word without one can be pressed,
+unless its row already carries a mark that ranks it.*
 
 A status names a state. A reason says why. A reason is body text in the body voice, with no
-dot and no caps. A surface may carry both, the state first and the reason under it.
-*Test: do the words answer "what state" or "why"? What state leads with a dot. Why does not,
+mark and no caps. A surface may carry both, the state first and the reason under it.
+*Test: do the words answer "what state" or "why"? What state leads with a mark. Why does not,
 and is not in caps.*
 
 A state has one name, on every screen, column and side of the wire. A token a test reads is
@@ -215,13 +225,22 @@ notice the reader must still be able to answer. Nobody writes a stacking order a
 One vocabulary. Things arrive by sliding a little and fading in, at `pace`, eased out. Press
 is a tilt: in fast, back with a hair of overshoot. A pressed control is *held* (see State).
 
-A wait is a beat (`animate-beat`), not a spinner. A beating dot animates its colour between a
-role and its dim, never its opacity. Two things go round rather than beat, because they are
-work under way and not a wait on the reader: the attention mark's arc, Pending's (see
-Attention), always at its own ink; and a line round Working's own diamond, same ink as the
-fill it rides (never a second colour arriving), tracing the edge it belongs to rather than
-turning a ring. Both owe the surface 3:1 at every frame of their travel, the same floor a
-beat keeps. `motion-reduce` rides every one: it keeps the fill and drops the geometry.
+A settled status's dot is still; nothing left of it beats. A status still under way — a
+command live now, or a wait — turns instead: a quarter arc, always `ink-dim`, turning one way
+round a ring at an uneven pace within the lap rather than a constant rate, never reversing and
+never varying in colour or opacity. Pending's own attention mark (see Attention) is the very
+same arc, at whatever ink its level carries instead of `ink-dim`: a machine's work is the same
+"still going" as any other, so it wears the one mark rather than a shape of its own. Every one
+of these owes the surface 3:1 at every frame of its travel. `motion-reduce` rides every one: it
+keeps the fill and drops the geometry.
+
+Working alone is not drawn to this rule at all: its attention mark is the agent's own cube,
+turning in the hand — the exact mark that turns inline in the transcript while the agent
+thinks (see Colour), now ranked among a session's other standings too, because an agent at
+work is one claim however it is read. `app/tailwind.css`'s long comment above `.agent-think`
+answers for the cube's own motion, including its one filed disagreement with this doctrine
+(D-13): it is lit, because it is a picture of the one object this doctrine already lets be lit,
+turned in the hand rather than redrawn.
 
 ### State
 
@@ -247,8 +266,8 @@ carry a rank (WCAG 1.4.1).
 |---|---|---|---|---|
 | Wrong | disc in a ring, the whole box | `err` | the ring draws round and the core springs in, once | nothing moves until a person fixes it: sign in again, a PR conflicted or failed |
 | Wanted | disc | `green` | the arc closes and fills, then a halo breathes out three times | a person's turn: the agent is waiting |
-| Working | solid diamond, a little larger than the other marks' radius | `agent` | a line runs once round its edge, 1.6s, for as long as the turn does | the agent at work: a turn is running |
-| Pending | quarter arc on a faint track | `ink-dim` | goes round, 1.6s, for as long as the work does | a machine's work, needs nobody: a command the agent left running, checks, the queue, a launch |
+| Working | the agent's own cube, not drawn to the box and ink columns at all | `agent`, always | turns in the hand, continuously, for as long as the turn does — the same cube and the same turn as the transcript's | the agent at work: a turn is running |
+| Pending | a quarter arc turning round a ring (the status spin, `Icon.spin`) | `ink-dim` | the arc turns, 1.6s a lap at an uneven pace, for as long as the work does | a machine's work, needs nobody: a command the agent left running, checks, the queue, a launch |
 | Absent | empty ring | `ink-dim` | none | no agent, chosen knowingly |
 | Rest | point | `ink-faint` | none | nothing to say: stopped, or everything watched is fine |
 
@@ -260,19 +279,24 @@ Wanted is green because green is the people, not because it is good.
 
 Working outranks Pending: the agent thinking is nearer a person's turn than a machine
 finishing. A command the agent left running is Pending, because no turn is thinking and the
-agent wakes when it ends, as it does for checks. Working wears its own diamond — the agent's
-shape, nowhere else in the five other levels — rather than Pending's arc, so a reader does not
-need the ink to tell whose work is under way; the word beside the mark still says which.
+agent wakes when it ends, as it does for checks. Working wears the agent's own cube — nowhere
+else in the five other levels, and the one mark here that is not a point at all — rather than
+Pending's spin, so a reader does not need the ink to tell whose work is under way; the word
+beside the mark still says which.
 
 Attention is ink: each level carries more than the one below it, so the order survives
-greyscale and a blur. They share one 12px box, centre and the chrome's 1.5px stroke. The
-mark is larger than a status's 6px dot because its shape carries the rank.
+greyscale and a blur. The five points share one 12px box, centre and the chrome's 1.5px
+stroke; the mark is larger than a status's 6px dot because its shape carries the rank. Working
+is the one exception to the box and the rule alike: it is the agent's own cube (see Colour),
+not a point and never `currentColor`, because it is not this rule's mark at all — it is the
+transcript's, ranked here too.
 
-Motion goes only where a state is live or asks. Working and Pending keep going because the work does,
-one tracing its edge and one going round. Wanted asks a few times and then sits still, so a session left
-waiting does not nag. Wrong never fidgets: a mark that kept moving would read as a spinner, not
-a fault. What moves is geometry, never the ink the meaning rests on. `motion-reduce` keeps every
-still face.
+Motion goes only where a state is live or asks. Pending keeps going because the work does,
+turning an arc round a ring; Working keeps going because the turn does, turning in the hand.
+Wanted asks a few times and then sits still, so a session left waiting does not nag. Wrong
+never fidgets: a mark that kept moving would read as a spinner, not a fault. What moves is
+geometry, never the ink the meaning rests on, Working's cube included (see Motion above).
+`motion-reduce` keeps every still face.
 
 The mark never stands alone. A word beside it, or the name of the control it sits in, says
 the state.

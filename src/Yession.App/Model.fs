@@ -744,7 +744,8 @@ module Refusal =
         | ReattachTerminal _ -> true
         | InterruptAgentTurn _
         | TrustRepo _
-        | AddRepo _ -> false
+        | AddRepo _
+        | PressSurfaceButton _ -> false
 
     /// Where `refusal` is drawn: in the pane while the pane is open and the refusal is one
     /// of its verbs' — that is where the press was — and in the conversation otherwise,
@@ -1981,13 +1982,12 @@ type ClientModel =
       /// open, because opening one is writing this. Two open menus would be two popovers
       /// over one column with one Escape between them.
       ItemMenu      : MessageId option
-      /// Whether the strip's `+` has its menu open (Plan 20, stage 1).
-      ///
-      /// A `bool` rather than an option of something, because there is one of these on the
-      /// screen: it hangs off one control, where `ItemMenu` hangs off whichever timeline item
-      /// was asked. Model state rather than the DOM's own, for `ItemMenu`'s reason — a menu
-      /// rendered only while open cannot be asked whether it is open.
-      PaneMenu      : bool
+      /// Where the sheet's New terminal starts one (`ClientModel.startIn` reads it). View
+      /// state: a place this client chose, not something anybody else is looking at.
+      StartIn       : SandboxRef
+      /// Whether the sheet shows the list of places to start a terminal in, in place of its
+      /// terminals and files. Reset each time the sheet comes down.
+      ChoosingStartIn : bool
       /// Whether the pane is on its "all" page: every terminal this session has had, live and
       /// closed, and every file shared into it.
       ///
@@ -2167,10 +2167,9 @@ type DomMove =
     /// Back to one item's actions control, after the menu it opened has gone. Without it,
     /// dismissing a menu strands focus on `body`.
     | FocusItemActions of MessageId
-    /// Back to the door the menu of new things hangs from, after the menu has gone —
-    /// `FocusItemActions`' reason, for the other menu this shell has. The strip's `+`, or the
-    /// empty pane's own button while the pane is empty and the strip offers no `+` (P1-4).
-    | FocusPaneNew
+    /// Onto where a terminal will start, as the sheet moves to or from the list of places:
+    /// the ticked place in that list, or the sheet's link that opens it.
+    | FocusStartIn
     /// Onto this terminal's command line — this peer's own, the one that takes keystrokes.
     /// Where a terminal tab is FOR, so it is where showing one lands. A terminal with no
     /// command line to offer (somebody holds its keyboard, or it has closed) lands on what it
@@ -2436,6 +2435,10 @@ type ClientMsg =
     /// pointer into that surface's data model. The spec's two-way binding, written into the
     /// synced state so every peer sees the answer (`SyncedSessionState.Surfaces`).
     | EditSurfaceMsg of surfaceId: string * path: string * value: A2ui.Json
+    /// Somebody pressed a button on an agent's surface, drawn under template item `scope`
+    /// (`""` at the root). A request of the session (`PressSurfaceButton`), which reads the
+    /// answer from the doc itself; it reaches everyone as `SurfaceActionTaken`.
+    | PressSurfaceMsg of surfaceId: string * componentId: string * scope: string
     /// This client sent the session a command, under this request id. Dispatched by the one
     /// verb that sends commands (`Client.Connection.Ask`), BEFORE the command leaves, so no
     /// answer can arrive ahead of the record of what it answers.
@@ -2645,11 +2648,10 @@ type ClientMsg =
     /// (`None`). Told by the notice itself, so that whatever takes it away — its dismiss, or
     /// an acceptance — can hand focus on rather than strand it on `body`.
     | RefusalFocusMsg of RefusalMount option
-    /// Open or shut the strip's menu of things to open (Plan 20, stage 1). Opening is a
-    /// toggle rather than a pair, so the control that opened it is the control that shuts it
-    /// and focus never has to go looking for a replacement.
-    | TogglePaneMenuMsg
-    | ClosePaneMenuMsg
+    /// Show the sheet's list of places to start a terminal in (`true`), or go back from it.
+    | ChoosingStartInMsg of bool
+    /// Start the sheet's next terminal here, and go back from the list of places.
+    | StartInMsg of SandboxRef
     /// Go to the pivot's `all` page, or back from it (P2-2). A toggle because its shortcut is
     /// one key for both; the pivot item itself only ever opens it, as a selected tab pressed
     /// again does nothing. Opening it brings the pane with it — reaching for a terminal you
@@ -2788,6 +2790,7 @@ type ClientEffect =
     | OpenTerminal of title: string * sandbox: SandboxRef
     | InterruptTurn of AgentTurnId
     | TrustRepo of RepoRef * shown: ConnectionRoute list * ticked: ConnectionRoute list
+    | PressSurface of surfaceId: string * componentId: string * scope: string
     | Launch of LaunchEffect
     | Claude of ClaudeCall
     | GitHub of GitHubCall
@@ -3017,7 +3020,8 @@ module ClientModel =
           PaneRoom = PaneRoom.unmeasured
           Readers = Map.empty
           ItemMenu = None
-          PaneMenu = false
+          StartIn = SandboxRef.defaultRef
+          ChoosingStartIn = false
           Switcher = false
           ListHeld = Set.empty
           ClosedShown = false
@@ -4198,6 +4202,11 @@ module ClientModel =
         SandboxRef.defaultRef
         :: (ConversationProjection.startedSandboxes model.Conversation |> List.map (fun s -> s.Sandbox))
 
+    /// Where the sheet's New terminal starts one: the place this client chose, while the
+    /// session still offers it, else `default`.
+    let startIn (model: ClientModel) : SandboxRef =
+        if List.contains model.StartIn (sandboxRows model) then model.StartIn else SandboxRef.defaultRef
+
     /// What a repo's file said one of those sandboxes is FOR, when it said anything. From the
     /// start that brought it up, which is the only place it is recorded.
     let sandboxPurpose (sandbox: SandboxRef) (model: ClientModel) : string option =
@@ -5010,9 +5019,9 @@ module ClientModel =
     /// message left the pane; and through `say` after it, so the status line speaks for the
     /// link the message left (`Said`); and through `holdList` after that, last, so the
     /// list's sheet holds a terminal by what it is once that has been counted.
-    /// The pane put away — and any popover hanging in it, which does not outlive it.
+    /// The pane put away — and the sheet over it, which does not outlive it.
     let private paneHidden (model: ClientModel) : ClientModel =
-        { model with TerminalsOpen = false; Switcher = false; PaneMenu = false }
+        { model with TerminalsOpen = false; Switcher = false }
 
     /// Bringing the sidebar column on screen, which every way in shares — the nav toggle,
     /// settings, a call to action that reveals settings — so the next way in cannot open the
@@ -5651,10 +5660,9 @@ module ClientModel =
             if Size.isValid size then
                 { model with TerminalViewports = Map.add terminal size model.TerminalViewports }
             else model
-        // Asking shuts the menu that asked. The entry pressed is about to leave the
-        // document, and a menu left standing over a terminal that is on its way is a surface
-        // the reader has to dismiss before they can see what they asked for.
-        | OpenTerminalMsg _ -> { model with Opening = model.Opening + 1; PaneMenu = false; Switcher = false }
+        // Asking puts the sheet away. A sheet left standing over a terminal that is on its
+        // way is a surface the reader has to dismiss before they can see what they asked for.
+        | OpenTerminalMsg _ -> { model with Opening = model.Opening + 1; Switcher = false }
         | ShowInPaneMsg mode ->
             // The WHOLE next face, stated by every way in. Nothing here clears a subset and
             // hopes the rest was already right: the switcher cannot outlive the choice made in
@@ -5770,7 +5778,7 @@ module ClientModel =
             // A popover does not outlive the pane it hangs in. Brought up, the pane lands where
             // every way of bringing it up lands (`landed`).
             if model.TerminalsOpen then paneHidden model
-            else landed { model with TerminalsOpen = true; Switcher = false; PaneMenu = false }
+            else landed { model with TerminalsOpen = true; Switcher = false }
         | HideContentMsg -> paneHidden model
         | ToggleNavMsg ->
             // The nav control always returns the column to its workspace face: a column that
@@ -5804,10 +5812,8 @@ module ClientModel =
             let next = if model.ItemMenu = Some messageId then None else Some messageId
             { model with ItemMenu = next }
         | CloseItemMenuMsg -> { model with ItemMenu = None }
-        // The menu hangs from the pivot's `+`, which the `all` page keeps on screen: it opens
-        // over whatever the pane shows, that page included, and leaves it where it was.
-        | TogglePaneMenuMsg -> { model with PaneMenu = not model.PaneMenu }
-        | ClosePaneMenuMsg -> { model with PaneMenu = false }
+        | ChoosingStartInMsg choosing -> { model with ChoosingStartIn = choosing }
+        | StartInMsg sandbox -> { model with StartIn = sandbox; ChoosingStartIn = false }
         | ToggleFoldMsg key ->
             let next =
                 if Set.contains key model.OpenFolds then Set.remove key model.OpenFolds
@@ -5829,12 +5835,11 @@ module ClientModel =
         | CopiedMsg None -> { model with Copied = None }
         | ToggleSwitcherMsg ->
             // Opening brings the pane: reaching for a terminal you cannot see is exactly the
-            // case where the pane is shut. Leaving it leaves the pane as it is. Going to it
-            // shuts the menu, as moving to any other pivot item would: a popover does not
-            // outlive the page it hung over.
+            // case where the pane is shut. Leaving it leaves the pane as it is.
             if model.Switcher then { model with Switcher = false }
             else fold OpenAllMsg model
-        | OpenAllMsg -> drawerShut { model with Switcher = true; PaneMenu = false; TerminalsOpen = true }
+        // The sheet always comes down on its list, never on the places it was left choosing.
+        | OpenAllMsg -> drawerShut { model with Switcher = true; ChoosingStartIn = false; TerminalsOpen = true }
         | CloseSwitcherMsg -> { model with Switcher = false }
         | ToggleClosedMsg -> { model with ClosedShown = not model.ClosedShown }
         | FilesOverMsg over -> { model with FilesOver = over }
@@ -6017,7 +6022,8 @@ module ClientModel =
         | ReleaseTerminalMsg _
         | ReattachTerminalMsg _
         | InterruptTerminalMsg _
-        | TrustRepoMsg _ -> model
+        | TrustRepoMsg _
+        | PressSurfaceMsg _ -> model
         // The reader's own hand on a trust card, kept here because nobody else's screen has it.
         | ToggleTrustRouteMsg (repo, route) -> { model with TrustCards = TrustCards.toggle repo route model.TrustCards }
         | NotNowTrustMsg (repo, shown) -> { model with TrustCards = TrustCards.putOff repo shown model.TrustCards }
@@ -6276,6 +6282,7 @@ module ClientModel =
             | OpenTerminalMsg (title, sandbox) -> [ ClientEffect.OpenTerminal (title, sandbox) ]
             | InterruptTurnMsg turn -> [ ClientEffect.InterruptTurn turn ]
             | TrustRepoMsg (repo, shown, ticked) -> [ ClientEffect.TrustRepo (repo, shown, ticked) ]
+            | PressSurfaceMsg (surfaceId, componentId, scope) -> [ ClientEffect.PressSurface (surfaceId, componentId, scope) ]
             | LaunchMsg launchMsg -> Launch.update launchMsg model.Launch |> snd |> List.map ClientEffect.Launch
             | ClaudePressedMsg press -> ClaudePress.call press model.Claude |> Result.toList |> List.map ClientEffect.Claude
             | GitHubPressedMsg press -> GitHubPress.call press model.GitHub |> Result.toList |> List.map ClientEffect.GitHub
@@ -6345,6 +6352,9 @@ module ClientModel =
                 else [ ClientEffect.Move DomMove.FocusPivot ]
             | OpenAllMsg -> [ ClientEffect.Move DomMove.FocusSwitcher ]
             | CloseSwitcherMsg when model.Switcher -> [ ClientEffect.Move DomMove.FocusPivot ]
+            // The press that moved the sheet to or from its places leaves with what it was on.
+            | ChoosingStartInMsg _
+            | StartInMsg _ -> [ ClientEffect.Move DomMove.FocusStartIn ]
             // Down the list's rows, by the order it draws them: the walk is the model's, and only
             // the focus it lands is the document's.
             | WalkListMsg (key, from) -> walkList key from model |> Option.map ClientEffect.Move |> Option.toList

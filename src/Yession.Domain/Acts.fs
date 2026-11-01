@@ -52,6 +52,7 @@ type Act =
     | ShellProfileSet of ShellProfileSet
     | FileChanged of FileChanged
     | ArtifactShared of ArtifactShared
+    | SurfaceActionTaken of Surfaces.SurfaceActionTaken
     | CommandRefused of CommandRefused
     | GatedCommandFailed of GatedCommandFailed
     | CredentialSpent of GitCredentialSpent
@@ -100,6 +101,7 @@ module Act =
         | Act.ShellProfileSet p -> ShellProfileSet.phrase p
         | Act.FileChanged f -> FileChanged.phrase f
         | Act.ArtifactShared a -> ArtifactShared.phrase a
+        | Act.SurfaceActionTaken a -> Surfaces.SurfaceActionTaken.phrase a
         | Act.CommandRefused c -> CommandRefused.phrase c
         | Act.GatedCommandFailed c -> GatedCommandFailed.phrase c
         | Act.CredentialSpent g -> GitCredentialSpent.deed g
@@ -143,6 +145,7 @@ module Act =
         | Act.SandboxSetupQueued _
         | Act.FileChanged _
         | Act.ArtifactShared _
+        | Act.SurfaceActionTaken _
         | Act.CommandRefused _
         | Act.GatedCommandFailed _
         | Act.McpServerAvailable _
@@ -197,6 +200,7 @@ module Act =
         | Act.PrCreated p -> PrCreated.particulars p
         | Act.CredentialSpent g -> GitCredentialSpent.particulars g
         | Act.ArtifactShared a -> ArtifactShared.particulars a
+        | Act.SurfaceActionTaken a -> Surfaces.SurfaceActionTaken.particulars a
         | Act.ShellProfileSet p -> ShellProfileSet.particulars p
         | Act.RepoRemoved _
         | Act.RepoBranchSwitched _
@@ -260,6 +264,7 @@ module Act =
         // three artifacts and a run that revised one three times are different stories, and a
         // reader asks about them separately.
         | Act.ArtifactShared a -> ArtifactShared.verb a, "artifact", "artifacts"
+        | Act.SurfaceActionTaken _ -> "answered", "surface", "surfaces"
         | Act.CommandRefused _ -> "refused", "command", "commands"
         | Act.GatedCommandFailed _ -> "failed", "command", "commands"
         | Act.CredentialSpent _ -> "spent", "credential", "credentials"

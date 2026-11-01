@@ -1818,6 +1818,7 @@ let private leaseCommandTests =
                             })
                         (fun _ _ _ _ -> async { return Error "no repos in this composition" })
                         (fun _ _ _ -> async { return Error "no repos in this composition" })
+                        (fun _ _ _ _ -> async { return Error "no surfaces in this composition" })
                         Principal.Peer
                 let! taken = handle ada (TakeTerminalLease terminalA)
                 Expect.equal taken CommandAccepted "a take always succeeds — it steals rather than asks"
@@ -1865,6 +1866,7 @@ let private peerOpenTests =
                 (fun id -> async { return Ok id })
                 (fun _ _ _ _ -> async { return Error "no repos in this composition" })
                 (fun _ _ _ -> async { return Error "no repos in this composition" })
+                (fun _ _ _ _ -> async { return Error "no surfaces in this composition" })
                 Principal.Peer
         handle, asked
 

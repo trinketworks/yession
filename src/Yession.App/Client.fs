@@ -272,6 +272,7 @@ module Client =
             | ClientEffect.OpenTerminal (title, sandbox) -> ask (OpenTerminal (title, sandbox))
             | ClientEffect.InterruptTurn turn -> ask (InterruptAgentTurn turn)
             | ClientEffect.TrustRepo (repo, shown, ticked) -> ask (TrustRepo (repo, shown, ticked))
+            | ClientEffect.PressSurface (surfaceId, componentId, scope) -> ask (PressSurfaceButton (surfaceId, componentId, scope))
             | ClientEffect.Launch (LaunchEffect.Start target) ->
                 connected (fun c ->
                     dispatch (LaunchMsg (LaunchSent (c.Ask (AddRepo (target.Repo, target.Branch)), target))))

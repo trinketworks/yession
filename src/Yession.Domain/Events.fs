@@ -154,6 +154,9 @@ type SessionEvent =
     // do, for the same reason a message sent before they arrived is in their chat.
     | TabOpened of TabOpened
     | TabClosed of TabClosed
+    // Somebody answered a surface the agent showed, by pressing its button. A turn is owed
+    // for it (`AgentWake`): the agent asked, and this is the reply.
+    | SurfaceActionTaken of Surfaces.SurfaceActionTaken
     // The approval gate's refusal (Plan 15, stage 3). Only the refusal: an approval is
     // recorded on the event of the command it released.
     | CommandRefused of CommandRefused

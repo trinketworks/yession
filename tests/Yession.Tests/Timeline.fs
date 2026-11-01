@@ -1225,7 +1225,7 @@ let private edgeTabTests =
 
         testCase "a pane brought up over a session with no open terminal shows the empty pane" <| fun () ->
             let model = firstLook false [ [ at 1L 0.0 (sent "1" "hello") ] ] |> Support.step ToggleContentMsg
-            Expect.isFalse model.Switcher "nothing to list, and the empty pane is where a terminal is made"
+            Expect.isFalse model.Switcher "no sheet asked for: the pane's body is the list, docked (`View.allPage`)"
 
         testCase "a pane brought up before the log arrived lands on the switcher once it has" <| fun () ->
             // Before the log is read through, "no terminal" and "not heard yet" look the same;
@@ -1242,11 +1242,16 @@ let private edgeTabTests =
             let moves = effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
             Expect.equal moves [ ClientEffect.Move (DomMove.IfDropped DomMove.FocusSwitcher) ] "onto the switcher, if dropped"
 
-        testCase "an empty pane offers one way to make a terminal" <| fun () ->
-            let html = Support.render (shownOf [] |> Support.step ToggleContentMsg)
-            let doors =
-                System.Text.RegularExpressions.Regex.Matches(html, "(data-pane-new|data-terminal-new)[\\s=>]").Count
-            Expect.equal doors 1 "one New terminal, not two"
+        testCase "an empty pane is the list, docked, with its one New terminal" <| fun () ->
+            let count (pattern: string) (html: string) = System.Text.RegularExpressions.Regex.Matches(html, pattern).Count
+            let doors = count "data-terminal-new[\\s=>]"
+            let lists = count "data-content-list[\\s=>]"
+            let scrims = count "data-pane-sheet-scrim[\\s=>]"
+            let empty = shownOf [] |> Support.step ToggleContentMsg
+            let html = Support.render empty
+            Expect.equal (lists html, doors html, scrims html) (1, 1, 0) "the list is the pane, with nothing under it to dim"
+            let asked = Support.render (Support.step OpenAllMsg empty)
+            Expect.equal (lists asked, doors asked, scrims asked) (1, 1, 0) "asked for, it is the same one list, not a second over it"
     ]
 
 // --- How a block ended, on every surface ----------------------------------------------------
@@ -3255,16 +3260,8 @@ let private listTests =
             let _, effects = ClientModel.update ToggleSwitcherMsg (clientOf [ at 1L 0.0 (opened terminalA "build") ])
             Expect.equal effects [ ClientEffect.Move DomMove.FocusSwitcher ] "into the switcher"
 
-        testCase "going to the all page shuts the menu of new things" <| fun () ->
-            // A popover does not outlive the page it hung over.
-            let model = clientOf [] |> Support.step TogglePaneMenuMsg |> Support.step ToggleSwitcherMsg
-            Expect.isFalse model.PaneMenu "the menu went"
-
-        // This replaced "opening the strip's menu shuts the switcher", from when the two were
-        // popovers over one pane: `all` is a page now, the `+` is on screen over it, and its
-        // menu opens over the page the way it opens over a terminal.
-        testCase "the menu of new things opens over the all page and leaves it up" <| fun () ->
-            let model = clientOf [] |> Support.step ToggleSwitcherMsg |> Support.step TogglePaneMenuMsg
+        testCase "the list of places is a view of the all page and leaves it up" <| fun () ->
+            let model = clientOf [] |> Support.step ToggleSwitcherMsg |> Support.step (ChoosingStartInMsg true)
             Expect.isTrue model.Switcher "the page stayed"
 
         // These are the tombstones of the states four agreeing fields allowed (Plan 25, stage
@@ -3525,15 +3522,14 @@ let private listTests =
             Expect.isFalse (clientOf []).Switcher "nothing open is not a reason to show it"
             Expect.isTrue (Support.step ToggleSwitcherMsg (clientOf [])).Switcher "asked for, shown"
 
-        testCase "asking for a terminal shuts the menu that asked" <| fun () ->
-            // The entry pressed is about to leave the document, and a menu left standing over
-            // a terminal on its way is a surface the reader has to dismiss before they can see
-            // what they asked for.
+        testCase "asking for a terminal puts the sheet that asked away" <| fun () ->
+            // A sheet left standing over a terminal on its way is a surface the reader has to
+            // dismiss before they can see what they asked for.
             let opened =
                 clientOf []
-                |> Support.step TogglePaneMenuMsg
+                |> Support.step ToggleSwitcherMsg
                 |> Support.step (OpenTerminalMsg ("", devInHello))
-            Expect.isFalse opened.PaneMenu "shut by the asking"
+            Expect.isFalse opened.Switcher "put away by the asking"
 
         // What the session REFUSED. Every command answers, and until this the launch surface
         // was the only caller that read the answer — so a press the session would not honour
@@ -3636,12 +3632,14 @@ let private listTests =
                 |> Support.step (RefusalFocusMsg None)
             Expect.isEmpty (ClientModel.update DismissRefusalMsg model |> snd) "nothing to hand on"
 
-        testCase "the menu opens and shuts on the one control" <| fun () ->
-            // A toggle rather than a pair, so the control that opened it is the control that
-            // shuts it and focus never has to go looking for a replacement.
-            let model = clientOf [] |> Support.step TogglePaneMenuMsg
-            Expect.isTrue model.PaneMenu "open"
-            Expect.isFalse (Support.step TogglePaneMenuMsg model).PaneMenu "and shut by the same press"
+        testCase "moving to or from the list of places takes focus with it" <| fun () ->
+            // The press that moved the sheet leaves the document with it, and the hand goes to
+            // where a terminal will start: the ticked place, or the link back on the list.
+            let sheet = clientOf [] |> Support.step ToggleSwitcherMsg
+            let choosing, opened = ClientModel.update (ChoosingStartInMsg true) sheet
+            Expect.equal opened [ ClientEffect.Move DomMove.FocusStartIn ] "onto the ticked place"
+            let _, chosen = ClientModel.update (StartInMsg devInHello) choosing
+            Expect.equal chosen [ ClientEffect.Move DomMove.FocusStartIn ] "and back onto the link"
 
         testCase "choosing a place asks for a terminal there, named by nothing" <| fun () ->
             // The only thing the press says is WHERE, so the session names the terminal after

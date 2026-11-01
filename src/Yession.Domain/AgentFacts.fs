@@ -70,6 +70,13 @@ and WakeReason =
     /// Attribution, never payload, like the rest: what changed arrives as the timeline note
     /// the transition already folded into, so the reason names only which pull request.
     | PrChanged of PrRef
+    /// Somebody pressed a button on a surface the agent showed (`SurfaceActionTaken`).
+    ///
+    /// Owned by whoever pressed it, which meets the rule above from the other side: nobody
+    /// queued work, but a person here answered the agent's question, and an answer is that
+    /// person asking for what follows from it — so the turn runs on their credential, as a
+    /// turn their message started would.
+    | SurfaceAnswered of surfaceId: string
     /// The agent's previous turn was cut off: the process running it ended — a crash, a
     /// deploy, the machine — and the next one found it in the log and failed it
     /// (`AgentTurnFailed.ProcessEnded`). Nothing the agent was in the middle of reported back

@@ -17,6 +17,7 @@
     <!-- The `yession` namespace's registry, built from a turn's capabilities, and the
          argument decoding every one of its tools does for itself. -->
     <Compile Include="AgentTools.fs" />
+    <Compile Include="SurfaceTool.fs" />
     <!-- The agent's prompt as rules a strategy is made of. After AgentTools: the sections name
          its tools by their literals. -->
     <Compile Include="Prompting.fs" />

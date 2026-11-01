@@ -153,31 +153,32 @@
   0%, 100% { opacity: 0.25; }
   50% { opacity: 1; }
 }
-/* A waiting dot's beat (`Style.statusDotBeat`): reconnecting, starting, looking, queued. The
-   same tempo as the live beat below and the same rule — the COLOUR moves, between the record's
-   ink and its dim, never the opacity, so the mark owes its surface 3:1 at every frame of the
-   beat rather than only at the top of it. The old opacity pulse bottomed out at a quarter,
-   which is where a dot saying "still going" read as no dot at all. Both colours are pinned to
-   that floor by the theme-contrast suite (Phase4), which reads them from this rule. */
-@keyframes beat-wait {
-  0%, 100% { background-color: var(--color-ink-faint); }
-  50% { background-color: var(--color-ink-dim); }
+/* Still going (`Icon.spin`, `Style.statusSpinCw`): a command live now, a wait under way, or
+   Pending's own attention mark (`Icon.attention`) — one mark for every "still going", a
+   machine's work included, replacing the two dots that used to beat colour here
+   (`statusDotLive`, `statusDotBeat`), the single arc Pending used to turn on its own track
+   (`mark-orbit`, retired with it), and the pair of arcs this one later was (passing each
+   other, retired with this). What moves is geometry, never the ink the mark's meaning rests
+   on (docs/visual-design.md, Motion) — a status keeps `ink-dim`; Pending draws the same circle
+   in whatever ink `attentionInk` gives its level instead, so the word beside the mark, or the
+   level itself, is still what says which. One arc, always turning the same way, never
+   reversing — but not at a constant rate: it clears the gap it started in quickly, slows
+   through the ring's far side, then quickens again to close the lap, the same pace it opened
+   with, so one lap runs into the next with nothing to catch — the mark reads as working at
+   it, not a gauge ticking round. */
+@keyframes status-spin-cw {
+  0% { transform: rotate(0deg); }
+  20% { transform: rotate(45deg); }
+  50% { transform: rotate(180deg); }
+  80% { transform: rotate(315deg); }
+  100% { transform: rotate(360deg); }
 }
-/* A live dot's beat (`Style.statusDotLive`): a running command. Its COLOUR moves, between
-   live's green and live's dim, never its opacity (docs/visual-design.md, Motion) — a mark owes
-   3:1 to the surface under it at every frame, not only at the top of the beat, and the old
-   opacity pulse bottomed out at a quarter, where the running dot on the pane's near-black read
-   as no dot at all. Every colour named here is pinned to that floor by the theme-contrast
-   suite (Phase4), which reads them from this rule. */
-/* The attention mark (`Icon.attention`, `Style.markOrbit` and its siblings). None moves a
-   colour or an opacity the mark's meaning rests on: the arc, the disc and the ring are always
-   at their ink, so the mark owes 3:1 at every frame. What moves is geometry (a turn, a scale,
-   how much of a ring is drawn) and, on the halo and the closing ring, which are extras over
-   the face, opacity. The numbers are the circles' circumferences in the 12-unit box. */
-/* Moving: a quarter arc (6.68 of 26.70) going round. Linear, because it is a rate. */
-@keyframes mark-orbit {
-  to { transform: rotate(360deg); }
-}
+/* The attention mark's remaining keyframes (`Icon.attention` and its siblings below;
+   Pending's own motion is `status-spin-cw` above, shared with `Icon.spin`). None moves a
+   colour or an opacity the mark's meaning rests on: the diamond, the disc and the ring are
+   always at their ink, so the mark owes 3:1 at every frame. What moves is geometry (a turn, a
+   scale, how much of a ring is drawn) and, on the halo and the closing ring, which are extras
+   over the face, opacity. The numbers are the circles' circumferences in the 12-unit box. */
 /* Wanted: a hairline ring breathing out from the disc's edge and gone by halfway, so each of
    its three breaths ends in a rest. */
 @keyframes mark-halo {
@@ -205,19 +206,6 @@
   from { transform: scale(0); }
   to { transform: scale(1); }
 }
-/* Working: a line traces the solid diamond's own edge, round at the diamond's four points —
-   the point it passes bulges a little wider than the fill under it, which is the "distorting"
-   read: not a different colour arriving (it is `currentColor` throughout, fill and line
-   alike), only the edge seeming to give as the line goes by. One lap, at `mark-orbit`'s rate,
-   because both say "still going". 6.72 of 26.87 is a quarter of the diamond's perimeter at
-   this size, the same proportion `mark-orbit`'s quarter arc keeps of the ring's. */
-@keyframes mark-run {
-  to { stroke-dashoffset: -26.87; }
-}
-@keyframes beat-live {
-  0%, 100% { background-color: var(--color-green-down-2); }
-  50% { background-color: var(--color-green); }
-}
 @keyframes beat {
   0% { scale: 1; }
   45% { scale: 0.72; }
@@ -229,15 +217,6 @@
 @keyframes breathe {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.86; }
-}
-/* The leaves mark beside a listed record's name (`Style.recordLinkMark`): a 1px lift toward
-   the corner it already points at, and straight back, mostly at rest between — a hint that
-   the name beside it opens elsewhere, not a wait and not a second status. Small and
-   infrequent on purpose: a roster can list a dozen of these, and all this is allowed to say
-   is "this one leaves". */
-@keyframes leave-nudge {
-  0%, 70%, 100% { translate: 0 0; }
-  85% { translate: 1px -1px; }
 }
 @keyframes rise {
   from { opacity: 0; translate: 0 6px; }
@@ -632,11 +611,22 @@ summary::-webkit-details-marker { display: none; }
 .agent-think {
   display: inline-block;
   position: relative;
-  width: calc(1ex + 0.06em);
-  height: calc(1ex + 0.06em);
+  --think-unit: calc(1ex + 0.06em);
+  width: var(--think-unit);
+  height: var(--think-unit);
   vertical-align: -0.03em;
   perspective: 8em;
-  --think-side: calc((1ex + 0.06em) * 0.70710678);
+  --think-side: calc(var(--think-unit) * 0.70710678);
+}
+/* Working's attention mark (`Icon.attention`, `Icon.cube`): the very same cube, turning in the
+   attention mark's own 12px box instead of the line of text a thought stands on — an agent at
+   work is one claim whether it is read inline or ranked beside a session's other standings.
+   `block`, because there is no baseline to sit on here; everything else about the turn (the
+   keyframes below, the Lambert veils) cares only about the box's own proportions, never its
+   absolute size, so the one override is the size itself. */
+.agent-think-mark {
+  --think-unit: 12px;
+  display: block;
 }
 .agent-think-tip {
   position: absolute;

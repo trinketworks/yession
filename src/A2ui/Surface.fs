@@ -63,6 +63,33 @@ module Surfaces =
         | DeleteSurface id when Map.containsKey id surfaces -> Ok (Map.remove id surfaces)
         | DeleteSurface id -> Error (NotFound id)
 
+    /// What pressing button `componentId` of surface `surfaceId` tells the server: the event's
+    /// name and its context, read from the data model under `scope` (the template item the
+    /// button was drawn under, `""` at the root). Refused when the button is not there, calls a
+    /// function locally rather than telling the server, or has a check that fails — the spec
+    /// does not send an event from a button whose checks fail.
+    let press
+        (surfaces: Map<string, Surface>)
+        (surfaceId: string)
+        (componentId: string)
+        (scope: string)
+        : Result<string * (string * Json) list, string> =
+        match Map.tryFind surfaceId surfaces with
+        | None -> Error (sprintf "there is no surface '%s'" surfaceId)
+        | Some surface ->
+            match Map.tryFind componentId surface.Components with
+            | Some { Kind = ComponentKind.Button (_, _, action, checks) } ->
+                let at = { Model = surface.DataModel; Base = scope }
+                match action with
+                | Action.LocalCall _ -> Error (sprintf "button '%s' calls a function here; it sends nothing" componentId)
+                | Action.Event (name, context) ->
+                    match Evaluate.failing at checks with
+                    | Error reason -> Error reason
+                    | Ok (_ :: _ as unmet) -> Error (String.concat " " unmet)
+                    | Ok [] -> Evaluate.context at context |> Result.map (fun read -> name, read)
+            | Some _ -> Error (sprintf "'%s' on surface '%s' is not a button" componentId surfaceId)
+            | None -> Error (sprintf "surface '%s' has no component '%s'" surfaceId componentId)
+
     /// The surfaces after each message in turn, or why the first that does not apply does not.
     let applyAll (surfaces: Map<string, Surface>) (messages: ServerToClient list) : Result<Map<string, Surface>, SurfaceError> =
         (Ok surfaces, messages) ||> List.fold (fun acc m -> acc |> Result.bind (fun s -> apply s m))

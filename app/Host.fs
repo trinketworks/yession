@@ -516,6 +516,20 @@ let startFull
                     return Ok ()
             }
 
+        /// A person answered a surface. The answer is read from the doc this process holds, not
+        /// from the peer, and recorded under its presser; the record is what owes the agent a
+        /// turn (`AgentWake`), so the wake only asks the scheduler to look.
+        let pressSurface (by: Principal) (surfaceId: string) (componentId: string) (scope: string) : Async<Result<unit, string>> =
+            async {
+                let surfaces = (SyncedStateSync.ofDoc doc).Surfaces
+                match SurfaceTool.answer surfaces (mintMessageId ()) by surfaceId componentId scope with
+                | Error reason -> return Error reason
+                | Ok answer ->
+                    let! _ = log.Append (Principal.toActor by) (SessionEvent.SurfaceActionTaken answer)
+                    wakeScheduler ()
+                    return Ok ()
+            }
+
         // The gate for structured commands (Plan 15, stage 3b; Plan 23): every command
         // passes the classifier on its way to the dispatch table, and hands back the same
         // `QueueId` a terminal command does — which is what lets ONE `check_pending` serve
@@ -745,7 +759,9 @@ let startFull
                   // is decorated so a stream a provider offers becomes a terminal (Plan 19) —
                   // over the REGISTRY rather than inside the client, so the seam sits where
                   // every call already passes, beside the audit's.
-                  Foreign = mcpConnections.Registries () |> List.map streamAttacher.Decorate } }
+                  Foreign = mcpConnections.Registries () |> List.map streamAttacher.Decorate
+                  // The agent's surfaces live in the doc, which is this Host's.
+                  Contributed = [ SurfaceTool.tool (SyncedStateSync.applySurfaceMessages doc) ] } }
 
         // The queue drain and turn scheduler (Phase 3) — the real machinery lives in
         // `Scheduler` (shared with the property harness); the Host wires it to this
@@ -1056,6 +1072,7 @@ let startFull
                         streamAttacher.Reattach
                         trustRepo
                         launchRepo
+                        pressSurface
                         principalFor
                   OnPresence =
                     fun payload ->

@@ -841,10 +841,9 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                             Size = None
                             ToolUseId = None } ] }
         Conversation =
-                [ // Two of a repo's sandboxes, up. The menu behind the strip's `+` (Plan 20,
-                  // stage 1) reads the starts on the timeline for somewhere to open a
-                  // terminal, so a harness without them could draw that surface and never
-                  // show what it has to survive.
+                [ // Two of a repo's sandboxes, up. The sheet's list of places to start a
+                  // terminal in reads the starts on the timeline, so a harness without them
+                  // could draw that surface and never show what it has to survive.
                   //
                   // The DESCRIPTIONS are whole sentences, as a real `yession.yaml` writes
                   // them — this repository's own are 170 and 100 characters. A fixture that
@@ -1791,7 +1790,8 @@ do
         | ClientEffect.InterruptTerminal _
         | ClientEffect.ReattachTerminal _
         | ClientEffect.InterruptTurn _
-        | ClientEffect.TrustRepo _ -> ()
+        | ClientEffect.TrustRepo _
+        | ClientEffect.PressSurface _ -> ()
         // The listing's next page, answered here because this harness has no session to
         // ask: a page arrives with two more rows and no cursor after it, which is what
         // the browser tier needs in order to watch REACHING the foot bring rows in
