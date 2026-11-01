@@ -1210,6 +1210,37 @@ let private composerTests =
             let back = Support.step (ExpandDraftMsg ada) expanded
             Expect.equal (ClientModel.composerTarget back) ada "expanding your own is the way back"
 
+        testCase "opening a queued message for editing, and Done returns to a new message" <| fun () ->
+            let queued = QueueId.create "q-edit" |> expect
+            let model =
+                { mine with
+                    Synced = { mine.Synced with Queue = Map.ofList [ queued, { QueueId = queued; Author = ada; Order = 1.0 } ] } }
+                |> withDrafts [ grace ]
+                |> Support.step (ExpandDraftMsg grace)
+            Expect.equal (ClientModel.composerTarget model) grace "set-up: joined on grace's draft"
+            let opened = Support.step (OpenQueueEditMsg queued) model
+            Expect.equal (ClientModel.editingQueue opened) (Some queued) "the entry moved into the composer"
+            let closed = Support.step CloseQueueEditMsg opened
+            Expect.equal (ClientModel.editingQueue closed) None "editing is done"
+            Expect.equal (ClientModel.composerTarget closed) ada "Done lands on a new message, not back on grace's draft"
+
+        testCase "opening a queued message clears whatever delete was armed before it" <| fun () ->
+            let a = QueueId.create "q-a" |> expect
+            let b = QueueId.create "q-b" |> expect
+            let model =
+                { mine with
+                    Synced =
+                        { mine.Synced with
+                            Queue =
+                                Map.ofList
+                                    [ a, { QueueId = a; Author = ada; Order = 1.0 }
+                                      b, { QueueId = b; Author = ada; Order = 2.0 } ] } }
+                |> Support.step (OpenQueueEditMsg a)
+                |> Support.step (ArmQueueDeleteMsg (Some a))
+            Expect.equal model.QueueDeleteArmed (Some a) "armed on the one open for editing"
+            let switched = Support.step (OpenQueueEditMsg b) model
+            Expect.equal switched.QueueDeleteArmed None "a freshly opened entry does not inherit the old arm"
+
         testCase "a draft that is sent or discarded stops being the composer" <| fun () ->
             let joined = Support.step (ExpandDraftMsg grace) (mine |> withDrafts [ grace ])
             let gone = { joined with Synced = { joined.Synced with Drafts = Map.empty } }

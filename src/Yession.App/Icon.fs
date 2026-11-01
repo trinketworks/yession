@@ -132,6 +132,12 @@ module Icon =
     /// already spends arrows on direction, and an arrow here would read as "download".
     let private archivePath =
         "M2.5 3.5 L13.5 3.5 L13.5 6.5 L2.5 6.5 Z M3.5 6.5 L3.5 12.5 L12.5 12.5 L12.5 6.5 M6.5 9 L9.5 9"
+    /// A waste bin: the lid, a handle sitting on it, the body tapering under it, and two
+    /// ridges down the body. What DELETE wears, never what dismiss or close wears — `close`
+    /// (the × above) says "put this away", and a press that destroys a queued message is not
+    /// that.
+    let private binPath =
+        "M3 4.5 L13 4.5 M6.5 4.5 L6.5 2.5 L9.5 2.5 L9.5 4.5 M4 4.5 L4.5 13 L11.5 13 L12 4.5 M6.5 6.5 L6.5 11 M9.5 6.5 L9.5 11"
 
     /// An ellipsis: three dots, drawn as ZERO-LENGTH subpaths. This set has no fills, so a
     /// filled circle would be its first — and a stroked ring at this size is a doughnut, not
@@ -246,6 +252,11 @@ module Icon =
     /// rendered only on a row that can be archived, and an archived row wears the word
     /// `Unarchive` instead.
     let archive = stroked archivePath
+    /// Delete, wherever a press destroys rather than dismisses — the queue's own delete
+    /// (`View.queue`'s edit bar). `btnIconBareDanger` carries the colour; this carries the
+    /// shape, so a reader learns one mark for "this is gone" instead of reading the same ×
+    /// that closes a panel as a threat every time it shows up on a destructive button.
+    let bin = stroked binPath
 
     /// Inline with a status word: smaller, and nudged onto the caps baseline. `-3px`, not
     /// `-1px`: the strokes sit inside the 12px box with ~3px of clear space under them (the

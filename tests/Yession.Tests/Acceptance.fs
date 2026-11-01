@@ -242,6 +242,7 @@ let private representativeModel : ClientModel =
       OpenFolds = Set.empty
       DatedBreaks = Set.empty
       QueueDeleteArmed = None
+      EditingQueue = None
       // Past the wait (`ClientModel.QueueShown`) already: this fixture is the checklist's
       // camera on the mount itself, not on the flash the wait exists to hide.
       QueueShown = Set.ofList [ queueId ]
@@ -750,10 +751,10 @@ let private uiChecklistTests =
                   "of how much", "aria-valuemax=\"8\""
                   "environment status (Phase 2)", Dom.Hooks.environment
                   "message queue (Phase 3)", Dom.Hooks.messageQueue
-                  "queued message editor", Dom.attr Dom.Hooks.queueInput "queue-ui"
+                  // Collapsed to one line at rest; opening it is `View.drafts`'s own test below.
+                  "queued message, collapsed to one line", Dom.attr Dom.Hooks.queueOpen "queue-ui"
                   "queue reorder up", Dom.attr Dom.Hooks.queueUp "queue-ui"
                   "queue reorder down", Dom.attr Dom.Hooks.queueDown "queue-ui"
-                  "queue delete", Dom.attr Dom.Hooks.queueDelete "queue-ui"
                   // The content pane (Plan 13): the column, the terminal it is showing, the
                   // block that ran with its exit status, and the composer that queues the next
                   // command.
@@ -1428,11 +1429,31 @@ let private uiChecklistTests =
                   "the way out of collaborating", Dom.Hooks.newDraft ]
             for label, needle in required do
                 Expect.isTrue (html.Contains needle) (sprintf "%s (%s)" label needle)
-            // And there is exactly ONE editable body host: the composer, not the summaries.
+            // And there is exactly ONE editable body host: the composer, not the summaries —
+            // the queued message draws as a one-line summary here too, same as any other
+            // body nobody tapped open (`View.queue`).
             Expect.equal
                 (html.Split "data-rich-readonly=\"false\"" |> Array.length |> (fun n -> n - 1))
-                2
-                "one editable draft body, plus the queued message's own editor"
+                1
+                "one editable draft body, the joined one — the queued message is a summary"
+
+        testCase "opening a queued message moves it into the composer, Delete and Done where the list was" <| fun () ->
+            let html = Support.render { representativeModel with EditingQueue = Some queueId }
+            let required =
+                [ "the message is editable, in the composer's own slot", Dom.attr Dom.Hooks.queueInput "queue-ui"
+                  "Delete, where the list used to be", Dom.attr Dom.Hooks.queueDelete "queue-ui"
+                  "and Done beside it", Dom.Hooks.queueDone ]
+            for label, needle in required do
+                Expect.isTrue (html.Contains needle) (sprintf "%s (%s)" label needle)
+            Expect.isFalse
+                (html.Contains (Dom.attr Dom.Hooks.queueOpen "queue-ui"))
+                "the band draws no list while this is open — nothing left to tap a second time"
+            // One editable body on the page: the queued message, not a second "new message"
+            // composer beside it.
+            Expect.equal
+                (html.Split "data-rich-readonly=\"false\"" |> Array.length |> (fun n -> n - 1))
+                1
+                "the queued message's own editor, and nothing else"
 
         // The agent's absence is asked for exactly once, and by a verb on the agent's own row
         // rather than a box under it. It used to be a sidebar row, a strip over the composer
