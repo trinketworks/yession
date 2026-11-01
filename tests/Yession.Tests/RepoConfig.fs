@@ -1555,6 +1555,19 @@ let foldTests =
             let r = repo "octo/hello"
             Expect.equal (RepoTrustWaits.pending [ trustAsked r both; trusted r ada ]) [] "settled"
 
+        // The ask slot stands questions oldest first, so the fold has to know which is oldest:
+        // the order repos asked in, not the order their names sort in.
+        testCase "repos wait in the order they asked" <| fun () ->
+            let zeta, alpha = repo "octo/zeta", repo "octo/alpha"
+            Expect.equal (RepoTrustWaits.pending [ trustAsked zeta both; trustAsked alpha both ]) [ zeta, both; alpha, both ] "first asked, first"
+
+        testCase "a repo asking again keeps its place" <| fun () ->
+            let zeta, alpha = repo "octo/zeta", repo "octo/alpha"
+            let order =
+                RepoTrustWaits.pending [ trustAsked zeta [ ConnectionRoute.Git ]; trustAsked alpha both; trustAsked zeta both ]
+                |> List.map fst
+            Expect.equal order [ zeta; alpha ] "the same question still standing"
+
         testCase "a repo that leaves the session stops waiting" <| fun () ->
             let r = repo "octo/hello"
             let removed =

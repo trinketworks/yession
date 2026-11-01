@@ -848,25 +848,36 @@ module RepoTrustWaits =
 
     /// A fold state rather than a function over the whole log, because a client sees the log
     /// in PAGES and re-reading all of it per page is the cost this projection exists to avoid.
-    type Pending = private Pending of Map<string, RepoRef * ConnectionRoute list>
+    /// Each repo with the place it took in the line when it FIRST asked, and the next place to
+    /// give. A repo that asks again for more keeps its place: it is the same question still
+    /// standing, not a new one at the back.
+    type Pending = private Pending of waits: Map<string, int * RepoRef * ConnectionRoute list> * next: int
 
-    let empty : Pending = Pending Map.empty
+    let empty : Pending = Pending (Map.empty, 0)
 
-    let apply (Pending state) (events: SessionEvent list) : Pending =
+    let apply (Pending (state, next)) (events: SessionEvent list) : Pending =
         events
         |> List.fold
-            (fun state event ->
+            (fun (state, next) event ->
                 match event with
-                | SessionEvent.RepoTrustAsked a -> Map.add (RepoRef.value a.Repo) (a.Repo, a.Routes) state
-                | SessionEvent.RepoTrusted t -> Map.remove (RepoRef.value t.Repo) state
-                | SessionEvent.RepoRemoved r -> Map.remove (RepoRef.value r.Repo) state
-                | _ -> state)
-            state
+                | SessionEvent.RepoTrustAsked a ->
+                    let key = RepoRef.value a.Repo
+                    match Map.tryFind key state with
+                    | Some (place, _, _) -> Map.add key (place, a.Repo, a.Routes) state, next
+                    | None -> Map.add key (next, a.Repo, a.Routes) state, next + 1
+                | SessionEvent.RepoTrusted t -> Map.remove (RepoRef.value t.Repo) state, next
+                | SessionEvent.RepoRemoved r -> Map.remove (RepoRef.value r.Repo) state, next
+                | _ -> state, next)
+            (state, next)
         |> Pending
 
-    /// Who is still waiting on somebody, in a stable order.
-    let waiting (Pending state) : (RepoRef * ConnectionRoute list) list =
-        state |> Map.toList |> List.map snd |> List.sortBy (fun (repo, _) -> RepoRef.value repo)
+    /// Who is still waiting on somebody, in the order they first asked.
+    let waiting (Pending (state, _)) : (RepoRef * ConnectionRoute list) list =
+        state
+        |> Map.toList
+        |> List.map snd
+        |> List.sortBy (fun (place, _, _) -> place)
+        |> List.map (fun (_, repo, routes) -> repo, routes)
 
     /// The whole log at once — the Process's reading, where there are no pages.
     let pending (events: SessionEvent list) : (RepoRef * ConnectionRoute list) list = apply empty events |> waiting

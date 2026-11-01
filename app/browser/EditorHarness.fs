@@ -1590,7 +1590,7 @@ let private launchCloningModel : ClientModel =
                 Stage = Cloning { LaunchTarget.Repo = launchRepo; LaunchTarget.Branch = None } } }
 
 /// The launch's next question: the repo just chosen, still cloning, asks to be trusted with the
-/// reader's GitHub — so the trust card stands where the launch card stood (`View.askSlot`).
+/// reader's GitHub — so a line for it stands above the launch card (`View.askSlot`).
 let private launchTrustModel : ClientModel =
     let asked =
         SessionEvent.RepoTrustAsked
@@ -1600,6 +1600,11 @@ let private launchTrustModel : ClientModel =
               RepoTrustAsked.Actor = ActorRef.Configured launchRepo
               RepoTrustAsked.CausedBy = None }
     { launchCloningModel with TrustWaits = RepoTrustWaits.apply RepoTrustWaits.empty [ asked ] }
+
+/// Two questions waiting at once: the launch, still choosing, and a repo asking to be trusted.
+/// The slot stacks them (`View.askSlot`), the launch in front as the oldest.
+let private askStackModel : ClientModel =
+    { launchModel with TrustWaits = launchTrustModel.TrustWaits }
 
 /// Connected, the log read through, nothing said — and the opening question already answered
 /// "none", so no card stands over the empty conversation.
@@ -2133,6 +2138,15 @@ do
           "launch-unavailable", (fun () -> show launchUnavailableModel)
           "launch-cloning", (fun () -> show launchCloningModel)
           "launch-trust", (fun () -> show launchTrustModel)
+          "ask-stack", (fun () -> show askStackModel)
+          "ask-stack-front", (fun () -> show { askStackModel with AskFront = Some ("trust:" + RepoRef.value launchRepo) })
+          // The agent's question in front of the launch and the trust ask: the stack with all
+          // three kinds of ask in it.
+          "ask-stack-surface", (fun () ->
+              show
+                  { askStackModel with
+                      Synced = { askStackModel.Synced with Surfaces = Map.ofList [ "ask", harnessSurface ] }
+                      AskFront = Some "surface:ask" })
           "terminal-closed",
           (fun () ->
               let doneId = TerminalId.create "term-done" |> expect
