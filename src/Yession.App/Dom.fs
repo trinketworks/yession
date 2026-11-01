@@ -347,6 +347,9 @@ module Dom =
         /// One per place in that list, carrying that sandbox's rendered ref — which is what
         /// makes two repos both declaring `dev` tellable apart in a selector.
         let startInChoice = "data-start-in-choice"
+        /// The list of places itself: a page on a phone, unfolded under the heading on a wide
+        /// screen.
+        let startInList = "data-start-in-list"
         /// The list of places' way back to the sheet's terminals and files.
         let startInBack = "data-start-in-back"
         /// A terminal's stop, on its row of the list (P2-2). On both of its faces — the word
