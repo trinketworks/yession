@@ -709,7 +709,16 @@ let private uiRenderTests =
         // name and nothing else, still ranks every row, and what the mark ranks first is what
         // the reader finds first when it opens.
         testCase "a row's mark ranks it, and names what it ranked first" <| fun () ->
+            // The attention mark is the row's own, and leads the row's markup (`Col.mark`),
+            // ahead of the unfolded detail's own marks for every standing after the first — so
+            // its rank is the FIRST `data-attention` the row's markup carries.
             let markOf (row: string) =
+                let at = row.IndexOf "data-attention=\""
+                let start = at + "data-attention=\"".Length
+                let shut = row.IndexOf ("\"", start)
+                row.Substring (start, shut - start)
+            // The chevron is the press, named for a screen reader to meet on a folded row.
+            let chevronOf (row: string) =
                 let at = row.IndexOf Dom.Manager.rowMark
                 let shut = row.IndexOf ("</button>", at)
                 row.Substring (at, shut - at)
@@ -722,12 +731,10 @@ let private uiRenderTests =
                   "running and quiet", row (ProcessManager.Running (8199, 42, None)) [], Yession.Domain.Standings.Rest
                   "running and stalled", row (ProcessManager.Running (8199, 42, None)) [ working; stalled ], Yession.Domain.Standings.Wrong ]
             for name, shown, attention in ranked do
-                Expect.isTrue
-                    ((markOf shown).Contains (sprintf "data-attention=\"%s\"" (Yession.Domain.Standings.Attention.name attention)))
-                    (sprintf "a %s row is marked %A" name attention)
-            let stalledMark = markOf (row (ProcessManager.Running (8199, 42, None)) [ working; stalled ])
-            Expect.isTrue (stalledMark.Contains "aria-label=\"UI &lt;Render&gt;: 3 PRs · 1 stalled\"") "the mark says the session and the worst thing it said"
-            Expect.isFalse (stalledMark.Contains "working") "and only the worst"
+                Expect.equal (markOf shown) (Yession.Domain.Standings.Attention.name attention) (sprintf "a %s row is marked %A" name attention)
+            let stalledChevron = chevronOf (row (ProcessManager.Running (8199, 42, None)) [ working; stalled ])
+            Expect.isTrue (stalledChevron.Contains "aria-label=\"UI &lt;Render&gt;: 3 PRs · 1 stalled\"") "the chevron says the session and the worst thing it said"
+            Expect.isFalse (stalledChevron.Contains "working") "and only the worst"
 
         // What the row unfolds to is in the markup, folded, and the mark is the control that
         // says so: an `aria-expanded` press pointing at the region it opens. Folded is the

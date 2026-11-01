@@ -70,6 +70,11 @@ module private Col =
     /// archive icon used to take on every row. Withdraw is bare (docs/visual-design.md,
     /// Hierarchy of controls), a word that fits in 100px with the cell's 16px gutter.
     let rail = "w-[100px]"
+    /// The row's disclosure (`Style.recordChevronPress`): a thumb's 44px, LAST, so it is the
+    /// table's own trailing edge at every width — the columns between it and the name all
+    /// yield on a phone (`id`, `status`, `created`), but this one never does, which is the
+    /// whole point of moving the press here from the mark beside the name.
+    let chevron = "w-11"
 
 /// The session's state, and beside it what the session says about ITSELF: the wide screen's
 /// status column (`Col.status`). A phone reads the same words in the row's unfolded lines
@@ -190,12 +195,7 @@ let private nameText (view: ProcessManager.SessionView) : TemplateResult =
             | ProcessManager.Launching
             | ProcessManager.LaunchFailed _
             | ProcessManager.Exited _ -> Style.recordLinkQuiet
-        // Two flex children (`Style.recordRowName`, on the span this renders into), not one
-        // span wrapping both: the name is `recordRowNameText` and truncates, the mark is
-        // `recordLinkMark` and does not, so a row too narrow for both clips the name and
-        // never the mark that says the link leaves.
-        html
-            $"""<span class="{face} {Style.recordRowNameText}">{view.Record.DisplayName}</span><span class="{Style.recordLinkMark}">{Icon.leavesSm}</span>"""
+        html $"""<span class="{face} {Style.recordRowNameText}">{view.Record.DisplayName}</span>"""
 
 /// The row's verbs, on the line its unfolding ends with: Stop while the session runs, Start
 /// where it can be started without being opened, and — where the session is not already
@@ -278,11 +278,15 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
 /// table is fixed-layout (`Col`) and each text cell clips rather than wraps. Rows that jump
 /// as processes start and stop make a list you cannot keep your place in.
 ///
-/// The mark is a press. It UNFOLDS the row, under the name: one line per thing the row says
+/// The chevron is the press. It lives in its own column, LAST (`Col.chevron`), so it is the
+/// row's trailing edge at every width — the columns between it and the name yield on a phone,
+/// this one never does. It UNFOLDS the row, under the name: one line per thing the row says
 /// (`rowSays`), each mark under the row's mark and each word on the name's rail, and then
-/// the verbs. The first line's mark IS the row's mark, riding down to it on a faint track
-/// (`Style.recordMarkRider`), so what the mark ranked first is never drawn twice. The server always renders a row folded; which row is open is the page's
-/// own state (`ManagerPage.fs`), carried across every frame the rows stream swaps in.
+/// the verbs. The first line's mark IS the row's own attention mark, riding down to it on a
+/// faint track (`Style.recordMarkRider`), so what the mark ranked first is never drawn twice —
+/// that mark, beside the name, carries attention's colour alone now and answers to no press of
+/// its own. The server always renders a row folded; which row is open is the page's own state
+/// (`ManagerPage.fs`), carried across every frame the rows stream swaps in.
 ///
 /// The id is stated ONCE. An unnamed session's name IS its id (`SessionRecord.isNamed`), so
 /// it is already on the row as the name cell's link, and the id cell beside it is left empty
@@ -300,7 +304,7 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
     let idCell = if SessionRecord.isNamed view.Record then id else ""
     let says = rowSays view
     let attention, first, _ = List.head says
-    let line = html $"""<span class="{Style.recordRowName}">{nameText view}</span>"""
+    let line = nameText view
     let nameLine =
         match view.Record.ArchivedAt with
         | Some _ -> line
@@ -318,14 +322,13 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
                 html $"""<span class="{Style.cls [ Style.recordDetailWord; Style.attentionInk attention ]}">{word}</span>"""
         if index = 0 then html $"""<span></span>{word}""" else html $"""{Icon.attention attention}{word}"""
     let detailId = sprintf "row-detail-%s" id
-    // The mark's name says the session and what it ranked first: the press is the one thing
-    // a screen reader meets on a folded row besides the name.
+    // The chevron's name says the session and what it ranked first: the press is the one
+    // thing a screen reader meets on a folded row besides the name.
     let markName = sprintf "%s: %s" name first
     html $"""
         <tr class="{Style.tableRow}" data-session="{id}">
           <td class="{Style.recordMarkCell} {Col.mark}">
-            <button type="button" class="{Style.recordMarkPress}" data-row-mark="{id}" aria-expanded="false"
-                    aria-controls="{detailId}" aria-label="{markName}"><span class="{Style.recordMarkSeat}"></span><span class="{Style.recordMarkTrack}"></span><span class="{Style.recordMarkRider}">{Icon.attention attention}</span></button>
+            <span class="{Style.recordMarkSeatWrap}" aria-hidden="true"><span class="{Style.recordMarkSeat}"></span><span class="{Style.recordMarkTrack}"></span><span class="{Style.recordMarkRider}">{Icon.attention attention}</span></span>
           </td>
           <td class="{Style.tableCell}" title="{name}">
             {nameLine}
@@ -341,6 +344,10 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
           <td class="{Style.tableCell} {Style.small} truncate {Col.status}">{stateLine view}</td>
           <td class="{Style.tableCell} {Style.monoFaint} truncate {Col.yields}">{idCell}</td>
           <td class="{Style.tableCell} {Style.monoFaint} tabular-nums truncate {Col.yields}">{createdView view.Record.CreatedAt}</td>
+          <td class="{Style.tableCell} {Col.chevron}">
+            <button type="button" class="{Style.recordChevronPress}" data-row-mark="{id}" aria-expanded="false"
+                    aria-controls="{detailId}" aria-label="{markName}"><span class="{Style.recordChevronMark}">{Icon.right}</span></button>
+          </td>
         </tr>"""
 
 /// One filter chip, wearing the COUNT of what it filters. A real `<a>`, because the filter
@@ -405,7 +412,7 @@ let private tableTemplate
         | [] ->
             [ html $"""
                 <tr>
-                  <td colspan="5" class="{Style.tableEmpty}">{emptyWord}</td>
+                  <td colspan="6" class="{Style.tableEmpty}">{emptyWord}</td>
                 </tr>""" ]
         | views -> views |> List.map rowTemplate
     // The `created` header IS the sort control — the canonical accessible table sort, and it
@@ -463,6 +470,7 @@ let private tableTemplate
                 <th scope="col" class="{Style.tableHead} {Col.created}" aria-sort="{sortedBy}">
                   <a class="{Style.sortHeader}" href="{sortHref}" data-filter="sort">created {sortMark}</a>
                 </th>
+                <th scope="col" class="{Col.chevron}"><span class="sr-only">expand</span></th>
               </tr>
             </thead>
             <tbody>{rows}</tbody>

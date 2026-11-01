@@ -1308,7 +1308,7 @@ module Dom =
         /// Launch WITHOUT opening: the unfolded row's verb for a stopped, exited or failed
         /// session, which starts it in place and leaves the reader on this page.
         let start = "data-start"
-        /// The row's attention mark, a press that unfolds the row; carries the session id.
+        /// The row's chevron, a press that unfolds the row; carries the session id.
         let rowMark = "data-row-mark"
         /// What a row unfolds to. Present on every row and folded until its row is open.
         let rowDetail = "data-row-detail"

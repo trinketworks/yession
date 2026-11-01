@@ -215,15 +215,6 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.86; }
 }
-/* The leaves mark beside a listed record's name (`Style.recordLinkMark`): a 1px lift toward
-   the corner it already points at, and straight back, mostly at rest between — a hint that
-   the name beside it opens elsewhere, not a wait and not a second status. Small and
-   infrequent on purpose: a roster can list a dozen of these, and all this is allowed to say
-   is "this one leaves". */
-@keyframes leave-nudge {
-  0%, 70%, 100% { translate: 0 0; }
-  85% { translate: 1px -1px; }
-}
 @keyframes rise {
   from { opacity: 0; translate: 0 6px; }
   to { opacity: 1; translate: 0 0; }
