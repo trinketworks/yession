@@ -1439,14 +1439,27 @@ module Events =
                       "component", Encode.string a.Component
                       "name", Encode.string a.Name
                       "context", Encode.string a.Context
+                      "responses", Encode.list (List.map Encode.string a.Responses)
                       "by", Codec.principal.Encode a.By ]
           Decode =
             Decode.object (fun get ->
+                let context = get.Required.Field "context" Decode.string
+                // An answer recorded before `responses` existed: the context's values, as text.
+                // Without the surface there are no labels to say them by.
+                let fromContext () =
+                    match A2ui.Codec.fromString A2ui.Codec.json context with
+                    | Ok (A2ui.JObject fields) -> fields |> List.collect (snd >> A2ui.Project.answers)
+                    | Ok other -> A2ui.Project.answers other
+                    | Error _ -> []
                 { Yession.Domain.Surfaces.SurfaceActionTaken.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
                   Yession.Domain.Surfaces.SurfaceActionTaken.SurfaceId = get.Required.Field "surfaceId" Decode.string
                   Yession.Domain.Surfaces.SurfaceActionTaken.Component = get.Required.Field "component" Decode.string
                   Yession.Domain.Surfaces.SurfaceActionTaken.Name = get.Required.Field "name" Decode.string
-                  Yession.Domain.Surfaces.SurfaceActionTaken.Context = get.Required.Field "context" Decode.string
+                  Yession.Domain.Surfaces.SurfaceActionTaken.Context = context
+                  Yession.Domain.Surfaces.SurfaceActionTaken.Responses =
+                    match get.Optional.Field "responses" (Decode.list Decode.string) with
+                    | Some responses -> responses
+                    | None -> fromContext ()
                   Yession.Domain.Surfaces.SurfaceActionTaken.By = get.Required.Field "by" Codec.principal.Decode }) }
 
     let private commandRefused : Codec<CommandRefused> =

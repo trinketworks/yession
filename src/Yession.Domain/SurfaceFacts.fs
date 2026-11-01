@@ -24,14 +24,31 @@ type SurfaceActionTaken =
       /// The event's context as JSON object text. Text, because the domain names no JSON
       /// library, and the reader of it is the agent, which reads JSON.
       Context : string
+      /// The answer as the person read it, one line per answer: an option's label rather than
+      /// its value, never JSON (`A2ui.Project.responses`). Kept on the event because the surface
+      /// is usually gone by the time anyone reads the line back.
+      Responses : string list
       By : Principal }
 
 module SurfaceActionTaken =
 
+    /// "responded main" for one answer, "responded with 3 answers" for several, which a screen
+    /// unfolds into the list (`particulars`).
     let phrase (a: SurfaceActionTaken) : Phrase =
-        Phrase.deed "pressed" [ Segment.Text (sprintf "%s on surface %s" a.Name a.SurfaceId) ]
+        match a.Responses with
+        | [] -> Phrase.deed "responded" []
+        | [ one ] -> Phrase.deed "responded" [ Segment.Text one ]
+        | many -> Phrase.deed "responded" [ Segment.Text (sprintf "with %d answers" many.Length) ]
 
-    /// What the button carried, which is the answer. Left out when it carried nothing: "{}"
-    /// says nobody anything.
+    /// The answers when there are several, then what the agent needs to act on them exactly:
+    /// the event and the values the button sent, which are the agent's own words for them.
     let particulars (a: SurfaceActionTaken) : Phrase list =
-        if a.Context = "{}" then [] else [ Phrase.text a.Context ]
+        let answers =
+            match a.Responses with
+            | []
+            | [ _ ] -> []
+            | many -> many |> List.map Phrase.text
+        let sent =
+            if a.Context = "{}" then sprintf "event %s on surface %s" a.Name a.SurfaceId
+            else sprintf "event %s on surface %s with context %s" a.Name a.SurfaceId a.Context
+        answers @ [ Phrase.text sent ]
