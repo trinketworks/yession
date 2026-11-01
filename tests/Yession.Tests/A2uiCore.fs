@@ -317,6 +317,10 @@ let private requiredCheck path message =
 let private pickOne =
     { Condition = Call { Function = Length (Bound "/choice", Some 1, None); ReturnType = None }; Message = "Pick one." }
 
+/// The `regex` function over `value`, bound at `/v`.
+let private regexOn (value: string) (pattern: string) =
+    Evaluate.invoke (Evaluate.root (JObject [ "v", JString value ])) { Function = Regex (Bound "/v", pattern); ReturnType = None }
+
 let private readTests =
     testList "reading a surface" [
         testCase "a template stamps its component once per item, each reading its own item" <| fun () ->
@@ -349,6 +353,20 @@ let private readTests =
         testCase "a function that needs a locale is an error, not text" <| fun () ->
             let call = { Function = FormatNumber (Literal 1.0, None, None); ReturnType = None }
             Expect.isError (Evaluate.invoke (Evaluate.root (JObject [])) call) "no locale yet"
+
+        testCase "regex answers a pattern that would hang a backtracking engine" <| fun () ->
+            Expect.equal (regexOn (String.replicate 5000 "a" + "!") "^(a+)+$") (Ok (Some (JBool false))) "no match, and promptly"
+
+        testCase "regex takes the spec's counted patterns" <| fun () ->
+            Expect.equal (regexOn "0412345678" @"^\d{10}$") (Ok (Some (JBool true))) "ten digits"
+            Expect.equal (regexOn "12345" @"^[0-9]{10,15}$") (Ok (Some (JBool false))) "too short"
+
+        testCase "regex anchors to the whole value, not a line of it" <| fun () ->
+            Expect.equal (regexOn "hello\n12345" @"^\d{5}$") (Ok (Some (JBool false))) "the second line is not the value"
+
+        testCase "regex refuses a construct outside the matcher's subset, by name" <| fun () ->
+            let result = regexOn "abc" "(?=a)abc"
+            Expect.isTrue (match result with Error reason -> reason.Contains "not something this matcher supports" | Ok _ -> false) (sprintf "refused by name: %A" result)
 
         testCase "the failing checks give their messages, in order" <| fun () ->
             let checks = [ requiredCheck "/a" "A is required."; requiredCheck "/b" "B is required."; requiredCheck "/c" "C is required." ]

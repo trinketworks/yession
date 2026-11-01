@@ -33,6 +33,9 @@
         "resolved": "13.0.1",
         "contentHash": "ppPFpBcvxdsfUonNcvITKqLl3bqxWbDCZIzDWHzjpdAHRFfZe0Dw9HmA0+za13IdyrgJwpkDTDA9fHaxOrt20A=="
       },
+      "yession.domain": {
+        "type": "Project"
+      },
       "Fable.Core": {
         "type": "CentralTransitive",
         "requested": "[5.2.0, )",
