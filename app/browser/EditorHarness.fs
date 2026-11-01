@@ -2140,6 +2140,13 @@ do
           "launch-trust", (fun () -> show launchTrustModel)
           "ask-stack", (fun () -> show askStackModel)
           "ask-stack-front", (fun () -> show { askStackModel with AskFront = Some ("trust:" + RepoRef.value launchRepo) })
+          // The agent's question in front of the launch and the trust ask: the stack with all
+          // three kinds of ask in it.
+          "ask-stack-surface", (fun () ->
+              show
+                  { askStackModel with
+                      Synced = { askStackModel.Synced with Surfaces = Map.ofList [ "ask", harnessSurface ] }
+                      AskFront = Some "surface:ask" })
           "terminal-closed",
           (fun () ->
               let doneId = TerminalId.create "term-done" |> expect
