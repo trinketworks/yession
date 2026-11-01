@@ -688,6 +688,10 @@ module Dom =
         // it says in place of a component this app does not draw yet.
         let agentSurface = "From the agent"
         let surfaceDismissLabel = "Dismiss this without answering"
+        /// Who asks, on a surface's line while another ask's card is in front.
+        let surfaceAsker = "agent asks"
+        /// What a surface's line says when the surface has no text to name it by.
+        let surfaceUntitled = "a question"
         /// What the pressed button says while the answer is on its way, in the box its own
         /// label leaves (`Style.whenBusy`), as the launch card's START says `cloning…`.
         let surfaceSending = "sending…"

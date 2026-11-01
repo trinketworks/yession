@@ -690,6 +690,8 @@ type Ask =
     | Launch
     /// Do you trust this repo, with what it asks for? (`TrustCards.showing`)
     | Trust of RepoRef * shown: ConnectionRoute list
+    /// A surface the agent drew (`show_surface`), by its id.
+    | Surface of surfaceId: string
 
 module Ask =
 
@@ -699,6 +701,7 @@ module Ask =
         match ask with
         | Ask.Launch -> "launch"
         | Ask.Trust (repo, _) -> "trust:" + RepoRef.value repo
+        | Ask.Surface surfaceId -> "surface:" + surfaceId
 
 /// One copy to the clipboard, as its confirmation shows it: the box it came out of, and which
 /// copy this is. The count is what makes a second copy of the same box a new moment, so its
@@ -2147,6 +2150,11 @@ type ClientModel =
       /// The ask this reader brought to the front of the slot (`Ask.key`), when they did.
       /// One reader's: what stands in front on one screen is not a fact about the session.
       AskFront      : string option
+      /// The asks waiting on this reader (`Ask.key`), in the order this client first saw each
+      /// arrive (`reconcileAsks`). Kept here rather than read from where each ask lives, because
+      /// they live in three places — the launch's state, the log, the synced doc — and only
+      /// the client sees all three arrive.
+      AskOrder      : string list
       /// The launch surface's state — choosing the session's first repo. View state, local
       /// to this client: choosing is one person's act on one screen, and what it produces
       /// reaches everyone through the log.
@@ -3038,6 +3046,7 @@ module ClientModel =
           TrustWaits = RepoTrustWaits.empty
           TrustCards = TrustCards.empty
           AskFront = None
+          AskOrder = []
           Launch = Launch.empty
           Repos = Repos.ReposProjection.empty
           Timeline = TimelineProjection.empty
@@ -3172,15 +3181,40 @@ module ClientModel =
     let launchOffered (model: ClientModel) : bool =
         Launch.offered (launchBegun model) model.Synced.LaunchDismissed model.Launch
 
-    /// Every question waiting on this reader, oldest first. The launch is the session's first
-    /// question, so it is oldest whenever it stands; repos waiting to be trusted follow in the
-    /// order they asked (`RepoTrustWaits.waiting`).
-    let asks (model: ClientModel) : Ask list =
+    /// Every question waiting on this reader, in the order they would have arrived: the launch
+    /// is the session's first question, repos waiting to be trusted follow in the order they
+    /// asked (`RepoTrustWaits.waiting`), then the agent's surfaces.
+    let private waitingAsks (model: ClientModel) : Ask list =
         let launch = if launchOffered model then [ Ask.Launch ] else []
         let trust =
             TrustCards.showing (RepoTrustWaits.waiting model.TrustWaits) model.TrustCards
             |> List.map Ask.Trust
-        launch @ trust
+        // A surface whose root has not arrived asks nothing yet (`SurfaceView.view`).
+        let surfaces =
+            model.Synced.Surfaces
+            |> Map.toList
+            |> List.filter (fun (_, surface) -> Map.containsKey "root" surface.Components)
+            |> List.map (fst >> Ask.Surface)
+        launch @ trust @ surfaces
+
+    /// Keeps `AskOrder` the order this client saw asks arrive: one that has gone leaves it, and
+    /// one that is new joins the end. Run after every message (`fold`), so whichever message
+    /// brings an ask is the moment it arrived. Those already waiting when the client first
+    /// reads the session join in the order `waitingAsks` lists them: the launch, repos in the
+    /// order they asked, then surfaces.
+    let private reconcileAsks (model: ClientModel) : ClientModel =
+        let present = waitingAsks model |> List.map Ask.key
+        let kept = model.AskOrder |> List.filter (fun key -> List.contains key present)
+        let arrived = present |> List.filter (fun key -> not (List.contains key kept))
+        match arrived, kept.Length = model.AskOrder.Length with
+        | [], true -> model
+        | _ -> { model with AskOrder = kept @ arrived }
+
+    /// Every question waiting on this reader, oldest first: the order they arrived in
+    /// (`reconcileAsks`).
+    let asks (model: ClientModel) : Ask list =
+        let place = model.AskOrder |> List.mapi (fun i key -> key, i) |> Map.ofList
+        waitingAsks model |> List.sortBy (fun ask -> Map.tryFind (Ask.key ask) place |> Option.defaultValue System.Int32.MaxValue)
 
     /// The ask whose card stands in the slot: the one this reader brought forward while it
     /// still waits, else the oldest. One that was answered or put away hands the front back
@@ -5133,7 +5167,7 @@ module ClientModel =
         { model with PaneRoom = { model.PaneRoom with Chosen = Some width } }
 
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
-        holdList (say (notice model (reconcileLaunch (landsWhenHeard model (openOfItself model (settle (recall (
+        holdList (say (notice model (reconcileAsks (reconcileLaunch (landsWhenHeard model (openOfItself model (settle (recall (
         match msg with
         | ConnectingMsg -> { model with Link = SessionLink.connecting model.Link }
         | LocalStoreFaultMsg reason -> { model with LocalCopy = LocalCopy.unread reason model.LocalCopy }
@@ -6152,7 +6186,7 @@ module ClientModel =
                     | Some (Previewing ({ Preview.Subject = PreviewSubject.Content shown }, under)) when shown = file ->
                         under |> Option.map OnTerminal
                     | other -> other }
-        ))))))))
+        )))))))))
 
     /// The read loop's decisions: what a message, once folded, asks to be read next — of the
     /// event log and of each terminal's transcript — and what it settles of the reads out.

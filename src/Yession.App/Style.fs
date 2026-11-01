@@ -3890,9 +3890,9 @@ module Style =
     /// surface arrives whole, so it stands as tall as what the agent drew — up to half the
     /// visible height, which it then scrolls inside (`surfaceScroll`). Without the cap a long
     /// question on a phone on its side (844x390) took the whole column and pushed the
-    /// conversation and the composer off screen. The dock is only as tall as its content, so a
-    /// percentage would resolve against nothing; the cap is a share of the shell's own height
-    /// (`--visual-h`, see `shell`), which already accounts for the iOS keyboard.
+    /// conversation and the composer off screen. It stands in the ask slot's stack
+    /// (`View.askSlot`) when it is the ask in front; the cap is a share of the shell's own
+    /// height (`--visual-h`, see `shell`), which already accounts for the iOS keyboard.
     ///
     /// It rises in as the card does, growing its cap from nothing (`animate-surface-rise`), so
     /// the conversation gives way over a beat rather than jumping by the surface's height.
