@@ -2497,12 +2497,6 @@ module View =
               </div>
             </section>"""
 
-    /// The agent thinking, drawn: the cube `Style.agentThinking` turns — a tip, the cube, its
-    /// six faces (`.agent-think` in `app/tailwind.css` says which is which) — inside a mark the
-    /// caller makes, because what the mark is ON is the caller's to say and so is its hook.
-    let private thinkingCube : TemplateResult =
-        html $"""<span class="{Style.agentThinkingTip}"><span class="{Style.agentThinkingCube}"><i></i><i></i><i></i><i></i><i></i><i></i></span></span>"""
-
     /// Who did something, as the transcript heads what they said: their square and their name
     /// in the caps voice, the agent's in blue. One face wherever an author heads what follows —
     /// a run of messages, a command in a terminal — so one person reads as one person
@@ -2872,7 +2866,7 @@ module View =
                     let mark =
                         match by with
                         | ActorRef.Agent ->
-                            html $"""<span class="{Style.actNoteRunningAgent}" style="{Style.thinkFrom (MessageId.value item.MessageId)}" data-act-running="agent">{thinkingCube}</span>"""
+                            html $"""<span class="{Style.actNoteRunningAgent}" style="{Style.thinkFrom (MessageId.value item.MessageId)}" data-act-running="agent">{Icon.cube}</span>"""
                         | PeerRef _ | UserRef _ | ActorRef.Session | ActorRef.System | ActorRef.Configured _ ->
                             html $"""<span class="{Style.actNoteRunningOther}" data-act-running="other"></span>"""
                     html $"""<span class="{Style.actNoteRunning}">{mark}<span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
@@ -3012,9 +3006,9 @@ module View =
                         if not (ClientModel.agentThinking model item) then
                             html $"""<span class="{Style.agentCaret}" data-agent-writing {Glide.into turn}></span>"""
                         elif System.String.IsNullOrWhiteSpace body then
-                            html $"""<span class="{Style.agentThinkingStart}" style="{Style.thinkFrom turn}" data-agent-writing {Glide.from turn}>{thinkingCube}</span>"""
+                            html $"""<span class="{Style.agentThinkingStart}" style="{Style.thinkFrom turn}" data-agent-writing {Glide.from turn}>{Icon.cube}</span>"""
                         else
-                            html $"""<span class="{Style.agentThinking}" style="{Style.thinkFrom turn}" data-agent-writing>{thinkingCube}</span>"""
+                            html $"""<span class="{Style.agentThinking}" style="{Style.thinkFrom turn}" data-agent-writing>{Icon.cube}</span>"""
                     Style.messageBodyStreaming, mark
                 | _ -> Style.messageBody, Lit.nothing
             let bodyClass = Style.cls [ bodyClass; Style.messageVoice isAgent ]

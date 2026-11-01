@@ -1312,9 +1312,10 @@ let private themeContrastTests =
         // "every dot that beats keeps >= 3:1 ..." pinned the floor for a mark that moved its
         // own colour through a beat. None does any more: the running/pending dot that used to
         // (`statusDotLive`, `statusDotBeat`) now turns instead (`Icon.spin`, `status-spin-cw`/
-        // `status-spin-ccw`), always at `ink-dim`, and Working's diamond runs a line round its
-        // own edge (`mark-run`) the same way — both move geometry, never colour. No `beat-*`
-        // keyframe is left in app/tailwind.css to check, so there is nothing left to pin here.
+        // `status-spin-ccw`), always at `ink-dim`, and Working's attention mark is the agent's
+        // own cube (`Icon.cube`), which never moves a colour the mark's meaning rests on either
+        // — both move geometry, never colour. No `beat-*` keyframe is left in app/tailwind.css
+        // to check, so there is nothing left to pin here.
 
         // The theme's colours are written once: a hex is a constant, and everything else is
         // made from one. A variant picked by hand — a "bright" that was its own hex — is how

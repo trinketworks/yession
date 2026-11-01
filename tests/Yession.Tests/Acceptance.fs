@@ -2051,16 +2051,19 @@ let private uiChecklistTests =
             Expect.isFalse (none.Contains "data-pr-strip") "and a session watching nothing says nothing"
 
         // The attention mark ranks by SHAPE (docs/visual-design.md, Attention): each face is
-        // told apart without its colour. Working alone wears the agent's diamond; Pending
-        // wears the same two-arc spin mark every other "still going" does (`Icon.spin`). What
-        // is pinned is what each face draws, so two levels collapsing into one shape goes red
-        // here, and so does the agent's diamond losing its own motion.
+        // told apart without its colour. Working alone wears the agent's own cube — not a
+        // point at all, the very mark that turns inline in the transcript — and Pending wears
+        // the same two-arc spin mark every other "still going" does (`Icon.spin`). What is
+        // pinned is what each face draws, so two levels collapsing into one shape goes red
+        // here, and so does the agent's cube losing its own turn.
         testCase "each attention level draws its own face, and only work under way keeps moving" <| fun () ->
             let levels =
                 [ Standings.Rest; Standings.Absent; Standings.Pending; Standings.Working; Standings.Wanted; Standings.Wrong ]
             let drawn level = Support.renderTemplate (Icon.attention level)
-            // The face, with the box and ink stripped: what is left is the shape alone.
-            let shape (html: string) = html.Substring (html.IndexOf "viewBox")
+            // The face, with the box and ink stripped: what is left is the shape alone. Working
+            // draws a `<span>`, not an `<svg>`, so the split point is `aria-hidden`, which both
+            // kinds of mark carry, rather than `viewBox`, which only one kind does.
+            let shape (html: string) = html.Substring (html.IndexOf "aria-hidden")
             let faces = levels |> List.map (drawn >> shape)
             Expect.equal (List.length (List.distinct faces)) 6 "six levels, six shapes"
             Expect.notEqual
@@ -2078,9 +2081,9 @@ let private uiChecklistTests =
                     (level = Standings.Pending)
                     (sprintf "%s spins only if it is a machine's wait" (Standings.Attention.name level))
                 Expect.equal
-                    (html.Contains Yession.App.Style.markRun)
+                    (html.Contains Yession.App.Style.agentThinkingCube)
                     (level = Standings.Working)
-                    (sprintf "%s runs round its edge only if it is the agent's own" (Standings.Attention.name level))
+                    (sprintf "%s turns the agent's own cube only if it is the agent's own" (Standings.Attention.name level))
             // The ones that ask arrive once; the ones that do not, do not.
             let arrives level =
                 let html = drawn level
