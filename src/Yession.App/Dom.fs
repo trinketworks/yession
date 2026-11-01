@@ -1012,9 +1012,10 @@ module Dom =
         let kill = "stop"
         let reattach = "attach"
         let putAway = "put away"
-        /// The list's fold over its closed terminals, and its name for a screen reader.
-        let closedHeading = "closed"
-        let closedTerminals (count: int) = sprintf "%d closed %s" count (if count = 1 then "terminal" else "terminals")
+        /// The list's fold over its closed terminals, and its name for a screen reader. Said
+        /// as "stopped", the word of the row's own `stop` that put them there.
+        let closedHeading = "stopped"
+        let closedTerminals (count: int) = sprintf "%d stopped %s" count (if count = 1 then "terminal" else "terminals")
         /// The heading over the list's files, which carries the way to add one.
         let filesHeading = "files"
         /// A rewound reader, told how far behind the live edge they are — when there is any
