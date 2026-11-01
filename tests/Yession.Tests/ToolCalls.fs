@@ -343,8 +343,9 @@ let private tests' =
             }
 
         // A sandbox the add brings up points back to the add, so the fold after it is told
-        // which item the add recorded, and for which repo.
-        testCaseAsync "add_repo refolds with the item it recorded" <|
+        // which item the add recorded, for which repo, and whose trust the add offers: adding a
+        // repo is one of the two acts that may run it with its person's GitHub.
+        testCaseAsync "add_repo refolds with the item it recorded, offering its person's trust" <|
             async {
                 let hello = RepoRef.create "octo/hello" |> expect
                 let added = MessageId.create "m-added" |> expect
@@ -362,7 +363,9 @@ let private tests' =
                 let session =
                     openToolSession { servicesOver repos with Refold = fun cause _ -> async { folds.Add cause } }
                 let! _ = addRepo session "octo/hello"
-                Expect.equal (List.ofSeq folds) [ FoldCause.Changed (hello, Some added) ] "the fold knows what the add recorded"
+                match List.ofSeq folds with
+                | [ FoldCause.Offered (repo, item, _) ] -> Expect.equal (repo, item) (hello, Some added) "the fold knows what the add recorded"
+                | other -> failwithf "expected one offered fold, got %A" other
             }
 
         // The answer has to carry the one fact the next step needs. "added octo/hello" on
