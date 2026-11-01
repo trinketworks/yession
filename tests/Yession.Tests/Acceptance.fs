@@ -2052,10 +2052,10 @@ let private uiChecklistTests =
 
         // The attention mark ranks by SHAPE (docs/visual-design.md, Attention): each face is
         // told apart without its colour. Working alone wears the agent's own cube — not a
-        // point at all, the very mark that turns inline in the transcript — and Pending keeps
-        // the arc a machine's work always had. What is pinned is what each face draws, so two
-        // levels collapsing into one shape goes red here, and so does the agent's cube losing
-        // its own turn.
+        // point at all, the very mark that turns inline in the transcript — and Pending wears
+        // the same two-arc spin mark every other "still going" does (`Icon.spin`). What is
+        // pinned is what each face draws, so two levels collapsing into one shape goes red
+        // here, and so does the agent's cube losing its own turn.
         testCase "each attention level draws its own face, and only work under way keeps moving" <| fun () ->
             let levels =
                 [ Standings.Rest; Standings.Absent; Standings.Pending; Standings.Working; Standings.Wanted; Standings.Wrong ]
@@ -2077,9 +2077,9 @@ let private uiChecklistTests =
                     (sprintf "data-attention=\"%s\"" (Standings.Attention.name level))
                     "each spells its level for a test"
                 Expect.equal
-                    (html.Contains Yession.App.Style.markOrbit)
+                    (html.Contains Yession.App.Style.statusSpinCw)
                     (level = Standings.Pending)
-                    (sprintf "%s goes round only if it is a machine's wait" (Standings.Attention.name level))
+                    (sprintf "%s spins only if it is a machine's wait" (Standings.Attention.name level))
                 Expect.equal
                     (html.Contains Yession.App.Style.agentThinkingCube)
                     (level = Standings.Working)

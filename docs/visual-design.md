@@ -220,10 +220,12 @@ is a tilt: in fast, back with a hair of overshoot. A pressed control is *held* (
 
 A settled status's dot is still; nothing left of it beats. A status still under way — a
 command live now, or a wait — turns instead: two arcs, always `ink-dim`, passing each other as
-they travel opposite ways round a ring, never varying in colour or opacity. Pending's own
-attention mark (see Attention) moves the same way, at its own ink, for the same reason. Every
-one of these owes the surface 3:1 at every frame of its travel. `motion-reduce` rides every one:
-it keeps the fill and drops the geometry.
+they travel opposite ways round a ring, easing in and out each lap rather than at a constant
+rate, never varying in colour or opacity. Pending's own attention mark (see Attention) is the
+very same two arcs, at whatever ink its level carries instead of `ink-dim`: a machine's work is
+the same "still going" as any other, so it wears the one mark rather than a shape of its own.
+Every one of these owes the surface 3:1 at every frame of its travel. `motion-reduce` rides
+every one: it keeps the fill and drops the geometry.
 
 Working alone is not drawn to this rule at all: its attention mark is the agent's own cube,
 turning in the hand — the exact mark that turns inline in the transcript while the agent
@@ -258,7 +260,7 @@ carry a rank (WCAG 1.4.1).
 | Wrong | disc in a ring, the whole box | `err` | the ring draws round and the core springs in, once | nothing moves until a person fixes it: sign in again, a PR conflicted or failed |
 | Wanted | disc | `green` | the arc closes and fills, then a halo breathes out three times | a person's turn: the agent is waiting |
 | Working | the agent's own cube, not drawn to the box and ink columns at all | `agent`, always | turns in the hand, continuously, for as long as the turn does — the same cube and the same turn as the transcript's | the agent at work: a turn is running |
-| Pending | quarter arc on a faint track | `ink-dim` | goes round, 1.6s, for as long as the work does | a machine's work, needs nobody: a command the agent left running, checks, the queue, a launch |
+| Pending | two arcs passing round a ring (the status spin, `Icon.spin`) | `ink-dim` | the arcs ease round, 1.6s a lap, for as long as the work does | a machine's work, needs nobody: a command the agent left running, checks, the queue, a launch |
 | Absent | empty ring | `ink-dim` | none | no agent, chosen knowingly |
 | Rest | point | `ink-faint` | none | nothing to say: stopped, or everything watched is fine |
 
@@ -272,7 +274,7 @@ Working outranks Pending: the agent thinking is nearer a person's turn than a ma
 finishing. A command the agent left running is Pending, because no turn is thinking and the
 agent wakes when it ends, as it does for checks. Working wears the agent's own cube — nowhere
 else in the five other levels, and the one mark here that is not a point at all — rather than
-Pending's arc, so a reader does not need the ink to tell whose work is under way; the word
+Pending's spin, so a reader does not need the ink to tell whose work is under way; the word
 beside the mark still says which.
 
 Attention is ink: each level carries more than the one below it, so the order survives

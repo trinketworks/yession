@@ -153,30 +153,29 @@
   0%, 100% { opacity: 0.25; }
   50% { opacity: 1; }
 }
-/* Still going (`Icon.spin`, `Style.statusSpinCw`/`statusSpinCcw`): a command live now, or a
-   wait under way — one mark for both, replacing the two dots that used to beat colour here
-   (`statusDotLive`, `statusDotBeat`). Always `ink-dim`, so neither keyframe moves a colour the
-   mark's own ink rests on; what moves is geometry, the same rule the attention mark's motion
-   keeps (docs/visual-design.md, Motion), so this owes the surface 3:1 at every frame rather
-   than only at the top of a beat. Two arcs rather than `mark-orbit`'s one, because this mark
-   has no gap to track round a ring the way Pending's arc does — it only has to say "still
-   going", so each turns the same way `mark-orbit` does but starting from where the other
-   left off, and they pass each other rather than chase. */
+/* Still going (`Icon.spin`, `Style.statusSpinCw`/`statusSpinCcw`): a command live now, a
+   wait under way, or Pending's own attention mark (`Icon.attention`) — one mark for every
+   "still going", a machine's work included, replacing the two dots that used to beat colour
+   here (`statusDotLive`, `statusDotBeat`) and the single arc Pending used to turn on its own
+   track (`mark-orbit`, retired with it). What moves is geometry, never the ink the mark's
+   meaning rests on (docs/visual-design.md, Motion) — a status keeps `ink-dim`; Pending draws
+   these same two circles in whatever ink `attentionInk` gives its level instead, so the word
+   beside the mark, or the level itself, is still what says which. Two arcs, each turning from
+   where the other left off so they pass rather than chase, eased in and out each lap rather
+   than at a constant rate — the mark reads as working at it, not a gauge ticking round. */
 @keyframes status-spin-cw {
   to { transform: rotate(360deg); }
 }
 @keyframes status-spin-ccw {
   to { transform: rotate(-360deg); }
 }
-/* The attention mark (`Icon.attention`, `Style.markOrbit` and its siblings). None moves a
-   colour or an opacity the mark's meaning rests on: the arc, the disc and the ring are always
-   at their ink, so the mark owes 3:1 at every frame. What moves is geometry (a turn, a scale,
-   how much of a ring is drawn) and, on the halo and the closing ring, which are extras over
-   the face, opacity. The numbers are the circles' circumferences in the 12-unit box. */
-/* Moving: a quarter arc (6.68 of 26.70) going round. Linear, because it is a rate. */
-@keyframes mark-orbit {
-  to { transform: rotate(360deg); }
-}
+/* The attention mark's remaining keyframes (`Icon.attention`, `Style.markRun` and its
+   siblings below; Pending's own motion is `status-spin-cw`/`status-spin-ccw` above, shared
+   with `Icon.spin`). None moves a colour or an opacity the mark's meaning rests on: the
+   diamond, the disc and the ring are always at their ink, so the mark owes 3:1 at every frame.
+   What moves is geometry (a turn, a scale, how much of a ring is drawn) and, on the halo and
+   the closing ring, which are extras over the face, opacity. The numbers are the circles'
+   circumferences in the 12-unit box. */
 /* Wanted: a hairline ring breathing out from the disc's edge and gone by halfway, so each of
    its three breaths ends in a rest. */
 @keyframes mark-halo {
