@@ -3834,25 +3834,53 @@ module Style =
     // looks, from the vocabulary above. So nothing here takes a colour, a size or a font from the
     // surface: a Primary button is this product's fill, a heading is a step on this ramp.
 
-    /// One surface: a band in the dock, on the composer's gutter, as a queued message is —
-    /// because it is a thing waiting on a person, in the place a person answers from.
+    /// One surface: the launch card's band (`ask`), because it is the same thing — the
+    /// session asking, docked above the composer, waiting on a person. Its rule on top, its
+    /// tone, and its blue lead (`surfaceLeadBar`), which is what says "waiting on you" at rest.
     ///
-    /// Capped at half the visible height, and it scrolls inside the cap. The agent decides how
-    /// long a surface is, so without a cap a long question on a phone on its side (844x390) took
-    /// the whole column and pushed the conversation and the composer off screen, with its own
-    /// buttons cut off at the bottom. The dock is only as tall as its content, so a percentage
-    /// would resolve against nothing. The cap is a share of the shell's own height
+    /// Not the card's fixed height: the card's list grows under it as pages load, and a
+    /// surface arrives whole, so it stands as tall as what the agent drew — up to half the
+    /// visible height, which it then scrolls inside (`surfaceScroll`). Without the cap a long
+    /// question on a phone on its side (844x390) took the whole column and pushed the
+    /// conversation and the composer off screen. The dock is only as tall as its content, so a
+    /// percentage would resolve against nothing; the cap is a share of the shell's own height
     /// (`--visual-h`, see `shell`), which already accounts for the iOS keyboard.
+    ///
+    /// It rises in as the card does, growing its cap from nothing (`animate-surface-rise`), so
+    /// the conversation gives way over a beat rather than jumping by the surface's height.
     let agentSurface =
-        cls [ "shrink-0 flex flex-col gap-3 py-4 px-4 wide:px-rail bg-surface"
-              "max-h-[calc(var(--visual-h,100dvh)/2)] overflow-y-auto overscroll-contain" ]
-    /// What the agent drew, with the app's × beside it at the top: the dismiss every surface
-    /// has, apart from the agent's own buttons and on no line of its own.
-    let surfaceBody = "flex items-start gap-3 min-w-0"
-    let surfaceContent = "flex-1 min-w-0"
+        cls [ "relative shrink-0 flex flex-col bg-surface overflow-hidden"
+              "max-h-[calc(var(--visual-h,100dvh)/2)]"
+              "animate-surface-rise motion-reduce:animate-none"; Stroke.dividerTop ]
+    /// The card's lead, for the card's reason: it spans the band rather than the scrollport,
+    /// so it stays put while a long surface scrolls.
+    let surfaceLeadBar = askLeadBar
+    /// What scrolls, inside the band, with the card's own top and foot.
+    let surfaceScroll =
+        "flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain pt-6 pb-6 phone:pt-4 phone:pb-4"
+    /// The reading inset the card's blocks spend (`askInset`), spent once here: what the agent
+    /// drew is arbitrary nesting, so no block of it can be trusted to spend it itself. The
+    /// first letter of the question lands where the card's question and every message body
+    /// start. `relative`, because the way out hangs in the gutter this opens (`surfaceWay`).
+    let surfaceFrame = cls [ "relative min-w-0"; askInset ]
+    /// The way out, in the GUTTER on the question's line, as the card's × is (`askWay`): grey,
+    /// because blue is spent on what the surface asks of you and leaving is not it. Hung there
+    /// rather than laid out, because the column it stands in is the column the choices' ticks
+    /// stand in, and the words must start on the rail whatever the agent put first. Its box is
+    /// one line of the HEADING step (`text-heading` sets the `1lh` the face measures by), the
+    /// step a surface's question is at.
+    let surfaceWay = cls [ askWay; "absolute top-0 left-8 max-md:left-4 text-heading" ]
+    /// The surface's actions, pinned under what scrolls (`SurfaceView.view`), as the card's
+    /// are (`askActions`). On the reading rail rather than the card's edge, because a surface's
+    /// buttons are the agent's words set as buttons and start where its question starts. The
+    /// scroll's own foot is the gap above them.
+    let surfaceActions = cls [ askInset; "shrink-0 pb-6 phone:pb-4" ]
+    let surfaceActionsLine = "min-w-0"
     let surfaceColumn = "flex flex-col gap-3 min-w-0"
     let surfaceRow = "flex flex-wrap items-center gap-3 min-w-0"
     /// A card inside a surface: one step up the greys, which is what nesting is said with.
+    /// A card at the surface's ROOT is not drawn as one (`SurfaceView.view`): the band is
+    /// already the card, and a card in a card is a box saying nothing the band did not.
     let surfaceCard = "flex flex-col gap-3 p-4 bg-surface-2 min-w-0"
     let surfaceDivider = cls [ Stroke.dividerTop; "w-full" ]
     let surfaceDividerVertical = cls [ Stroke.dividerLeft; "self-stretch" ]
@@ -3876,19 +3904,27 @@ module Style =
         | A2ui.Align.End -> "items-end"
         | A2ui.Align.Stretch -> "items-stretch"
 
-    /// The agent's words on a surface, in the agent's voice (sans): a heading at the heading
-    /// step, a subheading at the body step in weight, prose at the body step, a caption small.
-    let surfaceHeading = "font-ui font-extralight text-heading text-ink min-w-0"
-    let surfaceSubheading = "font-ui font-semibold text-body text-ink min-w-0"
-    let surfaceText = cls [ "font-ui"; body; "min-w-0" ]
-    let surfaceCaption = cls [ small; "min-w-0" ]
+    /// The agent's words on a surface, in the agent's voice (sans), each at the card's measure
+    /// (`readingColumn`): a question at the card's question step and weight (`askQuestion`,
+    /// without its lowercase — the agent's words carry names, and `GitHub` lowercased is a
+    /// different word), a subheading at the body step in weight, prose at the body step, a
+    /// caption small.
+    let surfaceHeading = cls [ "font-ui font-extralight text-heading tracking-[-0.01em] text-ink min-w-0"; readingColumn ]
+    let surfaceSubheading = cls [ "font-ui font-semibold text-body text-ink min-w-0"; readingColumn ]
+    let surfaceText = cls [ "font-ui"; body; "min-w-0"; readingColumn ]
+    let surfaceCaption = cls [ small; "min-w-0"; readingColumn ]
 
-    /// Why a control is not ready, or why an input is not valid: a REASON, so body text in the
-    /// body voice, no dot and no caps (docs/visual-design.md, Colour).
-    let surfaceReason = cls [ small; "min-w-0" ]
+    /// Why an answer is WRONG — a field that holds something its pattern or checks refuse. The
+    /// newest wrong thing on the surface, so the err ink, in the body voice with no mark and no
+    /// caps, because it is a reason and not a status (docs/visual-design.md, Colour). Drawn
+    /// only once there is an answer to be wrong: an empty required field is not wrong, it is
+    /// not answered yet, and the button that waits on it already wears that.
+    let surfaceProblem = cls [ "font-light text-small text-err min-w-0"; readingColumn ]
 
-    /// A field's own label above it, in the caps voice labels speak in.
-    let surfaceFieldLabel = cls [ label; "flex flex-col gap-1.5 min-w-0" ]
+    /// A field's own label above it, in the caps voice labels speak in, at the card's measure.
+    let surfaceFieldLabel = cls [ label; "flex flex-col gap-1.5 min-w-0"; readingColumn ]
+    /// THE field face, as the card's search wears it (`askSearch`), growing to the touch target
+    /// under a thumb as every control with an edge does.
     let surfaceField = field
     /// The long-text field: the same face, given the height several lines need rather than
     /// the one-line box's.
@@ -3896,15 +3932,30 @@ module Style =
         cls [ "bg-surface outline-none appearance-none min-h-20 px-3 py-2 transition-colors w-full resize-y"
               Stroke.ring; Stroke.hair; Stroke.hoverRim; Stroke.focus; fieldType ]
 
-    /// A choice: a whole-row press, as the launch card's repositories are, with the tick in a
-    /// cell drawn on every row and filled on the chosen ones, so choosing moves no word.
-    let surfaceChoices = "flex flex-col divide-y divide-hair min-w-0"
+    /// A choice list: the card's rows (`askRows`), edge to edge across the band. The frame
+    /// spent the reading inset (`surfaceFrame`), so the list hands it back with negative
+    /// margins and each row spends it again inside its own ground (`surfaceChoice`) — a lit
+    /// row's ground reaches the band's edges and the word on it still lands on the rail.
+    let surfaceChoices = "flex flex-col divide-y divide-hair min-w-0 -ml-16 -mr-8 max-md:-ml-12 max-md:-mr-4"
+    /// A choice: a whole-row press, as the card's repositories are (`askRowButton`). At least
+    /// the card's row height, and taller where the agent's label needs a second line — the
+    /// card's names truncate because a repository name is an identifier, but an option is a
+    /// sentence, and a sentence cut short is a different answer.
+    ///
+    /// `aria-disabled:` for while an answer is on its way (`SurfaceView`'s `Sending`): the row
+    /// stays in focus order and its press is refused by the handler, as the card's rows are
+    /// while their clone runs (docs/visual-design.md, State).
     let private surfaceChoiceBase =
-        cls [ "w-full text-left flex items-center gap-3 min-h-10 phone:min-h-touch py-2 border-0 cursor-pointer min-w-0 transition-colors"
-              focusRing ]
+        cls [ askInset; "w-full text-left flex min-h-12 py-3 border-0 cursor-pointer min-w-0 transition-colors"
+              "aria-disabled:cursor-default"; focusRing ]
     let surfaceChoice = cls [ surfaceChoiceBase; "bg-transparent"; rowLift ]
+    /// Chosen: the card's held row, one step up (`askRowHeld`), and the tick filled.
     let surfaceChoiceChosen = cls [ surfaceChoiceBase; "bg-surface-2" ]
-    let surfaceChoiceMark = "w-5 shrink-0 self-center text-blue"
+    let surfaceChoiceLine = cls [ askMeasure; "flex items-start gap-3" ]
+    /// The tick, in the gutter where the card hangs its own (`askRowMark`), on the label's
+    /// FIRST line (`text-body` states the `1lh` it is one line of), so a two-line option keeps
+    /// its tick by the line that starts it.
+    let surfaceChoiceMark = "-ml-rail w-5 h-[1lh] text-body shrink-0 grid place-items-center text-blue"
     let surfaceChoiceLabel = cls [ "font-ui"; body; "min-w-0" ]
 
     /// A component this renderer does not draw yet, said rather than silently dropped.

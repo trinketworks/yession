@@ -5665,6 +5665,9 @@ module View =
     /// that is fixed above them — which they must do only while it is there.
     let view (actions: ViewActions) (model: ClientModel) (dispatch: ClientMsg -> unit) : TemplateResult =
         let shellState = if (connectionReport model).IsSome then Style.degradedShell else ""
+        let asked = model.Asked |> Map.toList |> List.map snd
+        let surfaces =
+            model.Synced.Surfaces |> Map.toList |> List.map (fun (id, surface) -> SurfaceView.view dispatch asked id surface)
         html $"""
             <div class="contents {shellState}">
             {sidebar actions dispatch model}
@@ -5679,7 +5682,7 @@ module View =
                   {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
                 </div>
                 <div class="{Style.dock}">
-                  {model.Synced.Surfaces |> Map.toList |> List.map (fun (id, surface) -> SurfaceView.view dispatch id surface)}
+                  {surfaces}
                   {queue dispatch model}
                   {drafts actions dispatch model}
                 </div>

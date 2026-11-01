@@ -3702,7 +3702,9 @@ let probe (args: string list) =
 ///                 The agent replies with paragraphs, a list and a code block.
 ///   replies=<n>   the same, with <n> items.
 ///   surface       the model that the browser cases use, with an agent's A2UI question in the
-///                 dock.
+///                 dock, answered and ready to send.
+///   surface=<s>   the same question in another state: `waiting` (nothing chosen yet) or
+///                 `sending` (the answer on its way).
 let frames (args: string list) =
     let out = Path.Combine (repoRoot, "tools", "Yession.Frames", "out")
     let harnessPage, cameraArgs =
@@ -3717,7 +3719,8 @@ let frames (args: string list) =
                 | Some "replies" -> "/?replies=24"
                 | Some page when page.StartsWith "replies=" -> "/?" + page
                 | Some "surface" -> "/?surface"
-                | _ -> failwith "frames --harness: give lines, replies, replies=<n> or surface"
+                | Some page when page.StartsWith "surface=" -> "/?" + page
+                | _ -> failwith "frames --harness: give lines, replies, replies=<n>, surface or surface=<state>"
             Some page, List.take at args @ List.skip (at + 2) args
     withBuildSlot "frames" (fun () ->
         make [ Target.Tools; Target.Packages ]

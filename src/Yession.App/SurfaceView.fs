@@ -7,10 +7,14 @@ open Lit
 ///
 /// The agent says what is on the surface in the basic catalog's words; this module says how
 /// each word looks, from `Style`'s vocabulary, so a surface wears this product and nothing of
-/// the agent's choosing. It draws a subset of the catalog: text, the containers, a card, a
-/// divider, a button and the three inputs. Anything else is SAID rather than dropped
-/// (`Dom.Hooks.surfaceUnsupported`), because a question with a hole in it is worse than one
-/// that admits the hole.
+/// the agent's choosing. It wears the launch card's anatomy, because it is the same act — the
+/// session asking a person something, docked above the composer: the band with the blue lead,
+/// the way out hung in the gutter on the question's line, the question at the card's step,
+/// choices as the card's rows with the tick in the gutter, and the one filled verb.
+///
+/// It draws a subset of the catalog: text, the containers, a card, a divider, a button and the
+/// three inputs. Anything else is SAID rather than dropped (`Dom.Hooks.surfaceUnsupported`),
+/// because a question with a hole in it is worse than one that admits the hole.
 ///
 /// An input writes its answer into the shared data model (`EditSurfaceMsg`), which is the
 /// spec's two-way binding with everybody in the session on the other end of it. A button
@@ -65,11 +69,37 @@ module SurfaceView =
         | ComponentKind.Slider _
         | ComponentKind.DateTimeInput _ -> false
 
+    /// What this client has asked of one surface and not yet heard back about: the launch
+    /// card's `Sent`, for a surface. Read from the commands in flight (`ClientModel.Asked`)
+    /// rather than kept beside them, so it ends exactly when the session answers, either way.
+    [<RequireQualifiedAccess>]
+    type Sending =
+        | Nothing
+        /// A button's answer, by the button and the template item it was drawn under.
+        | Answer of componentId: string * scope: string
+        | Dismissal
+
+    let sending (asked: Yession.Domain.Link.SessionCommand list) (surfaceId: string) : Sending =
+        asked
+        |> List.tryPick (fun command ->
+            match command with
+            | Yession.Domain.Link.PressSurfaceButton (id, componentId, scope) when id = surfaceId ->
+                Some (Sending.Answer (componentId, scope))
+            | Yession.Domain.Link.DismissSurface id when id = surfaceId -> Some Sending.Dismissal
+            | _ -> None)
+        |> Option.defaultValue Sending.Nothing
+
     /// What one surface's components draw against.
     type private Canvas =
         { SurfaceId : string
           Components : Map<string, Component>
+          /// Whether an answer or a dismissal is on its way. While one is, nothing on the
+          /// surface takes a press or an edit — as the launch card's rows and field stand
+          /// still while its clone runs — and every control says so by its face.
+          Sending : Sending
           Dispatch : ClientMsg -> unit }
+
+    let private frozen (canvas: Canvas) = canvas.Sending <> Sending.Nothing
 
     /// The absolute pointer a binding writes to, read in `scope`; `None` for a literal, which
     /// has nowhere in the data model to write.
@@ -93,8 +123,11 @@ module SurfaceView =
         | Ok messages -> messages
         | Error reason -> [ reason ]
 
-    let private reasons (messages: string list) : TemplateResult list =
-        messages |> List.map (fun message -> html $"""<p class="{Style.surfaceReason}">{message}</p>""")
+    /// What is wrong with an answer, under the input that holds it — and only once it holds
+    /// one (`Style.surfaceProblem` says why).
+    let private problems (answered: bool) (messages: string list) : TemplateResult list =
+        if not answered then []
+        else messages |> List.map (fun message -> html $"""<p class="{Style.surfaceProblem}" role="status">{message}</p>""")
 
     /// Whether `text` matches the field's `validationRegexp`. A pattern that does not compile
     /// matches nothing, so the field says it cannot be checked rather than the page failing.
@@ -103,6 +136,31 @@ module SurfaceView =
 
     let private weight (c: Component) : string =
         c.Weight |> Option.map (sprintf "flex-grow:%g") |> Option.defaultValue ""
+
+    let private flag (on: bool) = if on then "true" else "false"
+
+    /// One choice row, the card's held-row anatomy: the tick's cell on every row and filled
+    /// on the chosen ones, so choosing moves no word.
+    let private choiceRow (canvas: Canvas) (role: string) (on: bool) (choice: string option) (label: string) (toggle: unit -> unit) =
+        let still = frozen canvas
+        let face = if on then Style.surfaceChoiceChosen else Style.surfaceChoice
+        let press = Ev(fun _ -> if not still then toggle ())
+        let line =
+            html $"""
+                <span class="{Style.surfaceChoiceLine}">
+                  <span class="{Style.surfaceChoiceMark}" aria-hidden="true">{if on then Icon.check else Lit.nothing}</span>
+                  <span class="{Style.surfaceChoiceLabel}">{label}</span>
+                </span>"""
+        // Only an option has a value to name; a CheckBox's row carries no choice hook.
+        match choice with
+        | Some value ->
+            html $"""
+                <button type="button" role="{role}" aria-checked="{flag on}" aria-disabled="{flag still}"
+                        class="{face}" data-surface-choice="{value}" @click={press}>{line}</button>"""
+        | None ->
+            html $"""
+                <button type="button" role="{role}" aria-checked="{flag on}" aria-disabled="{flag still}"
+                        class="{face}" @click={press}>{line}</button>"""
 
     let rec private draw (canvas: Canvas) (ancestors: Set<string>) (id: string) (scope: Scope) : TemplateResult =
         // A component that has not arrived is progressive rendering, and one that contains
@@ -126,15 +184,16 @@ module SurfaceView =
             <div class="{face}" style="{weight c}" data-surface-component="{c.Id}">{children canvas ancestors scope list}</div>"""
 
     and private drawComponent (canvas: Canvas) (ancestors: Set<string>) (c: Component) (scope: Scope) : TemplateResult =
-        let edit (path: string) (value: Json) = canvas.Dispatch (EditSurfaceMsg (canvas.SurfaceId, path, value))
+        let edit (path: string) (value: Json) =
+            if not (frozen canvas) then canvas.Dispatch (EditSurfaceMsg (canvas.SurfaceId, path, value))
         match c.Kind with
         | ComponentKind.Text (text, variant) ->
             let said = textIn scope text
             match variant with
             | Some TextVariant.H1
-            | Some TextVariant.H2 ->
+            | Some TextVariant.H2
+            | Some TextVariant.H3 ->
                 html $"""<p class="{Style.surfaceHeading}" role="heading" aria-level="2" style="{weight c}" data-surface-component="{c.Id}">{said}</p>"""
-            | Some TextVariant.H3
             | Some TextVariant.H4
             | Some TextVariant.H5 ->
                 html $"""<p class="{Style.surfaceSubheading}" role="heading" aria-level="3" style="{weight c}" data-surface-component="{c.Id}">{said}</p>"""
@@ -155,7 +214,15 @@ module SurfaceView =
             html $"""<div class="{face}" role="separator" data-surface-component="{c.Id}"></div>"""
         | ComponentKind.Button (child, variant, action, checks) ->
             let unmet = failing scope checks
-            let ready = List.isEmpty unmet
+            // This button's answer is the one on its way: it wears the HELD face (`pressed:`,
+            // through `aria-busy`) until the session answers, as the card's START holds
+            // through its clone. Every other button on the surface waits meanwhile.
+            let held =
+                match canvas.Sending with
+                | Sending.Answer (componentId, at) -> componentId = c.Id && at = scope.Base
+                | Sending.Nothing
+                | Sending.Dismissal -> false
+            let ready = List.isEmpty unmet && not (frozen canvas)
             // The press names the button and where it was drawn; the session reads the answer
             // from the doc. A button that is not ready, or that calls a function here rather
             // than telling the agent, sends nothing.
@@ -164,16 +231,28 @@ module SurfaceView =
                 | Action.Event _ when ready -> canvas.Dispatch (PressSurfaceMsg (canvas.SurfaceId, c.Id, scope.Base))
                 | Action.Event _
                 | Action.LocalCall _ -> ()
-            let face =
-                match variant, ready with
-                | Some ButtonVariant.Primary, true -> Style.btnPrimary
-                | Some ButtonVariant.Borderless, true -> Style.btnBare
-                | Some ButtonVariant.Borderless, false -> Style.btnBareWaiting
-                | (Some ButtonVariant.Default | None), true -> Style.btn
-                | _, false -> Style.btnWaiting
+            let live = ready || held
+            // The fill is the surface's one verb, and it says `sending…` in its own box while
+            // it holds (`whenReady`/`whenBusy`), so the press does not resize it. The other
+            // weights keep their label and wear the hold as their press face.
+            let face, label =
+                let label = draw canvas ancestors child scope
+                match variant with
+                | Some ButtonVariant.Primary ->
+                    (if live then Style.btnPrimarySwap else Style.btnWaitingSwap),
+                    html $"""<span class="{Style.whenReady}">{label}</span><span class="{Style.whenBusy}">{Dom.Text.surfaceSending}</span>"""
+                | Some ButtonVariant.Borderless -> (if live then Style.btnBare else Style.btnBareWaiting), label
+                | Some ButtonVariant.Default
+                | None -> (if live then Style.btn else Style.btnWaiting), label
+            // Why it waits is told to a screen reader with the button rather than printed under
+            // it: what it waits on is the input above it, which says so itself once it holds
+            // something wrong, as the card's START waits on a held row and says nothing.
+            let why =
+                if ready || held || List.isEmpty unmet then Lit.nothing
+                else html $"""<span class="{Style.srOnly}">{String.concat " " unmet}</span>"""
             html $"""
                 <button type="button" class="{face}" style="{weight c}" data-surface-component="{c.Id}"
-                        aria-disabled="{if ready then "false" else "true"}" @click={Ev press}>{draw canvas ancestors child scope}</button>{reasons unmet}"""
+                        aria-disabled="{flag (not live)}" aria-busy="{flag held}" @click={Ev press}>{label}{why}</button>"""
         | ComponentKind.TextField (label, value, variant, pattern, checks) ->
             let current = value |> Option.map (textIn scope) |> Option.defaultValue ""
             let target = value |> Option.bind (boundAt scope)
@@ -183,14 +262,18 @@ module SurfaceView =
                 | Some p when current <> "" && not (matches p current) ->
                     [ "This does not match the expected format." ]
                 | _ -> []
-            let unmet = failing scope checks @ mismatch
+            let answered = current <> ""
+            let wrong = failing scope checks @ mismatch
+            let invalid = flag (answered && not (List.isEmpty wrong))
+            // `readonly` and not `disabled` while an answer is on its way, as the card's search
+            // is while its clone runs: still focusable, still legible.
+            let still = frozen canvas
             let input =
                 match variant with
                 | Some TextFieldVariant.LongText ->
                     html $"""
-                        <textarea class="{Style.surfaceFieldLong}" .value={current}
-                                  aria-invalid="{if List.isEmpty unmet then "false" else "true"}"
-                                  @input={EvVal typed}></textarea>"""
+                        <textarea class="{Style.surfaceFieldLong}" .value={current} ?readonly={still}
+                                  aria-invalid="{invalid}" @input={EvVal typed}></textarea>"""
                 | _ ->
                     let kind =
                         match variant with
@@ -198,27 +281,22 @@ module SurfaceView =
                         | Some TextFieldVariant.Obscured -> "password"
                         | _ -> "text"
                     html $"""
-                        <input class="{Style.surfaceField}" type="{kind}" .value={current}
-                               aria-invalid="{if List.isEmpty unmet then "false" else "true"}"
-                               @input={EvVal typed} />"""
+                        <input class="{Style.surfaceField}" type="{kind}" .value={current} ?readonly={still}
+                               aria-invalid="{invalid}" @input={EvVal typed} />"""
             html $"""
                 <label class="{Style.surfaceFieldLabel}" style="{weight c}" data-surface-component="{c.Id}">
                   <span>{textIn scope label}</span>
                   {input}
-                  {reasons unmet}
+                  {problems answered wrong}
                 </label>"""
         | ComponentKind.CheckBox (label, value, checks) ->
             let on = Evaluate.conditionOf scope value |> Result.defaultValue false
             let target = boundAt scope value
+            let toggle () = target |> Option.iter (fun path -> edit path (JBool (not on)))
             html $"""
                 <div class="{Style.surfaceChoices}" style="{weight c}" data-surface-component="{c.Id}">
-                  <button type="button" role="checkbox" aria-checked="{if on then "true" else "false"}"
-                          class="{if on then Style.surfaceChoiceChosen else Style.surfaceChoice}"
-                          @click={Ev(fun _ -> target |> Option.iter (fun path -> edit path (JBool (not on))))}>
-                    <span class="{Style.surfaceChoiceMark}" aria-hidden="true">{if on then Icon.check else Lit.nothing}</span>
-                    <span class="{Style.surfaceChoiceLabel}">{textIn scope label}</span>
-                  </button>
-                </div>{reasons (failing scope checks)}"""
+                  {choiceRow canvas "checkbox" on None (textIn scope label) toggle}
+                </div>{problems on (failing scope checks)}"""
         | ComponentKind.ChoicePicker (label, variant, options, value, _, _, checks) ->
             // The spec's default is one answer (`mutuallyExclusive`).
             let many = variant = Some ChoiceVariant.MultipleSelection
@@ -226,7 +304,7 @@ module SurfaceView =
             let target = boundAt scope value
             let heading = label |> Option.map (textIn scope) |> Option.defaultValue ""
             // In the options' own order, so the answer reads the way the question listed it.
-            let toggle (picked: string) =
+            let toggle (picked: string) () =
                 let next =
                     if not many then [ picked ]
                     else
@@ -235,24 +313,17 @@ module SurfaceView =
                 target |> Option.iter (fun path -> edit path (JArray (List.map JString next)))
             let role = if many then "checkbox" else "radio"
             let option (o: ChoiceOption) =
-                let on = Set.contains o.Value chosen
-                html $"""
-                    <button type="button" role="{role}" aria-checked="{if on then "true" else "false"}"
-                            class="{if on then Style.surfaceChoiceChosen else Style.surfaceChoice}"
-                            data-surface-choice="{o.Value}" @click={Ev(fun _ -> toggle o.Value)}>
-                      <span class="{Style.surfaceChoiceMark}" aria-hidden="true">{if on then Icon.check else Lit.nothing}</span>
-                      <span class="{Style.surfaceChoiceLabel}">{textIn scope o.Label}</span>
-                    </button>"""
+                choiceRow canvas role (Set.contains o.Value chosen) (Some o.Value) (textIn scope o.Label) (toggle o.Value)
             let caption =
                 if heading = "" then Lit.nothing
-                else html $"""<p class="{Style.label}">{heading}</p>"""
+                else html $"""<p class="{Style.surfaceFieldLabel}">{heading}</p>"""
             html $"""
                 <div class="{Style.surfaceColumn}" style="{weight c}" data-surface-component="{c.Id}">
                   {caption}
                   <div class="{Style.surfaceChoices}" role="{if many then "group" else "radiogroup"}" aria-label="{heading}">
                     {options |> List.map option}
                   </div>
-                  {reasons (failing scope checks)}
+                  {problems (not (Set.isEmpty chosen)) (failing scope checks)}
                 </div>"""
         | ComponentKind.Image _
         | ComponentKind.Icon _
@@ -266,20 +337,61 @@ module SurfaceView =
             html $"""
                 <p class="{Style.surfaceUnsupported}" data-surface-component="{c.Id}" data-surface-unsupported="{name}">{Dom.Text.surfaceUnsupported name}</p>"""
 
-    /// One surface, from its `root` component, beside the app's own ×: every
-    /// surface can be taken down unanswered, whatever buttons the agent drew
+    /// One surface, from its `root` component, with the app's × hung in the gutter on its
+    /// first line: every surface can be taken down unanswered, whatever buttons the agent drew
     /// (`DismissSurfaceMsg`). A surface whose root has not arrived yet is not drawn: there is
     /// nothing to answer.
-    let view (dispatch: ClientMsg -> unit) (surfaceId: string) (surface: Surface) : TemplateResult =
-        if not (Map.containsKey "root" surface.Components) then Lit.nothing
-        else
-            let canvas = { SurfaceId = surfaceId; Components = surface.Components; Dispatch = dispatch }
+    ///
+    /// `asked` is every command this client has in flight (`ClientModel.Asked`), from which the
+    /// surface reads whether an answer or a dismissal of it is on its way (`sending`).
+    let view (dispatch: ClientMsg -> unit) (asked: Yession.Domain.Link.SessionCommand list) (surfaceId: string) (surface: Surface) : TemplateResult =
+        match Map.tryFind "root" surface.Components with
+        | None -> Lit.nothing
+        | Some root ->
+            let state = sending asked surfaceId
+            let canvas = { SurfaceId = surfaceId; Components = surface.Components; Sending = state; Dispatch = dispatch }
+            let scope = Evaluate.root surface.DataModel
+            // A card at the root is the band itself, so its child is drawn in its place.
+            let bodyId, ancestors =
+                match root.Kind with
+                | ComponentKind.Card child -> child, Set.singleton "root"
+                | _ -> "root", Set.empty
+            let isButton id =
+                match Map.tryFind id surface.Components with
+                | Some { Kind = ComponentKind.Button _ } -> true
+                | _ -> false
+            // A column that ends in a row of buttons ends in the surface's ACTIONS, and they
+            // are pinned under what scrolls, as the card's START is (`askActions`): the
+            // question can run past the band's cap, but what answers it stays on screen.
+            let content, actions =
+                match Map.tryFind bodyId surface.Components with
+                | Some ({ Kind = ComponentKind.Column (ChildList.Static ids, justify, align) } as column) when List.length ids > 1 ->
+                    let last = List.last ids
+                    match Map.tryFind last surface.Components with
+                    | Some ({ Kind = ComponentKind.Row (ChildList.Static buttons, _, _) } as row) when
+                        not (List.isEmpty buttons) && List.forall isButton buttons ->
+                        let inside = Set.add bodyId ancestors
+                        let above = { column with Kind = ComponentKind.Column (ChildList.Static (List.truncate (List.length ids - 1) ids), justify, align) }
+                        drawComponent canvas inside above scope,
+                        html $"""
+                            <div class="{Style.surfaceActions}" data-surface-actions>
+                              <div class="{Style.surfaceActionsLine}">{drawComponent canvas (Set.add last inside) row scope}</div>
+                            </div>"""
+                    | _ -> draw canvas ancestors bodyId scope, Lit.nothing
+                | _ -> draw canvas ancestors bodyId scope, Lit.nothing
+            let leaving = state = Sending.Dismissal
             html $"""
-                <section class="{Style.agentSurface}" data-surface="{surfaceId}" aria-label="{Dom.Text.agentSurface}">
-                  <div class="{Style.surfaceBody}">
-                    <div class="{Style.surfaceContent}">{draw canvas Set.empty "root" (Evaluate.root surface.DataModel)}</div>
-                    <button type="button" class="{Style.btnIcon}" data-surface-dismiss
-                            aria-label="{Dom.Text.surfaceDismissLabel}" title="{Dom.Text.surfaceDismissLabel}"
-                            @click={Ev(fun _ -> dispatch (DismissSurfaceMsg surfaceId))}>{Icon.close}</button>
+                <section class="{Style.agentSurface}" data-surface="{surfaceId}" aria-label="{Dom.Text.agentSurface}"
+                         aria-busy="{flag (state <> Sending.Nothing)}">
+                  <div class="{Style.surfaceLeadBar}" aria-hidden="true"></div>
+                  <div class="{Style.surfaceScroll}">
+                    <div class="{Style.surfaceFrame}">
+                      <button type="button" class="{Style.surfaceWay}" data-surface-dismiss
+                              aria-label="{Dom.Text.surfaceDismissLabel}" title="{Dom.Text.surfaceDismissLabel}"
+                              aria-busy="{flag leaving}" aria-disabled="{flag (state <> Sending.Nothing)}"
+                              @click={Ev(fun _ -> if state = Sending.Nothing then dispatch (DismissSurfaceMsg surfaceId))}>{Icon.close}</button>
+                      {content}
+                    </div>
                   </div>
+                  {actions}
                 </section>"""

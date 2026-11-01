@@ -140,6 +140,7 @@
   --animate-breathe: breathe 2.6s ease-in-out 2.8s infinite;
   --animate-rise: rise 0.5s ease-out 2.2s 1 both;
   --animate-ask-rise: ask-rise 240ms cubic-bezier(0.2, 0, 0, 1) 1;
+  --animate-surface-rise: surface-rise 240ms cubic-bezier(0.2, 0, 0, 1) 1;
   --animate-line-unfold: line-unfold 200ms ease-out 1;  /* Motion.pace, as a keyframe */
   --animate-arrive: rise 200ms ease-out 1 backwards;  /* the pace again, on `rise`'s distance; a lane waits clear */
   --animate-bar-unfold: bar-unfold 200ms ease-out 1;  /* the pace, as the chat makes room at the same pace */
