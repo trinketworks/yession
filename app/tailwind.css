@@ -162,16 +162,13 @@
    on (docs/visual-design.md, Motion) — a status keeps `ink-dim`; Pending draws the same circle
    in whatever ink `attentionInk` gives its level instead, so the word beside the mark, or the
    level itself, is still what says which. One arc, always turning the same way, never
-   reversing — but not at a constant rate: it clears the gap it started in quickly, slows
-   through the ring's far side, then quickens again to close the lap, the same pace it opened
-   with, so one lap runs into the next with nothing to catch — the mark reads as working at
-   it, not a gauge ticking round. */
+   reversing, at a constant rate — an uneven pace (stopping at the gap, surging through the far
+   side) read as the mark catching rather than working, so the lap is plain and even and never
+   seems to stick. It turns over a faint full ring of its own ink (`Style.statusSpinTrack`,
+   `Icon.spinTrack`) — the track it is going round — so the arc reads as travelling a path
+   rather than floating loose. */
 @keyframes status-spin-cw {
-  0% { transform: rotate(0deg); }
-  20% { transform: rotate(45deg); }
-  50% { transform: rotate(180deg); }
-  80% { transform: rotate(315deg); }
-  100% { transform: rotate(360deg); }
+  to { transform: rotate(360deg); }
 }
 /* The attention mark's remaining keyframes (`Icon.attention` and its siblings below;
    Pending's own motion is `status-spin-cw` above, shared with `Icon.spin`). None moves a
