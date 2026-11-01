@@ -488,6 +488,15 @@ let private toStartIn () : unit =
     |> Option.orElseWith (fun () -> find "[data-terminal-new]")
     |> focusOn
 
+/// Onto the question of the card at the front of the ask slot (`DomMove.FocusAsk`): the pane
+/// on screen's heading, not one in a pane waiting off to the side, which is `inert`.
+let private toAsk () : unit =
+    let headings = document.querySelectorAll "[data-ask-stack] > section h2"
+    seq { for i in 0 .. headings.length - 1 -> headings.item i }
+    |> Seq.tryFind (fun heading -> (heading.closest "[inert]").IsNone)
+    |> Option.map (fun heading -> heading :?> HTMLElement)
+    |> focusOn
+
 /// Onto the message composer's field — this peer's own, the one that is not read-only — or,
 /// where no composer is on offer, the session's title: the first control of the column a
 /// notice in it sat over (`DomMove.FocusComposer`).
@@ -604,6 +613,7 @@ and private place (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.FocusItemActions messageId -> toItemActions (Yession.Domain.MessageId.value messageId)
     | Yession.App.DomMove.FocusStartIn -> toStartIn ()
     | Yession.App.DomMove.FocusComposer -> toComposer ()
+    | Yession.App.DomMove.FocusAsk -> toAsk ()
     // Not placements, and nothing guards one: made as `move` makes them.
     | Yession.App.DomMove.RevealBlock _
     | Yession.App.DomMove.RevealMessage _

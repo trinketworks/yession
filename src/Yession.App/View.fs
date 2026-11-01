@@ -2131,6 +2131,38 @@ module View =
         elif seconds >= 60 then sprintf "%dm %ds" (seconds / 60) (seconds % 60)
         else sprintf "%ds" seconds
 
+    /// The ask card's frame, which every card in the ask slot is drawn in: the blue lead, the
+    /// track its panes ride, and the actions line under them. The caller writes the `<section>`
+    /// round it, because its hook is the card's own name (`data-repo-picker`, `data-repo-trust`)
+    /// and an attribute's NAME cannot be a hole.
+    let private askInside (track: TemplateResult) (actions: TemplateResult) : TemplateResult =
+        html $"""
+            <div class="{Style.askLeadBar}" aria-hidden="true"></div>
+            <div class="{Style.askBody}">
+              {track}
+              <div class="{Style.askActions}"><div class="{Style.askActionsLine}">{actions}</div></div>
+            </div>"""
+
+    /// A pane's head: the way out in the gutter, then who or what asks above the question. One
+    /// shape for every pane of every card, so the question stands on the same line whichever
+    /// card is in the slot and only the subtitle and the way out change.
+    let private askHead (way: TemplateResult) (subtitle: TemplateResult) (titleId: string) (title: string) : TemplateResult =
+        html $"""
+            <div class="{Style.askHead}">
+              <div class="{Style.askHeadLine}">
+                {way}
+                <div class="{Style.askHeadWords}">
+                  {subtitle}
+                  <h2 id="{titleId}" class="{Style.askQuestion}" tabindex="-1">{title}</h2>
+                </div>
+              </div>
+            </div>"""
+
+    /// A line the card says rather than one it offers, where the first row would stand
+    /// (`Style.askNote`), so an answer and the absence of one arrive in one place.
+    let private askNote (inner: TemplateResult) : TemplateResult =
+        html $"""<div class="{Style.askNote}"><div class="{Style.askNoteLine}">{inner}</div></div>"""
+
     /// The chat: what was said and what was run, in the order it happened (Plan 14, stage 1).
     ///
     /// Terminal items are resolved against `Projection` at render time rather than
@@ -2221,10 +2253,7 @@ module View =
                   </button>
                   {if heldNow then branchLink candidate else Lit.nothing}
                 </li>"""
-        // A line the card says rather than one it offers stands where the first row would
-        // have been (`askNote`), so an answer and the absence of one arrive in one place.
-        let note (inner: TemplateResult) =
-            html $"""<div class="{Style.askNote}"><div class="{Style.askNoteLine}">{inner}</div></div>"""
+        let note = askNote
         let listing =
             match launch.Listing with
             | ListingUnknown ->
@@ -2310,21 +2339,10 @@ module View =
             | Choosing -> startButton (Launch.target launch) false
             | Sent (_, target) -> startButton (Some target) true
             | Cloning target -> startButton (Some target) true
-        // The HEAD both panes fill: the same slot, the same line boxes, the same gutter — so
-        // the title never moves between them and the subtitle under it is the only thing that
-        // changes. The gutter carries the way OUT, which is what makes the two panes one
-        // shape: × leaves the card, ‹ leaves the pane.
-        let head (way: TemplateResult) (subtitle: TemplateResult) (title: string) =
-            html $"""
-                <div class="{Style.askHead}">
-                  <div class="{Style.askHeadLine}">
-                    {way}
-                    <div class="{Style.askHeadWords}">
-                      {subtitle}
-                      <h2 id="repo-picker-title" class="{Style.askQuestion}">{title}</h2>
-                    </div>
-                  </div>
-                </div>"""
+        // Both panes fill the one head (`askHead`), so the title never moves between them. The
+        // gutter carries the way OUT, which is what makes the two panes one shape: × leaves the
+        // card, ‹ leaves the pane.
+        let head way subtitle title = askHead way subtitle "repo-picker-title" title
         let dismiss =
             html $"""
                 <button type="button" class="{Style.askWay}" data-repo-picker-dismiss
@@ -2484,16 +2502,10 @@ module View =
                     {problem}
                   </div>
                 </div>"""
+        let track = html $"""<div class="{Style.askTrack}" data-repo-picker-track>{repoPane}{branchPane}</div>"""
         html $"""
             <section class="{Style.ask}" data-repo-picker="{stage}" aria-labelledby="repo-picker-title">
-              <div class="{Style.askLeadBar}" aria-hidden="true"></div>
-              <div class="{Style.askBody}">
-                <div class="{Style.askTrack}" data-repo-picker-track>
-                  {repoPane}
-                  {branchPane}
-                </div>
-                <div class="{Style.askActions}"><div class="{Style.askActionsLine}">{actionsRow}</div></div>
-              </div>
+              {askInside track actionsRow}
             </section>"""
 
     /// A repo waiting for somebody here to trust it with their GitHub (`RepoTrustWaits`), as the
@@ -2505,8 +2517,8 @@ module View =
     /// read as one of them.
     ///
     /// Every reader sees it, because whoever answers is whose GitHub the repo runs with; the
-    /// session refuses a reader with none of their own. One card at a time, oldest first: the
-    /// slot holds one question, and the next repo's stands there once this one is answered.
+    /// session refuses a reader with none of their own. It stands in the slot's stack
+    /// (`askSlot`) with every other question waiting on this reader, in the order they asked.
     ///
     /// The answer carries what the card SHOWED beside what is ticked. It answers those routes
     /// and no others, so a repo that asks for more after the card was drawn asks again. The ×
@@ -2538,45 +2550,66 @@ module View =
                 <button type="button" class="{Style.askWay}" data-repo-trust-later="{name}"
                         aria-label="{Dom.Text.trustLater}" title="{Dom.Text.trustLater}"
                         @click={Ev(fun _ -> dispatch (NotNowTrustMsg (repo, shown)))}>{Icon.close}</button>"""
-        html $"""
-            <section class="{Style.ask}" data-repo-trust="{name}" aria-labelledby="repo-trust-title">
-              <div class="{Style.askLeadBar}" aria-hidden="true"></div>
-              <div class="{Style.askBody}">
+        let subject = html $"""<span class="{Style.askSubject}">{name}</span>"""
+        let why = askNote (html $"""<p class="{Style.small}">{Dom.Text.trustWhy}</p>""")
+        let pane =
+            html $"""
                 <div class="{Style.askTrack}">
                   <div class="{Style.askPaneHere}">
-                    <div class="{Style.askHead}">
-                      <div class="{Style.askHeadLine}">
-                        {later}
-                        <div class="{Style.askHeadWords}">
-                          <span class="{Style.askSubject}">{name}</span>
-                          <h2 id="repo-trust-title" class="{Style.askQuestion}">{Dom.Text.trustTitle}</h2>
-                        </div>
-                      </div>
-                    </div>
+                    {askHead later subject "repo-trust-title" Dom.Text.trustTitle}
                     <div class="{Style.askScroll}">
-                      <div class="{Style.askNote}"><div class="{Style.askNoteLine}"><p class="{Style.small}">{Dom.Text.trustWhy}</p></div></div>
+                      {why}
                       <ul class="{Style.cls [ Style.askRows; Style.askRowsAfterNote ]}">{shown |> List.map routeRow}</ul>
                     </div>
                   </div>
-                </div>
-                <div class="{Style.askActions}">
-                  <div class="{Style.askActionsLine}">
-                    <button type="button" class="{Style.askStart}" data-repo-trust-answer="{name}"
-                            @click={Ev(fun _ -> dispatch (TrustRepoMsg (repo, shown, ticked)))}>
-                      <span class="{Style.whenReady}">{Dom.Text.trustAnswer}</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
+                </div>"""
+        let answer =
+            html $"""
+                <button type="button" class="{Style.askStart}" data-repo-trust-answer="{name}"
+                        @click={Ev(fun _ -> dispatch (TrustRepoMsg (repo, shown, ticked)))}>
+                  <span class="{Style.whenReady}">{Dom.Text.trustAnswer}</span>
+                </button>"""
+        html $"""
+            <section class="{Style.ask}" data-repo-trust="{name}" aria-labelledby="repo-trust-title">
+              {askInside pane answer}
             </section>"""
 
-    /// What stands in the ask slot above the composer, if anything: a repo waiting to be
-    /// trusted first, because it is the question the launch's answer led to, then the launch.
+    /// Who asks, and what, as an ask's line says it while another's card is in front.
+    let private askLineWords (ask: Ask) : string * string =
+        match ask with
+        | Ask.Launch -> Dom.Text.repoPickerAsker, Dom.Text.repoPickerTitle
+        | Ask.Trust (repo, _) -> RepoRef.value repo, Dom.Text.trustTitle
+
+    /// An ask waiting behind the card in front: ONE line, the head it would wear folded to who
+    /// asks and what, and the line is the press that brings its card forward. The same blue
+    /// lead, because it is waiting on you just as the card is.
+    let private askLine (dispatch: ClientMsg -> unit) (ask: Ask) : TemplateResult =
+        let who, question = askLineWords ask
+        let key = Ask.key ask
+        html $"""
+            <button type="button" class="{Style.askLine}" data-ask-line="{key}"
+                    @click={Ev(fun _ -> dispatch (BringAskForwardMsg key))}>
+              <span class="{Style.askLeadBar}" aria-hidden="true"></span>
+              <span class="{Style.askLineWords}">
+                <span class="{Style.askLineMark}" aria-hidden="true">{Icon.up}</span>
+                <span class="{Style.askLineWho}">{who}</span>
+                <span class="{Style.askLineQuestion}">{question}</span>
+              </span>
+            </button>"""
+
+    /// The ask slot above the composer: every question waiting on this reader (`ClientModel.asks`),
+    /// oldest first. The front one stands as its card and the rest as a line each above it, so
+    /// each is one press from the front and no two cards ever stand with two buttons that commit.
     let private askSlot (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
-        match TrustCards.showing (RepoTrustWaits.waiting model.TrustWaits) model.TrustCards with
-        | (repo, shown) :: _ -> trustCard dispatch repo shown model
-        | [] when ClientModel.launchOffered model -> askCard actions dispatch model
-        | [] -> Lit.nothing
+        match ClientModel.frontAsk model with
+        | None -> Lit.nothing
+        | Some front ->
+            let card =
+                match front with
+                | Ask.Launch -> askCard actions dispatch model
+                | Ask.Trust (repo, shown) -> trustCard dispatch repo shown model
+            let behind = ClientModel.asks model |> List.filter (fun ask -> Ask.key ask <> Ask.key front)
+            html $"""<div class="{Style.askStack}" data-ask-stack>{behind |> List.map (askLine dispatch)}{card}</div>"""
 
     /// Who did something, as the transcript heads what they said: their square and their name
     /// in the caps voice, the agent's in blue. One face wherever an author heads what follows —

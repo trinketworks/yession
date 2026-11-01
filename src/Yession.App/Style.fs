@@ -2930,7 +2930,22 @@ module Style =
 
     /// The navigation voice: the wordmark's family, lowercased, at the heading step. Not
     /// `heading`, which truncates — a question is allowed to take the second line it needs.
-    let askQuestion = "font-extralight text-heading tracking-[-0.01em] lowercase text-ink min-w-0"
+    let askQuestion = "font-extralight text-heading tracking-[-0.01em] lowercase text-ink min-w-0 outline-none"
+
+    /// The slot's stack: the lines of the asks behind, then the card in front. Boxless, so
+    /// the card stays the column's own child and its height still resolves against the column
+    /// (`ask`), as it did when it stood there alone.
+    let askStack = "contents"
+    /// One ask waiting behind the card: a full-width press, its words on the head's rail. 44px
+    /// tall (`py-3.5` round a 16px line), the target this product holds a thumb to.
+    let askLine =
+        cls [ "relative shrink-0 block w-full text-left bg-surface border-0 cursor-pointer py-3.5 transition-colors"
+              askEdge; Stroke.dividerTop; "hover:bg-surface-2"; focusRingInset ]
+    let askLineWords = cls [ askMeasure; "flex items-center gap-3 leading-4" ]
+    /// In the gutter, where the card's way out stands: the way IN, pointing where it goes.
+    let askLineMark = "w-5 shrink-0 grid place-items-center text-ink-faint"
+    let askLineWho = cls [ askSubtitle; "shrink-0 max-w-[40%]" ]
+    let askLineQuestion = "font-extralight text-body lowercase text-ink truncate min-w-0"
 
     /// The way in that is not the list — a search, or a link pasted. Its BLOCK, on the card's
     /// edge margin beside START, because what sits in it is a control with a rim and a rim held
