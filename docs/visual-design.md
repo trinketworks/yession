@@ -86,7 +86,7 @@ mean three things:
 Blue is never a status, with one exception: the attention mark of an agent at work (Working,
 see Attention) wears the agent's own blue, because it is a mark of the agent, and that blue is
 the tone a control never wears. A wait is `ink-dim` text: reconnecting, catching up, queued,
-looking and no agent yet. A wait leads with the spin mark (see Motion): two arcs, always grey,
+looking and no agent yet. A wait leads with the spin mark (see Motion): a quarter arc, always grey,
 turning in place rather than beating.
 
 Live is `green` text: a running command, a connected peer, a session that runs. It leads with
@@ -226,13 +226,13 @@ One vocabulary. Things arrive by sliding a little and fading in, at `pace`, ease
 is a tilt: in fast, back with a hair of overshoot. A pressed control is *held* (see State).
 
 A settled status's dot is still; nothing left of it beats. A status still under way — a
-command live now, or a wait — turns instead: two arcs, always `ink-dim`, passing each other as
-they travel opposite ways round a ring, easing in and out each lap rather than at a constant
-rate, never varying in colour or opacity. Pending's own attention mark (see Attention) is the
-very same two arcs, at whatever ink its level carries instead of `ink-dim`: a machine's work is
-the same "still going" as any other, so it wears the one mark rather than a shape of its own.
-Every one of these owes the surface 3:1 at every frame of its travel. `motion-reduce` rides
-every one: it keeps the fill and drops the geometry.
+command live now, or a wait — turns instead: a quarter arc, always `ink-dim`, turning one way
+round a ring at an uneven pace within the lap rather than a constant rate, never reversing and
+never varying in colour or opacity. Pending's own attention mark (see Attention) is the very
+same arc, at whatever ink its level carries instead of `ink-dim`: a machine's work is the same
+"still going" as any other, so it wears the one mark rather than a shape of its own. Every one
+of these owes the surface 3:1 at every frame of its travel. `motion-reduce` rides every one: it
+keeps the fill and drops the geometry.
 
 Working alone is not drawn to this rule at all: its attention mark is the agent's own cube,
 turning in the hand — the exact mark that turns inline in the transcript while the agent
@@ -267,7 +267,7 @@ carry a rank (WCAG 1.4.1).
 | Wrong | disc in a ring, the whole box | `err` | the ring draws round and the core springs in, once | nothing moves until a person fixes it: sign in again, a PR conflicted or failed |
 | Wanted | disc | `green` | the arc closes and fills, then a halo breathes out three times | a person's turn: the agent is waiting |
 | Working | the agent's own cube, not drawn to the box and ink columns at all | `agent`, always | turns in the hand, continuously, for as long as the turn does — the same cube and the same turn as the transcript's | the agent at work: a turn is running |
-| Pending | two arcs passing round a ring (the status spin, `Icon.spin`) | `ink-dim` | the arcs ease round, 1.6s a lap, for as long as the work does | a machine's work, needs nobody: a command the agent left running, checks, the queue, a launch |
+| Pending | a quarter arc turning round a ring (the status spin, `Icon.spin`) | `ink-dim` | the arc turns, 1.6s a lap at an uneven pace, for as long as the work does | a machine's work, needs nobody: a command the agent left running, checks, the queue, a launch |
 | Absent | empty ring | `ink-dim` | none | no agent, chosen knowingly |
 | Rest | point | `ink-faint` | none | nothing to say: stopped, or everything watched is fine |
 
@@ -292,7 +292,7 @@ not a point and never `currentColor`, because it is not this rule's mark at all 
 transcript's, ranked here too.
 
 Motion goes only where a state is live or asks. Pending keeps going because the work does,
-turning two arcs round a ring; Working keeps going because the turn does, turning in the hand.
+turning an arc round a ring; Working keeps going because the turn does, turning in the hand.
 Wanted asks a few times and then sits still, so a session left waiting does not nag. Wrong
 never fidgets: a mark that kept moving would read as a spinner, not a fault. What moves is
 geometry, never the ink the meaning rests on, Working's cube included (see Motion above).
