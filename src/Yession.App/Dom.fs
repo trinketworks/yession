@@ -678,6 +678,9 @@ module Dom =
         // it says in place of a component this app does not draw yet.
         let agentSurface = "From the agent"
         let surfaceDismissLabel = "Dismiss this without answering"
+        /// What the pressed button says while the answer is on its way, in the box its own
+        /// label leaves (`Style.whenBusy`), as the launch card's START says `cloning…`.
+        let surfaceSending = "sending…"
         let surfaceUnsupported (kind: string) : string =
             sprintf "The agent put a %s here, which this app does not show yet." kind
 

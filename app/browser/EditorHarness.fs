@@ -1246,6 +1246,18 @@ let private harnessSurface : A2ui.Surface =
 let private surfaceModel : ClientModel =
     { shellModel with Synced = { shellModel.Synced with Surfaces = Map.ofList [ "ask", harnessSurface ] } }
 
+/// The same question in the state `?surface=<state>` names: `waiting`, with nothing chosen,
+/// so its button waits; `sending`, with the answer on its way, so its button holds.
+let private surfaceModelIn (state: string) : ClientModel =
+    match state with
+    | "waiting" ->
+        { surfaceModel with
+            Synced = { surfaceModel.Synced with Surfaces = Map.ofList [ "ask", { harnessSurface with DataModel = A2ui.JObject [] } ] } }
+    | "sending" ->
+        let sent = Yession.Domain.Link.PressSurfaceButton ("ask", "submit", "")
+        { surfaceModel with Asked = Map.ofList [ Yession.Domain.RequestId.fresh (), sent ] }
+    | other -> failwithf "?surface=%s: give waiting or sending" other
+
 /// The model that the shell's page shows first. `/?replies=<n>` shows the `Replies`
 /// conversation with `n` items, so that a picture (`frames --harness replies`) shows the prose
 /// of a working session. `/?surface` shows `surfaceModel`. Every other address shows
@@ -1258,6 +1270,7 @@ let private openingModel : ClientModel =
         | true, items when items > 0 -> shellModelOf Replies items
         | _ -> failwithf "%s: give a count above 0, for example ?replies=24" search
     elif search = "?surface" then surfaceModel
+    elif search.StartsWith "?surface=" then surfaceModelIn (search.Substring "?surface=".Length)
     else shellModel
 
 let private launchModel : ClientModel =

@@ -179,6 +179,67 @@ let private viewTests =
                 "data-surface-unsupported=\"Image\""
                 "the hole is named"
 
+        // The launch card's `Sent`, for a surface: the pressed button holds and says so in its
+        // own box, and nothing else on the surface takes a press until the session answers.
+        testCase "a button whose answer is on its way holds, and the rest of the surface stands still" <| fun () ->
+            let model = withSurface (choiceSurface [ "choice", branches [ "main" ] ])
+            let sent = Yession.Domain.Link.PressSurfaceButton ("ask", "submit", "")
+            let page = render { model with Asked = Map.ofList [ Yession.Domain.RequestId.fresh (), sent ] }
+            let submit = tagWith "data-surface-component=\"submit\"" page
+            Expect.stringContains submit "aria-busy=\"true\"" "the press holds"
+            Expect.stringContains submit "aria-disabled=\"false\"" "held, not waiting"
+            Expect.stringContains page Dom.Text.surfaceSending "it says the answer is on its way"
+            Expect.stringContains (tagWith "data-surface-choice=\"dev\"" page) "aria-disabled=\"true\"" "a choice takes no press meanwhile"
+            Expect.stringContains (tagWith "data-surface-dismiss" page) "aria-disabled=\"true\"" "nor does the way out"
+
+        testCase "a surface with nothing on its way holds nothing" <| fun () ->
+            let page = render (withSurface (choiceSurface [ "choice", branches [ "main" ] ]))
+            Expect.stringContains (tagWith "data-surface-component=\"submit\"" page) "aria-busy=\"false\"" "nothing held"
+            Expect.stringContains (tagWith "data-surface-choice=\"dev\"" page) "aria-disabled=\"false\"" "choices take a press"
+
+        testCase "a dismissal on its way holds the way out" <| fun () ->
+            let model = withSurface (choiceSurface [ "choice", branches [ "main" ] ])
+            let page = render { model with Asked = Map.ofList [ Yession.Domain.RequestId.fresh (), Yession.Domain.Link.DismissSurface "ask" ] }
+            Expect.stringContains (tagWith "data-surface-dismiss" page) "aria-busy=\"true\"" "the × holds"
+            Expect.stringContains (tagWith "data-surface-component=\"submit\"" page) "aria-disabled=\"true\"" "and the answer waits"
+
+        // An empty required field is not answered yet, which the button already says by
+        // waiting; only an answer can be wrong.
+        testCase "a field says what is wrong only once it holds an answer" <| fun () ->
+            let field =
+                plain "root" (ComponentKind.TextField (Literal "Ticket", Some (Bound "/ticket"), None, Some "^\\d{5}$", []))
+            let empty = render (withSurface (surfaceOf [ field ] []))
+            Expect.isFalse (empty.Contains "does not match") "nothing wrong yet"
+            Expect.isFalse (empty.Contains "aria-invalid=\"true\"") "and not marked invalid"
+            let wrong = render (withSurface (surfaceOf [ field ] [ "ticket", JString "12" ]))
+            Expect.stringContains wrong "does not match" "a wrong answer says so"
+            Expect.stringContains wrong "aria-invalid=\"true\"" "and is marked invalid"
+
+        // The band is the card, so a card at the root draws its child in its place.
+        testCase "a card at the root is drawn as the surface itself" <| fun () ->
+            let components =
+                [ plain "root" (ComponentKind.Card "body")
+                  plain "body" (ComponentKind.Text (Literal "Ready?", None)) ]
+            let page = render (withSurface (surfaceOf components []))
+            Expect.stringContains page "Ready?" "its content is drawn"
+            Expect.isFalse (page.Contains "data-surface-component=\"root\"") "with no box of its own"
+
+        // As the card's START is: the question can scroll past the band's cap, its answer cannot.
+        testCase "a column ending in a row of buttons pins that row under what scrolls" <| fun () ->
+            let components =
+                [ plain "root" (ComponentKind.Column (Static [ "question"; "actions" ], None, None))
+                  plain "question" (ComponentKind.Text (Literal "Ready?", None))
+                  plain "actions" (ComponentKind.Row (Static [ "go" ], None, None))
+                  plain "go" (ComponentKind.Button ("goLabel", None, Action.Event ("go", []), []))
+                  plain "goLabel" (ComponentKind.Text (Literal "Go", None)) ]
+            let page = render (withSurface (surfaceOf components []))
+            let pinned = page.IndexOf "data-surface-actions"
+            Expect.isTrue (pinned > page.IndexOf "Ready?") "the actions follow the question"
+            Expect.isTrue (pinned < page.IndexOf "data-surface-component=\"go\"") "and hold the button"
+
+        testCase "a column ending in anything but buttons pins nothing" <| fun () ->
+            Expect.isFalse ((render (withSurface (choiceSurface []))).Contains "data-surface-actions") "a lone button is content"
+
         testCase "a surface whose root has not arrived is not drawn" <| fun () ->
             let rootless = choiceComponents |> List.filter (fun c -> c.Id <> "root")
             Expect.isFalse

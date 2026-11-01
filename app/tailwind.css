@@ -227,6 +227,13 @@
 @keyframes ask-rise {
   from { height: 0; opacity: 0; }
 }
+/* An agent's surface arriving (`Style.agentSurface`): the card's rise, on the CAP rather than
+   the height. A surface stands as tall as what the agent drew, and `auto` is a height no
+   animation can run to; its cap is a length, so growing the cap from nothing lets the band
+   open over the same beat and land on its own height with nothing to jump. */
+@keyframes surface-rise {
+  from { max-height: 0; opacity: 0; }
+}
 /* The composer's line arriving when its editor mounts (`Style.draftInput`). The page the
    server sends has the field's box but no editor in it, so the line — the prompt, or a draft
    kept from before — appears with the client, and the band grew under the reader by a line
