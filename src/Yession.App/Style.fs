@@ -403,23 +403,19 @@ module Style =
 
     /// Still going: a command running, or a wait under way (`Icon.spin`), and Pending's own
     /// attention mark (`Icon.attention`) — one mark for "still going" everywhere it appears,
-    /// a machine's work included. Always `ink-dim` here; Pending draws the same two circles
-    /// under whatever ink `attentionInk` gives it instead, so the word beside the mark (or the
-    /// attention level itself) is what still says which. Two 12-unit arcs, a quarter of the
-    /// ring each, turning opposite ways — passing each other rather than chasing, so at least
-    /// one gap always shows, standing still or turning. The box is `overflow-visible` for
-    /// nothing to clip the stroke's round caps at the ring's four compass points.
+    /// a machine's work included. Always `ink-dim` here; Pending draws the same circle under
+    /// whatever ink `attentionInk` gives it instead, so the word beside the mark (or the
+    /// attention level itself) is what still says which. One 12-unit arc, a quarter of the
+    /// ring, turning. The box is `overflow-visible` for nothing to clip the stroke's round
+    /// caps as they cross the ring's four compass points.
     let statusSpin = "inline-block w-3 h-3 align-[-2px] text-ink-dim overflow-visible"
     /// The spin mark leading a word or a count on its line, as `statusDot` leads a settled one.
     let statusSpinLead = cls [ statusSpin; "mr-1" ]
-    /// One arc's turn, clockwise, easing in and out each lap rather than a constant rate — the
-    /// mark reads as working at it, not as a gauge ticking round.
+    /// The arc's turn, clockwise, at an uneven pace within the lap rather than a constant
+    /// rate — it surges through the middle of each turn and eases through the top, so it
+    /// reads as working at it, never as a gauge ticking round or a thing rocking in place.
     let statusSpinCw =
         "origin-center [transform-box:fill-box] animate-status-spin-cw motion-reduce:animate-none"
-    /// The other arc's turn, the same pace the other way, starting half a lap ahead — so at
-    /// rest the two arcs sit nose to tail and trace the full ring between them.
-    let statusSpinCcw =
-        "origin-center [transform-box:fill-box] animate-status-spin-ccw motion-reduce:animate-none"
     /// The settled dot with a halo round it: something has happened that the person reading
     /// has not seen yet (`ClientModel.unseen`). An `outline` rather than a border, so the gap
     /// between the two is the surface it sits on, whichever that is — and so this stays a
@@ -748,8 +744,8 @@ module Style =
     /// The row's mark, which RIDES when the row unfolds: down a track to the first unfolded
     /// line, which is the one it ranks first, so that line says its word with no mark of its
     /// own rather than repeating the one above it (`--spacing-mark-slide`). A wrapper, so the
-    /// mark's own motion (`markRun`, `statusSpinCw`/`statusSpinCcw` and their siblings) runs
-    /// on undisturbed while it travels.
+    /// mark's own motion (`statusSpinCw` and its siblings) runs on undisturbed while it
+    /// travels.
     let recordMarkRider =
         cls [ "relative flex transition-[translate]"; Motion.pace
               "[[data-expanded]_&]:translate-y-(--spacing-mark-slide)" ]

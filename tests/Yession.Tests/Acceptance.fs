@@ -2053,7 +2053,7 @@ let private uiChecklistTests =
         // The attention mark ranks by SHAPE (docs/visual-design.md, Attention): each face is
         // told apart without its colour. Working alone wears the agent's own cube — not a
         // point at all, the very mark that turns inline in the transcript — and Pending wears
-        // the same two-arc spin mark every other "still going" does (`Icon.spin`). What is
+        // the same quarter-arc spin mark every other "still going" does (`Icon.spin`). What is
         // pinned is what each face draws, so two levels collapsing into one shape goes red
         // here, and so does the agent's cube losing its own turn.
         testCase "each attention level draws its own face, and only work under way keeps moving" <| fun () ->
