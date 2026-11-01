@@ -659,7 +659,7 @@ let private uiChecklistTests =
                     Approvals =
                         RepoApprovals.apply
                             RepoApprovals.empty
-                            [ asked waiting [ "!net:anywhere" ] true
+                            [ asked waiting [ "!conn:github/git" ] true
                               asked settled [ "path:/nix:ro" ] false ] }
             let html = Support.render model
             // Counted rather than matched, so the assertion is about how MANY there are —
@@ -688,7 +688,7 @@ let private uiChecklistTests =
                             [ SessionEvent.RepoCapabilitiesChanged
                                 { RepoCapabilitiesChanged.MessageId = MessageId.create "ask" |> expect
                                   RepoCapabilitiesChanged.Repo = repo
-                                  RepoCapabilitiesChanged.Granted = [ "!sock:/run/docker.sock" ]
+                                  RepoCapabilitiesChanged.Granted = [ "!conn:github/git" ]
                                   RepoCapabilitiesChanged.Sensitive = true
                                   RepoCapabilitiesChanged.Actor = ActorRef.Configured repo
                                   RepoCapabilitiesChanged.CausedBy = None } ] }
@@ -721,14 +721,14 @@ let private uiChecklistTests =
                             [ SessionEvent.RepoCapabilitiesChanged
                                 { RepoCapabilitiesChanged.MessageId = MessageId.create "ask" |> expect
                                   RepoCapabilitiesChanged.Repo = repo
-                                  RepoCapabilitiesChanged.Granted = [ "!sock:/run/docker.sock" ]
+                                  RepoCapabilitiesChanged.Granted = [ "!conn:github/git" ]
                                   RepoCapabilitiesChanged.Sensitive = true
                                   RepoCapabilitiesChanged.Actor = ActorRef.Configured repo
                                   RepoCapabilitiesChanged.CausedBy = None } ] }
             let html = Support.render model
             Expect.isTrue
                 (html.Contains (Dom.attr Dom.Hooks.legend "2"))
-                "the socket and the mark, and none of the five kinds nobody was offered"
+                "the connection and the mark, and none of the kinds nobody was offered"
 
         testCase "every required Phase 1 UI element renders from the model" <| fun () ->
             let html = Support.render representativeModel

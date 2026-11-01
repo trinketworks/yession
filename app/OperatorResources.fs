@@ -110,13 +110,11 @@ let private queryDef : QueryDef =
       Description =
         "What this host offers a sandbox, as the operator declared it. Each row is a name that a \
          repo may select. The row shows all that selecting the name grants in the end: the whole \
-         closure, not only the line written beside the name. A resource is sensitive when \
-         anything it reaches is sensitive, at any depth."
+         closure, not only the line written beside the name."
       Shape =
         Rows
             [ QueryColumn.create "resource" "resource"
               QueryColumn.create "grants" "grants"
-              QueryColumn.create "sensitive" "sensitive"
               QueryColumn.create "always" "always granted" ]
       // The WHOLE vocabulary, because this is the surface an operator comes to in order to
       // learn what this host can offer at all — the one place the kinds nobody has selected
@@ -140,18 +138,15 @@ let rows (file: ProfileFile) : (string * QueryCell) list list =
     ResourceProfile.declared profile
     |> Set.toList
     |> List.map (fun name ->
-        let described =
+        let grants =
             match ResourceProfile.resolve profile [ name ] with
-            | Ok closure ->
-                (ResourceClosure.describe closure |> String.concat "; "),
-                (if ResourceClosure.isSensitive closure then CellText "yes" else CellAbsent)
+            | Ok closure -> ResourceClosure.describe closure |> String.concat "; "
             // Unreachable for a loaded profile — `load` refused everything that could fail
             // here. Said rather than swallowed, because a row that quietly showed nothing
             // would read as a resource that grants nothing.
-            | Error reason -> reason, CellAbsent
+            | Error reason -> reason
         [ "resource", CellText (ResourceName.value name)
-          "grants", CellText (fst described)
-          "sensitive", snd described
+          "grants", CellText grants
           // Whether every sandbox on this host holds it without asking. Declared and not
           // granted is a real state, and one an operator cannot see any other way.
           "always", (if List.contains name file.Always then CellText "yes" else CellAbsent) ])

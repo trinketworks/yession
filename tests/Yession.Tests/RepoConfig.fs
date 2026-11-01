@@ -624,13 +624,31 @@ let private cell (value: 'a) = fun () -> value
 let private noCapabilities : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
     fun _ -> Ok { RepoSandboxes.Granted = []; RepoSandboxes.Sensitive = false }
 
-/// A vocabulary that grants exactly these lines, and nothing an operator marked sensitive —
-/// so the fold's approval gate stays out of the way of cases about something else.
-let private sensitively (lines: string list) : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
+/// A vocabulary that grants exactly these lines and waits for somebody to approve them, as a
+/// selection holding a connection does — for the cases about what approving does.
+let private asking (lines: string list) : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
     fun _ -> Ok { RepoSandboxes.Granted = lines; RepoSandboxes.Sensitive = true }
 
+/// A vocabulary that grants exactly these lines and asks nobody — so the fold's approval gate
+/// stays out of the way of cases about something else.
 let private granting (lines: string list) : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
     fun _ -> Ok { RepoSandboxes.Granted = lines; RepoSandboxes.Sensitive = false }
+
+/// A host offering a store (`nix`) and a connection (`github`), each selection put through
+/// the rule the session applies (`RepoSandboxes.capabilitiesOn`) — for the cases about
+/// WHETHER a fold waits for somebody, which a flag the case chose could not answer.
+let private offering : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
+    fun selection ->
+        let profile =
+            OperatorProfile.parse
+                """{ "version": 1,
+                     "resources": { "nix": { "mount": { "from": "/nix" } },
+                                    "github": { "connection": { "github": [ "git" ] } } } }"""
+            |> expect
+        RepoSandboxes.capabilitiesOn
+            HostLimits.unlimited
+            (fun uses wants -> ResourceProfile.resolve profile.Resources (ResourceProfile.selected profile.Resources uses wants))
+            selection
 
 /// A log for the fold to read its own history from and append its notes to. Fresh per case:
 /// what a fold says is a delta against what the session was already told, so a shared log
@@ -1249,7 +1267,7 @@ let foldTests =
                         log
                         (granting granted)
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
-                granted <- [ "path:/nix:ro"; "!net:anywhere" ]
+                granted <- [ "path:/nix:ro"; "net:anywhere" ]
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 let notes =
@@ -1257,14 +1275,16 @@ let foldTests =
                 Expect.equal (List.length notes) 2 "the widening is news"
                 Expect.equal
                     (notes |> List.last)
-                    [ "path:/nix:ro"; "!net:anywhere" ]
+                    [ "path:/nix:ro"; "net:anywhere" ]
                     "and the second note carries the whole set, so a person reads what it is now rather than what moved"
             }
 
-        // Only a SENSITIVE set waits on somebody. A prompt that appears for every repo is a
-        // prompt people learn to dismiss without reading, which is worse than none — it
-        // launders the one that mattered.
-        testCaseAsync "an ordinary capability set starts without asking anybody" <|
+        // Only a set holding a connection waits on somebody, because a connection is spent as
+        // the person asked. A prompt that appears for every repo is a prompt people learn to
+        // dismiss without reading, which is worse than none — it launders the one that
+        // mattered. Both halves select from a real vocabulary (`offering`), so what decides
+        // is the rule the session applies, not a flag the case chose.
+        testCaseAsync "a selection holding no connection starts without asking anybody" <|
             async {
                 let r = repo "octo/hello"
                 let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n")
@@ -1272,20 +1292,20 @@ let foldTests =
                 let folded =
                     RepoSandboxes.create
                         (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
-                        (recordingGate seen) (foldLog ()) (granting [ "path:/nix:ro" ])
+                        (recordingGate seen) (foldLog ()) offering
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal seen.Count 1 "the declaration reached the gate"
             }
 
-        testCaseAsync "a sensitive capability set starts nothing until somebody approves it" <|
+        testCaseAsync "a selection holding a connection starts nothing until somebody approves it" <|
             async {
                 let r = repo "octo/hello"
-                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ web ]\n")
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ github ]\n")
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
                     RepoSandboxes.create
                         (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
-                        (recordingGate seen) (foldLog ()) (sensitively [ "!net:anywhere" ])
+                        (recordingGate seen) (foldLog ()) offering
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal seen.Count 0 "nothing was started"
                 match folded.Outcomes () with
@@ -1297,7 +1317,7 @@ let foldTests =
                             (problem.Contains "approve")
                             (sprintf "the row says what is waited on, said: %s" problem)
                         Expect.isTrue
-                            (problem.Contains "net:anywhere")
+                            (problem.Contains "conn:github/git")
                             "and what is being asked for, so the answer is beside the question"
                 | other -> failwithf "expected one row, got %A" other
             }
@@ -1310,16 +1330,16 @@ let foldTests =
         testCaseAsync "approving starts it, without waiting for another repo verb" <|
             async {
                 let r = repo "octo/hello"
-                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ web ]\n")
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ github ]\n")
                 let seen = ResizeArray<GatedCall> ()
                 let log = foldLog ()
                 let folded =
                     RepoSandboxes.create
                         (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
-                        (recordingGate seen) log (sensitively [ "!net:anywhere" ])
+                        (recordingGate seen) log (asking [ "!conn:github/git" ])
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let ada = Principal.User (UserId.create "ada" |> expect)
-                let! approved = folded.Approve ada r [ "!net:anywhere" ]
+                let! approved = folded.Approve ada r [ "!conn:github/git" ]
                 Expect.equal approved (Ok ()) "a signed-in person may consent"
                 Expect.equal seen.Count 1 "and that alone starts it"
             }
@@ -1337,15 +1357,15 @@ let foldTests =
         testCaseAsync "a peer who did not sign in may approve, and is recorded as a peer" <|
             async {
                 let r = repo "octo/hello"
-                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ web ]\n")
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ github ]\n")
                 let log = foldLog ()
                 let folded =
                     RepoSandboxes.create
                         (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ())) log
-                        (sensitively [ "!net:anywhere" ])
+                        (asking [ "!conn:github/git" ])
                 let anonymous = Principal.Peer (PeerId.create "peer-1" |> expect)
-                let! approved = folded.Approve anonymous r [ "!net:anywhere" ]
+                let! approved = folded.Approve anonymous r [ "!conn:github/git" ]
                 Expect.equal approved (Ok ()) "a person at a browser is a person"
                 let! page = log.Read None System.Int32.MaxValue
                 match page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoCapabilitiesApproved a -> Some a.Actor | _ -> None) with
@@ -1359,18 +1379,18 @@ let foldTests =
         testCaseAsync "approving a set the repo no longer asks for is refused" <|
             async {
                 let r = repo "octo/hello"
-                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ web ]\n")
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ github ]\n")
                 let folded =
                     RepoSandboxes.create
                         (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray<GatedCall> ())) (foldLog ())
-                        (sensitively [ "!net:anywhere" ])
+                        (asking [ "!conn:github/git" ])
                 let ada = Principal.User (UserId.create "ada" |> expect)
                 match! folded.Approve ada r [ "reaches nowhere much" ] with
                 | Ok () -> failwith "consent to a set that is not what is asked must not stand"
                 | Error e ->
                     Expect.isTrue (e.Contains "changed since you looked") (sprintf "and says so, said: %s" e)
-                    Expect.isTrue (e.Contains "net:anywhere") "naming what it asks for now"
+                    Expect.isTrue (e.Contains "conn:github/git") "naming what it asks for now"
             }
 
         // Both sides fold the same log: the Process to know what to gate, a client to know
@@ -1382,13 +1402,13 @@ let foldTests =
                 SessionEvent.RepoCapabilitiesChanged
                     { RepoCapabilitiesChanged.MessageId = MessageId.create "m1" |> expect
                       RepoCapabilitiesChanged.Repo = r
-                      RepoCapabilitiesChanged.Granted = [ "!net:anywhere" ]
+                      RepoCapabilitiesChanged.Granted = [ "!conn:github/git" ]
                       RepoCapabilitiesChanged.Sensitive = true
                       RepoCapabilitiesChanged.Actor = ActorRef.Configured r
                       RepoCapabilitiesChanged.CausedBy = None }
             Expect.equal
                 (RepoApprovals.pending [ asked ])
-                [ r, [ "!net:anywhere" ] ]
+                [ r, [ "!conn:github/git" ] ]
                 "somebody has to decide about it"
 
         testCase "an ordinary ask is never pending, however often it changes" <| fun () ->
@@ -1410,7 +1430,7 @@ let foldTests =
                 SessionEvent.RepoCapabilitiesChanged
                     { RepoCapabilitiesChanged.MessageId = MessageId.create "m1" |> expect
                       RepoCapabilitiesChanged.Repo = r
-                      RepoCapabilitiesChanged.Granted = [ "!net:anywhere" ]
+                      RepoCapabilitiesChanged.Granted = [ "!conn:github/git" ]
                       RepoCapabilitiesChanged.Sensitive = true
                       RepoCapabilitiesChanged.Actor = ActorRef.Configured r
                       RepoCapabilitiesChanged.CausedBy = None }
@@ -1420,10 +1440,10 @@ let foldTests =
                       RepoCapabilitiesApproved.Repo = r
                       RepoCapabilitiesApproved.Granted = granted
                       RepoCapabilitiesApproved.Actor = ada }
-            Expect.equal (RepoApprovals.pending [ asked; approved [ "!net:anywhere" ] ]) [] "settled"
+            Expect.equal (RepoApprovals.pending [ asked; approved [ "!conn:github/git" ] ]) [] "settled"
             Expect.equal
                 (RepoApprovals.pending [ asked; approved [ "something else entirely" ] ])
-                [ r, [ "!net:anywhere" ] ]
+                [ r, [ "!conn:github/git" ] ]
                 "an approval of something else leaves the ask standing"
 
         // The case the whole rule exists for: yes to one set is not yes to a wider one.
@@ -1442,14 +1462,14 @@ let foldTests =
                 SessionEvent.RepoCapabilitiesApproved
                     { RepoCapabilitiesApproved.MessageId = MessageId.create "m2" |> expect
                       RepoCapabilitiesApproved.Repo = r
-                      RepoCapabilitiesApproved.Granted = [ "!net:anywhere" ]
+                      RepoCapabilitiesApproved.Granted = [ "!conn:github/git" ]
                       RepoCapabilitiesApproved.Actor = ada }
             Expect.equal
                 (RepoApprovals.pending
-                    [ asked [ "!net:anywhere" ]
+                    [ asked [ "!conn:github/git" ]
                       approved
-                      asked [ "!net:anywhere"; "path:/etc:ro" ] ])
-                [ r, [ "!net:anywhere"; "path:/etc:ro" ] ]
+                      asked [ "!conn:github/git"; "path:/etc:ro" ] ])
+                [ r, [ "!conn:github/git"; "path:/etc:ro" ] ]
                 "the old yes does not cover the new ask"
 
         // Where the session's terminals start is the one thing a file asks of the session,

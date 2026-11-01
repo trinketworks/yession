@@ -669,9 +669,10 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     neither is no browser's, and passes on its identity alone. A `GET` changes no state, so
     `/sessions/{id}/open` answers a stopped session with a screen that asks for the launch.
 25. A grant is decided by the person it belongs to. A connection is spent as the session's
-    user, so it needs their approval, whatever its declaration says (`ResourceLeaf.floor`). A
-    volume or a socket reaches other sessions and the host, so the operator decides it in the
-    profile, and a volume states its mode there. The session's user is not asked about it.
+    user, so a selection that holds one needs their approval (`ResourceClosure.asksItsUser`).
+    Every other grant is the operator's. A volume or a socket reaches other sessions and the
+    host, so the operator decides it in the profile, and a volume states its mode there. The
+    session's user is not asked about it, and no profile marks a grant to be asked about.
 26. A repository's container limits narrow the operator's, and only the operator names a
     cgroup (`ContainerSpec.forDaemon`, `ContainerCeiling`).
 

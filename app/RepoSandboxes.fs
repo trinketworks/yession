@@ -27,8 +27,10 @@ open Yession.Domain.Agent
 open Yession.Domain.Tools
 open Yession.Session
 
-/// What a repo's selection comes to: the lines a person reads, and whether any of it is
-/// something the operator marked as worth being asked about.
+/// What a repo's selection comes to: the lines a person reads, and whether a person has to
+/// approve them first, which is whether the selection holds a connection
+/// (`ResourceClosure.asksItsUser`). Named `Sensitive` after the event field it fills
+/// (`RepoCapabilitiesChanged.Sensitive`), which keeps its name because events are durable.
 type RepoCapabilities =
     { Granted : string list
       Sensitive : bool }
@@ -180,16 +182,15 @@ let capabilitiesOn
     match uses, wants with
     | [], [] -> Ok { Granted = []; Sensitive = false }
     | uses, wants ->
-        // Both postures reach the same resolution, so a sensitive resource is exactly as
-        // sensitive wanted as used: the approval prompt shows whatever will be GRANTED,
-        // and a want this host does not offer is not granted and not shown.
+        // Both postures reach the same resolution, so a connection asks exactly as much
+        // wanted as used: the approval prompt shows whatever will be GRANTED, and a want this
+        // host does not offer is not granted and not shown.
         resolve uses wants
         |> Result.map (fun closure ->
             { Granted = RealisedClosure.describeOn limits closure
-              // Read off the closure, never off the lines above: sensitivity is the
-              // operator's mark on a name and no host changes it, so a host that coarsened
-              // every leaf still has exactly the sensitive ones it started with.
-              Sensitive = ResourceClosure.isSensitive closure })
+              // Read off the closure, never off the lines above: whether a selection asks is
+              // a fact about the kinds of its leaves, and the lines are words.
+              Sensitive = ResourceClosure.asksItsUser closure })
 
 let create
     (repos: unit -> Repos.ReposService option)
@@ -200,9 +201,9 @@ let create
     // set is a fact about a REPO, not about one of its sandboxes, and only the fold sees all
     // of a repo's declarations at once.
     //
-    // Sensitivity is REPORTED rather than inferred from the words: reading it back out of a
-    // rendered description would make the prompt depend on the wording of a sentence, and the
-    // wording is a design that will move.
+    // Whether it asks is REPORTED rather than inferred from the words: reading it back out of
+    // a rendered description would make the prompt depend on the wording of a sentence, and
+    // the wording is a design that will move.
     (capabilitiesOf: ResourceName list * ResourceName list -> Result<RepoCapabilities, string>)
     : RepoSandboxes =
 
@@ -376,11 +377,12 @@ let create
                         match! failed with
                         | Some reason -> do! warn repo (sprintf "the shell profile could not be set: %s" reason)
                         | None -> ()
-                    // Which repos are waiting on somebody. Only a SENSITIVE set waits: a
-                    // repo asking for a cache and a store is not a decision anybody wants to
-                    // be asked to make, and a prompt that appears for everything is a prompt
-                    // people learn to dismiss without reading — which is worse than none,
-                    // because it launders the one that mattered.
+                    // Which repos are waiting on somebody. Only a set holding a connection
+                    // waits, because a connection is spent as the person asked: a repo asking
+                    // for a cache and a store is not a decision anybody wants to be asked to
+                    // make, and a prompt that appears for everything is a prompt people learn
+                    // to dismiss without reading — which is worse than none, because it
+                    // launders the one that mattered.
                     let awaiting =
                         byRepo
                         |> List.choose (fun (_, entries) ->

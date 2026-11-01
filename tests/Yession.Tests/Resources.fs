@@ -12,10 +12,6 @@ module Yession.Tests.Resources
 // Hedgehog has no `Gen.filter`, no shrinking and no `Gen.choice`, so "draw graphs until one
 // is acyclic" is not available — and it would be the wrong instinct anyway, because a
 // generator that rejects most of its draws tests the rejection more than the subject.
-//
-// One thing deliberately has no test: that a COMPOSITE cannot be declared sensitive. It has
-// no representation in `ResourceDecl`, so a case asserting it could only prove that the test
-// file compiles.
 
 open System
 open Fable.Pyxpecto
@@ -102,10 +98,6 @@ let private genLimits : Gen<HostLimits> =
         return HostLimits.of' (List.zip distinctions keep |> List.choose (fun (d, k) -> if k then Some d else None))
     }
 
-let private genSensitivity : Gen<Sensitivity> =
-    Gen.int32 (Range.linear 0 3)
-    |> Gen.map (fun n -> if n = 0 then Sensitivity.Sensitive else Sensitivity.Ordinary)
-
 /// A DAG, by construction: `r i` is either a leaf or a composition drawn ONLY from
 /// { r0 … r(i-1) }, so the index IS topological rank and a back edge is not expressible.
 /// `r0` is forced to a leaf because it has no predecessors. Children are drawn with
@@ -119,16 +111,14 @@ let rec private buildDag (size: int) (i: int) (acc: (ResourceName * ResourceDecl
                 if i = 0 then
                     gen {
                         let! leaf = genLeafFor 0
-                        let! sensitivity = genSensitivity
-                        return ResourceDecl.Leaf ([ leaf ], sensitivity)
+                        return ResourceDecl.Leaf [ leaf ]
                     }
                 else
                     gen {
                         let! shape = Gen.int32 (Range.linear 0 2)
                         if shape = 0 then
                             let! leaf = genLeafFor i
-                            let! sensitivity = genSensitivity
-                            return ResourceDecl.Leaf ([ leaf ], sensitivity)
+                            return ResourceDecl.Leaf [ leaf ]
                         else
                             let! picks = Gen.list (Range.linear 1 3) (Gen.int32 (Range.linear 0 (i - 1)))
                             return ResourceDecl.Composition (picks |> List.map (fun p -> pool.[p]))
@@ -183,13 +173,22 @@ let private genSelection (declarations: (ResourceName * ResourceDecl) list) : Ge
 let rec private expand (declarations: (ResourceName * ResourceDecl) list) (name: ResourceName) =
     match declarations |> List.tryFind (fun (declared, _) -> declared = name) with
     | None -> []
-    | Some (_, ResourceDecl.Leaf (leaves, sensitivity)) -> leaves |> List.map (fun leaf -> leaf, sensitivity)
+    | Some (_, ResourceDecl.Leaf leaves) -> leaves
     | Some (_, ResourceDecl.Composition children) -> children |> List.collect (expand declarations)
+
+/// How many of these leaves ask a person: the connections, counted by matching rather than
+/// through the rule under test, so the two can disagree.
+let private connections (leaves: ResourceLeaf seq) : int =
+    leaves
+    |> Seq.filter (function
+        | Connection _ -> true
+        | _ -> false)
+    |> Seq.length
 
 let private check (name: string) (body: unit -> Property<unit>) = testCase name <| fun () -> Property.check (body ())
 
 /// One resource `r`, declared as `leaf` (a JSON object), resolved.
-let private unmarked (leaf: string) : ResourceClosure =
+let private resolved (leaf: string) : ResourceClosure =
     let profile =
         OperatorProfile.parse (sprintf """{ "version": 1, "resources": { "r": %s } }""" leaf) |> expect
     ResourceProfile.resolve profile.Resources [ ResourceName.create "r" |> expect ] |> expect
@@ -197,9 +196,8 @@ let private unmarked (leaf: string) : ResourceClosure =
 /// Two resources that each load and cannot hold together: one target, two modes.
 let private alternatives =
     let at = { From = "/nix"; At = "/nix"; Mode = ResourceMountMode.Read }
-    [ ResourceName.create "nix-ro" |> expect, ResourceDecl.Leaf ([ Mount at ], Sensitivity.Ordinary)
-      ResourceName.create "nix-rw" |> expect,
-        ResourceDecl.Leaf ([ Mount { at with Mode = ResourceMountMode.Write } ], Sensitivity.Ordinary) ]
+    [ ResourceName.create "nix-ro" |> expect, ResourceDecl.Leaf [ Mount at ]
+      ResourceName.create "nix-rw" |> expect, ResourceDecl.Leaf [ Mount { at with Mode = ResourceMountMode.Write } ] ]
 
 let tests =
     testList "the resources algebra" [
@@ -254,7 +252,7 @@ let tests =
                 let! selection = genSelection declarations
                 let profile = ResourceProfile.load declarations |> expect
                 let closure = ResourceProfile.resolve profile selection |> expect
-                let oracle = selection |> List.collect (expand declarations) |> List.map fst |> Set.ofList
+                let oracle = selection |> List.collect (expand declarations) |> Set.ofList
                 Expect.equal (ResourceClosure.leaves closure) oracle "every leaf the naive walk reaches, once each"
             }
 
@@ -372,8 +370,8 @@ let tests =
                 let b = ResourceName.create "cc-gcc" |> expect
                 let both = ResourceName.create "cc-both" |> expect
                 let clashing =
-                    [ a, ResourceDecl.Leaf ([ Variable ("CC", VariableValue.Text "clang") ], Sensitivity.Ordinary)
-                      b, ResourceDecl.Leaf ([ Variable ("CC", VariableValue.Text "gcc") ], Sensitivity.Ordinary)
+                    [ a, ResourceDecl.Leaf [ Variable ("CC", VariableValue.Text "clang") ]
+                      b, ResourceDecl.Leaf [ Variable ("CC", VariableValue.Text "gcc") ]
                       both, ResourceDecl.Composition [ a; b ] ]
                 match ResourceProfile.load (declarations @ clashing) with
                 | Ok _ -> failwith "expected a refusal"
@@ -391,102 +389,30 @@ let tests =
                 | Error e -> Expect.isTrue (e.Contains "/nix") (sprintf "the refusal names the target, said: %s" e)
             }
 
-        // --- sensitivity ------------------------------------------------------------------
+        // --- who is asked ------------------------------------------------------------------
+        //
+        // A connection is spent as the person a sandbox's commands run for, so a selection
+        // holding one waits for a person to approve it. Everything else a profile grants is
+        // the operator's, and the session's user is not asked about it (invariant 25).
 
-        check "a closure is sensitive exactly when some leaf in it is" <| fun () ->
+        // The oracle is the naive walk again, so a rule that missed a connection somewhere
+        // down a composition, or started asking about another kind, reads as a disagreement.
+        check "a selection asks its user exactly when it holds a connection" <| fun () ->
             property {
                 let! declarations = genDag
                 let! selection = genSelection declarations
                 let profile = ResourceProfile.load declarations |> expect
                 let closure = ResourceProfile.resolve profile selection |> expect
-                let oracle =
-                    selection
-                    |> List.collect (expand declarations)
-                    |> List.exists (fun (leaf, sensitivity) ->
-                        sensitivity = Sensitivity.Sensitive || ResourceLeaf.floor leaf = Sensitivity.Sensitive)
-                Expect.equal (ResourceClosure.isSensitive closure) oracle "the naive walk and the closure agree"
+                Expect.equal
+                    (ResourceClosure.asksItsUser closure)
+                    (connections (selection |> List.collect (expand declarations)) > 0)
+                    "the naive walk and the closure agree"
             }
 
-        // The masking attack, stated directly: wrap a sensitive leaf in friendlier and
-        // friendlier names and it must stay sensitive, or an approval prompt goes quiet
-        // about the thing it exists to be loud about.
-        check "wrapping a sensitive resource in compositions never makes it ordinary" <| fun () ->
-            property {
-                let! depth = Gen.int32 (Range.linear 1 5)
-                let danger = ResourceName.create "open-web" |> expect
-                let wrappers = [ 0 .. depth - 1 ] |> List.map (fun i -> ResourceName.create (sprintf "friendly%d" i) |> expect)
-                let declarations =
-                    [ danger, ResourceDecl.Leaf ([ Endpoint "anywhere.example.com" ], Sensitivity.Sensitive) ]
-                    @ (wrappers
-                       |> List.mapi (fun i name ->
-                            let inner = if i = 0 then danger else wrappers.[i - 1]
-                            name, ResourceDecl.Composition [ inner ]))
-                let profile = ResourceProfile.load declarations |> expect
-                let closure = ResourceProfile.resolve profile [ List.last wrappers ] |> expect
-                Expect.isTrue (ResourceClosure.isSensitive closure) "however deep it is buried, it is still sensitive"
-            }
-
-        // The join, which the wrapping case does not reach: one leaf, two routes.
-        check "a leaf reached both sensitively and ordinarily comes out sensitive" <| fun () ->
-            property {
-                let shared = Endpoint "shared.example.com"
-                let loud = ResourceName.create "loud" |> expect
-                let quiet = ResourceName.create "quiet" |> expect
-                let both = ResourceName.create "both" |> expect
-                let declarations =
-                    [ loud, ResourceDecl.Leaf ([ shared ], Sensitivity.Sensitive)
-                      quiet, ResourceDecl.Leaf ([ shared ], Sensitivity.Ordinary)
-                      both, ResourceDecl.Composition [ quiet; loud ] ]
-                let profile = ResourceProfile.load declarations |> expect
-                Expect.isTrue
-                    (ResourceProfile.resolve profile [ both ] |> expect |> ResourceClosure.isSensitive)
-                    "the louder mark wins, whichever order the routes are folded in"
-            }
-
-        // --- the floor: what a kind is, whatever its declaration says ---------------------
-        //
-        // A connection is spent as the person a sandbox's commands run for, so it asks them,
-        // whatever the profile says (invariant 25). A volume and a socket are the operator's:
-        // asking the session user about them asks somebody who is not the one harmed.
-
-        testCase "a connection leaf with no sensitive key is sensitive" <| fun () ->
-            Expect.isTrue
-                (unmarked """{ "connection": { "github": [ "git" ] } }""" |> ResourceClosure.isSensitive)
-                "its kind's floor raises it"
-
-        yield! [ "volume", """{ "volume": { "name": "warm", "at": "/nix", "mode": "write" } }"""
-                 "socket", """{ "socket": "/run/docker.sock" }"""
-                 "mount", """{ "mount": { "from": "/nix" } }"""
-                 "endpoint", """{ "endpoint": "cache.nixos.org" }"""
-                 "variable", """{ "env": { "CI": "1" } }"""
-                 "exec", """{ "exec": "/usr/bin/git" }""" ]
-               |> List.map (fun (kind, leaf) ->
-                   testCase (sprintf "a %s leaf with no sensitive key is ordinary" kind) <| fun () ->
-                       Expect.isFalse (unmarked leaf |> ResourceClosure.isSensitive) "nothing raises it")
-
-        testCase "a composite over a connection leaf is sensitive" <| fun () ->
-            let profile =
-                OperatorProfile.parse """
-                    { "version": 1,
-                      "resources": { "gh": { "connection": { "github": [ "git" ] } },
-                                     "friendly": [ "gh" ] } }"""
-                |> expect
-            Expect.isTrue
-                (ResourceProfile.resolve profile.Resources [ ResourceName.create "friendly" |> expect ]
-                 |> expect
-                 |> ResourceClosure.isSensitive)
-                "the friendly name reaches a connection"
-
-        testCase "sensitive: true raises a mount leaf" <| fun () ->
-            Expect.isTrue
-                (unmarked """{ "mount": { "from": "/nix" }, "sensitive": true }""" |> ResourceClosure.isSensitive)
-                "the operator's mark raises an ordinary kind"
-
-        testCase "sensitive: false does not lower a connection leaf" <| fun () ->
-            Expect.isTrue
-                (unmarked """{ "connection": { "github": [ "git" ] }, "sensitive": false }"""
-                 |> ResourceClosure.isSensitive)
-                "no key lowers a sensitivity"
+        // Whether a selection asks is read off its leaves' kinds alone, and a closure holds
+        // nothing beside its leaves, so no composition, second route or declaration can raise
+        // or lower it. The cases that pinned a sensitivity mark through each of those went
+        // with the mark. A profile that still writes `sensitive:` is refused (below).
 
         // --- the syntax an operator writes ---------------------------------------------------
         //
@@ -578,7 +504,7 @@ let tests =
                     (sprintf "the refusal names read and write, said: %s" e)
 
         testCase "a volume with mode: read decodes read" <| fun () ->
-            match unmarked """{ "volume": { "name": "x", "at": "/x", "mode": "read" } }""" |> ResourceClosure.leaves |> Set.toList with
+            match resolved """{ "volume": { "name": "x", "at": "/x", "mode": "read" } }""" |> ResourceClosure.leaves |> Set.toList with
             | [ Volume (_, _, mode) ] -> Expect.equal mode ResourceMountMode.Read "the operator's word"
             | other -> failwithf "expected one volume, got %A" other
 
@@ -647,6 +573,23 @@ let tests =
                 (OperatorProfile.parse """
                     { "version": 1, "resources": { "s": { "mount": { "from": "/nix" }, "mounts": "/x" } } }""")
                 "a misspelled key fails the file even when the rest of the resource is fine"
+
+        // `sensitive` once marked a resource to be asked about, and a kind decides that now. A
+        // file still carrying it says something about who is asked, so its operator is told
+        // by name what became of that, whatever the mark said, rather than handed the
+        // unknown-key sentence a typo gets.
+        testCase "a resource that still marks itself sensitive is refused by name" <| fun () ->
+            for mark in [ "true"; "false" ] do
+                match
+                    OperatorProfile.parse (
+                        sprintf
+                            """{ "version": 1, "resources": { "s": { "mount": { "from": "/nix" }, "sensitive": %s } } }"""
+                            mark)
+                with
+                | Ok _ -> failwithf "sensitive: %s was accepted" mark
+                | Error e ->
+                    Expect.stringContains e "'sensitive'" (sprintf "the refusal names the key, said: %s" e)
+                    Expect.isFalse (e.Contains "unknown") (sprintf "and is not the typo's sentence, said: %s" e)
 
         testCase "a mount mode this build does not know is refused, naming the three there are" <| fun () ->
             match OperatorProfile.parse """{ "version": 1, "resources": { "s": { "mount": { "from": "/n", "mode": "rw" } } } }""" with
@@ -758,21 +701,6 @@ let tests =
                 (OperatorProfile.parse """{ "version": 1, "resources": { "a": [ "nope" ] } }""")
                 "the algebra's dangling-name refusal reaches the operator"
 
-        // Sensitivity is declarable on a leaf and NOT on a composition — there is no key for
-        // it there — so the only way a composite becomes sensitive is by reaching one.
-        testCase "a composition cannot declare itself ordinary around a sensitive leaf" <| fun () ->
-            let profile =
-                OperatorProfile.parse """
-                    { "version": 1,
-                      "resources": { "danger": { "endpoint": "anywhere", "sensitive": true },
-                                     "friendly": [ "danger" ] } }"""
-                |> expect
-            Expect.isTrue
-                (ResourceProfile.resolve profile.Resources [ ResourceName.create "friendly" |> expect ]
-                 |> expect
-                 |> ResourceClosure.isSensitive)
-                "the friendly name is sensitive because of what it reaches"
-
         // The refusal that REPLACED the ceiling. There is no list-versus-list comparison any
         // more: a repo cannot exceed what an operator offered because it can only name what
         // an operator offered, and a name it was not offered does not resolve. That is a
@@ -828,23 +756,8 @@ let tests =
             Expect.equal (always "store") (CellText "yes") "handed out without asking"
             Expect.equal (always "docker") CellAbsent "on the menu, and not on the table"
 
-        // Sensitivity is the reason the surface exists at all: an operator has to be able to
-        // see which of their own names are the loud ones, INCLUDING the ones that are only
-        // loud because of what they reach.
-        testCase "a resource is marked sensitive when something it reaches is" <| fun () ->
-            let profile =
-                OperatorProfile.parse """
-                    { "version": 1,
-                      "resources": { "danger": { "endpoint": "anywhere", "sensitive": true },
-                                     "friendly": [ "danger" ],
-                                     "quiet": { "exec": "/bin/true" } } }"""
-                |> expect
-            let sensitive name =
-                OperatorResources.rows profile
-                |> List.find (fun row -> row |> List.contains ("resource", CellText name))
-                |> List.pick (fun (column, cell) -> if column = "sensitive" then Some cell else None)
-            Expect.equal (sensitive "friendly") (CellText "yes") "a friendly name over a loud leaf is loud"
-            Expect.equal (sensitive "quiet") CellAbsent "and one that reaches nothing loud is not"
+        // A row has no sensitive column any more: no resource is marked, and a grant that asks
+        // is marked on its own line in `grants`, which the describing property below pins.
 
         // --- what a person is shown --------------------------------------------------------
 
@@ -914,12 +827,12 @@ let tests =
         // or seven entries about grants nobody was offered.
         testCase "a legend for particular grants holds what they use, and nothing else" <| fun () ->
             let shapes =
-                GrantNotation.legendFor [ "!sock:/run/docker.sock ~> sock:*"; "path:/nix:ro" ]
+                GrantNotation.legendFor [ "!conn:github/git"; "sock:/run/docker.sock ~> sock:*"; "path:/nix:ro" ]
                 |> List.map fst
             Expect.equal
                 shapes
-                [ "path:PATH[>AT]:ro|rw|ovl"; "sock:PATH"; "!GRANT"; "GRANT ~> OTHER" ]
-                "the two kinds and both marks, in reading order"
+                [ "path:PATH[>AT]:ro|rw|ovl"; "sock:PATH"; "conn:NAME/ROUTE"; "!GRANT"; "GRANT ~> OTHER" ]
+                "the three kinds and both marks, in reading order"
 
         // The empty case is the one that would go unnoticed: a surface with nothing to
         // explain must render no legend at all, rather than a heading over the vocabulary.
@@ -928,7 +841,7 @@ let tests =
 
         // A leaf that materialises and was never shown is the fault this module exists to
         // prevent. Counts leaves and marks; never the wording, which is a design and moves.
-        check "every leaf in a closure is described, and every sensitive one is marked" <| fun () ->
+        check "every leaf in a closure is described, and every connection is marked" <| fun () ->
             property {
                 let! declarations = genDag
                 let! selection = genSelection declarations
@@ -941,8 +854,8 @@ let tests =
                     "one line per leaf, and no leaf without one"
                 Expect.equal
                     (lines |> List.filter (fun line -> line.StartsWith "!") |> List.length)
-                    (Set.count (ResourceClosure.sensitiveLeaves closure))
-                    "and every sensitive leaf carries the mark"
+                    (connections (ResourceClosure.leaves closure))
+                    "and every connection carries the mark, and nothing else does"
             }
 
         // --- the third author: what this host can actually express -------------------------
@@ -1079,10 +992,9 @@ let tests =
                     "the same lines"
             }
 
-        // The masking property, arriving by the one author who is not a person. A host
-        // coarsens a grant and the mark on it must survive that — a sensitive leaf shown
-        // WIDER and unmarked is strictly worse than the sensitive leaf nobody widened.
-        check "however this host realises a selection, every leaf is shown and every sensitive one marked" <| fun () ->
+        // What a person consents to is read from these lines, so the mark that says a person
+        // has to decide is on them whatever this host made of the rest.
+        check "however this host realises a selection, every leaf is shown and every connection marked" <| fun () ->
             property {
                 let! declarations = genDag
                 let! selection = genSelection declarations
@@ -1096,7 +1008,7 @@ let tests =
                     "one line per leaf, including the ones this host withheld"
                 Expect.equal
                     (lines |> List.filter (fun line -> line.StartsWith "!") |> List.length)
-                    (Set.count (ResourceClosure.sensitiveLeaves closure))
+                    (connections (ResourceClosure.leaves closure))
                     "and the host changed no leaf's mark"
             }
 
@@ -1112,12 +1024,8 @@ let tests =
                 let closure = ResourceProfile.resolve profile selection |> expect
                 let realised = RealisedClosure.of' limits (ResourceClosure.leaves closure)
                 let lines = RealisedClosure.describeOn limits closure
-                let sensitive = ResourceClosure.sensitiveLeaves closure
                 for leaf, _ in RealisedClosure.differences realised do
-                    let named =
-                        ResourceClosure.mark
-                            (if Set.contains leaf sensitive then Sensitivity.Sensitive else Sensitivity.Ordinary)
-                            (ResourceLeaf.describe leaf)
+                    let named = ResourceClosure.mark leaf
                     Expect.isFalse
                         (lines |> List.contains named)
                         (sprintf "%s is not what this host gives" named)
@@ -1190,55 +1098,41 @@ let tests =
             Expect.equal asked.Granted [] "nothing to show"
             Expect.isFalse asked.Sensitive "and nobody to ask"
 
-        // Sensitivity is the operator's mark on a NAME, and the host is not an author of it.
-        // This is the bit that decides whether anybody is asked at all, so a host that
-        // coarsened the grant quietly clearing it would skip the prompt for the widest
-        // version of the very grant the mark exists for.
         // The approval prompt is what a person consents to, so a volume's line says
         // whether the sandbox may write the store every other session builds from.
         testCase "the approval line for a volume shows its mode" <| fun () ->
             let asked =
                 RepoSandboxes.capabilitiesOn
                     (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux)
-                    (fun _ _ -> Ok (unmarked """{ "volume": { "name": "warm", "at": "/nix", "mode": "read" } }"""))
+                    (fun _ _ -> Ok (resolved """{ "volume": { "name": "warm", "at": "/nix", "mode": "read" } }"""))
                     ([], [ ResourceName.create "r" |> expect ])
                 |> expect
             Expect.equal asked.Granted [ "vol:warm>/nix:ro" ] "the mode, on the line a person reads"
 
-        // Only a sensitive set waits for a person (`RepoSandboxes.create`), and the shipped
-        // profile marks nothing: a repository's `wants: [ github ]` lent a credential with
-        // nobody asked.
-        testCase "a grant set holding an unmarked connection waits for approval" <| fun () ->
+        // Only a set holding a connection waits for a person (`RepoSandboxes.create`), because
+        // a connection is spent as them.
+        testCase "a selection holding a connection waits for approval" <| fun () ->
             let asked =
                 RepoSandboxes.capabilitiesOn
                     (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux)
-                    (fun _ _ -> Ok (unmarked """{ "connection": { "github": [ "git" ] } }"""))
+                    (fun _ _ -> Ok (resolved """{ "connection": { "github": [ "git" ] } }"""))
                     ([], [ ResourceName.create "r" |> expect ])
                 |> expect
             Expect.isTrue asked.Sensitive "somebody is asked"
 
         // The other half: a shared volume is the operator's decision, made in the profile,
         // and the session user is not the one to ask about it.
-        testCase "a grant set holding an unmarked volume does not ask the session user" <| fun () ->
+        testCase "a selection holding a volume and no connection does not wait for approval" <| fun () ->
             let asked =
                 RepoSandboxes.capabilitiesOn
                     (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux)
-                    (fun _ _ -> Ok (unmarked """{ "volume": { "name": "warm", "at": "/nix", "mode": "write" } }"""))
+                    (fun _ _ -> Ok (resolved """{ "volume": { "name": "warm", "at": "/nix", "mode": "write" } }"""))
                     ([], [ ResourceName.create "r" |> expect ])
                 |> expect
             Expect.isFalse asked.Sensitive "the operator already decided"
 
-        testCase "a host that widens a sensitive grant leaves it sensitive" <| fun () ->
-            let profile =
-                OperatorProfile.parse """
-                    { "version": 1,
-                      "resources": { "docker": { "socket": "/run/docker.sock", "sensitive": true } } }"""
-                |> expect
-            let asked =
-                RepoSandboxes.capabilitiesOn
-                    (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Linux)
-                    (fun uses wants -> ResourceProfile.resolve profile.Resources (uses @ wants))
-                    ([ ResourceName.create "docker" |> expect ], [])
-                |> expect
-            Expect.isTrue asked.Sensitive "still worth asking about"
+        // Whether a selection asks is read off its closure (`ResourceClosure.asksItsUser`),
+        // which takes no host, and no host realises a connection as anything but what was
+        // asked (the same-grant-on-every-host property above). So the case that a host which
+        // widened a sensitive grant left it sensitive has nothing left to pin.
     ]
