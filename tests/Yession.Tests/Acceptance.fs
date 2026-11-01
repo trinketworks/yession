@@ -218,7 +218,6 @@ let private representativeModel : ClientModel =
       // Nothing pressed for and still owed: this client is looking, not mid-request.
       Opening = 0
       KillPending = None
-      KillArmed = None
       Pane = None
       TerminalsOpen = true
       PaneMemory = None
@@ -2721,31 +2720,30 @@ let private terminalListTests =
             let fold = System.Text.RegularExpressions.Regex.Match(html, "<button[^>]*data-list-closed-fold[^>]*>").Value
             Expect.stringContains fold "aria-expanded=\"false\"" "a fold, shut, over the closed terminal"
 
-        // A kill is two presses (`KillArmed`). What the second press confirms has to be said by
-        // the control the keyboard is on, so its accessible name names the act and the
-        // terminal — a screen reader hears what a sighted reader sees on the row.
-        let armedKill (model: ClientModel) =
-            System.Text.RegularExpressions.Regex.Match(
-                listed { model with KillArmed = Some terminalId },
-                sprintf "<button[^>]*%s=\"true\"[^>]*>" Dom.Hooks.terminalCloseArmed).Value
-
-        testCase "an armed kill names the terminal it will end" <| fun () ->
+        // A stop is one press, so its accessible name has to say what that press ends: a
+        // screen reader hears what a sighted reader sees on the row.
+        testCase "a row's stop names the terminal it will end" <| fun () ->
             let title =
                 Projection.tryFind terminalId representativeModel.Terminals
                 |> Option.map (fun view -> TerminalTitle.value view.Title)
                 |> Option.defaultWith (fun () -> failwith "the fixture has its terminal")
-            let label =
-                System.Text.RegularExpressions.Regex.Match(armedKill representativeModel, "aria-label=\"([^\"]*)\"").Groups.[1].Value
-            Expect.stringContains label title "the confirm says which terminal it ends"
+            let stop =
+                System.Text.RegularExpressions.Regex.Match(
+                    listed representativeModel,
+                    sprintf "<button[^>]*%s=\"%s\"[^>]*>" Dom.Hooks.terminalClose (TerminalId.value terminalId)).Value
+            let label = System.Text.RegularExpressions.Regex.Match(stop, "aria-label=\"([^\"]*)\"").Groups.[1].Value
+            Expect.stringContains label title "the stop says which terminal it ends"
 
-        testCase "an armed kill is the same control as the kill that armed it" <| fun () ->
-            // One button with two faces, never a second control beside the first: the press
-            // that confirms has to land where the one that armed did, and focus has to stay on
-            // it between them.
-            Expect.stringContains
-                (armedKill representativeModel)
-                (Dom.attr Dom.Hooks.terminalClose id)
-                "the armed face is still this terminal's kill"
+        // A shell that has ended has no way back, so its row says it stopped where the stop
+        // was, for as long as the list holds it above the fold. Under the fold the heading
+        // says it, and a device stream's `attach` already does.
+        testCase "a stopped shell held above the fold says stopped where its stop was" <| fun () ->
+            let held = { closedTerminalModel with Switcher = true; ListHeld = Set.singleton terminalId }
+            let html = Support.render held
+            Expect.stringContains html (Dom.attr Dom.Hooks.terminalStopped (TerminalId.value terminalId)) "stopped, on the row"
+            Expect.isFalse (html.Contains (Dom.attr Dom.Hooks.terminalClose (TerminalId.value terminalId))) "and no stop beside it"
+            let folded = Support.render { held with ListHeld = Set.empty; ClosedShown = true; Pane = None }
+            Expect.isFalse (folded.Contains Dom.Hooks.terminalStopped) "under the fold, the heading says it"
     ]
 
 // Artifacts in the same panel. What is pinned is REACHABILITY: an artifact is otherwise
@@ -3859,7 +3857,7 @@ let private chromeTests =
                     (Support.step (ShowPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalId, blockId)))) representativeModel)
             let html = shell + listShell + shut + reattachable + closed + previewing
             // The opening tag of every element carrying `hook`, valued or bare — and only that
-            // attribute, not one it is a prefix of (`data-terminal-close-armed`).
+            // attribute, not one it is a prefix of.
             let tagsWith (hook: string) =
                 let rec from (i: int) (acc: string list) =
                     match html.IndexOf (hook, i) with

@@ -1810,10 +1810,6 @@ let tests =
                 do! awaitU (page.ClickAsync "[data-pane-switcher]")
                 let kill = sprintf "[data-content-list] [data-terminal-close='%s']" one
                 do! awaitU (page.FocusAsync kill)
-                // Two presses: the first arms the kill, the second, on the same control,
-                // performs it (`KillArmed`).
-                do! awaitU (page.Keyboard.PressAsync "Enter")
-                do! waitVisible "the kill, armed" page (sprintf "%s[data-terminal-close-armed='true']" kill)
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! waitAbsent "the killed terminal's row to go" page kill
                 do! Wait.until "focus on the next row in the list"
@@ -7291,37 +7287,20 @@ let editorTests =
                     Expect.isTrue (listed.Contains id) (sprintf "%s, hidden by the pivot, is on the all page" id)
             }
 
-        // A kill is two presses in one place (`KillArmed`). What only a browser can answer is
-        // WHERE the second press lands: the armed face is wider than the glyph that armed it,
-        // and the confirm is only a confirm if the spot that was pressed is now the confirming
-        // control — not the row's name, not the next row's kill.
-        editorCase "one press on kill asks, and the asking control is where the press was" <| fun page ->
+        // A stop is one press.
+        editorCase "one press on a stop ends that terminal" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let kill = "#shell [data-content-list] [data-terminal-close='term-harness']"
-                // The press has to be at a point the case knows, because that point is what is
-                // asked about afterwards — so it cannot be the locator's own click. The point is
-                // measured only once Playwright has brought the kill onto the screen and found it
-                // standing still and pressable (a trial click, which presses nothing): measured
-                // before then, it is wherever the column's opening and the window's scroll had
-                // left the kill, which a press can miss (see the sheet's case above).
-                do! awaitU (page.Locator(kill).ClickAsync (LocatorClickOptions (Trial = true)))
-                let! rect = await (page.Locator(kill).BoundingBoxAsync ())
-                let x, y = rect.X + rect.Width / 2.0f, rect.Y + rect.Height / 2.0f
-                do! awaitU (page.Mouse.ClickAsync (x, y))
-                do! waitVisible "the kill, armed" page (kill + "[data-terminal-close-armed='true']")
-                // Hit-tested, not compared by rectangle: what matters is what a press at that
-                // point would reach, which is whatever is painted there.
-                let! under = Probe.attrAt page (float x) (float y) "[data-terminal-close]" "data-terminal-close-armed"
-                Expect.equal under (Some "true") "the spot that was pressed is the armed kill"
+                do! awaitU (page.ClickAsync "#shell [data-content-list] [data-terminal-close='term-harness']")
                 let! sent = Harness.read page HarnessPage.closed
-                Expect.equal sent None "the first press asked; it sent no kill"
+                Expect.equal sent (Some [| "term-harness" |]) "the press sent the kill"
             }
 
-        // The fault this replaced: a double-click on a kill ended two terminals, the second
-        // press landing on whatever slid under the pointer. Now the second press of the pair
-        // is the confirm, so a double-click ends exactly the terminal it was made on.
+        // The fault the two-press stop once fixed: a double-click on a kill ended two
+        // terminals, the second press landing on whatever slid under the pointer. The rows
+        // hold still now, and a press on a stop already sent sends nothing, so a double-click
+        // ends exactly the terminal it was made on.
         editorCase "a double-click on a kill ends that terminal and no other" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
@@ -7355,26 +7334,6 @@ let editorTests =
                 do! waitAbsent "the tab to be gone" page "#shell [data-pane-tab='terminal:term-harness']"
                 let! sent = Harness.read page HarnessPage.closed
                 Expect.equal sent None "nothing ended"
-            }
-
-        // The keyboard half of the same control (UI baseline: a swap must never strand
-        // focus). Escape takes the arming back and the control it was on keeps focus, so the
-        // next Enter asks again rather than landing somewhere else — and the switcher it is in
-        // stays open, because that Escape was about the arming.
-        editorCase "Escape takes an armed kill back and leaves focus where it was" <| fun page ->
-            async {
-                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let kill = "#shell [data-content-list] [data-terminal-close='term-harness']"
-                do! awaitU (page.FocusAsync kill)
-                do! awaitU (page.Keyboard.PressAsync "Enter")
-                do! waitVisible "the kill, armed" page (kill + "[data-terminal-close-armed='true']")
-                do! awaitU (page.Keyboard.PressAsync "Escape")
-                do! waitVisible "the kill, taken back" page (kill + "[data-terminal-close-armed='false']")
-                let! focused = Read.focused page "[data-terminal-close='term-harness']"
-                Expect.isTrue focused "focus stays on the kill"
-                let! sent = Harness.read page HarnessPage.closed
-                Expect.equal sent None "and nothing was killed"
             }
 
         // A list somebody is pressing in holds still. It used to put the open terminals first,
@@ -7433,6 +7392,10 @@ let editorTests =
                 // Landed: a closed terminal offers no kill, and one with nothing kept says so.
                 do! waitAbsent "#shell [data-terminal-close='term-harness'], #shell [data-terminal-close='term-bare'] to be gone" page "#shell [data-terminal-close='term-harness'], #shell [data-terminal-close='term-bare']"
                 do! waitVisible "the bare terminal's row to say nothing was kept" page "#shell [data-terminal-list-gone='term-bare']"
+                // Held where it was, each says it stopped where its stop was.
+                do! waitVisible "both rows to say stopped" page "#shell [data-terminal-stopped='term-harness'], #shell [data-terminal-stopped='term-bare']"
+                let! stopped = Read.count page "#shell [data-content-list] [data-terminal-stopped]"
+                Expect.equal stopped 2 "a stopped word on each of the two rows"
                 let! after = rows ()
                 Expect.equal after before "every row where it was, the size it was"
             }

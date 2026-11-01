@@ -1894,17 +1894,6 @@ type ClientModel =
       /// left owed, whatever closed that terminal next — its shell exiting, somebody else's
       /// kill — would be taken for this press's answer and move the reader's focus.
       KillPending   : TerminalId option
-      /// Which terminal's kill is ARMED — pressed once, waiting on a second press in the same
-      /// place to confirm it (`ArmKillMsg`). `QueueDeleteArmed`'s shape, for its reason and a
-      /// stronger one: a kill ends what runs in the terminal for everybody in the session, and
-      /// it used to happen on one press of a glyph that a double-click could land twice.
-      ///
-      /// ONE slot: arming another row's kill disarms this one, so at most one terminal is ever
-      /// a press from gone. View state, local and transient — an unconfirmed press is one
-      /// person's moment, not a fact the room agrees on. Taken back on its own after `armedMs`
-      /// (`ClientModel.timers`), by Escape, by focus leaving the control, and by the terminal
-      /// closing under it.
-      KillArmed     : TerminalId option
       /// What the pane is SHOWING: which terminal and which read of it, or a preview over one
       /// (Plan 25, stage 2; P2-1). `None` = nothing chosen yet, resolved to a
       /// default by `selectedTerminal`.
@@ -2727,11 +2716,7 @@ type ClientMsg =
     /// Ask the provider for a closed terminal's stream again (Plan 19, step 4).
     | ReattachTerminalMsg of TerminalId
     /// End a terminal — the one verb that stops what runs in it, the list's stop (P2-2).
-    ///
-    /// Dispatched by a kill control only on a SECOND press, once the terminal is `KillArmed` —
-    /// the first press sends `ArmKillMsg` instead (`ClientModel.killPress`). Like `DeleteQueuedMsg`, the two-press rule is a
-    /// property of the control, not of this message, which still ends the terminal whoever
-    /// sends it.
+    /// A press on the stop sends it by way of `KillPressedMsg`.
     | CloseTerminalMsg of TerminalId
     /// Stop the block running in a terminal — ^C to it, the terminal left standing. What a
     /// running block's Stop sends, and what Ctrl-C in an EMPTY command line sends: there the
@@ -2739,16 +2724,11 @@ type ClientMsg =
     /// request of the session only when the terminal HAS a running block, which is decided
     /// here, from the model, rather than at either control (`update`).
     | InterruptTerminalMsg of TerminalId
-    /// A terminal's kill was pressed — the strip's ×, Delete on its tab, a row's kill in the
-    /// switcher. What the press MEANS, arming or ending, is `ClientModel.killPress` asked of
-    /// the model as it is when the press lands, not of the one the control was last drawn
-    /// from: the page draws at most once a frame, so a second press inside the frame that
-    /// armed it would otherwise be judged by a picture that had not caught up.
+    /// A row's stop was pressed in the list. Whether it ends anything is `ClientModel.killPress`
+    /// asked of the model as it is when the press lands, not of the one the control was last
+    /// drawn from: the page draws at most once a frame, so a second press inside that frame
+    /// would otherwise send a second kill for a terminal already being ended.
     | KillPressedMsg of TerminalId
-    /// Arm (`Some`) or take back the arming (`None`) of a terminal's kill. `Some` replaces
-    /// whatever was armed before it; `None` is sent by the wait (`armedMs`), by Escape on the
-    /// armed control, and by focus leaving it.
-    | ArmKillMsg of TerminalId option
     /// Put a CLOSED terminal's tab away: the × a closed item wears in place of its kill, and
     /// Delete on any closed item.
     ///
@@ -3015,7 +2995,6 @@ module ClientModel =
           FileTabs = []
           Opening = 0
           KillPending = None
-          KillArmed = None
           Pane = None
           TerminalsOpen = false
           PaneMemory = None
@@ -4161,19 +4140,17 @@ module ClientModel =
     let opensSwitcher (code: string) (ctrl: bool) (meta: bool) : bool =
         (ctrl || meta) && code = "Backquote"
 
-    /// What one press on a terminal's kill asks for, wherever the control is (P2-2) — the
-    /// strip's × and Delete on a tab, a row's kill in the switcher. `None` where there is
-    /// nothing to kill.
+    /// What one press on a row's stop asks for (P2-2): the kill, once. `None` where there is
+    /// nothing to kill, and for a press on a stop already sent and not yet answered
+    /// (`KillPending`) — a double-click is one stop, not two.
     ///
-    /// The two-press rule (`KillArmed`) is HERE rather than in each control, so the strip and
-    /// the switcher cannot disagree about it: the first press arms, a press on the armed one
-    /// kills. A press on a terminal other than the armed one arms THAT one, which disarms the
-    /// first — one slot, so at most one terminal is ever a press from gone.
+    /// One press, not an arm and a confirm: the row stays where it is while the list is up
+    /// (`ListHeld`) and says `stopped` in the stop's place, so what the press did is on the
+    /// row it was made on.
     let killPress (terminal: TerminalId) (model: ClientModel) : ClientMsg option =
         match Projection.tryFind terminal model.Terminals with
-        | Some view when (affordances view model).CanKill ->
-            if model.KillArmed = Some terminal then Some (CloseTerminalMsg terminal)
-            else Some (ArmKillMsg (Some terminal))
+        | Some view when (affordances view model).CanKill && model.KillPending <> Some terminal ->
+            Some (CloseTerminalMsg terminal)
         | Some _ | None -> None
 
     /// The rows the arrow walk goes down: `listSections` flattened — the terminals it lists
@@ -4992,13 +4969,6 @@ module ClientModel =
                         { Key = [ "queue-shown"; QueueId.value queueId ]
                           After = catchUpQuietMs
                           Fire = QueueShownMsg queueId })
-        let killArmed =
-            match model.KillArmed with
-            | Some terminal ->
-                [ { Key = [ "kill-armed"; TerminalId.value terminal ]
-                    After = armedMs
-                    Fire = ArmKillMsg None } ]
-            | None -> []
         let pending =
             [ "claude", model.Claude.Pending; "github", model.GitHub.Pending ]
             |> List.choose (fun (panel, pending) ->
@@ -5009,7 +4979,7 @@ module ClientModel =
                           After = int Pending.deadlineMillis
                           Fire = PendingWaitedMsg (since + Pending.deadlineMillis) }
                 | Pending.Ready | Pending.Sending | Pending.Refused _ -> None)
-        effort @ waited @ dwell @ copied @ queueDeleteArmed @ queueShown @ killArmed @ pending @ quiet @ GitHubPoll.timer model.GitHub
+        effort @ waited @ dwell @ copied @ queueDeleteArmed @ queueShown @ pending @ quiet @ GitHubPoll.timer model.GitHub
 
     /// Fold a message into the model — the state half of `update`, its only caller.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
@@ -5371,12 +5341,6 @@ module ClientModel =
                                 match e.Event with
                                 | SessionEvent.TerminalClosed closed -> closed.TerminalId = killed
                                 | _ -> false)))
-                // An armed kill means nothing over a terminal that has already gone — somebody
-                // else ended it, or it exited — and must not sit there waiting to fire.
-                KillArmed =
-                    model.KillArmed
-                    |> Option.filter (fun armed ->
-                        Projection.tryFind armed terminals |> Option.exists (fun view -> view.IsOpen))
                 Peers = peers
                 Here = here
                 Attribution = attribution
@@ -6046,11 +6010,9 @@ module ClientModel =
         // A request of the session like those above, and also a press whose control the
         // answer will take away: remembered, so the close that answers it can say where the
         // hand goes next (`KillPending`).
-        // The armed slot is spent by the press that confirms it.
-        | CloseTerminalMsg terminal -> { model with KillPending = Some terminal; KillArmed = None }
+        | CloseTerminalMsg terminal -> { model with KillPending = Some terminal }
         // Never reaches a fold: `update` turns it into the press it is first.
         | KillPressedMsg _ -> model
-        | ArmKillMsg next -> { model with KillArmed = next }
         | DismissTabMsg terminal ->
             // Open or closed alike: putting a tab away ends nothing. A running terminal goes
             // on running, in the list, which is where it is stopped.
