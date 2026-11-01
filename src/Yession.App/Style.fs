@@ -4422,7 +4422,7 @@ module Style =
     /// not chosen gives that pixel back (`mb-px`), so the rule still runs under it and under
     /// the hand. The chosen tab keeps it: its ground covers the rule and runs straight into the
     /// pane's below, and a hairline on each side closes it — the same open tab the list button
-    /// is with its sheet down (`paneListButtonOn`). `divide-x` already draws its right side
+    /// is with its list up (`paneListButtonOn`). `divide-x` already draws its right side
     /// unless it is last, and nothing draws its left when it is first; `border-r` and
     /// `first:border-l` cover both.
     let private pivotItemChosen = "border-r first:border-l border-hair text-ink"
@@ -4455,22 +4455,21 @@ module Style =
         cls [ "shrink-0 self-center w-touch h-touch grid place-items-center bg-transparent border-0 cursor-pointer p-0"
               "text-ink-dim hover:text-ink hover:bg-surface transition-colors motion-reduce:transition-none"; focusRingInset ]
     /// The list button: the list's glyph, at the strip's head. At least a touch square. Its
-    /// right edge is a hairline only while the sheet is down, so it is always 1px there and
+    /// right edge is a hairline only while the list is up, so it is always 1px there and
     /// the tabs beside it do not move when it opens.
     let private paneListButtonBase =
         cls [ "shrink-0 min-w-touch px-3 phone:px-2 inline-flex items-center justify-center border-0 border-r cursor-pointer"
               "transition-colors motion-reduce:transition-none"; focusRingInset ]
     let paneListButton =
         cls [ paneListButtonBase; "self-center h-touch border-transparent bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
-    /// The same with its sheet down: a tab. It fills the strip's height and one pixel more
+    /// The same with its list up: a tab. It fills the strip's height and one pixel more
     /// (`-mb-px`), so its ground covers the strip's rule (`panePivotRow`) and runs straight
-    /// into the sheet's (`allSheet`, `surface`) — the open tab and the page under it read as
+    /// into the list's (`allPanel`, `surface`) — the open tab and the page under it read as
     /// one surface. A hairline on its right closes the tab's side against the strip.
     let paneListButtonOn =
         cls [ paneListButtonBase; "self-stretch -mb-px border-hair bg-surface text-ink" ]
 
-    /// Everything under the strip — the toolbar, the body, and the list's sheet when it is down,
-    /// which is laid over the first two from the strip's edge.
+    /// Everything under the strip: the toolbar and the body.
     let paneUnderStrip = "relative flex-1 min-h-0 flex flex-col"
     /// A tab's presence marks: one dot per peer whose caret is in THAT terminal, so a
     /// collaborator typing a command in a terminal you are not looking at is visible from
@@ -4660,28 +4659,13 @@ module Style =
     /// the air doing the separating.
     let allPage = "flex flex-col pb-3 select-none"
 
-    /// The list's sheet: dropped from the strip's edge over the pane, which goes on showing the
-    /// terminal under it. A step up the ground (`surface`), because it is a layer over the
-    /// pane, and opaque, because rows read over a terminal's text are rows nobody can read; its
-    /// rim is at the foot, where it ends over the terminal. As tall as it needs and no taller
-    /// than the pane, scrolling inside itself.
-    ///
-    /// Its focus ring is `focusRingInset` — inset because the sheet scrolls and clips, and
-    /// composed because there is one ring in this product: it had been written here as its
-    /// four utilities, which is a second way to draw it (principle 5).
-    ///
-    /// No drop shadow. It carried one, and a surface lit from above is the whole of what
-    /// "Honest materials" forbids (docs/visual-design.md, Form: surfaces are flat, depth is
-    /// said by blur over something real). What the shadow was for is already said by three
-    /// things that are real — a step up the ground, a rim where the sheet ends, and the pane
-    /// dimmed under it (`allSheetScrim`).
-    let allSheet =
-        cls [ "absolute inset-x-0 top-0 max-h-full z-30 overflow-y-auto overscroll-contain"
-              "bg-surface border-b border-edge"; focusRingInset ]
-
-    /// What the sheet is laid over, dimmed: the pane goes on showing under it, a step back.
-    /// Under the sheet in the stack and over everything else the pane has.
-    let allSheetScrim = cls [ "absolute inset-0 z-20 p-0 border-0 cursor-default bg-black/45"; focusRingInset ]
+    /// The list's panel: the pane's body while the list is up, as a terminal's panel is while
+    /// its tab is — filling the pane and scrolling inside it, in place of what was on screen.
+    /// It was a sheet dropped over the pane, with a scrim dimming the terminal under it, and a
+    /// second face for when nothing was open to drop it over; a page is one face, and nothing
+    /// under it shows through. On its own ground (`surface`), which the list button's open tab
+    /// wears and runs into (`paneListButtonOn`).
+    let allPanel = cls [ "flex-1 min-h-0 overflow-y-auto overscroll-contain bg-surface"; focusRingInset ]
 
     /// One row: its name (and the marks beside it) over what it last ran, its verbs at the
     /// right. The names line up down the page because every mark sits AFTER its name — a
@@ -4776,11 +4760,6 @@ module Style =
     /// The page's word when there is nothing on it.
     let contentListEmptyWord = "px-3 py-3 font-ui font-light text-body text-ink-faint select-none"
 
-    /// The list as the pane's body, when nothing is open to lay it over: the sheet's rows on the
-    /// pane's own ground, filling the pane and scrolling inside it — a page, not a layer, so no
-    /// step up and no rim.
-    let allDocked = cls [ "flex-1 min-h-0 overflow-y-auto overscroll-contain"; focusRingInset ]
-
 
     /// A section of the sheet's head: what it is called, and its acts. One line on a wide
     /// screen, the acts at its right end and one hairline under both. Two on a phone, the acts
@@ -4832,19 +4811,16 @@ module Style =
     let startInFoldMark = "inline-flex phone:hidden transition-transform motion-reduce:transition-none"
     let startInFoldMarkOpen = cls [ startInFoldMark; "rotate-180" ]
 
-    /// While the places are chosen from, the rest of the sheet. On a phone the places are a
+    /// While the places are chosen from, the rest of the list. On a phone the places are a
     /// page and nothing else shows; on a wide screen they unfold under the Terminals heading,
-    /// with the sheet still round them.
+    /// with the list still round them.
     let startInBeside = "contents"
     let startInBesideChoosing = "contents phone:hidden"
-    /// The sheet while its places are a page: on a phone it runs to the pane's foot, so the
-    /// terminal it was laid over is not glimpsed under a page that is not a layer.
-    let allSheetChoosing = cls [ allSheet; "phone:bottom-0" ]
 
-    /// The list of places. On a phone, a page in the sheet: its head (the way back, and what
-    /// the list is for), then one row per place, the chosen one ticked. On a wide screen the
-    /// same rows unfold under the heading whose link opened them, on a well a step down the
-    /// ground (`panel` under the sheet's `surface`), because they are nested in that section
+    /// The list of places. On a phone, a page in place of the list: its head (the way back, and
+    /// what the list is for), then one row per place, the chosen one ticked. On a wide screen
+    /// the same rows unfold under the heading whose link opened them, on a well a step down the
+    /// ground (`panel` under the list's `surface`), because they are nested in that section
     /// and must not read as more terminals; the head is the heading itself, so it is not
     /// drawn twice.
     let startInList = "wide:bg-panel"

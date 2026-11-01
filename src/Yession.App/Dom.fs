@@ -59,8 +59,8 @@ module Dom =
     /// selected tab back (`paneTabId`) in `aria-labelledby`. That pair is what tells assistive
     /// technology which tab the region under the strip belongs to.
     let panePanelId = "pane-panel"
-    /// The sheet the list drops down as, over the pane (`View.allPage`).
-    let paneSheetId = "pane-sheet"
+    /// The list's panel, the pane's body while the list is up (`View.allPage`).
+    let paneListId = "pane-list"
 
     /// The `id` of a preview's name, in the line under the pivot: what its panel is labelled
     /// by, after the tab of the terminal it is laid over (`View.contentPane`).
@@ -623,9 +623,6 @@ module Dom =
         /// A list row's name, inside the row's button with the line under it: the button's
         /// accessible name (`aria-labelledby`).
         let terminalListName = "data-terminal-list-name"
-        /// The scrim laid over the pane under the list's sheet: pressed, it puts the sheet
-        /// away. A duplicate of the list button and Escape, so out of the tree.
-        let paneSheetScrim = "data-pane-sheet-scrim"
         /// A closed row whose recording the per-terminal cap ate. The stated gap, where a
         /// play affordance would otherwise be — an audit trail's hole is said, never left to
         /// look like a terminal that printed nothing.

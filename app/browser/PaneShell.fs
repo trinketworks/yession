@@ -93,7 +93,7 @@ let private toCommandLine (terminal: Yession.Domain.TerminalId) : unit =
 /// frame after the render that shut it, it is there.
 let private toPaneReopen () : unit = focusOn (find "[data-content-toggle=\"show\"]")
 
-/// Onto the docked list's New terminal, once the pane is empty: the press that fills it. The
+/// Onto the list's New terminal, once the pane is empty: the press that fills it. The
 /// list button if that has not drawn.
 let private toPaneEmpty () : unit =
     find "[data-content-list] [data-terminal-new]"
