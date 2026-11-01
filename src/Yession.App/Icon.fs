@@ -308,8 +308,10 @@ module Icon =
     /// - Rest: a point, radius 1.75.
     /// - Absent: an empty ring, radius 4.25: a seat with nobody in it.
     /// - Pending: the same turning quarter arc that marks "still going" everywhere else
-    ///   (`Icon.spin`, `Style.statusSpinCw`) — a machine's work, needs nobody, so it wears the
-    ///   one mark every other wait wears rather than a shape of its own (`Style.attentionInk`).
+    ///   (`Icon.spin`, `Style.statusSpinCw`), over the same faint full-ring track
+    ///   (`Style.statusSpinTrack`) that arc always turns on — a machine's work, needs nobody,
+    ///   so it wears the one mark every other wait wears rather than a shape of its own
+    ///   (`Style.attentionInk`).
     /// - Working: the agent's own cube (`cube` above), turning in place — the exact mark that
     ///   turns inline in the transcript while the agent thinks, now ranked among a session's
     ///   other standings too, because an agent at work is one claim however it is read. Not a
@@ -319,10 +321,10 @@ module Icon =
     /// - Wrong: a disc, radius 3, in a ring, radius 5.25: the most ink, the whole box.
     ///
     /// The rings that stand alone (Absent, Wanted, Wrong) start at twelve o'clock
-    /// (`rotate(-90 6 6)`), so drawing one round sets off from the top; Pending's arc is the
-    /// shared spin mark exactly as it is everywhere else, cap and all, so it keeps that mark's
-    /// own rest position instead. Motion is `Style`'s (`statusSpinCw` for Pending), and the
-    /// cube's own (`app/tailwind.css`'s `think-*` keyframes) for Working.
+    /// (`rotate(-90 6 6)`), so drawing one round sets off from the top; Pending's arc and its
+    /// track are the shared spin mark exactly as it is everywhere else, cap and all, so it
+    /// keeps that mark's own rest position instead. Motion is `Style`'s (`statusSpinCw` for
+    /// Pending), and the cube's own (`app/tailwind.css`'s `think-*` keyframes) for Working.
     /// `data-attention` spells the level for a test (`Attention.name`). `aria-hidden`: the word
     /// beside it, or the name of the control it sits in, says the state.
     let attention (level: Yession.Domain.Standings.Attention) =
@@ -337,7 +339,7 @@ module Icon =
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5"></circle></svg>"""
         | Yession.Domain.Standings.Pending ->
             html
-                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle class="{Style.statusSpinCw}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 20.02"></circle></svg>"""
+                $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle class="{Style.statusSpinTrack}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5"></circle><circle class="{Style.statusSpinCw}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 20.02"></circle></svg>"""
         | Yession.Domain.Standings.Working ->
             html
                 $"""<span class="{Style.attentionCube}" data-attention="{name}" aria-hidden="true">{cube}</span>"""
@@ -348,20 +350,22 @@ module Icon =
             html
                 $"""<svg class="{box}" data-attention="{name}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><g transform="rotate(-90 6 6)"><circle class="{Style.markDraw}" cx="6" cy="6" r="5.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="32.99"></circle></g><circle class="{Style.markPop}" cx="6" cy="6" r="3" fill="currentColor"></circle></svg>"""
 
-    /// Still going: one arc, a quarter of a 12-unit ring, turning. One shape for every status
-    /// that says "not settled yet" — a command live now and a wait under way alike
+    /// Still going: one arc, a quarter of a 12-unit ring, turning over a faint full ring of its
+    /// own ink (`Style.statusSpinTrack`) — the track it is going round, so it reads as
+    /// travelling a path rather than a stroke adrift with nothing under it. One shape for every
+    /// status that says "not settled yet" — a command live now and a wait under way alike
     /// (`Style.statusSpin`, which used to be two different beating dots, `statusDotLive` and
     /// `statusDotBeat`, then a pair of arcs passing each other), and Pending's own attention
-    /// mark (`Icon.attention`) wears the very same arc, because a machine's work is the same
-    /// "still going" as any other — the one exception is the ink: a status stays `ink-dim`
-    /// always, so the word beside it (`Style.statusOk`'s green, `Style.statusWait`'s dim ink)
-    /// is what still says whether what is going is live or a wait, while Pending's copy takes
-    /// whatever ink `Style.attentionInk` gives its level. A quarter rather than a half or the
-    /// whole ring, so standing still (`motion-reduce`) it still reads as a broken ring, not one
-    /// Absent's own shape could be mistaken for.
+    /// mark (`Icon.attention`) wears the very same arc and track, because a machine's work is
+    /// the same "still going" as any other — the one exception is the ink: a status stays
+    /// `ink-dim` always, so the word beside it (`Style.statusOk`'s green, `Style.statusWait`'s
+    /// dim ink) is what still says whether what is going is live or a wait, while Pending's
+    /// copy takes whatever ink `Style.attentionInk` gives its level. A quarter rather than a
+    /// half or the whole ring, so standing still (`motion-reduce`) it still reads as a broken
+    /// ring over its track, not one Absent's own shape could be mistaken for.
     let spinPath (extra: string) =
         html
-            $"""<svg class="{extra}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle class="{Style.statusSpinCw}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 20.02"></circle></svg>"""
+            $"""<svg class="{extra}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><circle class="{Style.statusSpinTrack}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5"></circle><circle class="{Style.statusSpinCw}" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.68 20.02"></circle></svg>"""
     /// Standing alone, where no word follows on the same line.
     let spin = spinPath Style.statusSpin
     /// Leading the status word it belongs to, as `statusDot`'s own lead does for a plain dot.
