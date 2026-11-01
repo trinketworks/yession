@@ -4816,6 +4816,8 @@ module Style =
     let startInLink = cls [ listSectionActBase; focusRingInset ]
     let startInWord = "text-ink-dim"
     let startInName = "font-terminal text-small normal-case tracking-normal"
+    /// "default" is no name a repo declared, so it is not written in the terminal face.
+    let startInNameDefault = "font-ui font-light text-small normal-case tracking-normal"
 
     /// The list of places, in the sheet in place of its terminals and files: its head (the
     /// way back, and what the list is for), then one row per place, the chosen one ticked.
@@ -4834,11 +4836,12 @@ module Style =
     let startInWho = "min-w-0 flex-1 flex flex-col gap-0.5"
     /// The place's name, in the terminal face, as the repo picker writes a branch.
     let startInChoiceName = "font-terminal text-body text-ink truncate min-w-0"
-    /// Which repo declared the place, and what its file said it is for — prose somebody
-    /// wrote, so wrapped and clamped rather than cut after its first words.
+    /// The session's own place, "default": in the prose face and dimmer, apart from the
+    /// sandbox names below it.
+    let startInChoiceNameDefault = "font-ui font-light text-body text-ink-dim truncate min-w-0"
+    /// What the place's file said it is for — prose somebody wrote, so wrapped and clamped
+    /// rather than cut after its first words.
     let startInNote = "line-clamp-2 font-ui font-light text-small text-ink-faint"
-    /// "default", beside the session's own place.
-    let startInDefault = cls [ label; "ml-auto shrink-0" ]
 
     /// An artifact's row: the same row as a terminal's, so the two sections read as one list
     /// of things rather than two designs.

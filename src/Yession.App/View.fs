@@ -5004,9 +5004,13 @@ module View =
         // nothing to choose and the link that chooses is not drawn.
         let places = ClientModel.sandboxRows model
         let place = ClientModel.startIn model
+        // A repo's place carries the repo's name, since two repos may both declare `dev`.
         let placeName (sandbox: SandboxRef) =
-            if sandbox = SandboxRef.defaultRef then Dom.Text.aTerminal
-            else SandboxName.value (SandboxRef.name sandbox)
+            match SandboxRef.scope sandbox with
+            | _ when sandbox = SandboxRef.defaultRef -> Dom.Text.defaultPlace
+            | SessionOwned -> SandboxName.value (SandboxRef.name sandbox)
+            | RepoOwned repo -> sprintf "%s:%s" (RepoRef.repo repo) (SandboxName.value (SandboxRef.name sandbox))
+        let isDefault (sandbox: SandboxRef) = sandbox = SandboxRef.defaultRef
         // The terminals under a heading of their own, which carries the one way to make one,
         // and — when there is a choice — where it will start, the way the repo picker's row
         // carries its branch: the name as a link, into a list that changes it.
@@ -5023,7 +5027,7 @@ module View =
                                 aria-label="{Dom.Text.startInNamed (placeName place)}"
                                 @click={Ev(fun _ -> dispatch (ChoosingStartInMsg true))}>
                           <span class="{Style.startInWord}">{Dom.Text.startInWord}</span>
-                          <span class="{Style.startInName}">{placeName place}</span>
+                          <span class="{if isDefault place then Style.startInNameDefault else Style.startInName}">{placeName place}</span>
                           {Icon.right}
                         </button>"""
             html $"""
@@ -5045,20 +5049,11 @@ module View =
         let choosingPlace () =
             let choice (sandbox: SandboxRef) =
                 let chosen = sandbox = place
-                // What tells two repos' `dev` apart, and what the file said either is for.
-                let beneath =
-                    [ (match SandboxRef.scope sandbox with
-                       | SessionOwned -> None
-                       | RepoOwned repo -> Some (RepoRef.value repo))
-                      ClientModel.sandboxPurpose sandbox model ]
-                    |> List.choose id
+                // What the file said the place is for.
                 let note =
-                    if List.isEmpty beneath then Lit.nothing
-                    else html $"""<span class="{Style.startInNote}">{String.concat " · " beneath}</span>"""
-                let isDefault =
-                    if sandbox = SandboxRef.defaultRef then
-                        html $"""<span class="{Style.startInDefault}">{Dom.Text.defaultPlace}</span>"""
-                    else Lit.nothing
+                    match ClientModel.sandboxPurpose sandbox model with
+                    | None -> Lit.nothing
+                    | Some purpose -> html $"""<span class="{Style.startInNote}">{purpose}</span>"""
                 html $"""
                     <li class="{Style.startInRow}">
                       <button type="button" class="{Style.startInChoice}" data-start-in-choice="{SandboxRef.render sandbox}"
@@ -5067,10 +5062,9 @@ module View =
                               @click={Ev(fun _ -> dispatch (StartInMsg sandbox))}>
                         <span class="{Style.startInMark}" aria-hidden="true">{if chosen then Icon.check else Lit.nothing}</span>
                         <span class="{Style.startInWho}">
-                          <span class="{Style.startInChoiceName}">{placeName sandbox}</span>
+                          <span class="{if isDefault sandbox then Style.startInChoiceNameDefault else Style.startInChoiceName}">{placeName sandbox}</span>
                           {note}
                         </span>
-                        {isDefault}
                       </button>
                     </li>"""
             html $"""
