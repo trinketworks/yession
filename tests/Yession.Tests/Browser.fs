@@ -341,7 +341,7 @@ let private switcherDown (page: IPage) : Async<unit> =
         if n > 0 then do! awaitU (page.Locator(shut).First.DispatchEventAsync "click")
     }
 
-/// Open a terminal the way a person does: bring the list's sheet down and press New terminal
+/// Open a terminal the way a person does: bring the list up and press New terminal
 /// on its Terminals heading, which starts one in the session's own sandbox unless somebody
 /// chose another place.
 let private openNewTerminal (page: IPage) : Async<unit> =
@@ -3937,9 +3937,9 @@ let editorTests =
         // One door. The pane has offered a `+` on its strip, "+ New terminal" at the foot of its
         // switcher, and an empty pane's own button — two of them on one screen at once, a
         // reader left to work out they were one act. Now the list's New terminal is the
-        // only one: on screen exactly while the list is — dropped as the sheet, or docked as
-        // an empty pane's body — and nowhere else. Counted at more tabs than fit, the `all`
-        // page, and an empty pane, which is the list docked. Counted by
+        // only one: on screen exactly while the list is — asked for, or as an empty pane's
+        // body — and nowhere else. Counted at more tabs than fit, the `all` page, and an
+        // empty pane, which is the list. Counted by
         // what is painted at each control's centre, so one present but covered is not a door,
         // and one a reader can see is — which is the only count that means anything to them.
         //
@@ -3975,8 +3975,7 @@ let editorTests =
                     do! waitVisible "a closed tab's way to put it away" page "#shell [data-pane-tab-dismiss]"
                     do! awaitU (page.ClickAsync "#shell [data-pane-tab-dismiss]")
                     do! waitCount (sprintf "%d tabs left" left) page "#shell [data-terminal-closed-tab]" left
-                do! waitVisible "the list, docked in the empty pane" page "#shell [data-content-list]"
-                do! waitAbsent "no scrim over a docked list" page "#shell [data-pane-sheet-scrim]"
+                do! waitVisible "the list, the empty pane's body" page "#shell [data-content-list]"
                 let! empty = doors "an empty pane"
                 Expect.equal
                     [ many; listing; empty ]
@@ -6861,11 +6860,11 @@ let editorTests =
                 Expect.isEmpty faults (sprintf "nothing wider than the screen: %s" (String.Join (", ", faults)))
             }
 
-        // The list's sheet is over the preview AND its terminal, so the head that names the
-        // preview is covered with the rest of what it lies over. Asked of the pane's own text
-        // rather than of a hook, because the fault was the preview's name shown by another
-        // surface (a strip item) than the one that names it now — and asked by hit-test,
-        // because the covered head is still laid out under the sheet.
+        // The list takes the place of the preview AND its terminal, so the head that names the
+        // preview goes with them. Asked of the pane's own text rather than of a hook, because
+        // the fault was the preview's name shown by another surface (a strip item) than the
+        // one that names it now — and asked by hit-test, which a head laid out under a layer
+        // would also pass.
         editorCaseIn 390 844 "on a phone, the all page does not show the preview it is over" <| fun page ->
             async {
                 do! previewSettled page
@@ -6911,10 +6910,8 @@ let editorTests =
                 return ()
             }
 
-        // On a phone the places are a PAGE: nothing of the sheet beside them, and the sheet
-        // run to the pane's foot, so the terminal it is laid over does not show under it. A
-        // sheet as tall as its rows left the terminal on screen below a list that, on a phone,
-        // is somewhere you went.
+        // On a phone the places are a PAGE: nothing of the list beside them, and the page run
+        // to the pane's foot, so no terminal shows under it.
         editorCaseIn 390 844 "on a phone the start-in link opens the places as a page over the whole pane" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
@@ -6923,17 +6920,17 @@ let editorTests =
                 do! waitVisible "the list of places" page "#shell [data-start-in-choice]"
                 do! Wait.until "New terminal out of sight" (fun () -> Read.visible page "#shell [data-terminal-new]") not
 
-                let! boxes = boxesOf page [ "#shell #pane-sheet"; "#shell [data-content-panel]" ]
+                let! boxes = boxesOf page [ "#shell #pane-list"; "#shell [data-content-panel]" ]
                 match boxes with
-                | [ sheet; pane ] ->
+                | [ list; pane ] ->
                     Expect.isTrue
-                        (abs (sheet.Bottom - pane.Bottom) <= 1.0)
-                        (sprintf "the page reaches the pane's foot: sheet ends at %d, pane at %d" (px sheet.Bottom) (px pane.Bottom))
+                        (abs (list.Bottom - pane.Bottom) <= 1.0)
+                        (sprintf "the page reaches the pane's foot: list ends at %d, pane at %d" (px list.Bottom) (px pane.Bottom))
                 | _ -> failwith "two boxes measured"
 
-                // Its back arrow is the way back to the sheet's list.
+                // Its back arrow is the way back to the list.
                 do! awaitU (page.ClickAsync "#shell [data-start-in-back]")
-                do! waitVisible "the sheet's list again" page "#shell [data-terminal-new]"
+                do! waitVisible "the list again" page "#shell [data-terminal-new]"
                 return ()
             }
 
@@ -7196,28 +7193,26 @@ let editorTests =
                 return ()
             }
 
-        // The sheet is a layer over the pane, not a place: the pane under it is the way out,
-        // pressed anywhere it shows. Only a browser can say what is on top where it shows —
-        // a scrim under the sheet, or under the pane's own layers, presses nothing.
-        editorCase "pressing the pane under the list's sheet puts the sheet away" <| fun page ->
+        // The list is the pane's body while it is up, as a terminal is while its tab is: it runs
+        // to the pane's foot, and the terminal it replaced is gone from the pane, its toolbar
+        // with it. Only a browser can say the terminal does not show below a list shorter than
+        // the pane. Pressed again, the list button brings the terminal back.
+        editorCaseIn 390 844 "the list replaces the terminal in the pane rather than lying over it" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! waitVisible "a terminal on screen" page "#shell [data-pane-panel^='terminal:']"
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let sheet = "#shell #pane-sheet"
-                let panel = "#shell [data-content-panel]"
-                do! waitVisible "the list's sheet" page sheet
-                let! box = await (page.Locator(sheet).BoundingBoxAsync ())
-                let! pane = await (page.Locator(panel).BoundingBoxAsync ())
-                Expect.isTrue (box.Y + box.Height < pane.Y + pane.Height - 20.0f) "pane showing under the sheet, or this proves nothing"
-                // Pressed through the pane's locator, at a place IN the pane, never at a point
-                // worked out from where the pane was drawn: the locator waits for the pane to
-                // stand still, brings the place onto the screen, and refuses when something
-                // outside the pane would take the press. A point taken from the box was below the
-                // screen whenever the window had been scrolled off the shell — which the harness
-                // allowed until the shell had a page of its own (`editor-harness.html` says how
-                // the clicks above used to scroll it), and pressed nothing.
-                do! awaitU (page.Locator(panel).ClickAsync (LocatorClickOptions (Position = Position (X = pane.Width / 2.0f, Y = pane.Height - 10.0f))))
-                do! waitVisible "the switcher, shut" page "#shell [data-pane-switcher][aria-expanded='false']"
+                do! waitVisible "the list" page "#shell #pane-list"
+                do! waitAbsent "the terminal, gone from the pane" page "#shell [data-pane-panel^='terminal:']"
+                let! boxes = boxesOf page [ "#shell #pane-list"; "#shell [data-content-panel]" ]
+                match boxes with
+                | [ list; pane ] ->
+                    Expect.isTrue
+                        (abs (list.Bottom - pane.Bottom) <= 1.0)
+                        (sprintf "the list reaches the pane's foot: list ends at %d, pane at %d" (px list.Bottom) (px pane.Bottom))
+                | _ -> failwith "two boxes measured"
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                do! waitVisible "the terminal back" page "#shell [data-pane-panel^='terminal:']"
                 return ()
             }
 

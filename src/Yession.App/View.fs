@@ -4744,7 +4744,7 @@ module View =
     /// ones folded under one row that unfolds in place (`ClientModel.listSections`). A
     /// session's closed terminals are its record, and forty of them listed among the live
     /// ones made a list a reader had to read all of to find the one that wanted them. The
-    /// rows above the fold are held while the sheet is down (`ListHeld`), so a row does not
+    /// rows above the fold are held while the list is up (`ListHeld`), so a row does not
     /// move under the pointer when its terminal ends.
     ///
     /// The verbs are rendered from `Affordances` and from nothing else — a row wears exactly
@@ -4764,9 +4764,9 @@ module View =
     /// may hold no controls. The name is the row's own button; the arrows walk the names
     /// (`ClientModel.walkList`), Tab reaches the verbs.
     ///
-    /// `docked` when the pane has nothing else to show: the list is then the pane's body, with
-    /// no scrim and nothing under it to dim — there is no blank page to drop it over.
-    let private allPage (actions: ViewActions) (dispatch: ClientMsg -> unit) (docked: bool) (model: ClientModel) : TemplateResult =
+    /// It is the pane's body while it is up, as any tab's panel is: in place of what was on
+    /// screen, never laid over it.
+    let private allPage (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let selected = ClientModel.selectedTerminal model
         // The arrow walk down the names, pressed on one: the row says which it is, and the
         // model says where that goes (`ClientModel.walkList`). Its default is refused here,
@@ -5056,10 +5056,10 @@ module View =
                     {startIn}
                   </div>
                 </div>"""
-        // The list of places: on a phone, a page in the sheet in place of what it lists, the
-        // repo picker's branch pane in this sheet's rows; on a wide screen, the same rows
-        // unfolded under the heading, with the rest of the sheet still round them. Choosing
-        // one folds it, and New terminal then starts there.
+        // The list of places: on a phone, a page in place of the list, the repo picker's
+        // branch pane in this page's rows; on a wide screen, the same rows unfolded under the
+        // heading, with the rest of the list still round them. Choosing one folds it, and New
+        // terminal then starts there.
         let choosingPlace () =
             let choice (sandbox: SandboxRef) =
                 let chosen = sandbox = place
@@ -5091,28 +5091,15 @@ module View =
                   </div>
                   <ul aria-label="{Dom.Text.startInHeading}">{places |> List.map choice}</ul>
                 </div>"""
-        // Under the sheet, the pane goes on showing, dimmed: the sheet is a layer over it, not
-        // a place. Pressed, the scrim puts the sheet away — a duplicate of the list button and
-        // of Escape, so out of the tree and the Tab order, as the phone's grab edge is. Docked,
-        // there is nothing under it, so no scrim.
         let beside = if choosing then Style.startInBesideChoosing else Style.startInBeside
         let listed =
             html $"""
                 <div class="{beside}">{terminals}</div>
                 {if choosing then choosingPlace () else Lit.nothing}
                 <div class="{beside}">{opened}{closed}{empty}{files}</div>"""
-        let sheet = if choosing then Style.allSheetChoosing else Style.allSheet
-        let scrim =
-            if docked then Lit.nothing
-            else
-                html $"""
-                    <button type="button" class="{Style.allSheetScrim}" tabindex="-1" aria-hidden="true"
-                            aria-label="{Dom.Text.switchTerminal}" data-pane-sheet-scrim
-                            @click={Ev(fun _ -> dispatch CloseSwitcherMsg)}></button>"""
         html $"""
-            {scrim}
-            <div class="{if docked then Style.allDocked else sheet}" role="region" tabindex="-1" aria-label="{Dom.Text.terminalsAndFiles}"
-                 id="{Dom.paneSheetId}" data-pane-panel="{allKey}">
+            <div class="{Style.allPanel}" role="region" tabindex="-1" aria-label="{Dom.Text.terminalsAndFiles}"
+                 id="{Dom.paneListId}" data-pane-panel="{allKey}">
               <div class="{Style.allPage}" data-content-list aria-label="{Dom.Text.terminalsAndFiles}"
                    @paste={Ev(pasted)} @dragover={Ev(dragged)} @dragleave={Ev(left)} @drop={Ev(dropped)}>
                 {listed}
@@ -5142,8 +5129,8 @@ module View =
             match preview.Subject with
             | PreviewSubject.Block _ -> true
             | PreviewSubject.Stretch _ | PreviewSubject.Content _ -> false
-        // With nothing open the list is the pane's body (`allPage`, docked), so `all` is up
-        // whether or not the sheet was asked for.
+        // With nothing open the list is the pane's body (`allPage`), so `all` is up whether or
+        // not it was asked for.
         let nothingOpen = Option.isNone previewing && Option.isNone selected
         let onAll = model.Switcher || nothingOpen
         // The file on screen, if one is: its own tab is the selected item.
@@ -5194,7 +5181,7 @@ module View =
             let id = TerminalId.value view.TerminalId
             // Under a command's preview, the tab wears the preview's own lifted ground, so the
             // two read as one piece: the command, lifted out of this terminal.
-            // Under the list's sheet it goes quiet: the list button is the one lit thing then.
+            // While the list is up it goes quiet: the list button is the one lit thing then.
             let klass =
                 if not on || onAll then Style.pivotItem
                 elif previewing |> Option.exists lifted then Style.pivotItemLifted
@@ -5347,18 +5334,17 @@ module View =
                      aria-selected="{if on then "true" else "false"}" tabindex="{stopAt key on}" title="{name}"
                      @keydown={Ev(Events.key activateKey)}
                      @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}">{name}</span>{dismiss}</div>"""
-        // The door to every terminal and file: a button at the strip's head that
-        // drops the list down as a sheet over whatever the pane is showing. Not a tab: the
-        // list is not a place the pane goes to, and the tab under it stays selected. Pressed
-        // again, or Escape, puts it away.
+        // The door to every terminal and file: a button at the strip's head that makes the
+        // list the pane's body, in place of whatever the pane was showing. Pressed again, or
+        // Escape, goes back to that.
         //
-        // Down, it wears the sheet's ground and runs through the strip's rule into it — the
-        // sheet's tab — and the selected tab goes quiet under it, so the strip has one lit
-        // thing and it is the thing in front.
+        // Up, it wears the list's ground and runs through the strip's rule into it — the
+        // list's tab — and the selected tab goes quiet, so the strip has one lit thing and it
+        // is the thing on screen.
         let listButton =
             html $"""
                 <button type="button" class="{if onAll then Style.paneListButtonOn else Style.paneListButton}"
-                        data-pane-switcher aria-controls="{Dom.paneSheetId}"
+                        data-pane-switcher aria-controls="{Dom.paneListId}"
                         aria-expanded="{if onAll then "true" else "false"}"
                         aria-label="{Dom.Text.switchTerminal}" title="{Dom.Text.switchTerminal}"
                         @click={Ev(fun _ -> dispatch ToggleSwitcherMsg)}>{Icon.list}</button>"""
@@ -5484,6 +5470,9 @@ module View =
                  else terminalComposer actions dispatch model view.TerminalId}"""
         let body () =
             match previewing, selected with
+            // The list, when it is up — asked for, or because nothing is open: the list is
+            // where everything here is opened or started from.
+            | _ when onAll -> allPage actions dispatch model
             // A preview, laid over the selected terminal: the thing itself. Not the terminal's
             // composer — the reader is reading, not typing, and its close restores it.
             //
@@ -5506,10 +5495,7 @@ module View =
                          data-pane-panel="{key}" data-pane-preview="{key}">
                       {previewBody preview}
                     </div>"""
-            // Nothing open: the pane is the list, docked, because the list is where everything
-            // here is opened or started from. It was a blank page with a line pointing at the
-            // list button.
-            | None, None -> allPage actions dispatch true model
+            | None, None -> Lit.nothing
             | None, Some terminal ->
                 let inner =
                     match Projection.tryFind terminal model.Terminals with
@@ -5545,6 +5531,7 @@ module View =
             | other -> dispatch other
         let toolbar =
             match previewing, selected with
+            | _ when onAll -> Lit.nothing
             | Some preview, _ ->
                 let key = PreviewSubject.key preview.Subject
                 let label, hint = previewLabel preview.Subject
@@ -5638,9 +5625,9 @@ module View =
               <div class="{Style.terminalResize}" data-term-resize role="separator" tabindex="0"
                    aria-orientation="vertical" aria-label="Resize the content column"
                    aria-valuemin="{PaneSplit.narrowest}" aria-valuenow="{split.Width}" aria-valuemax="{split.Widest}"></div>
-              <!-- Escape anywhere in the pane steps back one item: off the sheet's list of
-                   places to its list, off `all` to what it was laid over, or a preview down,
-                   as its close does. -->
+              <!-- Escape anywhere in the pane steps back one item: off the list of places to
+                   the list, off `all` to what was on screen before it, or a preview down, as
+                   its close does. -->
               <div class="{Style.terminalPane}"
                    @keydown={Ev(Events.key (fun e ->
                                     if e.key = "Escape" then
@@ -5652,7 +5639,6 @@ module View =
                   {toolbar}
                   {refusalNotice dispatch model RefusalMount.Pane}
                   {body ()}
-                  {if model.Switcher && not nothingOpen then allPage actions dispatch false model else Lit.nothing}
                 </div>
               </div>
             </aside>"""

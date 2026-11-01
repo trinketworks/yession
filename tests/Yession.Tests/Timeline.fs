@@ -1225,7 +1225,7 @@ let private edgeTabTests =
 
         testCase "a pane brought up over a session with no open terminal shows the empty pane" <| fun () ->
             let model = firstLook false [ [ at 1L 0.0 (sent "1" "hello") ] ] |> Support.step ToggleContentMsg
-            Expect.isFalse model.Switcher "no sheet asked for: the pane's body is the list, docked (`View.allPage`)"
+            Expect.isFalse model.Switcher "the list not asked for: it is the pane's body anyway (`View.allPage`)"
 
         testCase "a pane brought up before the log arrived lands on the switcher once it has" <| fun () ->
             // Before the log is read through, "no terminal" and "not heard yet" look the same;
@@ -1242,16 +1242,23 @@ let private edgeTabTests =
             let moves = effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
             Expect.equal moves [ ClientEffect.Move (DomMove.IfDropped DomMove.FocusSwitcher) ] "onto the switcher, if dropped"
 
-        testCase "an empty pane is the list, docked, with its one New terminal" <| fun () ->
+        testCase "an empty pane is the list, with its one New terminal" <| fun () ->
             let count (pattern: string) (html: string) = System.Text.RegularExpressions.Regex.Matches(html, pattern).Count
             let doors = count "data-terminal-new[\\s=>]"
             let lists = count "data-content-list[\\s=>]"
-            let scrims = count "data-pane-sheet-scrim[\\s=>]"
             let empty = shownOf [] |> Support.step ToggleContentMsg
             let html = Support.render empty
-            Expect.equal (lists html, doors html, scrims html) (1, 1, 0) "the list is the pane, with nothing under it to dim"
+            Expect.equal (lists html, doors html) (1, 1) "the list is the pane"
             let asked = Support.render (Support.step OpenAllMsg empty)
-            Expect.equal (lists asked, doors asked, scrims asked) (1, 1, 0) "asked for, it is the same one list, not a second over it"
+            Expect.equal (lists asked, doors asked) (1, 1) "asked for, it is the same one list, not a second"
+
+        testCase "the list asked for over a terminal takes the terminal's place in the pane" <| fun () ->
+            let count (pattern: string) (html: string) = System.Text.RegularExpressions.Regex.Matches(html, pattern).Count
+            let shown = shownOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let terminalPanels = count "data-pane-panel=\"terminal:"
+            Expect.equal (terminalPanels (Support.render shown)) 1 "the terminal is the pane's body, or this proves nothing"
+            let html = Support.render (Support.step OpenAllMsg shown)
+            Expect.equal (count "data-content-list[\\s=>]" html, terminalPanels html) (1, 0) "the list, and no terminal under it"
     ]
 
 // --- How a block ended, on every surface ----------------------------------------------------
