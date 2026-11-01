@@ -188,10 +188,20 @@ module Dom =
         let queueId = "data-queue-id"
         let queueAuthor = "data-queue-author"
         let queueOrder = "data-queue-order"
+        /// A collapsed queued message's one-line row, and the button that opens it for
+        /// editing — the queue's own `draftSummary`/`expandDraft` pair.
+        let queueSummary = "data-queue-summary"
+        let queueOpen = "data-queue-open"
+        /// The editable host a queued message moves to while it is open for editing — the
+        /// same body, mounted in the composer's slot instead of the band's row.
         let queueInput = "data-queue-input"
         let queueUp = "data-queue-up"
         let queueDown = "data-queue-down"
+        /// Worn only by the edit bar now (`View.queue`): the queue's own surface, spent on
+        /// Delete and Done in place of the list while one entry is open.
         let queueDelete = "data-queue-delete"
+        /// Back to the list and the local peer's own composer.
+        let queueDone = "data-queue-done"
         // Draft composer.
         let draftEditor = "data-draft-editor"
         let draftId = "data-draft-id"

@@ -3793,6 +3793,18 @@ module Style =
     let queueItem =
         cls [ "group flex items-center gap-3 min-h-10 py-2 px-4 wide:px-rail bg-surface transition-colors"; rowLift ]
 
+    /// A collapsed queued message's whole row: the tap target that opens it for editing —
+    /// the queue's own `draftSummary`. `text-left`, because a button defaults to centred and
+    /// a summary reads as a line of text, not a label.
+    let queueSummary = cls [ "flex-1 min-w-0 flex items-center gap-3 text-left cursor-pointer"; focusRing ]
+
+    /// The clamped one line of it — `draftSummaryBody`'s own rule (see there for why the
+    /// clamp lives on the host rather than its ProseMirror children), at `queueItem`'s own
+    /// line height rather than `draftSummary`'s fixed row.
+    let queueSummaryBody =
+        "flex-1 min-w-0 " + messageVoice false + " text-small leading-5 text-ink-dim "
+        + "truncate [&_*]:inline [&_*]:whitespace-nowrap [&_*]:m-0"
+
     /// `focus-within`, not `focus`: the caret lands in the editor MOUNTED INSIDE this host,
     /// so `focus:` on the host never fires and the brightening never happened.
     ///
@@ -3828,6 +3840,20 @@ module Style =
     /// wearing the err fill at rest, because a touch has no hover to hold a warning up.
     let queueVerbDelete = cls [ btnIconBareDanger; hitTouch; queueDeleteGap ]
     let queueVerbDeleteArmed = cls [ btnIconBareDangerArmed; hitTouch; queueDeleteGap ]
+
+    /// The band's OWN surface while one entry is open for editing: `queueItem`'s own height
+    /// and gutter, spent on Delete and Done instead of the list — the same row, a different
+    /// moment, because a reader should feel the band hold its ground rather than a second box
+    /// appearing beside it.
+    let queueEditBar = "flex items-center justify-between min-h-10 py-2 px-4 wide:px-rail bg-surface"
+
+    /// Done: the way out of editing a queued message, back to the list and the local peer's
+    /// own composer — `draftNew`'s own voice (the bare caps word a composer's escape hatch
+    /// speaks in), not `self-end`: this one rides a row beside Delete rather than trailing a
+    /// column.
+    let queueDone =
+        "bg-transparent border-0 cursor-pointer px-2 py-1 " + caps
+        + " text-ink-faint hover:text-blue transition-colors " + focusRing
 
     // --- Agent surfaces: what the agent draws for people to answer (A2UI) ----------------------
     // The agent says WHAT is on a surface, in the basic catalog's words; this product says how it

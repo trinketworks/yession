@@ -1514,40 +1514,57 @@ module View =
 
     let private queue (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let synced = model.Synced
-        // Only entries the wait has cleared (`ClientModel.QueueShown`) — most sends drain
-        // before it fires, so the band that used to open and shut on every ordinary send now
-        // stays closed for them. A reorder or a delete press still reaches an entry fresh
-        // off this filter: both read `synced.Queue` by id, never this list's order.
-        let entries = QueueOrder.sorted synced.Queue |> List.filter (fun entry -> Set.contains entry.QueueId model.QueueShown)
-        let head =
-            match entries with
-            | [] -> Lit.nothing
-            | _ ->
-                html $"""<div class="{Style.queueHead}"><span class="{Style.queueCount}">queued · {List.length entries}</span></div>"""
-        let items =
-            entries
-            |> List.map (fun entry ->
-                let id = entry.QueueId
-                // The second press of a two-press delete: armed by the first (below), and
-                // taken back on its own after `ClientModel.armedMs` if nobody
-                // follows through. One mis-tap next to reorder used to be irreversible; now
-                // it is a press that does nothing but ask again.
-                let armed = model.QueueDeleteArmed = Some id
-                let deleteFace = if armed then Style.queueVerbDeleteArmed else Style.queueVerbDelete
-                let deleteLabel = if armed then "Confirm delete" else "Delete"
-                let onDelete = if armed then DeleteQueuedMsg id else ArmQueueDeleteMsg (Some id)
-                html $"""
-                    <article class="{Style.queueItem}" data-queue-id="{QueueId.value id}" data-queue-author="{PeerId.value entry.Author}" data-queue-order="{string entry.Order}">
-                      <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model (PeerRef entry.Author) ]}"></span>
-                      <div class="{Style.queueInput}" data-rich-body="{BodyKey.queued id}" data-rich-readonly="false" data-queue-input="{QueueId.value id}"></div>
-                      <div class="{Style.queueTools}">
-                        <button type="button" class="{Style.queueVerb}" aria-label="Move up" data-queue-up="{QueueId.value id}" @click={Ev(fun _ -> match QueueOrder.moveUp synced.Queue id with Some o -> dispatch (ReorderQueuedMsg (id, o)) | None -> ())}>{Icon.up}</button>
-                        <button type="button" class="{Style.queueVerb}" aria-label="Move down" data-queue-down="{QueueId.value id}" @click={Ev(fun _ -> match QueueOrder.moveDown synced.Queue id with Some o -> dispatch (ReorderQueuedMsg (id, o)) | None -> ())}>{Icon.down}</button>
-                        <button type="button" class="{deleteFace}" aria-label="{deleteLabel}" data-queue-delete="{QueueId.value id}" data-queue-delete-armed="{if armed then "true" else "false"}" @click={Ev(fun _ -> dispatch onDelete)}>{Icon.close}</button>
-                      </div>
-                    </article>""")
-        let band = if List.isEmpty entries then Style.queueEmpty else Style.queue
-        html $"""<section class="{band}" data-message-queue>{head}{items}</section>"""
+        match ClientModel.editingQueue model with
+        | Some id ->
+            // The band's OWN surface, while this entry sits in the composer instead of the
+            // list (`View.drafts`): Delete and Done where the list was, because there is
+            // nothing left here to reorder against an entry that is not drawn, and the
+            // per-row delete this replaced is gone with it (`Style.queueEditBar`).
+            //
+            // The second press of a two-press delete: armed by the first (below), and taken
+            // back on its own after `ClientModel.armedMs` if nobody follows through.
+            let armed = model.QueueDeleteArmed = Some id
+            let deleteFace = if armed then Style.queueVerbDeleteArmed else Style.queueVerbDelete
+            let deleteLabel = if armed then "Confirm delete" else "Delete"
+            let onDelete = if armed then DeleteQueuedMsg id else ArmQueueDeleteMsg (Some id)
+            html $"""
+                <section class="{Style.queueEditBar}" data-message-queue>
+                  <button type="button" class="{deleteFace}" aria-label="{deleteLabel}" data-queue-delete="{QueueId.value id}" data-queue-delete-armed="{if armed then "true" else "false"}" @click={Ev(fun _ -> dispatch onDelete)}>{Icon.bin}</button>
+                  <button type="button" class="{Style.queueDone}" data-queue-done @click={Ev(fun _ -> dispatch CloseQueueEditMsg)}>Done</button>
+                </section>"""
+        | None ->
+            // Only entries the wait has cleared (`ClientModel.QueueShown`) — most sends drain
+            // before it fires, so the band that used to open and shut on every ordinary send now
+            // stays closed for them. A reorder press still reaches an entry fresh off this
+            // filter: it reads `synced.Queue` by id, never this list's order.
+            let entries = QueueOrder.sorted synced.Queue |> List.filter (fun entry -> Set.contains entry.QueueId model.QueueShown)
+            let head =
+                match entries with
+                | [] -> Lit.nothing
+                | _ ->
+                    html $"""<div class="{Style.queueHead}"><span class="{Style.queueCount}">queued · {List.length entries}</span></div>"""
+            let items =
+                entries
+                |> List.map (fun entry ->
+                    let id = entry.QueueId
+                    // One clamped line of it — the same read-only editor the browser mounts
+                    // everywhere, so the CRDT keeps it current (`draftSummary`'s own move).
+                    // Opening it moves the SAME body into the composer, editable
+                    // (`View.drafts`), rather than copying its content there: `BodyKey.queued
+                    // id` names the one fragment either host binds.
+                    html $"""
+                        <article class="{Style.queueItem}" data-queue-id="{QueueId.value id}" data-queue-author="{PeerId.value entry.Author}" data-queue-order="{string entry.Order}">
+                          <button type="button" class="{Style.queueSummary}" data-queue-summary="{QueueId.value id}" data-queue-open="{QueueId.value id}" @click={Ev(fun _ -> dispatch (OpenQueueEditMsg id))}>
+                            <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model (PeerRef entry.Author) ]}"></span>
+                            <span class="{Style.queueSummaryBody}" data-rich-body="{BodyKey.queued id}" data-rich-readonly="true"></span>
+                          </button>
+                          <div class="{Style.queueTools}">
+                            <button type="button" class="{Style.queueVerb}" aria-label="Move up" data-queue-up="{QueueId.value id}" @click={Ev(fun _ -> match QueueOrder.moveUp synced.Queue id with Some o -> dispatch (ReorderQueuedMsg (id, o)) | None -> ())}>{Icon.up}</button>
+                            <button type="button" class="{Style.queueVerb}" aria-label="Move down" data-queue-down="{QueueId.value id}" @click={Ev(fun _ -> match QueueOrder.moveDown synced.Queue id with Some o -> dispatch (ReorderQueuedMsg (id, o)) | None -> ())}>{Icon.down}</button>
+                          </div>
+                        </article>""")
+            let band = if List.isEmpty entries then Style.queueEmpty else Style.queue
+            html $"""<section class="{band}" data-message-queue>{head}{items}</section>"""
 
     /// The model picker, riding the composer's own row beside Send and Interrupt rather than
     /// two taps down in Settings. Choosing a model is a per-turn decision, so it belongs
@@ -1690,6 +1707,29 @@ module View =
     /// presence) and any peer may send one, so the open draft is a full composer whoever's it is.
     /// What differs by ownership is destruction: discard is the author's alone.
     let private drafts (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+        let editingQueue = ClientModel.editingQueue model
+        if editingQueue.IsSome then
+            let id = editingQueue.Value
+            // The composer's OWN surface while a queued message is open for editing: the SAME
+            // body the band's one-line summary named (`BodyKey.queued id`), editable here
+            // instead of there — nothing moved but which host is bound to it. No Send: the
+            // message is already queued, so there is nothing here to commit, and Done (the
+            // band's own surface, `View.queue`) is the way out rather than a second send.
+            // Collapsed drafts and the "new message" link are both about composing something
+            // NEW, which this is not, so neither draws while this is open.
+            html $"""
+                {composerTray dispatch model}
+                <section class="{Style.composer}" data-draft-editor data-queue-editor="{QueueId.value id}">
+                  <span class="{Style.bandRail}"></span>
+                  <span class="{Style.bandEdge}"></span>
+                  <article class="{Style.draftBox}">
+                    <div class="{Style.draftBody}">
+                      <div class="{Style.draftInput}" data-rich-body="{BodyKey.queued id}" data-rich-readonly="false" data-queue-input="{QueueId.value id}"></div>
+                    </div>
+                  </article>
+                </section>"""
+        else
+
         let myPeer = model.Peer.PeerId
         let target = ClientModel.composerTarget model
         // Live carets in a draft, coloured per peer: "grace and ada are in this one".

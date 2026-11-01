@@ -2042,6 +2042,19 @@ type ClientModel =
       /// (`ClientModel.timers`) — an arm nobody confirms must not stay armed forever, the way
       /// a menu left open or a copy's confirmation left showing would be wrong too.
       QueueDeleteArmed : QueueId option
+      /// The one queued message open for editing, if any — moved there out of the band's own
+      /// list and into the composer (`View.drafts`), the same slot a draft composes in. Local
+      /// view state, same reason `Composer` is: which entry a tap opened is this client's own
+      /// moment, not a fact the room needs to agree on. The band draws the rest of the queue
+      /// as one-line summaries while this is `Some`, and spends its own surface on Delete and
+      /// Done instead of the list (`View.queue`) — there is nothing to reorder against an
+      /// entry that is not drawn.
+      ///
+      /// An id naming an entry gone from `Synced.Queue` (sent, drained, deleted by a peer) is
+      /// read as `None` everywhere (`ClientModel.editingQueue`) rather than cleared on every
+      /// path that could remove one — the read already has to agree with the doc, so a second
+      /// place asserting the same fact would only be a second way to get it wrong.
+      EditingQueue : QueueId option
       /// Which entries of `Synced.Queue` have sat long enough to be worth drawing
       /// (`ClientModel.catchUpQuietMs`, the same round trip `EffortSlowMsg` already
       /// names). A send almost always drains before this fires — the entry appears in
@@ -2346,6 +2359,13 @@ type ClientMsg =
     /// `None` is sent back by the entry's own wait (`armedMs`) when nobody
     /// confirms it, the same shape as `CopiedMsg`'s expiry.
     | ArmQueueDeleteMsg of QueueId option
+    /// Open this queued message for editing: it moves out of the band's list and into the
+    /// composer (`View.drafts`), the same slot a draft composes in, same escape as
+    /// `ExpandDraftMsg`'s — opening one collapses whatever was open. Local view state.
+    | OpenQueueEditMsg of QueueId
+    /// Done editing a queued message: back to the band's list and the local peer's own
+    /// "new message" composer, the same return `StartDraftMsg` gives a joined draft.
+    | CloseQueueEditMsg
     /// A queued entry has sat long enough to be worth drawing (`ClientModel.QueueShown`,
     /// `ClientModel.catchUpQuietMs`). Fired by the timer `ClientModel.timers` declares for
     /// it, never by anything else — the entry may be long gone by the time this arrives, and
@@ -2997,6 +3017,7 @@ module ClientModel =
           OpenFolds = Set.empty
           DatedBreaks = Set.empty
           QueueDeleteArmed = None
+          EditingQueue = None
           QueueShown = Set.empty
           Copied = None
           Uploads = []
@@ -3152,6 +3173,12 @@ module ClientModel =
     let collapsedDrafts (model: ClientModel) : PeerId list =
         let target = composerTarget model
         model.Synced.Drafts |> Map.toList |> List.map fst |> List.filter (fun peer -> peer <> target)
+
+    /// The queued message open for editing, narrowed against what the doc still holds —
+    /// `None` the moment the entry it named is gone, however that happened, rather than a
+    /// second place that has to notice and clear `EditingQueue` itself.
+    let editingQueue (model: ClientModel) : QueueId option =
+        model.EditingQueue |> Option.filter (fun id -> Map.containsKey id model.Synced.Queue)
 
     /// Whether a draft carries anything a send would take.
     ///
@@ -5445,6 +5472,16 @@ module ClientModel =
             model |> withSynced { model.Synced with Queue = Map.remove queueId model.Synced.Queue }
         | ArmQueueDeleteMsg next ->
             { model with QueueDeleteArmed = next }
+        | OpenQueueEditMsg queueId ->
+            // A fresh arm from whatever was open before this one does not carry over onto an
+            // entry it was never pressed on.
+            { model with EditingQueue = Some queueId; QueueDeleteArmed = None }
+        | CloseQueueEditMsg ->
+            // Back to the local peer's own "new message" composer always, not whatever draft
+            // was open before the edit — the word on the control that gets here is "Done",
+            // never "back", and a person who finished editing a queued message is not asking
+            // to resume somebody else's half-written draft.
+            { model with EditingQueue = None; QueueDeleteArmed = None; Composer = Own }
         | QueueShownMsg queueId ->
             { model with QueueShown = Set.add queueId model.QueueShown }
         | ClaudeStatusMsg status ->
