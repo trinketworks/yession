@@ -79,27 +79,45 @@ let private fresh =
 
 let private launch (msg: LaunchMsg) (model: ClientModel) = Support.step (LaunchMsg msg) model
 
+/// `model` with octo/hello waiting to be trusted.
+let private trustWaiting (model: ClientModel) : ClientModel =
+    let asked =
+        SessionEvent.RepoTrustAsked
+            { RepoTrustAsked.MessageId = MessageId.create "asked" |> expect
+              RepoTrustAsked.Repo = hello
+              RepoTrustAsked.Routes = [ ConnectionRoute.Git; ConnectionRoute.Api ]
+              RepoTrustAsked.Actor = ActorRef.Configured hello
+              RepoTrustAsked.CausedBy = None }
+    { model with TrustWaits = RepoTrustWaits.apply RepoTrustWaits.empty [ asked ] }
+
 let private offeredTests =
     testList "when it is offered" [
 
-        // The slot above the composer asks one thing at a time. A repo waiting to be trusted is
-        // the question the launch led to, so it is the one standing there — never both cards,
-        // two questions in one place with two buttons that commit.
-        testCase "a repo waiting to be trusted takes the launch card's place" <| fun () ->
-            let asked =
-                SessionEvent.RepoTrustAsked
-                    { RepoTrustAsked.MessageId = MessageId.create "asked" |> expect
-                      RepoTrustAsked.Repo = hello
-                      RepoTrustAsked.Routes = [ ConnectionRoute.Git; ConnectionRoute.Api ]
-                      RepoTrustAsked.Actor = ActorRef.Configured hello
-                      RepoTrustAsked.CausedBy = None }
-            let offered = clientAt 1L fresh
-            let waiting = { offered with TrustWaits = RepoTrustWaits.apply RepoTrustWaits.empty [ asked ] }
-            let html = render waiting
+        // The slot stacks every question waiting on the reader: the front one as its card, the
+        // rest a line each. Each is one press from the front, and only one card stands, so
+        // there is never a second button that commits.
+        testCase "a repo waiting to be trusted is a line above the launch card" <| fun () ->
+            let html = render (trustWaiting (clientAt 1L fresh))
             Expect.equal
-                (html.Contains "data-repo-trust=\"octo/hello\"", html.Contains "data-repo-picker=")
-                (true, false)
-                "the trust card stands in the slot, and the launch card does not stand beside it"
+                (html.Contains "data-ask-line=\"trust:octo/hello\"", html.Contains "data-repo-picker=\"choosing\"")
+                (true, true)
+                "the launch, oldest, is the card; the trust ask waits one press away"
+
+        testCase "bringing an ask forward makes it the card" <| fun () ->
+            let html = render (trustWaiting (clientAt 1L fresh) |> Support.step (BringAskForwardMsg "trust:octo/hello"))
+            Expect.equal
+                (html.Contains "data-repo-trust=\"octo/hello\"", html.Contains "data-ask-line=\"launch\"")
+                (true, true)
+                "the trust card stands in front, and the launch waits as a line"
+
+        testCase "bringing an ask forward moves the keyboard to it" <| fun () ->
+            let _, effects = ClientModel.update (BringAskForwardMsg "trust:octo/hello") (trustWaiting (clientAt 1L fresh))
+            Expect.isTrue (List.contains (ClientEffect.Move DomMove.FocusAsk) effects) "onto the card's question"
+
+        testCase "an ask answered while in front hands the front to the oldest" <| fun () ->
+            let forward = trustWaiting (clientAt 1L fresh) |> Support.step (BringAskForwardMsg "trust:octo/hello")
+            let answered = { forward with TrustWaits = RepoTrustWaits.empty }
+            Expect.equal (ClientModel.frontAsk answered) (Some Ask.Launch) "the launch again"
 
         testCase "a connected client that has read an empty log to its end is offered it" <| fun () ->
             Expect.isTrue (ClientModel.launchOffered (clientAt 1L fresh)) "offered"

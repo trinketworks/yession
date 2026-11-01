@@ -2153,7 +2153,7 @@ module View =
                 {way}
                 <div class="{Style.askHeadWords}">
                   {subtitle}
-                  <h2 id="{titleId}" class="{Style.askQuestion}">{title}</h2>
+                  <h2 id="{titleId}" class="{Style.askQuestion}" tabindex="-1">{title}</h2>
                 </div>
               </div>
             </div>"""
@@ -2517,8 +2517,8 @@ module View =
     /// read as one of them.
     ///
     /// Every reader sees it, because whoever answers is whose GitHub the repo runs with; the
-    /// session refuses a reader with none of their own. One card at a time, oldest first: the
-    /// slot holds one question, and the next repo's stands there once this one is answered.
+    /// session refuses a reader with none of their own. It stands in the slot's stack
+    /// (`askSlot`) with every other question waiting on this reader, in the order they asked.
     ///
     /// The answer carries what the card SHOWED beside what is ticked. It answers those routes
     /// and no others, so a repo that asks for more after the card was drawn asks again. The ×
@@ -2574,13 +2574,42 @@ module View =
               {askInside pane answer}
             </section>"""
 
-    /// What stands in the ask slot above the composer, if anything: a repo waiting to be
-    /// trusted first, because it is the question the launch's answer led to, then the launch.
+    /// Who asks, and what, as an ask's line says it while another's card is in front.
+    let private askLineWords (ask: Ask) : string * string =
+        match ask with
+        | Ask.Launch -> Dom.Text.repoPickerAsker, Dom.Text.repoPickerTitle
+        | Ask.Trust (repo, _) -> RepoRef.value repo, Dom.Text.trustTitle
+
+    /// An ask waiting behind the card in front: ONE line, the head it would wear folded to who
+    /// asks and what, and the line is the press that brings its card forward. The same blue
+    /// lead, because it is waiting on you just as the card is.
+    let private askLine (dispatch: ClientMsg -> unit) (ask: Ask) : TemplateResult =
+        let who, question = askLineWords ask
+        let key = Ask.key ask
+        html $"""
+            <button type="button" class="{Style.askLine}" data-ask-line="{key}"
+                    @click={Ev(fun _ -> dispatch (BringAskForwardMsg key))}>
+              <span class="{Style.askLeadBar}" aria-hidden="true"></span>
+              <span class="{Style.askLineWords}">
+                <span class="{Style.askLineMark}" aria-hidden="true">{Icon.up}</span>
+                <span class="{Style.askLineWho}">{who}</span>
+                <span class="{Style.askLineQuestion}">{question}</span>
+              </span>
+            </button>"""
+
+    /// The ask slot above the composer: every question waiting on this reader (`ClientModel.asks`),
+    /// oldest first. The front one stands as its card and the rest as a line each above it, so
+    /// each is one press from the front and no two cards ever stand with two buttons that commit.
     let private askSlot (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
-        match TrustCards.showing (RepoTrustWaits.waiting model.TrustWaits) model.TrustCards with
-        | (repo, shown) :: _ -> trustCard dispatch repo shown model
-        | [] when ClientModel.launchOffered model -> askCard actions dispatch model
-        | [] -> Lit.nothing
+        match ClientModel.frontAsk model with
+        | None -> Lit.nothing
+        | Some front ->
+            let card =
+                match front with
+                | Ask.Launch -> askCard actions dispatch model
+                | Ask.Trust (repo, shown) -> trustCard dispatch repo shown model
+            let behind = ClientModel.asks model |> List.filter (fun ask -> Ask.key ask <> Ask.key front)
+            html $"""<div class="{Style.askStack}" data-ask-stack>{behind |> List.map (askLine dispatch)}{card}</div>"""
 
     /// Who did something, as the transcript heads what they said: their square and their name
     /// in the caps voice, the agent's in blue. One face wherever an author heads what follows —
