@@ -40,6 +40,8 @@ type Act =
     | RepoBranchSwitched of RepoBranchSwitched
     | RepoCapabilitiesChanged of RepoCapabilitiesChanged
     | RepoCapabilitiesApproved of RepoCapabilitiesApproved
+    | RepoTrustAsked of RepoTrustAsked
+    | RepoTrusted of RepoTrusted
     | RepoConfigRefused of RepoConfigRefused
     | RepoConfigWarned of RepoConfigWarned
     | SandboxStarting of WorkSandboxStarting
@@ -88,6 +90,8 @@ module Act =
         | Act.RepoBranchSwitched r -> RepoBranchSwitched.phrase r
         | Act.RepoCapabilitiesChanged c -> RepoCapabilitiesChanged.phrase c
         | Act.RepoCapabilitiesApproved a -> RepoCapabilitiesApproved.phrase a
+        | Act.RepoTrustAsked a -> RepoTrustAsked.phrase a
+        | Act.RepoTrusted t -> RepoTrusted.phrase t
         | Act.RepoConfigRefused r -> RepoConfigRefused.phrase r
         | Act.RepoConfigWarned w -> RepoConfigWarned.phrase w
         | Act.SandboxStarting s -> WorkSandboxStarting.phrase s
@@ -135,6 +139,8 @@ module Act =
         | Act.RepoBranchSwitched _
         | Act.RepoCapabilitiesChanged _
         | Act.RepoCapabilitiesApproved _
+        | Act.RepoTrustAsked _
+        | Act.RepoTrusted _
         | Act.RepoConfigRefused _
         | Act.RepoConfigWarned _
         | Act.SandboxStopped _
@@ -203,6 +209,8 @@ module Act =
         | Act.RepoRemoved _
         | Act.RepoBranchSwitched _
         | Act.RepoCapabilitiesApproved _
+        | Act.RepoTrustAsked _
+        | Act.RepoTrusted _
         | Act.SandboxStopped _
         // The diff is not a phrase: a screen draws it as lines, and the agent already holds
         // the texts it sent. The headline's counts are the whole of what prose says.
@@ -244,6 +252,8 @@ module Act =
         | Act.RepoBranchSwitched _ -> "switched", "branch", "branches"
         | Act.RepoCapabilitiesChanged _ -> "changed", "repo's capabilities", "repos' capabilities"
         | Act.RepoCapabilitiesApproved _ -> "approved", "repo's capabilities", "repos' capabilities"
+        | Act.RepoTrustAsked _ -> "waited for trust", "repo", "repos"
+        | Act.RepoTrusted _ -> "trusted", "repo", "repos"
         | Act.RepoConfigRefused _ -> "refused", "repo config", "repo configs"
         | Act.RepoConfigWarned _ -> "noted", "repo config", "repo configs"
         | Act.SandboxStarting _

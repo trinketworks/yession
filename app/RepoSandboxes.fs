@@ -25,15 +25,23 @@ open Yession.Domain.Repos
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Tools
+open Yession.Domain.Chat
 open Yession.Session
 
-/// What a repo's selection comes to: the lines a person reads, and whether a person has to
-/// approve them first, which is whether the selection holds a connection
-/// (`ResourceClosure.asksItsUser`). Named `Sensitive` after the event field it fills
-/// (`RepoCapabilitiesChanged.Sensitive`), which keeps its name because events are durable.
+/// What a repo's selection comes to: the lines a person reads, and the routes its sandboxes
+/// forward GitHub by. Those routes are what trusting the repo means. A repo that forwards none
+/// spends nobody's GitHub, so it asks nobody: what else it holds is the operator's to grant.
 type RepoCapabilities =
     { Granted : string list
-      Sensitive : bool }
+      GitHubRoutes : ConnectionRoute list }
+
+/// Whether one repo's sandboxes may start in this fold, and on whose authority.
+type private TrustDecision =
+    /// Start them, with this credential's act: the person whose trust runs the repo here, or —
+    /// for a repo that forwards nobody's GitHub — whoever the fold runs for.
+    | RunsWith of CredentialFor
+    /// Hold them, and say why.
+    | Holds of problem: string
 
 /// What the last fold made of one repo. `Sandbox = None` is about the FILE itself — it
 /// could not be read — and the distinction matters because those are fixed in different
@@ -76,13 +84,10 @@ type RepoSandboxes =
       /// What a checkout said one of its sandboxes is FOR, from the last fold. Answered here
       /// because this is what holds declarations; the sandbox manager holds none and asks.
       Described : SandboxRef -> string option
-      /// Consent to what a repo asks for, on the authority of a person.
-      ///
-      /// Takes the set the person was SHOWN and refuses if it is not the set asked for now.
-      /// A capability set is authored by whoever can push to the checkout and can change
-      /// between a screen being drawn and a button being pressed — approving something other
-      /// than what was read is the failure worth preventing, and it is the easy one to build.
-      Approve : Principal -> RepoRef -> string list -> Async<Result<unit, string>> }
+      /// A person's answer to a repo's trust card: the routes it showed, and the ones they
+      /// ticked. Written to their own record, and then the repo runs with their GitHub when
+      /// nobody's trust runs it here yet and their answer covers what it asks.
+      Trust : Principal -> RepoRef -> ConnectionRoute list -> ConnectionRoute list -> Async<Result<unit, string>> }
 
 /// A session with nothing to fold: no repos service, or a composition without one. Total,
 /// so a caller never branches on whether the fold exists.
@@ -92,7 +97,7 @@ let none : RepoSandboxes =
       Undeclared = fun () -> []
       Declared = fun () -> Read Map.empty
       Described = fun _ -> None
-      Approve = fun _ _ _ -> async { return Error "this session has no repos to approve anything for" } }
+      Trust = fun _ _ _ _ -> async { return Error "this session has no repos to trust" } }
 
 /// What the log already says about one declaration: the reason it was last refused, when
 /// that refusal is still the last word about it.
@@ -151,49 +156,72 @@ let private lastCapabilities (events: SessionEvent list) (repo: RepoRef) : strin
         | _ -> None)
     |> List.tryLast
 
-/// What a person last consented to for this repo.
-let private lastApproved (events: SessionEvent list) (repo: RepoRef) : string list option =
+/// Who this repo runs with here: the person in its last `RepoTrusted` since it last came into the
+/// session. A repo removed and added again is one nobody here has trusted yet.
+let private trusterOf (events: SessionEvent list) (repo: RepoRef) : Principal option =
     events
-    |> List.choose (fun event ->
-        match event with
-        | SessionEvent.RepoCapabilitiesApproved a when RepoRef.value a.Repo = RepoRef.value repo ->
-            Some a.Granted
-        | _ -> None)
-    |> List.tryLast
+    |> List.fold
+        (fun truster event ->
+            match event with
+            | SessionEvent.RepoAdded a when RepoRef.value a.Repo = RepoRef.value repo -> None
+            | SessionEvent.RepoRemoved r when RepoRef.value r.Repo = RepoRef.value repo -> None
+            | SessionEvent.RepoTrusted t when RepoRef.value t.Repo = RepoRef.value repo -> Some t.By
+            | _ -> truster)
+        None
 
-/// What a repo's selection comes to on THIS host: the lines somebody says yes to.
+/// The routes of the card this repo has standing — what it last asked trust for — or `None`
+/// when nothing is asked: somebody answered it, or it never asked. The same fold as the
+/// client's (`RepoTrustWaits`), so a card on a screen and a held sandbox cannot disagree.
+let private standingAsk (events: SessionEvent list) (repo: RepoRef) : ConnectionRoute list option =
+    RepoTrustWaits.pending events
+    |> List.tryFind (fun (waiting, _) -> RepoRef.value waiting = RepoRef.value repo)
+    |> Option.map snd
+
+/// What a repo's selection comes to on THIS host: the lines the timeline says it asks for, and
+/// the routes its sandboxes forward GitHub by.
 ///
 /// A function here rather than a lambda in the composition root, because it settles two
 /// things a test has to be able to reach. First, that the lines are the host's realisation
 /// and not the selection's own words — the operator named a socket, the repo picked it, and
-/// on a host that cannot scope one the sandbox gets every socket, so that is what consent has
-/// to be about. Second, that consent BINDS to those lines: `Approve` refuses a set that is
-/// not the set asked for now, so an operator who moves the backend under a pending decision
-/// re-asks rather than inheriting a yes given about a narrower grant.
+/// on a host that cannot scope one the sandbox gets every socket, so that is what is said.
+/// Second, that the routes come from the closure, under the connection's own name: they are
+/// what a person is asked to trust the repo with, and what a loan is then built from.
 ///
 /// A selection of nothing resolves to nothing without asking the resolver. That is not an
-/// optimisation — a repo that selects no resource has nothing to consent to, and running it
+/// optimisation — a repo that selects no resource asks nobody anything, and running it
 /// through a host that declares no profile would turn silence into a refusal.
 let capabilitiesOn
     (limits: HostLimits)
+    (github: ConnectionName)
     (resolve: ResourceName list -> ResourceName list -> Result<ResourceClosure, string>)
     ((uses, wants): ResourceName list * ResourceName list)
     : Result<RepoCapabilities, string> =
     match uses, wants with
-    | [], [] -> Ok { Granted = []; Sensitive = false }
+    | [], [] -> Ok { Granted = []; GitHubRoutes = [] }
     | uses, wants ->
-        // Both postures reach the same resolution, so a connection asks exactly as much
-        // wanted as used: the approval prompt shows whatever will be GRANTED, and a want this
-        // host does not offer is not granted and not shown.
+        // Both postures reach the same resolution, so a connection is asked about exactly as
+        // much wanted as used: what is shown is what will be GRANTED, and a want this host
+        // does not offer is neither granted nor asked about.
         resolve uses wants
         |> Result.map (fun closure ->
             { Granted = RealisedClosure.describeOn limits closure
-              // Read off the closure, never off the lines above: whether a selection asks is
-              // a fact about the kinds of its leaves, and the lines are words.
-              Sensitive = ResourceClosure.asksItsUser closure })
+              // Read off the closure, never off the lines above: the lines are words for a
+              // person, and the routes are what a loan is built from.
+              GitHubRoutes =
+                ResourceClosure.leaves closure
+                |> Set.toList
+                |> List.choose (fun leaf ->
+                    match leaf with
+                    | ResourceLeaf.Connection (name, route) when name = ConnectionName.value github -> Some route
+                    | _ -> None)
+                |> List.distinct
+                |> List.sort })
 
 let create
     (repos: unit -> Repos.ReposService option)
+    // Everybody's trust, read from their own records: what decides whether a repo that forwards
+    // GitHub may start, and with whose.
+    (trusts: RepoTrusts)
     (sandboxes: unit -> WorkSandboxes.WorkSandboxes)
     (run: RunGatedCommand)
     (log: EventLog<SessionEvent>)
@@ -229,6 +257,82 @@ let create
     //
     // `NotYetRead` until the first fold finishes, so nothing reads the empty map as an answer.
     let mutable declarations : Declarations = NotYetRead
+
+    /// Whether a repo whose sandboxes forward GitHub may start in this fold, and with whose.
+    ///
+    /// It runs with the GitHub of the person in its last `RepoTrusted` while their record still
+    /// answers everything it asks. Otherwise it waits, with a card for everyone here, until an
+    /// act that OFFERS somebody's trust finds their record answering it: adding the repo, or
+    /// answering the card (`FoldCause.Offered`). Nothing else makes anybody its truster. A
+    /// person who joins, a boot and a branch switch only read who it already is.
+    ///
+    /// The person it runs with may not be readable — not signed in to this launch yet after a
+    /// restart, or the Manager refused. Then it waits for them without a card: a card would
+    /// hand the repo to whoever arrived first, and its owner coming back resumes it.
+    let decideTrust (told: SessionEvent list) (cause: FoldCause) (repo: RepoRef) (asked: Set<ConnectionRoute>) : Async<TrustDecision> =
+        async {
+            let answering (person: Principal) =
+                async {
+                    match! trusts.Read (RepoTrust.ownerOf person) repo with
+                    | Ok trust -> return Ok (RepoTrust.answers asked trust)
+                    | Error reason -> return Error reason
+                }
+            let trusted (person: Principal) =
+                async {
+                    let actor = Principal.toActor person
+                    do!
+                        append
+                            actor
+                            (SessionEvent.RepoTrusted
+                                { RepoTrusted.MessageId = mintMessageId ()
+                                  RepoTrusted.Repo = repo
+                                  RepoTrusted.By = person
+                                  RepoTrusted.Actor = actor })
+                    return RunsWith (CredentialFor.Person person)
+                }
+            let! current =
+                async {
+                    match trusterOf told repo with
+                    | None -> return None
+                    | Some truster ->
+                        match! answering truster with
+                        | Ok true -> return Some (Ok truster)
+                        | Ok false -> return None
+                        | Error reason -> return Some (Error reason)
+                }
+            match current with
+            // Settling a card that stood, so it leaves every screen once somebody runs it.
+            | Some (Ok truster) when standingAsk told repo |> Option.isSome -> return! trusted truster
+            | Some (Ok truster) -> return RunsWith (CredentialFor.Person truster)
+            | _ ->
+                let! offered =
+                    async {
+                        match cause with
+                        | FoldCause.Offered (offeredRepo, _, person) when RepoRef.value offeredRepo = RepoRef.value repo ->
+                            match! answering person with
+                            | Ok true -> return Some person
+                            | _ -> return None
+                        | _ -> return None
+                    }
+                match offered, current with
+                | Some person, _ -> return! trusted person
+                | None, Some (Error reason) ->
+                    return Holds (sprintf "waiting for the person whose trust runs %s here: %s" (RepoRef.value repo) reason)
+                | None, _ ->
+                    let routes = Set.toList asked
+                    if standingAsk told repo <> Some routes then
+                        let actor = ActorRef.Configured repo
+                        do!
+                            append
+                                actor
+                                (SessionEvent.RepoTrustAsked
+                                    { RepoTrustAsked.MessageId = mintMessageId ()
+                                      RepoTrustAsked.Repo = repo
+                                      RepoTrustAsked.Routes = routes
+                                      RepoTrustAsked.Actor = actor
+                                      RepoTrustAsked.CausedBy = FoldCause.causeFor repo cause })
+                    return Holds (sprintf "waiting for somebody here to trust %s with their GitHub" (RepoRef.value repo))
+        }
 
     let foldOnce (cause: FoldCause) (onBehalfOf: CredentialFor) : Async<unit> =
         async {
@@ -305,7 +409,6 @@ let create
                                             { RepoCapabilitiesChanged.MessageId = mintMessageId ()
                                               RepoCapabilitiesChanged.Repo = repo
                                               RepoCapabilitiesChanged.Granted = granted
-                                              RepoCapabilitiesChanged.Sensitive = capabilities.Sensitive
                                               RepoCapabilitiesChanged.Actor = actor
                                               RepoCapabilitiesChanged.CausedBy = FoldCause.causeFor repo cause })
                     // Where the session's own terminals start, as the files say it
@@ -377,23 +480,30 @@ let create
                         match! failed with
                         | Some reason -> do! warn repo (sprintf "the shell profile could not be set: %s" reason)
                         | None -> ()
-                    // Which repos are waiting on somebody. Only a set holding a connection
-                    // waits, because a connection is spent as the person asked: a repo asking
-                    // for a cache and a store is not a decision anybody wants to be asked to
-                    // make, and a prompt that appears for everything is a prompt people learn
-                    // to dismiss without reading — which is worse than none, because it
-                    // launders the one that mattered.
-                    let awaiting =
-                        byRepo
-                        |> List.choose (fun (_, entries) ->
-                            let repo = entries |> List.head |> fst
-                            let asked = entries |> List.map snd |> SandboxDecl.selectionOf
-                            match capabilitiesOf asked with
-                            | Ok capabilities when
-                                capabilities.Sensitive && lastApproved told repo <> Some capabilities.Granted ->
-                                Some (RepoRef.value repo, capabilities.Granted)
-                            | _ -> None)
-                        |> Map.ofList
+                    // Who each repo's sandboxes run with. One that forwards nobody's GitHub
+                    // runs on the authority of whoever folded, as every start here always has:
+                    // it spends nothing of theirs. One that forwards GitHub runs with the GitHub
+                    // of somebody who trusts it here, and waits while nobody's trust covers it
+                    // (`decideTrust`). In turn rather than at once, because each may write the
+                    // log, and the next reads it.
+                    let! decided =
+                        async {
+                            let decided = ref Map.empty
+                            for _, entries in byRepo do
+                                let repo = entries |> List.head |> fst
+                                let asked =
+                                    match capabilitiesOf (entries |> List.map snd |> SandboxDecl.selectionOf) with
+                                    | Ok capabilities -> Set.ofList capabilities.GitHubRoutes
+                                    // Refused per declaration below, with the reason; nothing
+                                    // here starts it, so there is nothing to trust.
+                                    | Error _ -> Set.empty
+                                if Set.isEmpty asked then
+                                    decided.Value <- Map.add (RepoRef.value repo) (RunsWith onBehalfOf) decided.Value
+                                else
+                                    let! decision = decideTrust told cause repo asked
+                                    decided.Value <- Map.add (RepoRef.value repo) decision decided.Value
+                            return decided.Value
+                        }
                     let! rows =
                         declared
                         |> Map.toList
@@ -404,25 +514,20 @@ let create
                                 // writes a repo scope. A session-owned one here would mean
                                 // the union had been fed something no file produced.
                                 | SessionOwned -> return None
-                                | RepoOwned repo when Map.containsKey (RepoRef.value repo) awaiting ->
-                                    // Nothing starts until somebody says yes. The row says
-                                    // what is being asked, so the answer to "why is my
-                                    // sandbox not running" is in the same place as what to do
-                                    // about it.
-                                    return
-                                        Some
-                                            { Repo = repo
-                                              Sandbox = Some ref
-                                              Problem =
-                                                Some (
-                                                    sprintf
-                                                        "waiting for somebody in this session to approve what %s asks for: %s"
-                                                        (RepoRef.value repo)
-                                                        (String.concat "; " (Map.find (RepoRef.value repo) awaiting))) }
                                 | RepoOwned repo ->
+                                  match Map.tryFind (RepoRef.value repo) decided with
+                                  // Nothing starts until somebody here trusts it. The row says
+                                  // so, so the answer to "why is my sandbox not running" is in
+                                  // the same place as what to do about it.
+                                  | Some (Holds problem) -> return Some { Repo = repo; Sandbox = Some ref; Problem = Some problem }
+                                  | decision ->
+                                    let credential =
+                                        match decision with
+                                        | Some (RunsWith credential) -> credential
+                                        | _ -> onBehalfOf
                                     let call =
                                         Commands.startWorkSandboxCall
-                                            (Authority.configuredBy repo onBehalfOf)
+                                            (Authority.configuredBy repo credential)
                                             (FoldCause.causeFor repo cause)
                                             ref
                                             decl
@@ -534,80 +639,23 @@ let create
                 else folding <- false
         }
 
-    /// What this repo asks for right now, or nothing when its selection does not resolve.
-    let askedBy (declared: Map<SandboxRef, SandboxDecl>) (repo: RepoRef) =
-        let mine =
-            declared
-            |> Map.toList
-            |> List.choose (fun (ref, decl) ->
-                match SandboxRef.scope ref with
-                | RepoOwned owner when RepoRef.value owner = RepoRef.value repo -> Some decl
-                | _ -> None)
-        capabilitiesOf (SandboxDecl.selectionOf mine)
-        |> Result.toOption
-        |> Option.map (fun capabilities -> capabilities.Granted)
-
-    /// Consent to what a repo asks for.
+    /// A person's answer to a repo's trust card.
     ///
-    /// A PERSON may, and `Principal` is exactly that distinction: a user is somebody who
-    /// signed in, a peer somebody at a browser who did not. Both are people, and the record
-    /// keeps them apart rather than flattening one into the other — a deployment that trusts
-    /// whoever reaches it is a real trust model, and calling that person a signed-in user
-    /// would be this code pretending to know something it does not.
+    /// Written to their own record first, so their answer holds in every session they open the
+    /// repo in, whatever happens here. Then the fold runs on their authority with their trust
+    /// OFFERED: a repo that nobody's trust runs here yet starts with their GitHub when their
+    /// answer covers what it asks. A repo that already runs with somebody's keeps them.
     ///
-    /// What may NOT consent is everything that is not a person: the agent, the session
-    /// process, and the repo's own file. A checkout that could approve itself is a checkout
-    /// nobody is deciding about, which is the whole reason it is a separate principal — and
-    /// the reason this takes a `Principal`: there is no call to write that asks it to.
-    let approve (approver: Principal) (repo: RepoRef) (granted: string list) : Async<Result<unit, string>> =
+    /// A PERSON may answer, and `Principal` is exactly that: the agent, a process and a repo's
+    /// own file have no GitHub to trust anything with, and there is no call to write that asks
+    /// them. A checkout that could vouch for itself is one nobody is deciding about.
+    let trust (person: Principal) (repo: RepoRef) (shown: ConnectionRoute list) (ticked: ConnectionRoute list) : Async<Result<unit, string>> =
         async {
-            match repos () with
-            | None -> return Error "this session has no repos"
-            | Some service ->
-                match! service.ListRepos () with
-                | Error reason -> return Error reason
-                | Ok reads ->
-                    match reads |> List.tryPick (function RepoRead.Unreadable u when u.Repo = repo -> Some u | _ -> None) with
-                    // Consent is to what the file asks for NOW, and an unreadable checkout has
-                    // no now: say why, rather than "asks for nothing".
-                    | Some unreadable -> return Error (sprintf "git cannot read the checkout at %s: %s" unreadable.Path unreadable.Reason)
-                    | None ->
-                        let! read = RepoConfig.readAll service.ReadCommitted (RepoRead.listed reads |> List.map (fun listing -> listing.Repo))
-                        let declared = read.Declared
-                        match askedBy declared repo with
-                        | None -> return Error (sprintf "%s asks for nothing this session can resolve" (RepoRef.value repo))
-                        // The set that arrived is the set a person read. If it is not what
-                        // the repo asks for now, the file moved under them and the decision
-                        // they made is not the one they would make.
-                        | Some asked when asked <> granted ->
-                            return
-                                Error (
-                                    sprintf
-                                        "what %s asks for changed since you looked. It now asks for %s."
-                                        (RepoRef.value repo)
-                                        (String.concat "; " asked))
-                        | Some asked ->
-                            let actor = Principal.toActor approver
-                            let approval = mintMessageId ()
-                            do!
-                                append
-                                    actor
-                                    (SessionEvent.RepoCapabilitiesApproved
-                                        { RepoCapabilitiesApproved.MessageId = approval
-                                          RepoCapabilitiesApproved.Repo = repo
-                                          RepoCapabilitiesApproved.Granted = asked
-                                          RepoCapabilitiesApproved.Actor = actor })
-                            // And then DO it. Consent that leaves the sandbox down until
-                            // somebody happens to touch a repo is a button that reports
-                            // success and changes nothing — which is the same class of fault
-                            // as a refusal nobody sees, arriving from the other direction.
-                            //
-                            // Safe to call here because the fold is idempotent by
-                            // construction: it re-asks for what is already running and
-                            // records nothing when nothing changed. It runs on the authority
-                            // of whoever approved, which is the truth of why it ran.
-                            do! fold (FoldCause.Changed (repo, Some approval)) (CredentialFor.Person approver)
-                            return Ok ()
+            match! trusts.Answer (RepoTrust.ownerOf person) repo (Set.ofList shown) (Set.ofList ticked) with
+            | Error reason -> return Error reason
+            | Ok _ ->
+                do! fold (FoldCause.Offered (repo, None, person)) (CredentialFor.Person person)
+                return Ok ()
         }
 
     let undeclared () =
@@ -634,7 +682,7 @@ let create
       Undeclared = undeclared
       Declared = fun () -> declarations
       Described = fun ref -> declaredAs ref |> Option.bind (fun decl -> decl.Description)
-      Approve = approve }
+      Trust = trust }
 
 // --- the `repo_config` query ------------------------------------------------------------
 

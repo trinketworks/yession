@@ -33,9 +33,9 @@ module SessionCommands =
         // the rest, so a session that was given no providers simply cannot: the composition
         // decides, not a flag.
         (reattachTerminal: TerminalId -> Async<Result<TerminalId, string>>)
-        // Consent to a repo's capability set (Plan 27). A function like the rest, so a
-        // session composed without repos simply cannot be asked.
-        (approveCapabilities: Principal -> RepoRef -> string list -> Async<Result<unit, string>>)
+        // A person's answer to a repo's trust card. A function like the rest, so a session
+        // composed without repos simply cannot be asked.
+        (trustRepo: Principal -> RepoRef -> ConnectionRoute list -> ConnectionRoute list -> Async<Result<unit, string>>)
         // The launch surface's act. Answers ADMISSION only — the clone it starts reports
         // through the log — so a function whose `Ok` means "begun", never "done".
         (addRepo: Principal -> RepoRef -> string option -> Async<Result<unit, string>>)
@@ -45,16 +45,16 @@ module SessionCommands =
         // A surface taken down unanswered. `Ok` means it is gone and the dismissal is on the record.
         (dismissSurface: Principal -> string -> Async<Result<unit, string>>)
         // Who a peer is. A `Principal`, because every peer is one, and the two acts above
-        // are a PERSON's — consent to what a repo asks for, a repo brought in on their
-        // credential — which the type then says outright rather than a check inside each.
+        // are a PERSON's — trust in a repo, a repo brought in on their credential — which the
+        // type then says outright rather than a check inside each.
         (principalFor: PeerId -> Principal)
         (peerId: PeerId)
         (command: SessionCommand)
         : Async<SessionCommandResult> =
         async {
             match command with
-            | ApproveRepoCapabilities (repo, granted) ->
-                match! approveCapabilities (principalFor peerId) repo granted with
+            | TrustRepo (repo, shown, ticked) ->
+                match! trustRepo (principalFor peerId) repo shown ticked with
                 | Ok () -> return CommandAccepted
                 | Error reason -> return CommandRejected reason
             | AddRepo (repo, branch) ->

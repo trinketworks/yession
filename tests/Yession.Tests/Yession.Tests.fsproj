@@ -46,6 +46,7 @@
     <Compile Include="Assets.fs" />
     <Compile Include="Reaper.fs" />
     <Compile Include="Secrets.fs" />
+    <Compile Include="RepoTrust.fs" />
     <Compile Include="Session.fs" />
     <Compile Include="Support.fs" />
     <Compile Include="Connections.fs" />

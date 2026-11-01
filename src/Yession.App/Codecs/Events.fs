@@ -1238,18 +1238,16 @@ module Events =
                       // log nobody audits, and a short digest could be collided by whoever
                       // authors the file this watches.
                       "granted", Encode.list (p.Granted |> List.map Encode.string)
-                      "sensitive", Encode.bool p.Sensitive
                       "actor", Codec.actor.Encode p.Actor
                       "causedBy", Encode.option Codec.cause.Encode p.CausedBy ]
           Decode =
             Decode.object (fun get ->
                 { RepoCapabilitiesChanged.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
                   RepoCapabilitiesChanged.Repo = get.Required.Field "repo" Codec.repoRef.Decode
+                  // A log written while a set could be "sensitive" says so beside the grants.
+                  // Nothing reads it: whether a repo waits is a question of trust now
+                  // (`RepoTrustAsked`), asked of the routes it forwards.
                   RepoCapabilitiesChanged.Granted = get.Required.Field "granted" (Decode.list Decode.string)
-                  // Absent in a log written before a set could be sensitive, and false is what
-                  // that log meant: nothing then waited on anybody.
-                  RepoCapabilitiesChanged.Sensitive =
-                    get.Optional.Field "sensitive" Decode.bool |> Option.defaultValue false
                   RepoCapabilitiesChanged.Actor = get.Required.Field "actor" Codec.actor.Decode
                   // Optional in: a set said before causes were recorded names none.
                   RepoCapabilitiesChanged.CausedBy =
@@ -1269,6 +1267,43 @@ module Events =
                   RepoCapabilitiesApproved.Repo = get.Required.Field "repo" Codec.repoRef.Decode
                   RepoCapabilitiesApproved.Granted = get.Required.Field "granted" (Decode.list Decode.string)
                   RepoCapabilitiesApproved.Actor = get.Required.Field "actor" Codec.actor.Decode }) }
+
+    let private connectionRoute : Codec<ConnectionRoute> =
+        { Encode = ConnectionRoute.name >> Encode.string
+          Decode = Codec.viaSmartCtor ConnectionRoute.parse Decode.string }
+
+    let private repoTrustAsked : Codec<RepoTrustAsked> =
+        { Encode =
+            fun (p: RepoTrustAsked) ->
+                Encode.object
+                    [ "messageId", Codec.messageId.Encode p.MessageId
+                      "repo", Codec.repoRef.Encode p.Repo
+                      "routes", Encode.list (p.Routes |> List.map connectionRoute.Encode)
+                      "actor", Codec.actor.Encode p.Actor
+                      "causedBy", Encode.option Codec.cause.Encode p.CausedBy ]
+          Decode =
+            Decode.object (fun get ->
+                { RepoTrustAsked.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
+                  RepoTrustAsked.Repo = get.Required.Field "repo" Codec.repoRef.Decode
+                  RepoTrustAsked.Routes = get.Required.Field "routes" (Decode.list connectionRoute.Decode)
+                  RepoTrustAsked.Actor = get.Required.Field "actor" Codec.actor.Decode
+                  RepoTrustAsked.CausedBy =
+                    get.Optional.Field "causedBy" (Decode.option Codec.cause.Decode) |> Option.flatten }) }
+
+    let private repoTrusted : Codec<RepoTrusted> =
+        { Encode =
+            fun (p: RepoTrusted) ->
+                Encode.object
+                    [ "messageId", Codec.messageId.Encode p.MessageId
+                      "repo", Codec.repoRef.Encode p.Repo
+                      "by", Codec.principal.Encode p.By
+                      "actor", Codec.actor.Encode p.Actor ]
+          Decode =
+            Decode.object (fun get ->
+                { RepoTrusted.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
+                  RepoTrusted.Repo = get.Required.Field "repo" Codec.repoRef.Decode
+                  RepoTrusted.By = get.Required.Field "by" Codec.principal.Decode
+                  RepoTrusted.Actor = get.Required.Field "actor" Codec.actor.Decode }) }
 
     let private repoConfigRefused : Codec<RepoConfigRefused> =
         { Encode =
@@ -1708,6 +1743,10 @@ module Events =
                     Encode.object
                         [ "type", Encode.string "repoCapabilitiesApproved"
                           "payload", repoCapabilitiesApproved.Encode p ]
+                | RepoTrustAsked p ->
+                    Encode.object [ "type", Encode.string "repoTrustAsked"; "payload", repoTrustAsked.Encode p ]
+                | RepoTrusted p ->
+                    Encode.object [ "type", Encode.string "repoTrusted"; "payload", repoTrusted.Encode p ]
                 | ShellProfileSet p ->
                     Encode.object [ "type", Encode.string "shellProfileSet"; "payload", shellProfileSet.Encode p ]
                 | SessionEvent.FileChanged p ->
@@ -1806,6 +1845,8 @@ module Events =
                     Decode.field "payload" repoCapabilitiesChanged.Decode |> Decode.map RepoCapabilitiesChanged
                 | "repoCapabilitiesApproved" ->
                     Decode.field "payload" repoCapabilitiesApproved.Decode |> Decode.map RepoCapabilitiesApproved
+                | "repoTrustAsked" -> Decode.field "payload" repoTrustAsked.Decode |> Decode.map RepoTrustAsked
+                | "repoTrusted" -> Decode.field "payload" repoTrusted.Decode |> Decode.map RepoTrusted
                 | "workSandboxStopped" -> Decode.field "payload" workSandboxStopped.Decode |> Decode.map WorkSandboxStopped
                 | "shellProfileSet" -> Decode.field "payload" shellProfileSet.Decode |> Decode.map ShellProfileSet
                 | "fileChanged" -> Decode.field "payload" fileChanged.Decode |> Decode.map SessionEvent.FileChanged

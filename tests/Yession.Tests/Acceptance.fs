@@ -82,7 +82,8 @@ let private representativeModel : ClientModel =
       Said = None
       Showings = 0
       Session = Some sessionId
-      Approvals = RepoApprovals.empty
+      TrustWaits = RepoTrustWaits.empty
+      TrustCards = TrustCards.empty
       Launch = Launch.empty
       Repos = ReposProjection.empty
       // Connected, so the reconnect offer (Plan 11) is not showing — but the origin is
@@ -641,27 +642,29 @@ let private uiChecklistTests =
                 (sprintf "every button needs a name, from its text or aria-label — these have neither: %s"
                     (String.concat " | " offenders))
 
-        // The promise, not the design: one prompt per repo somebody has to decide about, and
-        // none for a repo nobody does. What it SAYS is a design and will move; that a waiting
-        // repo is offered exactly once is what a person is owed.
-        testCase "a repo waiting on somebody is offered exactly once, and one that is not is not offered" <| fun () ->
+        // The promise, not the design: one card per repo somebody here has to trust, and none
+        // for a repo somebody already trusts. What it SAYS is a design and will move; that a
+        // waiting repo is offered exactly once is what a person is owed.
+        testCase "a repo waiting for trust is offered exactly once, and one that is trusted is not offered" <| fun () ->
             let waiting = RepoRef.create "octo/hello" |> expect
             let settled = RepoRef.create "octo/quiet" |> expect
-            let asked repo granted sensitive =
-                SessionEvent.RepoCapabilitiesChanged
-                    { RepoCapabilitiesChanged.MessageId = MessageId.create (RepoRef.value repo) |> expect
-                      RepoCapabilitiesChanged.Repo = repo
-                      RepoCapabilitiesChanged.Granted = granted
-                      RepoCapabilitiesChanged.Sensitive = sensitive
-                      RepoCapabilitiesChanged.Actor = ActorRef.Configured repo
-                      RepoCapabilitiesChanged.CausedBy = None }
+            let asked repo =
+                SessionEvent.RepoTrustAsked
+                    { RepoTrustAsked.MessageId = MessageId.create (RepoRef.value repo) |> expect
+                      RepoTrustAsked.Repo = repo
+                      RepoTrustAsked.Routes = [ ConnectionRoute.Git; ConnectionRoute.Api ]
+                      RepoTrustAsked.Actor = ActorRef.Configured repo
+                      RepoTrustAsked.CausedBy = None }
+            let ada = Principal.User (UserId.create "ada" |> expect)
+            let trusted =
+                SessionEvent.RepoTrusted
+                    { RepoTrusted.MessageId = MessageId.create "trusted" |> expect
+                      RepoTrusted.Repo = settled
+                      RepoTrusted.By = ada
+                      RepoTrusted.Actor = Principal.toActor ada }
             let model =
                 { representativeModel with
-                    Approvals =
-                        RepoApprovals.apply
-                            RepoApprovals.empty
-                            [ asked waiting [ "!conn:github/git" ] true
-                              asked settled [ "path:/nix:ro" ] false ] }
+                    TrustWaits = RepoTrustWaits.apply RepoTrustWaits.empty [ asked waiting; asked settled; trusted ] }
             let html = Support.render model
             // Counted rather than matched, so the assertion is about how MANY there are —
             // which is the promise — and not about any of the words around them.
@@ -671,28 +674,39 @@ let private uiChecklistTests =
                     | -1 -> found
                     | at -> count (at + needle.Length) (found + 1)
                 count 0 0
-            Expect.equal (occurrences (Dom.attr Dom.Hooks.approvalPrompt "octo/hello")) 1 "offered once"
-            Expect.equal (occurrences (Dom.attr Dom.Hooks.approvalPrompt "octo/quiet")) 0 "and an ordinary ask is not a decision"
-            Expect.equal (occurrences (Dom.attr Dom.Hooks.approvalAction "octo/hello")) 1 "with one way to say yes"
+            Expect.equal
+                (occurrences (Dom.attr Dom.Hooks.trustCard "octo/hello"),
+                 occurrences (Dom.attr Dom.Hooks.trustCard "octo/quiet"),
+                 occurrences (Dom.attr Dom.Hooks.trustAnswer "octo/hello"))
+                (1, 0, 1)
+                "one card for the repo that waits, with one way to trust it, and none for the one somebody trusts"
+
+        // Putting a card off decides nothing and is this reader's alone: the card goes, and it
+        // comes back when the repo asks for something it did not ask before.
+        testCase "a card put off is not offered again until the repo asks for something new" <| fun () ->
+            let repo = RepoRef.create "octo/hello" |> expect
+            let asked routes =
+                SessionEvent.RepoTrustAsked
+                    { RepoTrustAsked.MessageId = MessageId.create "ask" |> expect
+                      RepoTrustAsked.Repo = repo
+                      RepoTrustAsked.Routes = routes
+                      RepoTrustAsked.Actor = ActorRef.Configured repo
+                      RepoTrustAsked.CausedBy = None }
+            let putOff = TrustCards.putOff repo [ ConnectionRoute.Git ] TrustCards.empty
+            let shownWhen routes =
+                TrustCards.showing (RepoTrustWaits.pending [ asked routes ]) putOff |> List.length
+            Expect.equal
+                (shownWhen [ ConnectionRoute.Git ], shownWhen [ ConnectionRoute.Git; ConnectionRoute.Api ])
+                (0, 1)
+                "gone while it asks the same, back when it asks for more"
 
         // A glossary is consulted, not read: it is offered above what it explains and shut
-        // until somebody wants it, so a panel of answers is not a wall of vocabulary. Both
-        // mounts are checked at once because it is ONE promise about every legend there is —
-        // and a `<details>` is what keeps it the browser's disclosure rather than ours.
+        // until somebody wants it, so a panel of answers is not a wall of vocabulary. Every mount
+        // is checked at once because it is ONE promise about every legend there is — and a
+        // `<details>` is what keeps it the browser's disclosure rather than ours. (A trust card
+        // asks in words rather than in the grant vocabulary, so it has no legend to offer.)
         testCase "every legend is offered without taking the surface" <| fun () ->
-            let repo = RepoRef.create "octo/hello" |> expect
-            let model =
-                { representativeModel with
-                    Approvals =
-                        RepoApprovals.apply
-                            RepoApprovals.empty
-                            [ SessionEvent.RepoCapabilitiesChanged
-                                { RepoCapabilitiesChanged.MessageId = MessageId.create "ask" |> expect
-                                  RepoCapabilitiesChanged.Repo = repo
-                                  RepoCapabilitiesChanged.Granted = [ "!conn:github/git" ]
-                                  RepoCapabilitiesChanged.Sensitive = true
-                                  RepoCapabilitiesChanged.Actor = ActorRef.Configured repo
-                                  RepoCapabilitiesChanged.CausedBy = None } ] }
+            let model = representativeModel
             let html = Support.render model
             // The tag each legend hook sits in: back to its `<`, forward to its `>`.
             let rec tags (from: int) (found: string list) =
@@ -703,33 +717,10 @@ let private uiChecklistTests =
                     let closed = html.IndexOf ('>', at)
                     tags (closed + 1) (html.Substring (opened, closed - opened) :: found)
             let legends = tags 0 []
-            Expect.isNonEmpty legends "the panel's and the prompt's, so neither half is vacuous"
+            Expect.isNonEmpty legends "the panel's, so the promise is not vacuous"
             for tag in legends do
                 Expect.isTrue (tag.StartsWith "<details") (sprintf "a legend is a disclosure, this one is %s" tag)
                 Expect.isFalse (tag.Contains " open") (sprintf "and it is shut, this one is %s" tag)
-
-        // Consent is to lines written in a vocabulary, so how to read them is on the screen
-        // where the decision is — and only the part these lines need. Counted, because that
-        // the entries are the ones this prompt's grants use is the promise; which words
-        // explain a socket is a design.
-        testCase "a prompt says how to read the grants it is asking about" <| fun () ->
-            let repo = RepoRef.create "octo/hello" |> expect
-            let model =
-                { representativeModel with
-                    Approvals =
-                        RepoApprovals.apply
-                            RepoApprovals.empty
-                            [ SessionEvent.RepoCapabilitiesChanged
-                                { RepoCapabilitiesChanged.MessageId = MessageId.create "ask" |> expect
-                                  RepoCapabilitiesChanged.Repo = repo
-                                  RepoCapabilitiesChanged.Granted = [ "!conn:github/git" ]
-                                  RepoCapabilitiesChanged.Sensitive = true
-                                  RepoCapabilitiesChanged.Actor = ActorRef.Configured repo
-                                  RepoCapabilitiesChanged.CausedBy = None } ] }
-            let html = Support.render model
-            Expect.isTrue
-                (html.Contains (Dom.attr Dom.Hooks.legend "2"))
-                "the connection and the mark, and none of the kinds nobody was offered"
 
         testCase "every required Phase 1 UI element renders from the model" <| fun () ->
             let html = Support.render representativeModel
@@ -1822,7 +1813,6 @@ let private uiChecklistTests =
                         { RepoCapabilitiesChanged.MessageId = MessageId.create "msg-asked" |> expect
                           RepoCapabilitiesChanged.Repo = hello
                           RepoCapabilitiesChanged.Granted = granted
-                          RepoCapabilitiesChanged.Sensitive = false
                           RepoCapabilitiesChanged.Actor = ActorRef.Configured hello
                           RepoCapabilitiesChanged.CausedBy = None })
               Status = Complete

@@ -589,43 +589,50 @@ module View =
             | None ->
                 html $"""<div class="{Style.person}" data-agent-presence="unknown"><span class="{Style.cls [ Style.avatar; Style.agentAvatarAbsent; Style.personAvatar ]}"></span><span class="text-ink-faint">agent</span></div>"""
 
-        // What a checkout asks for, when somebody still has to decide about it.
+        // Which repos wait for somebody here to trust them with their GitHub (`RepoTrustWaits`).
         //
         // Beside the agent's own prompt rather than in the settings drawer: a sandbox that is
-        // not running is a thing somebody is waiting on RIGHT NOW, and a decision parked
-        // behind a disclosure is a decision nobody makes. Only sets holding a connection appear
-        // (`ResourceClosure.asksItsUser`) — a connection is spent as the person asked, and a
-        // prompt for every repo is a prompt people learn to dismiss without reading.
+        // not running is a thing somebody is waiting on RIGHT NOW, and a decision parked behind
+        // a disclosure is a decision nobody makes. Every reader sees it, because whoever answers
+        // is whose GitHub the repo runs with; the session refuses a reader with none of their own.
         //
-        // The button carries the set that is ON SCREEN. If the file moved under the reader,
-        // the Process refuses rather than approving something they did not read.
-        let approvalPrompts =
-            RepoApprovals.waiting model.Approvals
-            |> List.map (fun (repo, granted) ->
-                // WRAPPED, not truncated. Somebody consenting has to see the whole of what
-                // they are consenting to, and an ellipsis in the middle of a hostname is a
-                // decision made about a string nobody finished reading. The rail is narrow,
-                // so this costs a line or two and buys the only thing the prompt is for.
-                let lines =
-                    // `break-anywhere`, not `break-words`: the strings here are paths, and a
-                    // nix store path is one token with no break opportunity in it at all, so
-                    // the polite rule declines to break and the list runs off the rail. This
-                    // is the one surface where reading all of it is the point.
-                    granted |> List.map (fun line -> html $"""<li class="[overflow-wrap:anywhere]">{line}</li>""")
+        // The answer carries what the card SHOWED beside what is ticked. It answers those routes
+        // and no others, so a repo that asks for more after the card was drawn asks again.
+        let trustCards =
+            TrustCards.showing (RepoTrustWaits.waiting model.TrustWaits) model.TrustCards
+            |> List.map (fun (repo, shown) ->
+                let ticked = TrustCards.ticked repo shown model.TrustCards
+                let routeLabel (route: ConnectionRoute) =
+                    match route with
+                    | ConnectionRoute.Git -> "Push and fetch"
+                    | ConnectionRoute.Api -> "API (gh, pull requests, Actions)"
+                let routeRow (route: ConnectionRoute) =
+                    let on = List.contains route ticked
+                    html $"""
+                        <button type="button" role="checkbox" aria-checked="{if on then "true" else "false"}"
+                                class="{if on then Style.surfaceChoiceChosen else Style.surfaceChoice}"
+                                data-repo-trust-route="{ConnectionRoute.name route}"
+                                @click={Ev(fun _ -> dispatch (ToggleTrustRouteMsg (repo, route)))}>
+                          <span class="{Style.surfaceChoiceMark}" aria-hidden="true">{if on then Icon.check else Lit.nothing}</span>
+                          <span class="{Style.surfaceChoiceLabel}">{routeLabel route}</span>
+                        </button>"""
                 html $"""
-                    <div class="{Style.cls [ Style.noAgentBlock; "min-w-0" ]}" data-repo-approval="{RepoRef.value repo}">
+                    <div class="{Style.cls [ Style.noAgentBlock; "min-w-0" ]}" data-repo-trust="{RepoRef.value repo}">
                       <div class="{Style.person}">
                         <span class="{Style.cls [ Style.givesWay; "text-ink-faint" ]}">{RepoRef.value repo}</span>
-                        <span class="{Style.label} ml-auto shrink-0">asks for</span>
                       </div>
                       <div class="{Style.noAgentPrompt}">
                         <span class="{Style.noAgentEdge}"></span>
                         <div class="{Style.noAgentBody}">
-                          {legendView (GrantNotation.legendFor granted)}
-                          <ul class="{Style.cls [ Style.label; "w-full min-w-0 whitespace-normal" ]}">{lines}</ul>
+                          <p class="w-full min-w-0 whitespace-normal">Do you trust this repo?</p>
+                          <p class="{Style.cls [ Style.label; "w-full min-w-0 whitespace-normal" ]}">Its code, on any branch or pull request, runs in its sandboxes with your GitHub.</p>
+                          <div class="{Style.cls [ Style.surfaceChoices; "w-full" ]}">{shown |> List.map routeRow}</div>
                           <button type="button" class="{Style.cls [ Style.btn; Style.noAgentAction; "w-full min-w-0" ]}"
-                                  data-repo-approve="{RepoRef.value repo}"
-                                  @click={Ev(fun _ -> dispatch (ApproveRepoCapabilitiesMsg (repo, granted)))}>Approve</button>
+                                  data-repo-trust-answer="{RepoRef.value repo}"
+                                  @click={Ev(fun _ -> dispatch (TrustRepoMsg (repo, shown, ticked)))}>Trust</button>
+                          <button type="button" class="{Style.cls [ Style.btn; Style.noAgentAction; "w-full min-w-0" ]}"
+                                  data-repo-trust-later="{RepoRef.value repo}"
+                                  @click={Ev(fun _ -> dispatch (NotNowTrustMsg (repo, shown)))}>Not now</button>
                         </div>
                       </div>
                     </div>""")
@@ -661,7 +668,7 @@ module View =
               <div class="{Style.person}"><span class="{Style.cls [ Style.avatar; Entity.actorMark model (PeerRef model.Peer.PeerId); Style.personAvatar ]}"></span><span class="truncate" data-display-name>{model.Peer.DisplayName}</span><span class="{Style.personYou}">you</span></div>
               {peerRows}
               {agentRow}
-              {approvalPrompts}
+              {trustCards}
             </section>"""
 
     /// Something still under way, said by a beating dot; the word is for screen readers. Live,

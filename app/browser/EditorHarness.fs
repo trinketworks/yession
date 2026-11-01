@@ -1790,7 +1790,7 @@ do
         | ClientEffect.InterruptTerminal _
         | ClientEffect.ReattachTerminal _
         | ClientEffect.InterruptTurn _
-        | ClientEffect.ApproveRepoCapabilities _
+        | ClientEffect.TrustRepo _
         | ClientEffect.PressSurface _
         | ClientEffect.DismissSurface _ -> ()
         // The listing's next page, answered here because this harness has no session to

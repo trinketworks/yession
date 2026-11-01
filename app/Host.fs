@@ -68,10 +68,10 @@ type SessionHost =
       /// composed — the Host owns the gate because it owns the doc and the log, and the
       /// table has to arrive from the layer above it.
       SetCommandDispatch : CommandDispatch -> unit
-      /// Tell the peer command surface how a person's consent to a repo's capability set is
-      /// carried out (Plan 27). Set once, from SessionMain, for the same reason the dispatch
-      /// table is: the fold that knows what a repo asks for is composed a layer above this.
-      SetApproveCapabilities : (Principal -> RepoRef -> string list -> Async<Result<unit, string>>) -> unit
+      /// Tell the peer command surface how a person's answer to a repo's trust card is carried
+      /// out. Set once, from SessionMain, for the same reason the dispatch table is: the fold
+      /// that knows what a repo asks for is composed a layer above this.
+      SetTrustRepo : (Principal -> RepoRef -> ConnectionRoute list -> ConnectionRoute list -> Async<Result<unit, string>>) -> unit
       /// Tell the peer command surface how a person's choice of first repo is carried out
       /// (the launch surface). Set once, from SessionMain, where the repo service is. The
       /// Host runs the work it is handed back in the background and records a failure as
@@ -479,12 +479,12 @@ let startFull
         // SessionMain has composed the services; empty until then, which is honest — a
         // command proposed before the session is up has nothing to run it.
         let commandDispatch : CommandDispatch ref = ref Map.empty
-        // Until SessionMain sets it, nothing can be consented to — which is the honest state
-        // for a session whose repos are not composed yet, rather than a silent yes.
-        let approveCapabilitiesRef
-            : (Principal -> RepoRef -> string list -> Async<Result<unit, string>>) ref =
-            ref (fun _ _ _ -> async { return Error "this session cannot approve anything yet" })
-        let approveCapabilities actor repo granted = approveCapabilitiesRef.Value actor repo granted
+        // Until SessionMain sets it, nothing can be trusted — which is the honest state for a
+        // session whose repos are not composed yet, rather than a silent yes.
+        let trustRepoRef
+            : (Principal -> RepoRef -> ConnectionRoute list -> ConnectionRoute list -> Async<Result<unit, string>>) ref =
+            ref (fun _ _ _ _ -> async { return Error "this session cannot keep anybody's trust yet" })
+        let trustRepo person repo shown ticked = trustRepoRef.Value person repo shown ticked
         // Likewise nothing can be launched into until SessionMain says how.
         let launchRepoRef : Commands.LaunchRepo ref =
             ref (fun _ _ _ -> async { return Error "this session cannot add a repo yet" })
@@ -1086,7 +1086,7 @@ let startFull
                         terminals.Take
                         terminals.Release
                         streamAttacher.Reattach
-                        approveCapabilities
+                        trustRepo
                         launchRepo
                         pressSurface
                         dismissSurface
@@ -1267,7 +1267,7 @@ let startFull
               Terminals = terminals
               Files = files
               SetCommandDispatch = fun table -> commandDispatch.Value <- table
-              SetApproveCapabilities = fun approve -> approveCapabilitiesRef.Value <- approve
+              SetTrustRepo = fun trust -> trustRepoRef.Value <- trust
               SetLaunchRepo = fun launch -> launchRepoRef.Value <- launch
               SetNotificationHandler = fun handle -> notificationHandler.Value <- Some handle
               SetStaging =

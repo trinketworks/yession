@@ -29,6 +29,7 @@ let all =
         Tag.needs "Idle reaping" [] (fun () -> Reaper.tests)
         Tag.needs "Cli" [] (fun () -> Cli.tests)
         Tag.needs "Secrets" [] (fun () -> Secrets.tests)
+        Tag.needs "Repo trust" [] (fun () -> RepoTrust.tests)
         Tag.needs "Connections" [] (fun () -> Connections.tests)
         Tag.needs "Queries" [] (fun () -> Queries.tests)
         Tag.needs "yession.yaml on disk" [] (fun () -> RepoConfig.tests)

@@ -29,6 +29,32 @@ The last section holds trust boundaries as sharp as the first section's.
 
 ## Security & trust
 
+- **Repo trust does not cover the agent's own sandbox.** A repo's own sandboxes are lent a person's
+  GitHub only by what their trust in the repo grants
+  ([ADR](decisions/2026-11-01-a-repo-runs-with-the-github-of-somebody-who-trusts-it.md)). The
+  session's own sandbox, where the agent's commands run, is lent the turn person's GitHub by every
+  route it forwards, as every GitHub verb spends it. The repo's code runs there too, whenever a
+  command the agent runs reaches it (a test script, a build hook).
+  - Why: the agent acts for the turn's person, and a gate there would stand between them and their
+    own verbs.
+  - Open: lend the session's sandbox only what the person's trust grants while the checkout under
+    it belongs to a repo they have not trusted.
+- **Trust cannot be taken back yet.** A person's trust in a repo is their record, and nothing lists
+  or removes a record ([GAPS](#persistence--data)). A route they left unticked can be granted later
+  by answering again, but nothing asks again about a route they granted.
+  - Open: the Manager's page lists a person's records and removes one, which makes the next session
+    ask again.
+- **A pull request from a fork runs on the base repo's trust.** Trust is about the repository the
+  session cloned. A branch a pull request brings in from a fork is that fork's code, and it runs in
+  the repo's sandboxes with the same trust. The card says "on any branch or pull request" for this
+  reason.
+- **A repo whose truster does not come back waits for them.** After a restart, a repo runs again only
+  when the person it ran with signs in to the session again. Nobody else is asked, so nobody else
+  can start it short of removing the repo and adding it again.
+- **The trust card is the same for every reader, and it sits in the roster.** It shows every route
+  the repo asks for, also to a reader whose own record already answers them, and pressing Trust is
+  then the one-tap start. It is not yet the next page of the launch surface, or a card in the
+  timeline where `add_repo` was said.
 - **A Manager route that changes state trusts a request that names no origin.** The
   request-origin rule (`ManagerUi.requestOrigin`, [§5 rule 24](technical-design.md#5-architectural-invariants))
   accepts `Sec-Fetch-Site: same-origin` or `none`, or, without it, an `Origin` whose host and

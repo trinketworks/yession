@@ -1816,7 +1816,7 @@ let private leaseCommandTests =
                                 calls.Add (sprintf "reattach:%s" (TerminalId.value id))
                                 return Ok id
                             })
-                        (fun _ _ _ -> async { return Error "no repos in this composition" })
+                        (fun _ _ _ _ -> async { return Error "no repos in this composition" })
                         (fun _ _ _ -> async { return Error "no repos in this composition" })
                         (fun _ _ _ _ -> async { return Error "no surfaces in this composition" })
                         (fun _ _ -> async { return Error "no surfaces in this composition" })
@@ -1865,7 +1865,7 @@ let private peerOpenTests =
                 (fun _ _ -> async { return Error "not this test" })
                 (fun _ _ -> async { return Error "not this test" })
                 (fun id -> async { return Ok id })
-                (fun _ _ _ -> async { return Error "no repos in this composition" })
+                (fun _ _ _ _ -> async { return Error "no repos in this composition" })
                 (fun _ _ _ -> async { return Error "no repos in this composition" })
                 (fun _ _ _ _ -> async { return Error "no surfaces in this composition" })
                 (fun _ _ -> async { return Error "no surfaces in this composition" })

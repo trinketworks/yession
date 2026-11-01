@@ -26,6 +26,9 @@ open Yession.Session
 
 let private expect = function Ok v -> v | Error e -> failwithf "%A" e
 
+/// The connection a repo's sandboxes forward GitHub by, under the name the session gives it.
+let private github = ConnectionName.create "github" |> expect
+
 /// A small fixed pool, small ON PURPOSE: collisions are what produce diamonds, and a diamond
 /// is what the set-semantics property is about. Eight random 8-character names would generate
 /// a forest and prove nothing.
@@ -1054,6 +1057,7 @@ let tests =
             let asked =
                 RepoSandboxes.capabilitiesOn
                     (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Linux)
+                    github
                     (fun uses wants -> ResourceProfile.resolve profile.Resources (uses @ wants))
                     (selection, [])
                 |> expect
@@ -1077,6 +1081,7 @@ let tests =
             let asked =
                 RepoSandboxes.capabilitiesOn
                     (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin)
+                    github
                     (fun uses wants -> ResourceProfile.resolve profile.Resources (uses @ wants))
                     (selection, [])
                 |> expect
@@ -1092,47 +1097,47 @@ let tests =
             let asked =
                 RepoSandboxes.capabilitiesOn
                     (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Linux)
+                    github
                     (fun _ _ -> failwith "nothing should have been resolved")
                     ([], [])
                 |> expect
-            Expect.equal asked.Granted [] "nothing to show"
-            Expect.isFalse asked.Sensitive "and nobody to ask"
+            Expect.equal (asked.Granted, asked.GitHubRoutes) ([], []) "nothing to show, and nobody to ask"
 
-        // The approval prompt is what a person consents to, so a volume's line says
+        // The timeline says what a repo's sandboxes hold, so a volume's line says
         // whether the sandbox may write the store every other session builds from.
-        testCase "the approval line for a volume shows its mode" <| fun () ->
+        testCase "the line for a volume shows its mode" <| fun () ->
             let asked =
                 RepoSandboxes.capabilitiesOn
                     (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux)
+                    github
                     (fun _ _ -> Ok (resolved """{ "volume": { "name": "warm", "at": "/nix", "mode": "read" } }"""))
                     ([], [ ResourceName.create "r" |> expect ])
                 |> expect
             Expect.equal asked.Granted [ "vol:warm>/nix:ro" ] "the mode, on the line a person reads"
 
-        // Only a set holding a connection waits for a person (`RepoSandboxes.create`), because
-        // a connection is spent as them.
-        testCase "a selection holding a connection waits for approval" <| fun () ->
+        // What a repo asks people to trust it with is the routes its sandboxes forward GitHub
+        // by (`RepoSandboxes.create` holds them until somebody does): a repository's
+        // `wants: [ github ]` once lent a credential with nobody asked.
+        testCase "a selection forwarding GitHub asks to be trusted with its routes" <| fun () ->
             let asked =
                 RepoSandboxes.capabilitiesOn
                     (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux)
+                    github
                     (fun _ _ -> Ok (resolved """{ "connection": { "github": [ "git" ] } }"""))
                     ([], [ ResourceName.create "r" |> expect ])
                 |> expect
-            Expect.isTrue asked.Sensitive "somebody is asked"
+            Expect.equal asked.GitHubRoutes [ ConnectionRoute.Git ] "trusting it means git"
 
         // The other half: a shared volume is the operator's decision, made in the profile,
         // and the session user is not the one to ask about it.
-        testCase "a selection holding a volume and no connection does not wait for approval" <| fun () ->
+        testCase "a selection holding a volume asks nobody to trust anything" <| fun () ->
             let asked =
                 RepoSandboxes.capabilitiesOn
                     (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux)
+                    github
                     (fun _ _ -> Ok (resolved """{ "volume": { "name": "warm", "at": "/nix", "mode": "write" } }"""))
                     ([], [ ResourceName.create "r" |> expect ])
                 |> expect
-            Expect.isFalse asked.Sensitive "the operator already decided"
+            Expect.equal asked.GitHubRoutes [] "the operator already decided"
 
-        // Whether a selection asks is read off its closure (`ResourceClosure.asksItsUser`),
-        // which takes no host, and no host realises a connection as anything but what was
-        // asked (the same-grant-on-every-host property above). So the case that a host which
-        // widened a sensitive grant left it sensitive has nothing left to pin.
     ]

@@ -320,6 +320,42 @@ module ConnectionName =
         |> List.distinct
         |> List.sortBy value
 
+/// How a forwarded connection reaches a sandbox — the MECHANISM, which is the session's and
+/// not the provider's: `Git` is the git gateway (a sandbox's git sends its requests there,
+/// and each block's are answered with its act's credential), `Api` is the credential proxy (a
+/// sandbox's HTTPS to the provider's API is answered there, with a stand-in swapped for the
+/// credential). Two, because those are the two ways this session has of lending a credential
+/// without handing it over; a provider offers whichever of them it has hosts for.
+///
+/// Closed, so a route an operator misspells is refused where the file is read rather than
+/// quietly forwarding nothing — and named rather than implied, so a sandbox that needs a
+/// repository's git is not also a sandbox whose every API call carries somebody's token.
+[<RequireQualifiedAccess>]
+type ConnectionRoute =
+    | Git
+    | Api
+
+module ConnectionRoute =
+
+    let all : ConnectionRoute list = [ ConnectionRoute.Git; ConnectionRoute.Api ]
+
+    /// The word a file writes and a grant prints.
+    let name (route: ConnectionRoute) : string =
+        match route with
+        | ConnectionRoute.Git -> "git"
+        | ConnectionRoute.Api -> "api"
+
+    let parse (raw: string) : Result<ConnectionRoute, string> =
+        match all |> List.tryFind (fun route -> name route = raw.Trim().ToLowerInvariant ()) with
+        | Some route -> Ok route
+        | None ->
+            Error (
+                sprintf
+                    "'%s' is not a route. A connection is forwarded by %s"
+                    raw
+                    (all |> List.map name |> String.concat " or ")
+            )
+
 /// Who an event or action is attributed to. `UserRef` is a durable human identity the
 /// Manager verified; `PeerRef` is a client connection — the fallback attribution when no
 /// authentication strategy binds a user to the connection.
@@ -581,6 +617,12 @@ type FoldCause =
     /// Something was done to one repo, recorded as this item — or as nothing, when it
     /// changed nothing (a repeated add).
     | Changed of RepoRef * MessageId option
+    /// A person added this repo, or answered whether they trust it: `Changed`, and one thing
+    /// more. When their own record already answers everything the repo asks of their GitHub,
+    /// its sandboxes may now run with it. Only these two acts offer that. Opening the session,
+    /// joining it or switching a branch never does
+    /// (docs/decisions/2026-11-01-a-repo-runs-with-the-github-of-somebody-who-trusts-it.md).
+    | Offered of RepoRef * MessageId option * Principal
 
 module FoldCause =
 
@@ -595,6 +637,8 @@ module FoldCause =
         | FoldCause.Connected CredentialFor.Deployment -> None
         | FoldCause.Changed (changed, Some item) when changed = repo -> Some (Cause.Item item)
         | FoldCause.Changed _ -> None
+        | FoldCause.Offered (changed, Some item, _) when changed = repo -> Some (Cause.Item item)
+        | FoldCause.Offered _ -> None
 
 /// The name of one of the session's WorkSandboxes (Plan 15, stage 2). A session used to
 /// have exactly one, so it needed no name; now the agent can ask for a `test` sandbox
