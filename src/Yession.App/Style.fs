@@ -4375,8 +4375,9 @@ module Style =
     let panePivotRow =
         cls [ "shrink-0 h-band flex items-stretch bg-bg phone:h-band-phone"; Stroke.dividerBottom ]
     /// The tablist: the scroller of tabs, after the list button at the row's head. `min-w-0`
-    /// so the scroller is what gives way when the names outgrow the row.
-    let panePivotList = "flex-1 min-w-0 flex items-stretch"
+    /// so the scroller is what gives way when the names outgrow the row. `-mb-px` lets the
+    /// chosen tab reach over the row's rule into the pane (`pivotItemOn`).
+    let panePivotList = "flex-1 min-w-0 flex items-stretch -mb-px"
     /// The tabs' own scroll box, and nothing else that moves.
     ///
     /// When names run past an end, that end fades (`TabStrip.hidden`, written by the browser
@@ -4419,11 +4420,19 @@ module Style =
         cls [ "shrink-0 cursor-pointer min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5"
               "font-ui font-normal text-small whitespace-nowrap transition-colors duration-150 ease-out"
               "motion-reduce:transition-none"; focusRingInset ]
-    let pivotItem = cls [ pivotItemBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
-    let pivotItemOn = cls [ pivotItemBase; "bg-panel text-ink" ]
+    /// The tablist reaches one pixel past the strip, over its rule (`panePivotList`). A tab
+    /// not chosen gives that pixel back (`mb-px`), so the rule still runs under it and under
+    /// the hand. The chosen tab keeps it: its ground covers the rule and runs straight into the
+    /// pane's below, and a hairline on each side closes it — the same open tab the list button
+    /// is with its sheet down (`paneListButtonOn`). `divide-x` already draws its right side
+    /// unless it is last, and nothing draws its left when it is first; `border-r` and
+    /// `first:border-l` cover both.
+    let private pivotItemChosen = "border-r first:border-l border-hair text-ink"
+    let pivotItem = cls [ pivotItemBase; "mb-px bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
+    let pivotItemOn = cls [ pivotItemBase; pivotItemChosen; "bg-panel" ]
     /// The selected tab under a command's preview: the preview's lifted ground, so the tab and
     /// the command lifted out of its terminal read as one piece (`paneToolbarLifted`).
-    let pivotItemLifted = cls [ pivotItemBase; "bg-surface-2 text-ink" ]
+    let pivotItemLifted = cls [ pivotItemBase; pivotItemChosen; "bg-surface-2" ]
     /// A pivot item's name: as much of it as fits, and an ellipsis for the rest — capped so
     /// that at the narrowest pane the splitter allows, the selected item and its × still fit
     /// beside `all` whole. The `all` page writes the name out in full.
