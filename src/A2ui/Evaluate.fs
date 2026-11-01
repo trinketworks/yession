@@ -64,6 +64,14 @@ module Evaluate =
         | Some (JString s) -> Expression.number (s.Trim ())
         | _ -> None
 
+    /// Whether `text` matches an agent's `pattern`, anchored to the whole text as a `RegExp`
+    /// is. Run by the domain's matcher, which cannot backtrack, so no pattern hangs the page
+    /// or the Session; a pattern outside its subset is an error that names the construct.
+    let matches (pattern: string) (text: string) : Result<bool, string> =
+        Yession.Domain.Terminals.Pattern.compileAnchored Yession.Domain.Terminals.TextAnchors pattern
+        |> Result.mapError (sprintf "Invalid regex pattern: %s")
+        |> Result.bind (fun compiled -> Yession.Domain.Terminals.Pattern.matches compiled text)
+
     let private emailPattern =
         System.Text.RegularExpressions.Regex "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
 
@@ -112,13 +120,7 @@ module Evaluate =
                 | Some (JString "")
                 | Some (JArray []) -> verdict false
                 | Some _ -> verdict true)
-        | Regex (v, pattern) ->
-            let compiled =
-                try
-                    Ok (System.Text.RegularExpressions.Regex pattern)
-                with _ ->
-                    Error (sprintf "Invalid regex pattern: %s" pattern)
-            compiled |> Result.bind (fun r -> str v |> Result.map (fun j -> verdict (r.IsMatch (text j))))
+        | Regex (v, pattern) -> str v |> Result.bind (fun j -> matches pattern (text j) |> Result.map verdict)
         | Length (v, min, max) ->
             str v
             |> Result.map (fun j ->

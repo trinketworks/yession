@@ -99,11 +99,7 @@ module SurfaceView =
     /// Whether `text` matches the field's `validationRegexp`. A pattern that does not compile
     /// matches nothing, so the field says it cannot be checked rather than the page failing.
     let private matches (pattern: string) (text: string) : bool =
-        try
-            System.Text.RegularExpressions.Regex.IsMatch (text, pattern)
-        // Any exception: .NET throws `ArgumentException`, a browser's `RegExp` a `SyntaxError`.
-        with _ ->
-            false
+        Evaluate.matches pattern text |> Result.defaultValue false
 
     let private weight (c: Component) : string =
         c.Weight |> Option.map (sprintf "flex-grow:%g") |> Option.defaultValue ""
