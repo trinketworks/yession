@@ -1253,8 +1253,8 @@ let private repoTests =
                 | [ item ] -> ConversationItem.headline item, noteDetail item
                 | other -> failwithf "expected one note, got %A" other
             Expect.equal
-                (asked [ "/nix, read-only"; "reaches cache.nixos.org"; "reaches anywhere (sensitive)" ])
-                ("asked for 3 capabilities", Some "/nix, read-only; reaches cache.nixos.org; reaches anywhere (sensitive)")
+                (asked [ "/nix, read-only"; "reaches cache.nixos.org"; "reaches anywhere" ])
+                ("asked for 3 capabilities", Some "/nix, read-only; reaches cache.nixos.org; reaches anywhere")
                 "counted, then named — every one of them"
 
         // The counterpart, and the reason the count is not unconditional: "asks for 1

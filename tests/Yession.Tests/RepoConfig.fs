@@ -721,6 +721,22 @@ let private trustedHere (log: EventLog<SessionEvent>) (r: RepoRef) (person: Prin
         return ()
     }
 
+/// A host offering a store (`nix`) and a connection (`github`), each selection put through
+/// the rule the session applies (`RepoSandboxes.capabilitiesOn`) — for the cases about
+/// WHETHER a fold waits for somebody, which a flag the case chose could not answer.
+let private offering : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
+    fun selection ->
+        let profile =
+            OperatorProfile.parse
+                """{ "version": 1,
+                     "resources": { "nix": { "mount": { "from": "/nix" } },
+                                    "github": { "connection": { "github": [ "git" ] } } } }"""
+            |> expect
+        RepoSandboxes.capabilitiesOn
+            HostLimits.unlimited
+            (fun uses wants -> ResourceProfile.resolve profile.Resources (ResourceProfile.selected profile.Resources uses wants))
+            selection
+
 /// A log for the fold to read its own history from and append its notes to. Fresh per case:
 /// what a fold says is a delta against what the session was already told, so a shared log
 /// would make one case's notes another's silence.
@@ -1337,7 +1353,7 @@ let foldTests =
                         log
                         (granting granted)
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
-                granted <- [ "path:/nix:ro"; "!net:anywhere" ]
+                granted <- [ "path:/nix:ro"; "net:anywhere" ]
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 let notes =
@@ -1345,7 +1361,7 @@ let foldTests =
                 Expect.equal (List.length notes) 2 "the widening is news"
                 Expect.equal
                     (notes |> List.last)
-                    [ "path:/nix:ro"; "!net:anywhere" ]
+                    [ "path:/nix:ro"; "net:anywhere" ]
                     "and the second note carries the whole set, so a person reads what it is now rather than what moved"
             }
 
@@ -1358,7 +1374,7 @@ let foldTests =
                 let folded =
                     createFold
                         (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
-                        (recordingGate seen) (foldLog ()) (granting [ "path:/nix:ro" ])
+                        (recordingGate seen) (foldLog ()) offering
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal seen.Count 1 "the declaration reached the gate"
             }

@@ -229,9 +229,9 @@ let create
     // set is a fact about a REPO, not about one of its sandboxes, and only the fold sees all
     // of a repo's declarations at once.
     //
-    // Sensitivity is REPORTED rather than inferred from the words: reading it back out of a
-    // rendered description would make the prompt depend on the wording of a sentence, and the
-    // wording is a design that will move.
+    // Whether it asks is REPORTED rather than inferred from the words: reading it back out of
+    // a rendered description would make the prompt depend on the wording of a sentence, and
+    // the wording is a design that will move.
     (capabilitiesOf: ResourceName list * ResourceName list -> Result<RepoCapabilities, string>)
     : RepoSandboxes =
 
