@@ -174,6 +174,10 @@ and RepoConfigRefused =
       /// Said whole, in the words the refusal already used. A note that summarised would be
       /// a second copy of a sentence the query is also showing, free to disagree with it.
       Reason : string
+      /// What went wrong underneath, in the words of whatever refused (a Manager's status
+      /// line, say). Kept apart from `Reason` so a reader is told what happened and unfolds
+      /// the mechanism only if they want it.
+      Detail : string option
       /// The repo's file, as the party that asked (`ActorRef.Configured`) — the same
       /// attribution its successful starts carry.
       Actor : ActorRef

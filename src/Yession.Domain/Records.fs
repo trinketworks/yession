@@ -60,6 +60,24 @@ type StoredRecord =
       Revision : int
       UpdatedAt : DateTimeOffset }
 
+/// Why a record could not be read. A refusal is told apart from every other failure because
+/// it says something about the caller rather than about the Manager: this session may not read
+/// that person's records — they are not signed in to it, say — and asking again will not help
+/// until that changes. Either way `said` is the whole account, for whoever unfolds it.
+[<RequireQualifiedAccess>]
+type RecordFailure =
+    /// The Manager answered 403.
+    | Refused of said: string
+    /// Anything else: another status, a Manager that did not answer, a reply that did not decode.
+    | Failed of said: string
+
+module RecordFailure =
+
+    let said (failure: RecordFailure) : string =
+        match failure with
+        | RecordFailure.Refused said
+        | RecordFailure.Failed said -> said
+
 /// What a write came to. A write names the revision it read (`None`: there was no record), and
 /// replaces the record only while that is still the stored one. So two sessions that change one
 /// person's record at the same time cannot lose either change: the second is told `Stale`,

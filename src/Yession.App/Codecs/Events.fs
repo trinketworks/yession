@@ -1316,6 +1316,7 @@ module Events =
                       // here knows the fix is in the YAML rather than in what it asked for.
                       "sandbox", Encode.option Codec.sandboxRef.Encode p.Sandbox
                       "reason", Encode.string p.Reason
+                      "detail", Encode.option Encode.string p.Detail
                       "actor", Codec.actor.Encode p.Actor
                       "causedBy", Encode.option Codec.cause.Encode p.CausedBy ]
           Decode =
@@ -1324,6 +1325,8 @@ module Events =
                   RepoConfigRefused.Repo = get.Required.Field "repo" Codec.repoRef.Decode
                   RepoConfigRefused.Sandbox = get.Required.Field "sandbox" (Decode.option Codec.sandboxRef.Decode)
                   RepoConfigRefused.Reason = get.Required.Field "reason" Decode.string
+                  // Optional in: a refusal said before details were kept apart has none.
+                  RepoConfigRefused.Detail = get.Optional.Field "detail" (Decode.option Decode.string) |> Option.flatten
                   RepoConfigRefused.Actor = get.Required.Field "actor" Codec.actor.Decode
                   // Optional in: a refusal said before causes were recorded names none.
                   RepoConfigRefused.CausedBy =

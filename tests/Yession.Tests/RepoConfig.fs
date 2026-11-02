@@ -660,7 +660,7 @@ let private trustOf (answers: (Principal * Set<ConnectionRoute>) list) (unreadab
     let away = unreadable |> List.map (RepoTrust.ownerOf >> key) |> Set.ofList
     let read owner =
         async {
-            if Set.contains (key owner) away then return Error "user is not signed in to this session"
+            if Set.contains (key owner) away then return Error (Yession.Domain.Access.RecordFailure.Refused "/control/records/read refused (403): user is not signed in to this session")
             else return Ok (Map.tryFind (key owner) kept.Value)
         }
     { RepoTrusts.Read = fun owner _ -> read owner
@@ -1479,6 +1479,29 @@ let foldTests =
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let! asks = trustAsks log
                 Expect.equal (seen.Count, asks) (0, 0) "held, and nobody else asked"
+            }
+
+        // Why it waits is one plain line, and what the Manager said is kept for the fold.
+        testCaseAsync "a truster the Manager refuses to read holds the repo, said plainly with the refusal kept apart" <|
+            async {
+                let r, dir = selecting ()
+                let log = foldLog ()
+                do! trustedHere log r ada
+                let folded = trustingFold (trustOf [ ada, Set.ofList both ] [ ada ]) r dir (recordingGate (ResizeArray ())) log
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                let! page = log.Read None System.Int32.MaxValue
+                let said =
+                    page.Events
+                    |> List.choose (fun e ->
+                        match e.Event with
+                        | SessionEvent.RepoConfigRefused refused -> Some (refused.Reason, refused.Detail)
+                        | _ -> None)
+                    |> List.distinct
+                Expect.equal
+                    said
+                    [ "not allowed to check who trusts octo/hello",
+                      Some "/control/records/read refused (403): user is not signed in to this session" ]
+                    "the reason in plain words, the Manager's own behind it"
             }
 
         testCaseAsync "its truster coming back resumes the repo" <|

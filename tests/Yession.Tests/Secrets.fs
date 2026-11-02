@@ -1426,7 +1426,7 @@ let private recordRouteTests =
                 let records = ControlClient.records (ControlEndpoint.Address url) "secret-a"
                 let! _ = records.Write aliceRecord None "trusted"
                 let! read = records.Read aliceRecord
-                Expect.equal (expect read |> Option.map (fun r -> r.Value)) (Some "trusted") "read back over the wire"
+                Expect.equal (expect (Result.mapError RecordFailure.said read) |> Option.map (fun r -> r.Value)) (Some "trusted") "read back over the wire"
             }
 
         testCaseAsync "a stale write answers stale over the wire" <|
@@ -1444,7 +1444,7 @@ let private recordRouteTests =
                 let! _, url = recordsServer store
                 let records = ControlClient.records (ControlEndpoint.Address url) "secret-b"
                 let! read = records.Read aliceRecord
-                Expect.isError read "refused"
+                Expect.isTrue (match read with Error (RecordFailure.Refused _) -> true | _ -> false) "refused, as a refusal"
             }
     ]
 
