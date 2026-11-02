@@ -2745,6 +2745,14 @@ module Style =
     /// the end) is a price; content nobody can reach is a fault.
     let launchArea = "flex-1 min-h-0 flex flex-col"
 
+    /// The composer's column, which every card above it stands in too. On a wide screen the
+    /// dock under the conversation is one rail in from the column on each side and no wider
+    /// than the measure (`dock`), so a card that ran the column's full width stood 32px
+    /// proud of the composer on the left and a third of the column past it on the right: two
+    /// widths for one object, the question and the box its answer is typed in. On a phone
+    /// both run edge to edge, as they always have.
+    let askColumn = "wide:mx-rail wide:max-w-measure"
+
     /// Docked at the foot of `launchArea`, under the conversation and above the composer, so
     /// START and the composer stay where the hand expects them. A FIXED share of the column
     /// rather than of the screen, because what it is sized against is the conversation's room:
@@ -2784,7 +2792,7 @@ module Style =
     /// traded). The paddings come in a step on a phone for the same reason — every 8px there
     /// is 8px the list does not get.
     let ask =
-        cls [ "relative shrink-0 h-[max(60%,var(--spacing-ask))] max-h-full flex flex-col"
+        cls [ "relative shrink-0 h-[max(60%,var(--spacing-ask))] max-h-full flex flex-col"; askColumn
               "pt-6 pb-6 phone:pt-4 phone:pb-4 bg-surface overflow-hidden"
               "animate-ask-rise motion-reduce:animate-none"; Stroke.dividerTop ]
 
@@ -2805,7 +2813,7 @@ module Style =
     /// Why not simply pad the band: a row's ground has to run edge to edge, and a band that
     /// spent the padding would stop it short of both edges. Carried as padding INSIDE each
     /// full-width block, the ground reaches the screen and the name still lands on the line.
-    let private askInset = "pl-16 pr-8 max-md:pl-12 max-md:pr-4"
+    let private askInset = "pl-16 pr-8 max-md:pl-12 max-md:pr-4 wide:pl-rail"
 
     /// The measure, INSIDE a block that runs edge to edge. A row's ground and its rule are the
     /// band's full width, because a highlight that stopped at a measure reads as a box drawn
@@ -2872,7 +2880,7 @@ module Style =
     /// The card's own edge margin — what a block spends when what is in it is not a line of
     /// reading. `askInset` is the rail, and the rail is for WORDS; a block that has no word to
     /// land on it has nothing to buy with those 64 pixels and only ends up shoved off centre.
-    let private askEdge = "px-8 max-md:px-4"
+    let private askEdge = "px-8 max-md:px-4 wide:pl-0"
 
     /// The question and the way out, on one line — there is no author line above it any more.
     /// A caps `session asks` over `Which repository is this session for?` spent two lines
@@ -2929,7 +2937,7 @@ module Style =
     /// tall (`py-3.5` round a 16px line), the target this product holds a thumb to.
     let askLine =
         cls [ "relative shrink-0 block w-full text-left bg-surface border-0 cursor-pointer py-3.5 transition-colors"
-              askEdge; Stroke.dividerTop; "hover:bg-surface-2"; focusRingInset ]
+              askColumn; askEdge; Stroke.dividerTop; "hover:bg-surface-2"; focusRingInset ]
     let askLineWords = cls [ askMeasure; "flex items-center gap-3 leading-4" ]
     /// In the gutter, where the card's way out stands: the way IN, pointing where it goes.
     let askLineMark = "w-5 shrink-0 grid place-items-center text-ink-faint"
@@ -3772,7 +3780,7 @@ module Style =
     /// wider than what it writes into. And it stands off the screen's bottom edge by the
     /// timeline's own foot (`pb-6`), so it reads as the column's last object, not as chrome
     /// fixed to the window.
-    let dock = "shrink-0 flex flex-col wide:mx-rail wide:mb-6 wide:max-w-measure"
+    let dock = cls [ "shrink-0 flex flex-col wide:mb-6"; askColumn ]
 
     let queue = "shrink-0 flex flex-col gap-0.5 pt-4"
 
@@ -3886,7 +3894,7 @@ module Style =
     /// It rises in as the card does, growing its cap from nothing (`animate-surface-rise`), so
     /// the conversation gives way over a beat rather than jumping by the surface's height.
     let agentSurface =
-        cls [ "relative shrink-0 flex flex-col bg-surface overflow-hidden"
+        cls [ "relative shrink-0 flex flex-col bg-surface overflow-hidden"; askColumn
               "max-h-[calc(var(--visual-h,100dvh)/2)]"
               "animate-surface-rise motion-reduce:animate-none"; Stroke.dividerTop ]
     /// The card's lead, for the card's reason: it spans the band rather than the scrollport,
@@ -3906,7 +3914,7 @@ module Style =
     /// stand in, and the words must start on the rail whatever the agent put first. Its box is
     /// one line of the HEADING step (`text-heading` sets the `1lh` the face measures by), the
     /// step a surface's question is at.
-    let surfaceWay = cls [ askWay; "absolute top-0 left-8 max-md:left-4 text-heading" ]
+    let surfaceWay = cls [ askWay; "absolute top-0 left-8 max-md:left-4 wide:left-0 text-heading" ]
     /// The surface's actions, pinned under what scrolls (`SurfaceView.view`), as the card's
     /// are (`askActions`). On the reading rail rather than the card's edge, because a surface's
     /// buttons are the agent's words set as buttons and start where its question starts. The
@@ -3973,7 +3981,7 @@ module Style =
     /// spent the reading inset (`surfaceFrame`), so the list hands it back with negative
     /// margins and each row spends it again inside its own ground (`surfaceChoice`) — a lit
     /// row's ground reaches the band's edges and the word on it still lands on the rail.
-    let surfaceChoices = "flex flex-col divide-y divide-hair min-w-0 -ml-16 -mr-8 max-md:-ml-12 max-md:-mr-4"
+    let surfaceChoices = "flex flex-col divide-y divide-hair min-w-0 -ml-16 -mr-8 max-md:-ml-12 max-md:-mr-4 wide:-ml-rail"
     /// A choice: a whole-row press, as the card's repositories are (`askRowButton`). At least
     /// the card's row height, and taller where the agent's label needs a second line — the
     /// card's names truncate because a repository name is an identifier, but an option is a
