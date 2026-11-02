@@ -20,3 +20,6 @@ b1-18-D1-LSP,1,18,D1,DEFINITION,LSP,1,13.6,2,51158,1,1,"","src/Yession.Domain/Cl
 b1-16-D4-LSP,1,16,D4,DEFINITION,LSP,1,17.1,4,52112,3,1,"","src/Yession.App/Pending.fs:28"
 b1-19-T1-RG,1,19,T1,TYPE-DRIVEN,RG,1,17.2,4,52919,0,0,"","Map<string, string list>"
 b1-14-T2-RG,1,14,T2,TYPE-DRIVEN,RG,1,17.9,4,53156,0,0,"","Map<ConnectionId, ConnectionStatus>"
+b1-21-R2-RG,1,21,R2,REFERENCES,RG,1,24.3,3,61131,0,0,"","src/Yession.App/Probes.fs, tests/Yession.Tests/BrowserProbe.fs, tests/Yession.Tests/Browser.fs, app/browser/Probes.fs"
+b1-23-R3-RG,1,23,R3,REFERENCES,RG,1,24.3,3,60230,0,0,"","src/Yession.Peer/Peer.fs, tests/Yession.Tests/Support.fs, tests/Yession.Tests/Resilience.fs, tests/Yession.Tests/Phase3.fs"
+b1-20-R1-LSP,1,20,R1,REFERENCES,LSP,1,25.9,4,53975,1,1,"","app/Host.fs, app/ProcessManager.fs, app/Sse.fs, app/VolumeLeases.fs, src/Yession.Domain/Clock.fs, src/Yession.Domain/Sandbox.fs, src/Yession.Session/CommandGates.fs, src/Yession.Session/Names.fs, src/Yession.Session/Terminals.fs, tests/Yession.Tests/Support.fs, tests/Yession.Tests/Terminals.fs"

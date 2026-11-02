@@ -1,0 +1,1 @@
+STOP-RULE after block 1: logRatioCI [-0.680, -0.009] width 0.671 excludes0=true; accCI [0.000, 0.000] excludes0=false -> CONTINUE
