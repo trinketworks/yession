@@ -69,3 +69,5 @@ b3-17-R4-LSP,3,17,R4,REFERENCES,LSP,1,13.5,2,52059,1,1,"","src/Yession.App/Clien
 b3-16-T4-LSP,3,16,T4,TYPE-DRIVEN,LSP,1,18.2,2,51133,1,1,"","(string * string) list"
 b3-19-R2-RG,3,19,R2,REFERENCES,RG,1,18.4,3,60543,0,0,"","src/Yession.App/Probes.fs, app/browser/Probes.fs, tests/Yession.Tests/BrowserProbe.fs, tests/Yession.Tests/Browser.fs"
 b3-22-D3-LSP,3,22,D3,DEFINITION,LSP,1,19.7,2,51259,1,1,"","tests/Yession.Tests/Support.fs:753"
+b3-21-R1-RG,3,21,R1,REFERENCES,RG,1,25.4,5,61940,0,0,"","src/Yession.Domain/Clock.fs, src/Yession.Domain/Sandbox.fs, src/Yession.Session/Names.fs, src/Yession.Session/CommandGates.fs, src/Yession.Session/Terminals.fs, app/Host.fs, app/Sse.fs, app/ProcessManager.fs, app/VolumeLeases.fs, tests/Yession.Tests/Support.fs, tests/Yession.Tests/Terminals.fs"
+b3-23-R4-RG,3,23,R4,REFERENCES,RG,1,25.9,4,56211,0,0,"","src/Yession.App/Client.fs, src/Yession.Peer/Peer.fs, app/browser/Browser.fs, tests/Yession.Tests/Support.fs, tests/Yession.Tests/Resilience.fs, tests/Yession.Tests/TranscriptHttp.fs"
