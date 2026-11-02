@@ -276,14 +276,14 @@ module RepoTrustAsked =
             "is waiting"
             (Phrase.text (
                 sprintf
-                    "for somebody here to trust it with their GitHub (%s)"
+                    "to be trusted (%s)"
                     (a.Routes |> List.map routeWords |> String.concat ", ")
             ))
 
 module RepoTrusted =
 
     let phrase (t: RepoTrusted) : Phrase =
-        Phrase.deed "trusts" [ Segment.Ref (EntityRef.Repo t.Repo); Segment.Text ": its sandboxes run with their GitHub here" ]
+        Phrase.deed "trusts" [ Segment.Ref (EntityRef.Repo t.Repo) ]
 
 module RepoConfigRefused =
 

@@ -331,7 +331,7 @@ let create
                                       RepoTrustAsked.Routes = routes
                                       RepoTrustAsked.Actor = actor
                                       RepoTrustAsked.CausedBy = FoldCause.causeFor repo cause })
-                    return Holds (sprintf "waiting for somebody here to trust %s with their GitHub" (RepoRef.value repo))
+                    return Holds (sprintf "waiting for someone to trust %s" (RepoRef.value repo))
         }
 
     let foldOnce (cause: FoldCause) (onBehalfOf: CredentialFor) : Async<unit> =
