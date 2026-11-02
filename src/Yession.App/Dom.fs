@@ -807,7 +807,7 @@ module Dom =
         let reconnectingStatus = "reconnecting"
         /// Behind a connect's disclosure, before an error nothing handled (`PageFault`): what it
         /// may have done, and what undoes it.
-        let pageFaultLead = "An error on this page may have stopped it connecting. Reloading starts it again."
+        let pageFaultLead = "An error on this page may have stopped it connecting. Reload to start again."
         /// The error itself, behind the disclosure; its frames follow it.
         let pageFaultWhy (name: string) (message: string) = if message = "" then name else name + ": " + message
         /// Load this page again, which is what starts its way to the session again.
@@ -820,7 +820,7 @@ module Dom =
         let signedOutStatus = "signed out"
         /// What being signed out costs, said under the status: nothing is lost, and nothing
         /// syncs until the sign-in is back.
-        let signedOutPromise = "Your work is saved here and will sync once you are signed in."
+        let signedOutPromise = "Your work is saved, and syncs once you sign in."
         /// History stopped arriving: the reads gave up (`SessionLink.Stalled`).
         let historyPausedStatus = "history paused"
         /// History is arriving slowly: a read failed, and is being tried again.
@@ -849,7 +849,7 @@ module Dom =
         let retryNow = "Try again"
         /// What every degraded state promises: this is a local-first client, so a lost leg
         /// costs sync, not the ability to work.
-        let localFallback = "Your work is saved on this device. It will sync when the session is back."
+        let localFallback = "Your work is saved on this device, and syncs when the session is back."
         /// The same promise where it cannot be kept (Plan 13): this deployment addresses
         /// sessions by port, so a session that restarts comes back at a new origin — and a
         /// browser partitions storage by origin, which strands anything written here in the
@@ -859,7 +859,7 @@ module Dom =
         /// Nobody needs the browser's storage model to understand what it costs them — but
         /// the reader who wonders why a local-first client would lose anything is owed it.
         let ephemeralAddress =
-            "This session reopens at a new address. A browser keeps saved work separately for each address."
+            "The session reopens at a new address, and a browser keeps saved work per address."
         /// The model picker's state token, and its first option, for when nobody has chosen:
         /// the provider decides. Named rather than blank because "no model is set" and
         /// "whatever the provider picks" are the same fact, and only one of them is a
@@ -872,12 +872,10 @@ module Dom =
         /// from a bug. The remedy is the operator's, and it is one flag, so name it.
         let historyNotKept = "This session's history will not be kept on this device."
         let historyNotKeptWhy =
-            "It is served over plain HTTP. A browser withholds storage of this kind outside a secure "
-            + "context. Serving it over HTTPS restores it."
-        let historyUnread = "This device's copy of the session could not be read. This page runs without it."
+            "It is served over plain HTTP. Serve it over HTTPS to keep it."
+        let historyUnread = "This device's copy of the session could not be read."
         let historyUnreadWhy =
-            "The conversation comes from the session instead. What arrives may not be kept on "
-            + "this device until the page is opened again."
+            "The conversation comes from the session instead, and may not be kept here until the page reopens."
         /// What the composer's keys do, shown in the composer while you are in it. Enter
         /// stays a prose key, same as a plain textarea, because a phone's return key has no
         /// modifier to reach for; sending is the explicit second key beside it, reachable
@@ -933,15 +931,15 @@ module Dom =
         // The trust card: the launch card's anatomy, asking the repo's next question.
         let trustTitle = "Do you trust this repo?"
         /// Under the question, before the rows: what saying yes means.
-        let trustWhy = "Its code, on any branch or pull request, runs in its sandboxes with your GitHub."
+        let trustWhy = "Commands you or your agent run in it, on any branch or pull request, use your GitHub."
         let trustRouteGit = "push and fetch"
-        let trustRouteGitDetail = "git, with your token"
+        let trustRouteGitDetail = "git"
         let trustRouteApi = "GitHub API"
         let trustRouteApiDetail = "gh, pull requests, Actions"
         let trustAnswer = "Trust"
         /// The way out's accessible name and tooltip. Says what the press does: nothing is
         /// decided, and only this reader stops being asked until the repo asks for more.
-        let trustLater = "not now: ask me again when it asks for more"
+        let trustLater = "not now"
         /// What stands where history this device does not hold would be (Plan 20). Said only
         /// while nothing is coming to fill it — see `View.chat` — so it is a fact about this
         /// client's own store rather than a complaint about the network.
@@ -1194,7 +1192,7 @@ module Dom =
         /// Simplified Technical English: one term for the state ("cannot run commands") and one
         /// for what became of its queue ("refused"), everywhere, on every surface. The session
         /// knows only that the marks stopped, so the cause is said with "may".
-        let terminalCannotRun = "This terminal cannot run commands. The session cannot tell when a command starts or ends here. Another program may be running in place of the shell."
+        let terminalCannotRun = "This terminal cannot run commands. Another program may have replaced the shell."
         /// When, and after which command. `since` is a `Moment.stamp`.
         let terminalCannotRunSince (since: string option) (after: string option) =
             match since, after with
@@ -1204,7 +1202,7 @@ module Dom =
             | None, None -> ""
         /// The mechanism, in the banner's detail note.
         let terminalCannotRunWhy =
-            "The shell stopped sending the marks that show when a command starts and ends."
+            "The shell stopped saying where commands start and end."
         /// What the shell printed when the session stopped waiting for it: the evidence.
         let terminalShellPrinted (said: string) =
             if said = "" then "The shell printed nothing after the command."
@@ -1215,8 +1213,8 @@ module Dom =
         let terminalRefusedHere (n: int) =
             match n with
             | 0 -> ""
-            | 1 -> "The session refused 1 queued command. It did not run:"
-            | n -> sprintf "The session refused %d queued commands. They did not run:" n
+            | 1 -> "Refused 1 queued command:"
+            | n -> sprintf "Refused %d queued commands:" n
         /// What a person can still do: the terminal is not closed, only its commands.
         let terminalStillTypes = "You can still type in this terminal."
         let openNewTerminal = "Open a new terminal"
@@ -1224,10 +1222,10 @@ module Dom =
         /// control, never the sentence's subject: a name is often a long command.
         let chatRefused (n: int) =
             if n = 1 then
-                "The session refused 1 command from the agent. It did not run. Its terminal cannot run commands."
+                "Refused 1 agent command. Its terminal cannot run commands."
             else
                 sprintf
-                    "The session refused %d commands from the agent. They did not run. Their terminal cannot run commands."
+                    "Refused %d agent commands. Their terminal cannot run commands."
                     n
         let showTerminal = "Show terminal"
         let system = "system"
@@ -1248,12 +1246,12 @@ module Dom =
         let turnWoke = "woke"
         /// The same fact, at length, for the reader who wants it. Never the visible label:
         /// the chat's meta line is three short words wide.
-        let turnWokeCommandFinished = "The agent started this on its own: a command it left running in the background finished."
-        let turnWokeStreamEnded = "The agent started this on its own: the stream behind a terminal it was working in has ended."
-        let turnWokeIntegrationLost = "The agent started on its own. A terminal where the agent had work cannot run commands."
-        let turnWokePrChanged = "The agent started this on its own: a pull request watched here changed state."
-        let turnWokeCutOff = "The agent started this on its own. The session stopped during its previous turn. The agent is resuming that turn."
-        let turnWokeSurfaceAnswered = "The agent started this because a person replied to a surface it showed."
+        let turnWokeCommandFinished = "Started on its own: a background command finished."
+        let turnWokeStreamEnded = "Started on its own: a terminal's stream ended."
+        let turnWokeIntegrationLost = "Started on its own: a terminal it was using cannot run commands."
+        let turnWokePrChanged = "Started on its own: a watched pull request changed."
+        let turnWokeCutOff = "Resuming the turn cut off when the session stopped."
+        let turnWokeSurfaceAnswered = "Started because someone answered its surface."
         /// Stands where the quoted message would be when the ref points past the loaded page —
         /// the reply is real, its cause simply is not on screen yet.
         let replyRefMissing = "earlier message"
@@ -1290,7 +1288,7 @@ module Dom =
         let stopCommand (command: string) : string = "Stop " + command
         /// The same control's tooltip: what it does to the terminal, and the key that does it
         /// from the command line.
-        let stopCommandHint = "Send ^C to this command (Ctrl-C in an empty command line); the terminal stays open"
+        let stopCommandHint = "Send ^C; the terminal stays open"
         /// The same control's accessible name while its click is in flight (`AgentViewState.
         /// Interrupting`) — between the press and the stop actually landing, so a screen
         /// reader is told the request went somewhere rather than repeating the verb as if

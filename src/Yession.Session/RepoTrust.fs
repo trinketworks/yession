@@ -210,7 +210,7 @@ module RepoTrusts =
             : Async<Result<RepoTrust, string>> =
             async {
                 if not (connected owner) then
-                    return Error "Connect a GitHub of your own first. A repo you trust runs with it."
+                    return Error "Connect your GitHub first."
                 else
                     match! idOf owner repo with
                     | Error reason -> return Error reason
