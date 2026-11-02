@@ -710,32 +710,42 @@ module Style =
     /// a list you cannot keep your place in, so this clips rather than wraps.
     let recordRowNameText = "block truncate"
 
-    /// The roster's mark column (`ManagerUi.Col.mark`): the row's attention mark, at every
-    /// width, as the session page wears its worst standing under the chevron. The column is
-    /// 32px and the mark sits at its left edge, which is the page's rail — so the chips, the
-    /// section heads and every row's mark start on one line, and every name starts 32px in,
-    /// where the session page's title starts beside its chevron.
+    /// A roster row's LEADING rail, shared by its two leading columns — the attention mark
+    /// (`ManagerUi.Col.mark`) and, right after it, the chevron that unfolds the row
+    /// (`ManagerUi.Col.chevron`) — so the two sit on one top-aligned line together rather than
+    /// each settling to a different baseline of its own. Every row's mark and chevron start on
+    /// the page's rail, where the chips and section heads do too, and every name starts the
+    /// same distance in: one 32px column and one 44px column.
     ///
-    /// The cell has no gutter of its own (the column's width IS the gap), and 2px above and
-    /// below a 44px target makes the row's 48px: the name cell's 12px + 24px line + 12px. Top,
-    /// not baseline, so an unfolded row keeps its mark on the name's line.
-    let recordMarkCell = "py-0.5 align-top"
+    /// Top, not baseline: a cell this short (`recordMarkSeatWrap`'s 44px, or the chevron
+    /// button's own 44px) centred by `align-baseline` would float to the middle of whatever the
+    /// row's TALLEST cell turns out to be, which drifts whenever a neighbour's padding does —
+    /// `align-top` instead pins each to ITS OWN padding, 2px, so the two agree with each other
+    /// and with the name's first line without needing to match the row's full height. 2px above
+    /// and below a 44px target makes 48px, the same height `Style.tableCell`'s py-3 makes for
+    /// the name's 24px line (12 + 24 + 12) — so a folded row's three leading cells, each sized
+    /// differently, still land on one line. And an UNFOLDED row keeps the mark and chevron on
+    /// the name's own line rather than sliding them toward the middle of everything it unfolds to.
+    let recordLeadingCell = "py-0.5 align-top"
 
     /// The mark's own box: a thumb's 44px, grown LEFT into the page's gutter rather than
-    /// right into the name, so the mark stays on the rail and the name's own target is
-    /// untouched. No press of its own — the row's disclosure is `recordChevronPress`, at the
-    /// row's trailing edge — so this is attention's colour alone, not a control: `aria-hidden`
-    /// at the call site, same as the dot it wraps.
+    /// right into the chevron beside it, so the mark stays on the rail and the chevron's own
+    /// target is untouched. No press of its own — the row's disclosure is `recordChevronPress`,
+    /// in the column right after it — so this is attention's colour alone, not a control:
+    /// `aria-hidden` at the call site, same as the dot it wraps.
     let recordMarkSeatWrap = "relative -ml-3 w-11 h-11 pl-3 flex items-center"
 
-    /// The row's disclosure: a thumb's whole 44px at the row's TRAILING edge, which is the
-    /// one legible "tap to expand" on a phone — the mark beside the name is attention's
-    /// colour alone now (`recordMarkSeatWrap`), and the glyph that used to sit here saying
-    /// the name's link leaves is gone, not replaced; this is the row's one press. A column of
-    /// its own (`ManagerUi.Col.chevron`), so it lands at the table's own right edge at every
-    /// width, not just where a phone happens to hide the columns after it. It unfolds the row
-    /// (`aria-expanded`); no ground of its own, for the same reason the mark never wore one —
-    /// the unfolded lines under it already say the row is open.
+    /// The row's disclosure: a thumb's whole 44px, in its own column right after the mark
+    /// (`ManagerUi.Col.chevron`) — the LEADING edge, not the trailing one, because a chevron at
+    /// a row's trailing edge reads as "this opens another screen" (the convention every list
+    /// that drills into a detail view uses), while one at the leading edge, turning in place, is
+    /// the ordinary shape of "this unfolds" (an accordion header, a file tree's twist). The mark
+    /// beside it is attention's colour alone now (`recordMarkSeatWrap`), and the glyph that used
+    /// to sit at the row's trailing edge saying the name's link leaves is gone, not replaced;
+    /// this is the row's one press. Never yields on a phone, unlike the columns after the name
+    /// (`id`, `status`, `created`) — the one thing a reader must always be able to reach. It
+    /// unfolds the row (`aria-expanded`); no ground of its own, for the same reason the mark
+    /// never wore one — the unfolded lines under it already say the row is open.
     let recordChevronPress =
         cls [ "w-11 h-11 flex items-center justify-center bg-transparent border-0 cursor-pointer"
               "text-ink-faint hover:text-ink transition-colors"; focusRing ]
