@@ -86,6 +86,7 @@ let private representativeModel : ClientModel =
       TrustCards = TrustCards.empty
       AskFront = None
       AskOrder = []
+      SurfaceAnswers = Map.empty
       Launch = Launch.empty
       Repos = ReposProjection.empty
       // Connected, so the reconnect offer (Plan 11) is not showing — but the origin is

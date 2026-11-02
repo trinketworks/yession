@@ -89,6 +89,11 @@ module SurfaceView =
             | _ -> None)
         |> Option.defaultValue Sending.Nothing
 
+    /// An answer on the record that the agent has not finished acting on
+    /// (`ClientModel.SurfaceAnswers`): who gave it, as this reader names them, and the button
+    /// they pressed. Everyone's, unlike `Sending`, because everyone reads it off the log.
+    type Answered = { By : string; Component : string }
+
     /// What one surface's components draw against.
     type private Canvas =
         { SurfaceId : string
@@ -97,9 +102,12 @@ module SurfaceView =
           /// surface takes a press or an edit — as the launch card's rows and field stand
           /// still while its clone runs — and every control says so by its face.
           Sending : Sending
+          /// Whether the surface has an answer the agent is still to act on. It stands still
+          /// for the same reason: a second answer now would land on a question already answered.
+          Answered : Answered option
           Dispatch : ClientMsg -> unit }
 
-    let private frozen (canvas: Canvas) = canvas.Sending <> Sending.Nothing
+    let private frozen (canvas: Canvas) = canvas.Sending <> Sending.Nothing || canvas.Answered.IsSome
 
     /// The absolute pointer a binding writes to, read in `scope`; `None` for a literal, which
     /// has nowhere in the data model to write.
@@ -217,11 +225,18 @@ module SurfaceView =
             // This button's answer is the one on its way: it wears the HELD face (`pressed:`,
             // through `aria-busy`) until the session answers, as the card's START holds
             // through its clone. Every other button on the surface waits meanwhile.
-            let held =
+            //
+            // Once the answer is on the record, the button that gave it goes on holding — for
+            // every reader now, saying `answered` — until the agent's turn on it ends. The log
+            // keeps the button and not the template item, so a stamped button holds on each item.
+            let sendingHere =
                 match canvas.Sending with
                 | Sending.Answer (componentId, at) -> componentId = c.Id && at = scope.Base
                 | Sending.Nothing
                 | Sending.Dismissal -> false
+            let answeredHere = not sendingHere && canvas.Answered |> Option.exists (fun a -> a.Component = c.Id)
+            let held = sendingHere || answeredHere
+            let busyWord = if answeredHere then Dom.Text.surfaceAnsweredWord else Dom.Text.surfaceSending
             let ready = List.isEmpty unmet && not (frozen canvas)
             // The press names the button and where it was drawn; the session reads the answer
             // from the doc. A button that is not ready, or that calls a function here rather
@@ -240,7 +255,7 @@ module SurfaceView =
                 match variant with
                 | Some ButtonVariant.Primary ->
                     (if live then Style.btnPrimarySwap else Style.btnWaitingSwap),
-                    html $"""<span class="{Style.whenReady}">{label}</span><span class="{Style.whenBusy}">{Dom.Text.surfaceSending}</span>"""
+                    html $"""<span class="{Style.whenReady}">{label}</span><span class="{Style.whenBusy}">{busyWord}</span>"""
                 | Some ButtonVariant.Borderless -> (if live then Style.btnBare else Style.btnBareWaiting), label
                 | Some ButtonVariant.Default
                 | None -> (if live then Style.btn else Style.btnWaiting), label
@@ -343,13 +358,21 @@ module SurfaceView =
     /// nothing to answer.
     ///
     /// `asked` is every command this client has in flight (`ClientModel.Asked`), from which the
-    /// surface reads whether an answer or a dismissal of it is on its way (`sending`).
-    let view (dispatch: ClientMsg -> unit) (asked: Yession.Domain.Link.SessionCommand list) (surfaceId: string) (surface: Surface) : TemplateResult =
+    /// surface reads whether an answer or a dismissal of it is on its way (`sending`). `answered`
+    /// is the answer on the record that the agent has not finished acting on, when there is one.
+    let view
+        (dispatch: ClientMsg -> unit)
+        (asked: Yession.Domain.Link.SessionCommand list)
+        (answered: Answered option)
+        (surfaceId: string)
+        (surface: Surface)
+        : TemplateResult =
         match Map.tryFind "root" surface.Components with
         | None -> Lit.nothing
         | Some root ->
             let state = sending asked surfaceId
-            let canvas = { SurfaceId = surfaceId; Components = surface.Components; Sending = state; Dispatch = dispatch }
+            let canvas = { SurfaceId = surfaceId; Components = surface.Components; Sending = state; Answered = answered; Dispatch = dispatch }
+            let still = frozen canvas
             let scope = Evaluate.root surface.DataModel
             // A card at the root is the band itself, so its child is drawn in its place.
             let bodyId, ancestors =
@@ -363,7 +386,7 @@ module SurfaceView =
             // A column that ends in a row of buttons ends in the surface's ACTIONS, and they
             // are pinned under what scrolls, as the card's START is (`askActions`): the
             // question can run past the band's cap, but what answers it stays on screen.
-            let content, actions =
+            let content, pinned =
                 match Map.tryFind bodyId surface.Components with
                 | Some ({ Kind = ComponentKind.Column (ChildList.Static ids, justify, align) } as column) when List.length ids > 1 ->
                     let last = List.last ids
@@ -372,24 +395,46 @@ module SurfaceView =
                         not (List.isEmpty buttons) && List.forall isButton buttons ->
                         let inside = Set.add bodyId ancestors
                         let above = { column with Kind = ComponentKind.Column (ChildList.Static (List.truncate (List.length ids - 1) ids), justify, align) }
-                        drawComponent canvas inside above scope,
-                        html $"""
-                            <div class="{Style.surfaceActions}" data-surface-actions>
-                              <div class="{Style.surfaceActionsLine}">{drawComponent canvas (Set.add last inside) row scope}</div>
-                            </div>"""
-                    | _ -> draw canvas ancestors bodyId scope, Lit.nothing
-                | _ -> draw canvas ancestors bodyId scope, Lit.nothing
+                        drawComponent canvas inside above scope, Some (drawComponent canvas (Set.add last inside) row scope)
+                    | _ -> draw canvas ancestors bodyId scope, None
+                | _ -> draw canvas ancestors bodyId scope, None
             let leaving = state = Sending.Dismissal
+            // The blue lead says "waiting on you". An answered surface waits on the agent, so
+            // the lead goes, and a line under the actions says who answered and what it waits
+            // on — where the card's actions row says `looking` while it waits on GitHub.
+            let waiting =
+                match answered with
+                | Some a when state = Sending.Nothing -> Some a
+                | _ -> None
+            let lead =
+                match waiting with
+                | Some _ -> Lit.nothing
+                | None -> html $"""<div class="{Style.surfaceLeadBar}" aria-hidden="true"></div>"""
+            let awaiting =
+                match waiting with
+                | Some a ->
+                    Some (html $"""<p class="{Style.surfaceAwaiting}" role="status" data-surface-answered>{Icon.spinLead}{Dom.Text.surfaceAnsweredBy a.By}</p>""")
+                | None -> None
+            let actions =
+                match pinned, awaiting with
+                | None, None -> Lit.nothing
+                | Some row, status ->
+                    html $"""
+                        <div class="{Style.surfaceActions}" data-surface-actions>
+                          <div class="{Style.surfaceActionsLine}">{row}</div>
+                          {status |> Option.defaultValue Lit.nothing}
+                        </div>"""
+                | None, Some status -> html $"""<div class="{Style.surfaceActions}">{status}</div>"""
             html $"""
                 <section class="{Style.agentSurface}" data-surface="{surfaceId}" aria-label="{Dom.Text.agentSurface}"
-                         aria-busy="{flag (state <> Sending.Nothing)}">
-                  <div class="{Style.surfaceLeadBar}" aria-hidden="true"></div>
+                         aria-busy="{flag still}">
+                  {lead}
                   <div class="{Style.surfaceScroll}">
                     <div class="{Style.surfaceFrame}">
                       <button type="button" class="{Style.surfaceWay}" data-surface-dismiss
                               aria-label="{Dom.Text.surfaceDismissLabel}" title="{Dom.Text.surfaceDismissLabel}"
-                              aria-busy="{flag leaving}" aria-disabled="{flag (state <> Sending.Nothing)}"
-                              @click={Ev(fun _ -> if state = Sending.Nothing then dispatch (DismissSurfaceMsg surfaceId))}>{Icon.close}</button>
+                              aria-busy="{flag leaving}" aria-disabled="{flag still}"
+                              @click={Ev(fun _ -> if not still then dispatch (DismissSurfaceMsg surfaceId))}>{Icon.close}</button>
                       {content}
                     </div>
                   </div>

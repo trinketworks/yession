@@ -2144,6 +2144,10 @@ type ClientModel =
       /// they live in three places — the launch's state, the log, the synced doc — and only
       /// the client sees all three arrive.
       AskOrder      : string list
+      /// The agent's surfaces somebody has answered, while the agent has not yet finished the
+      /// turn the answer owes it (`SurfaceAnswers`). Folded from the log, so every reader sees
+      /// one surface stand still under one name.
+      SurfaceAnswers : Map<string, Yession.Domain.Agent.AwaitedAnswer>
       /// The launch surface's state — choosing the session's first repo. View state, local
       /// to this client: choosing is one person's act on one screen, and what it produces
       /// reaches everyone through the log.
@@ -3027,6 +3031,7 @@ module ClientModel =
           TrustCards = TrustCards.empty
           AskFront = None
           AskOrder = []
+          SurfaceAnswers = SurfaceAnswers.empty
           Launch = Launch.empty
           Repos = Repos.ReposProjection.empty
           Timeline = TimelineProjection.empty
@@ -5431,6 +5436,8 @@ module ClientModel =
                 TrustWaits = RepoTrustWaits.apply model.TrustWaits (freshEvents |> List.map (fun e -> e.Event))
                 Timeline = timeline
                 Agent = agent
+                SurfaceAnswers =
+                    freshEvents |> List.fold (fun awaited e -> SurfaceAnswers.apply awaited e.Event) model.SurfaceAnswers
                 Environment = environment
                 Terminals = terminals
                 Stolen = stolen

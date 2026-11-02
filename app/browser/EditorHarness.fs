@@ -1248,7 +1248,8 @@ let private surfaceModel : ClientModel =
     { shellModel with Synced = { shellModel.Synced with Surfaces = Map.ofList [ "ask", harnessSurface ] } }
 
 /// The same question in the state `?surface=<state>` names: `waiting`, with nothing chosen,
-/// so its button waits; `sending`, with the answer on its way, so its button holds.
+/// so its button waits; `sending`, with the answer on its way, so its button holds; `answered`,
+/// with the answer on the record and the agent still to act on it.
 let private surfaceModelIn (state: string) : ClientModel =
     match state with
     | "waiting" ->
@@ -1257,7 +1258,18 @@ let private surfaceModelIn (state: string) : ClientModel =
     | "sending" ->
         let sent = Yession.Domain.Link.PressSurfaceButton ("ask", "submit", "")
         { surfaceModel with Asked = Map.ofList [ Yession.Domain.RequestId.fresh (), sent ] }
-    | other -> failwithf "?surface=%s: give waiting or sending" other
+    | "answered" ->
+        let answer : Yession.Domain.Surfaces.SurfaceActionTaken =
+            { MessageId = MessageId.create "harness-answer" |> expect
+              SurfaceId = "ask"
+              Component = "submit"
+              Name = "submit"
+              Context = "{\"choice\":[\"fix/layout-reads-head\"]}"
+              Responses = [ "fix/layout-reads-head" ]
+              By = Principal.Peer surfaceModel.Peer.PeerId }
+        { surfaceModel with
+            SurfaceAnswers = SurfaceAnswers.ofEvents [ SessionEvent.SurfaceActionTaken answer ] }
+    | other -> failwithf "?surface=%s: give waiting, sending or answered" other
 
 /// The model that the shell's page shows first. `/?replies=<n>` shows the `Replies`
 /// conversation with `n` items, so that a picture (`frames --harness replies`) shows the prose
