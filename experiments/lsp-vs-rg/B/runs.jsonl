@@ -1,0 +1,96 @@
+{"trial":"b1-01","block":1,"seq":1,"task":"D1","cond":"RG","agent_id":"a95904aba600d0fdb"}
+{"trial":"b1-02","block":1,"seq":2,"task":"T2","cond":"RG","agent_id":"aef9285e0c798dc8f"}
+{"trial":"b1-03","block":1,"seq":3,"task":"D2","cond":"LSP","agent_id":"af84ee0512a5efbda"}
+{"trial":"b1-04","block":1,"seq":4,"task":"T3","cond":"RG","agent_id":"a6aff5257bc0c693f"}
+{"trial":"b1-05","block":1,"seq":5,"task":"R3","cond":"RG","agent_id":"af053180b4cd3b3b2"}
+{"trial":"b1-06","block":1,"seq":6,"task":"R1","cond":"LSP","agent_id":"a5fe2c975d62ff024"}
+{"trial":"b1-07","block":1,"seq":7,"task":"T2","cond":"LSP","agent_id":"a2116fe02b65b4ec2"}
+{"trial":"b1-08","block":1,"seq":8,"task":"D4","cond":"LSP","agent_id":"a64f8444d89c6e53c"}
+{"trial":"b1-09","block":1,"seq":9,"task":"T4","cond":"LSP","agent_id":"aa413ef2565bc4315"}
+{"trial":"b1-10","block":1,"seq":10,"task":"T1","cond":"LSP","agent_id":"a709f8972de970323"}
+{"trial":"b1-11","block":1,"seq":11,"task":"R4","cond":"RG","agent_id":"a222b92ee17b7c034"}
+{"trial":"b1-12","block":1,"seq":12,"task":"R3","cond":"LSP","agent_id":"a02b7f5c6d0a70625"}
+{"trial":"b1-13","block":1,"seq":13,"task":"R2","cond":"RG","agent_id":"a1218f07a7ff1657f"}
+{"trial":"b1-14","block":1,"seq":14,"task":"R2","cond":"LSP","agent_id":"a0f707f6897d808e2"}
+{"trial":"b1-15","block":1,"seq":15,"task":"R4","cond":"LSP","agent_id":"a5398db2807ac337a"}
+{"trial":"b1-16","block":1,"seq":16,"task":"R1","cond":"RG","agent_id":"a55dc07365f9ab03e"}
+{"trial":"b1-17","block":1,"seq":17,"task":"T1","cond":"RG","agent_id":"adaaa9bc05c04cd82"}
+{"trial":"b1-18","block":1,"seq":18,"task":"D1","cond":"LSP","agent_id":"aef74fee82cf47cb3"}
+{"trial":"b1-19","block":1,"seq":19,"task":"T4","cond":"RG","agent_id":"af07b6b2f3ce2cb95"}
+{"trial":"b1-20","block":1,"seq":20,"task":"D4","cond":"RG","agent_id":"a680a926d2da23be4"}
+{"trial":"b1-21","block":1,"seq":21,"task":"T3","cond":"LSP","agent_id":"aee52f530e0bdc89d"}
+{"trial":"b1-22","block":1,"seq":22,"task":"D3","cond":"LSP","agent_id":"a8492011cd1b4aa27"}
+{"trial":"b1-23","block":1,"seq":23,"task":"D3","cond":"RG","agent_id":"a81b52f3547e6bae1"}
+{"trial":"b1-24","block":1,"seq":24,"task":"D2","cond":"RG","agent_id":"ad61c75ad36ed171b"}
+{"trial": "b2-01", "block": 2, "seq": 1, "task": "D3", "cond": "RG", "agent_id": "a7c4b24f1f2215b19"}
+{"trial": "b2-02", "block": 2, "seq": 2, "task": "T2", "cond": "RG", "agent_id": "a1821b254f524a8f7"}
+{"trial": "b2-03", "block": 2, "seq": 3, "task": "D2", "cond": "RG", "agent_id": "a57b0dea436fc44a4"}
+{"trial": "b2-04", "block": 2, "seq": 4, "task": "D3", "cond": "LSP", "agent_id": "afa837b0472cf9ecf"}
+{"trial": "b2-05", "block": 2, "seq": 5, "task": "R3", "cond": "LSP", "agent_id": "ab7108eda0e71e366"}
+{"trial": "b2-06", "block": 2, "seq": 6, "task": "D2", "cond": "LSP", "agent_id": "aae20f9f08da284d9"}
+{"trial": "b2-07", "block": 2, "seq": 7, "task": "R4", "cond": "RG", "agent_id": "a83a6c49c1671dba2"}
+{"trial": "b2-08", "block": 2, "seq": 8, "task": "T3", "cond": "LSP", "agent_id": "a2f2ee79aea5b1b72"}
+{"trial": "b2-09", "block": 2, "seq": 9, "task": "T1", "cond": "RG", "agent_id": "a6c06f47067b302f1"}
+{"trial": "b2-10", "block": 2, "seq": 10, "task": "D1", "cond": "LSP", "agent_id": "aee04f68f726bc67f"}
+{"trial": "b2-11", "block": 2, "seq": 11, "task": "T2", "cond": "LSP", "agent_id": "a2dd6aef6cd0700f9"}
+{"trial": "b2-12", "block": 2, "seq": 12, "task": "R1", "cond": "LSP", "agent_id": "ae5e80faff6981af7"}
+{"trial": "b2-13", "block": 2, "seq": 13, "task": "R1", "cond": "RG", "agent_id": "af31c06a4b1bba2f2"}
+{"trial": "b2-14", "block": 2, "seq": 14, "task": "T4", "cond": "RG", "agent_id": "af691f3b1b6c66683"}
+{"trial": "b2-15", "block": 2, "seq": 15, "task": "T1", "cond": "LSP", "agent_id": "a77c1ab576ab555c7"}
+{"trial": "b2-16", "block": 2, "seq": 16, "task": "R3", "cond": "RG", "agent_id": "af502ea42957e56fc"}
+{"trial": "b2-17", "block": 2, "seq": 17, "task": "D4", "cond": "LSP", "agent_id": "a5933308e17eaa88b"}
+{"trial": "b2-18", "block": 2, "seq": 18, "task": "D1", "cond": "RG", "agent_id": "a9060e70342174d35"}
+{"trial": "b2-19", "block": 2, "seq": 19, "task": "R4", "cond": "LSP", "agent_id": "a5a31c8d5ba916521"}
+{"trial": "b2-20", "block": 2, "seq": 20, "task": "R2", "cond": "LSP", "agent_id": "aee643f880c9b0c55"}
+{"trial": "b2-21", "block": 2, "seq": 21, "task": "R2", "cond": "RG", "agent_id": "aad9189cd9527c32c"}
+{"trial": "b2-22", "block": 2, "seq": 22, "task": "D4", "cond": "RG", "agent_id": "a205fcc20bb4183ae"}
+{"trial": "b2-23", "block": 2, "seq": 23, "task": "T3", "cond": "RG", "agent_id": "a19dd60d6cd5b3767"}
+{"trial": "b2-24", "block": 2, "seq": 24, "task": "T4", "cond": "LSP", "agent_id": "a828b77c3bd5a391f"}
+{"trial": "b3-01", "block": 3, "seq": 1, "task": "T3", "cond": "RG", "agent_id": "a514dbce04dab40a3"}
+{"trial": "b3-02", "block": 3, "seq": 2, "task": "R1", "cond": "RG", "agent_id": "a6b3e0bba2b7a0fe0"}
+{"trial": "b3-03", "block": 3, "seq": 3, "task": "D4", "cond": "RG", "agent_id": "a01187ec1edfaa192"}
+{"trial": "b3-04", "block": 3, "seq": 4, "task": "T4", "cond": "RG", "agent_id": "a707e0245329b55cd"}
+{"trial": "b3-05", "block": 3, "seq": 5, "task": "T1", "cond": "RG", "agent_id": "ac02d149eb4d5d876"}
+{"trial": "b3-06", "block": 3, "seq": 6, "task": "D1", "cond": "RG", "agent_id": "aa10affd962eaa80b"}
+{"trial": "b3-07", "block": 3, "seq": 7, "task": "D1", "cond": "LSP", "agent_id": "a16b966c79211853b"}
+{"trial": "b3-08", "block": 3, "seq": 8, "task": "R4", "cond": "RG", "agent_id": "ac43d5ca3549d45fa"}
+{"trial": "b3-09", "block": 3, "seq": 9, "task": "T1", "cond": "LSP", "agent_id": "a7950ba1c8b20c642"}
+{"trial": "b3-10", "block": 3, "seq": 10, "task": "R4", "cond": "LSP", "agent_id": "ae27279d44bc99841"}
+{"trial": "b3-11", "block": 3, "seq": 11, "task": "D4", "cond": "LSP", "agent_id": "adf63d69735db1f8e"}
+{"trial": "b3-12", "block": 3, "seq": 12, "task": "R3", "cond": "RG", "agent_id": "ad5897de5d82f08a0"}
+{"trial": "b3-13", "block": 3, "seq": 13, "task": "R2", "cond": "LSP", "agent_id": "a486a98c0197b7a69"}
+{"trial": "b3-14", "block": 3, "seq": 14, "task": "R2", "cond": "RG", "agent_id": "a475cb30223ad4eb6"}
+{"trial": "b3-15", "block": 3, "seq": 15, "task": "D2", "cond": "RG", "agent_id": "aa24c5e6064704c18"}
+{"trial": "b3-16", "block": 3, "seq": 16, "task": "R1", "cond": "LSP", "agent_id": "abd0c888328957094"}
+{"trial": "b3-17", "block": 3, "seq": 17, "task": "T2", "cond": "RG", "agent_id": "a001326ed46713934"}
+{"trial": "b3-18", "block": 3, "seq": 18, "task": "D3", "cond": "LSP", "agent_id": "af525615b7792c486"}
+{"trial": "b3-19", "block": 3, "seq": 19, "task": "R3", "cond": "LSP", "agent_id": "ad99ef100de2d3a92"}
+{"trial": "b3-20", "block": 3, "seq": 20, "task": "D2", "cond": "LSP", "agent_id": "ad27f18545da9895d"}
+{"trial": "b3-21", "block": 3, "seq": 21, "task": "T2", "cond": "LSP", "agent_id": "a44b886c41a6a1a9d"}
+{"trial": "b3-22", "block": 3, "seq": 22, "task": "T4", "cond": "LSP", "agent_id": "acb69a686ba38fcd5"}
+{"trial": "b3-23", "block": 3, "seq": 23, "task": "T3", "cond": "LSP", "agent_id": "adfb1d4ecc0863cff"}
+{"trial": "b3-24", "block": 3, "seq": 24, "task": "D3", "cond": "RG", "agent_id": "a5e7161fac71b1409"}
+{"trial": "b4-01", "block": 4, "seq": 1, "task": "T2", "cond": "LSP", "agent_id": "adc87516db9b4e29d"}
+{"trial": "b4-02", "block": 4, "seq": 2, "task": "R2", "cond": "LSP", "agent_id": "a46e6f2494886ff71"}
+{"trial": "b4-03", "block": 4, "seq": 3, "task": "R4", "cond": "LSP", "agent_id": "a5e663fa32663b89a"}
+{"trial": "b4-04", "block": 4, "seq": 4, "task": "D3", "cond": "LSP", "agent_id": "a74d47470c64d3492"}
+{"trial": "b4-05", "block": 4, "seq": 5, "task": "T3", "cond": "LSP", "agent_id": "a871335ddae8e50c5"}
+{"trial": "b4-06", "block": 4, "seq": 6, "task": "D4", "cond": "RG", "agent_id": "acf9616c1379b4a27"}
+{"trial": "b4-07", "block": 4, "seq": 7, "task": "R1", "cond": "LSP", "agent_id": "a6194224d926fceb7"}
+{"trial": "b4-08", "block": 4, "seq": 8, "task": "T4", "cond": "LSP", "agent_id": "a364686f5c73c9d1c"}
+{"trial": "b4-09", "block": 4, "seq": 9, "task": "D2", "cond": "LSP", "agent_id": "ad4c0274067242c6e"}
+{"trial": "b4-10", "block": 4, "seq": 10, "task": "T4", "cond": "RG", "agent_id": "a4efad91626865b83"}
+{"trial": "b4-11", "block": 4, "seq": 11, "task": "T1", "cond": "RG", "agent_id": "ad02e213ba06e5477"}
+{"trial": "b4-12", "block": 4, "seq": 12, "task": "R3", "cond": "LSP", "agent_id": "a1c994af90a865da2"}
+{"trial": "b4-13", "block": 4, "seq": 13, "task": "T2", "cond": "RG", "agent_id": "a144cebb5883e4362"}
+{"trial": "b4-14", "block": 4, "seq": 14, "task": "T1", "cond": "LSP", "agent_id": "a2063773e127a414b"}
+{"trial": "b4-15", "block": 4, "seq": 15, "task": "R4", "cond": "RG", "agent_id": "a0dab6024843aeafa"}
+{"trial": "b4-16", "block": 4, "seq": 16, "task": "R1", "cond": "RG", "agent_id": "a3e217ec74270bdea"}
+{"trial": "b4-17", "block": 4, "seq": 17, "task": "R3", "cond": "RG", "agent_id": "a2e337b87f6e24745"}
+{"trial": "b4-18", "block": 4, "seq": 18, "task": "R2", "cond": "RG", "agent_id": "aad590ba95c708ab5"}
+{"trial": "b4-19", "block": 4, "seq": 19, "task": "D1", "cond": "RG", "agent_id": "a70316b5ea71e9dab"}
+{"trial": "b4-20", "block": 4, "seq": 20, "task": "D4", "cond": "LSP", "agent_id": "a79a1574ce78d3d1d"}
+{"trial": "b4-21", "block": 4, "seq": 21, "task": "D3", "cond": "RG", "agent_id": "adb6dd7316592a2fb"}
+{"trial": "b4-22", "block": 4, "seq": 22, "task": "D2", "cond": "RG", "agent_id": "a874c6084930e8e14"}
+{"trial": "b4-23", "block": 4, "seq": 23, "task": "D1", "cond": "LSP", "agent_id": "a65a8367704288200"}
+{"trial": "b4-24", "block": 4, "seq": 24, "task": "T3", "cond": "RG", "agent_id": "ad8abd3ccc24c0475"}

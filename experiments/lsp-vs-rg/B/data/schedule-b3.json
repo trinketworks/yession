@@ -1,0 +1,170 @@
+[
+ {
+  "trial": "b3-01",
+  "block": 3,
+  "seq": 1,
+  "task": "T3",
+  "cond": "RG"
+ },
+ {
+  "trial": "b3-02",
+  "block": 3,
+  "seq": 2,
+  "task": "R1",
+  "cond": "RG"
+ },
+ {
+  "trial": "b3-03",
+  "block": 3,
+  "seq": 3,
+  "task": "D4",
+  "cond": "RG"
+ },
+ {
+  "trial": "b3-04",
+  "block": 3,
+  "seq": 4,
+  "task": "T4",
+  "cond": "RG"
+ },
+ {
+  "trial": "b3-05",
+  "block": 3,
+  "seq": 5,
+  "task": "T1",
+  "cond": "RG"
+ },
+ {
+  "trial": "b3-06",
+  "block": 3,
+  "seq": 6,
+  "task": "D1",
+  "cond": "RG"
+ },
+ {
+  "trial": "b3-07",
+  "block": 3,
+  "seq": 7,
+  "task": "D1",
+  "cond": "LSP"
+ },
+ {
+  "trial": "b3-08",
+  "block": 3,
+  "seq": 8,
+  "task": "R4",
+  "cond": "RG"
+ },
+ {
+  "trial": "b3-09",
+  "block": 3,
+  "seq": 9,
+  "task": "T1",
+  "cond": "LSP"
+ },
+ {
+  "trial": "b3-10",
+  "block": 3,
+  "seq": 10,
+  "task": "R4",
+  "cond": "LSP"
+ },
+ {
+  "trial": "b3-11",
+  "block": 3,
+  "seq": 11,
+  "task": "D4",
+  "cond": "LSP"
+ },
+ {
+  "trial": "b3-12",
+  "block": 3,
+  "seq": 12,
+  "task": "R3",
+  "cond": "RG"
+ },
+ {
+  "trial": "b3-13",
+  "block": 3,
+  "seq": 13,
+  "task": "R2",
+  "cond": "LSP"
+ },
+ {
+  "trial": "b3-14",
+  "block": 3,
+  "seq": 14,
+  "task": "R2",
+  "cond": "RG"
+ },
+ {
+  "trial": "b3-15",
+  "block": 3,
+  "seq": 15,
+  "task": "D2",
+  "cond": "RG"
+ },
+ {
+  "trial": "b3-16",
+  "block": 3,
+  "seq": 16,
+  "task": "R1",
+  "cond": "LSP"
+ },
+ {
+  "trial": "b3-17",
+  "block": 3,
+  "seq": 17,
+  "task": "T2",
+  "cond": "RG"
+ },
+ {
+  "trial": "b3-18",
+  "block": 3,
+  "seq": 18,
+  "task": "D3",
+  "cond": "LSP"
+ },
+ {
+  "trial": "b3-19",
+  "block": 3,
+  "seq": 19,
+  "task": "R3",
+  "cond": "LSP"
+ },
+ {
+  "trial": "b3-20",
+  "block": 3,
+  "seq": 20,
+  "task": "D2",
+  "cond": "LSP"
+ },
+ {
+  "trial": "b3-21",
+  "block": 3,
+  "seq": 21,
+  "task": "T2",
+  "cond": "LSP"
+ },
+ {
+  "trial": "b3-22",
+  "block": 3,
+  "seq": 22,
+  "task": "T4",
+  "cond": "LSP"
+ },
+ {
+  "trial": "b3-23",
+  "block": 3,
+  "seq": 23,
+  "task": "T3",
+  "cond": "LSP"
+ },
+ {
+  "trial": "b3-24",
+  "block": 3,
+  "seq": 24,
+  "task": "D3",
+  "cond": "RG"
+ }
+]
