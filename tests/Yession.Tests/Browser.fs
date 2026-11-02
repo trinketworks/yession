@@ -2678,6 +2678,8 @@ let private commandChipHolds (page: IPage) : Async<unit> =
         do! waitVisible "the call's chip in the chat" page callChip
         let! revealed = Probe.ask page Yession.App.Probes.reveal (callChip, "center")
         Expect.isTrue revealed "the call's chip is there to bring into view"
+        // Measured while the page still animates, the chip read up to 6px off where it settles.
+        do! Probe.settled page
         let! before = rectOf callChip
         do! foldHarness page [
                 401L,
@@ -2694,6 +2696,7 @@ let private commandChipHolds (page: IPage) : Async<unit> =
                       Yession.Domain.Terminals.TerminalBlockStarted.ToolUseId = Some call } ]
         do! waitVisible "the block's chip in the chat, in place of the call's" page blockChip
         do! waitAbsent "the call's own chip to be gone" page callChip
+        do! Probe.settled page
         let! after = rectOf blockChip
         Expect.equal after before "the block's chip is the call's chip's box, not one moved below it"
     }
