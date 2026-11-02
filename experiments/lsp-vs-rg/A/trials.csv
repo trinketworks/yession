@@ -94,3 +94,4 @@ b4-13-R3-RG,4,13,R3,REFERENCES,RG,0,15.8,3,60171,0,0,"","src/Yession.Peer/Peer.f
 b4-14-T1-RG,4,14,T1,TYPE-DRIVEN,RG,1,16.0,4,52496,0,0,"","Map<string, string list>"
 b4-18-D4-LSP,4,18,D4,DEFINITION,LSP,1,16.4,3,51353,2,1,"","src/Yession.App/Pending.fs:28"
 b4-24-D1-RG,4,24,D1,DEFINITION,RG,1,17.8,2,51395,0,0,"","src/Yession.Domain/Clock.fs:19"
+b4-22-R4-LSP,4,22,R4,REFERENCES,LSP,1,26.6,2,51744,1,1,"","src/Yession.App/Client.fs, app/browser/Browser.fs, src/Yession.Peer/Peer.fs, tests/Yession.Tests/Resilience.fs, tests/Yession.Tests/Support.fs, tests/Yession.Tests/TranscriptHttp.fs"
