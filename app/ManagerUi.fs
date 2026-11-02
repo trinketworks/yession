@@ -44,9 +44,17 @@ module private Col =
     /// ids were set in whatever monospace a box happened to have, and the switch to a shipped
     /// face made them 6px too wide for it. The first thing to go on a phone.
     let id = "w-[210px] phone:hidden"
-    /// The row's attention mark (`Style.recordMarkCell`): 32px, the mark on the page's rail
-    /// and the name 32px in, at every width.
+    /// The row's attention mark (`Style.recordLeadingCell`): 32px, the mark on the page's rail
+    /// at every width.
     let mark = "w-8"
+    /// The row's disclosure (`Style.recordChevronPress`): a thumb's 44px, right after `mark`,
+    /// so the two sit together on the row's LEADING edge and the name starts 76px in, at every
+    /// width — the columns between the name and this one all yield on a phone (`id`, `status`,
+    /// `created`), but this one never does, which is the whole point of giving the press a
+    /// column at the row's own rail rather than hiding it behind whichever columns a phone
+    /// happens to keep. Leading, not trailing: a chevron at a row's far edge reads as "this
+    /// opens a screen"; one beside the mark it ranks, turning in place, reads as "this unfolds".
+    let chevron = "w-11"
     /// The session's state in words, as a column of its own on a wide screen, so every row's
     /// state starts on one rail and a scan down the column reads what the marks beside the
     /// names only rank. Wide enough for the longest state word (`failed to start`) and some
@@ -70,11 +78,6 @@ module private Col =
     /// archive icon used to take on every row. Withdraw is bare (docs/visual-design.md,
     /// Hierarchy of controls), a word that fits in 100px with the cell's 16px gutter.
     let rail = "w-[100px]"
-    /// The row's disclosure (`Style.recordChevronPress`): a thumb's 44px, LAST, so it is the
-    /// table's own trailing edge at every width — the columns between it and the name all
-    /// yield on a phone (`id`, `status`, `created`), but this one never does, which is the
-    /// whole point of moving the press here from the mark beside the name.
-    let chevron = "w-11"
 
 /// The session's state, and beside it what the session says about ITSELF: the wide screen's
 /// status column (`Col.status`). A phone reads the same words in the row's unfolded lines
@@ -86,7 +89,7 @@ module private Col =
 /// something to press beside the bare verbs in the same row.
 ///
 /// Running and stopped are the exception: this page's own roster already says "running" by the
-/// row's own spin mark (`recordMarkCell`, at every width) and "stopped" by nothing under way at
+/// row's own spin mark (`recordLeadingCell`, at every width) and "stopped" by nothing under way at
 /// all, so the word here carries no second mark of its own — plain text is unambiguous and a
 /// mark beside it would only repeat what the rail already drew. Every other state here still
 /// leads with one, because it is the only place that state is said at this width: `starting` is
@@ -273,19 +276,23 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
 /// column. The row leads with its attention mark, so it reads mark → name → state.
 ///
 /// At rest a row is ONE line at every width, and the same height whatever its state: the
-/// mark on the page's rail (`Col.mark`), then the name; a wide screen adds the state in words
-/// as a column of its own (`Col.status`), so every row's state starts on one rail. The
-/// table is fixed-layout (`Col`) and each text cell clips rather than wraps. Rows that jump
-/// as processes start and stop make a list you cannot keep your place in.
+/// mark on the page's rail (`Col.mark`), then the chevron right after it (`Col.chevron`), then
+/// the name; a wide screen adds the state in words as a column of its own (`Col.status`), so
+/// every row's state starts on one rail. The table is fixed-layout (`Col`) and each text cell
+/// clips rather than wraps. Rows that jump as processes start and stop make a list you cannot
+/// keep your place in.
 ///
-/// The chevron is the press. It lives in its own column, LAST (`Col.chevron`), so it is the
-/// row's trailing edge at every width — the columns between it and the name yield on a phone,
-/// this one never does. It UNFOLDS the row, under the name: one line per thing the row says
-/// (`rowSays`), each mark under the row's mark and each word on the name's rail, and then
-/// the verbs. The first line's mark IS the row's own attention mark, riding down to it on a
-/// faint track (`Style.recordMarkRider`), so what the mark ranked first is never drawn twice —
-/// that mark, beside the name, carries attention's colour alone now and answers to no press of
-/// its own. The server always renders a row folded; which row is open is the page's own state
+/// The chevron is the press. It lives in its own column, right after the mark — the row's
+/// LEADING edge, not its trailing one, at every width: the columns after the name yield on a
+/// phone (`id`, `status`, `created`), the chevron never does. It UNFOLDS the row, under the
+/// name: one line per thing the row says (`rowSays`), each mark under the row's mark and each
+/// word on the name's rail, and then the verbs. The first line's mark IS the row's own attention
+/// mark, riding down to it on a faint track (`Style.recordMarkRider`), so what the mark ranked
+/// first is never drawn twice — that mark, beside the chevron, carries attention's colour alone
+/// now and answers to no press of its own. Mark and chevron share one vertical rule
+/// (`Style.recordLeadingCell`) so a folded row's dot and chevron sit on exactly the name's own
+/// line rather than drifting toward the middle of whatever the row's tallest cell turns out to
+/// be. The server always renders a row folded; which row is open is the page's own state
 /// (`ManagerPage.fs`), carried across every frame the rows stream swaps in.
 ///
 /// The id is stated ONCE. An unnamed session's name IS its id (`SessionRecord.isNamed`), so
@@ -327,8 +334,12 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
     let markName = sprintf "%s: %s" name first
     html $"""
         <tr class="{Style.tableRow}" data-session="{id}">
-          <td class="{Style.recordMarkCell} {Col.mark}">
+          <td class="{Style.recordLeadingCell} {Col.mark}">
             <span class="{Style.recordMarkSeatWrap}" aria-hidden="true"><span class="{Style.recordMarkSeat}"></span><span class="{Style.recordMarkTrack}"></span><span class="{Style.recordMarkRider}">{Icon.attention attention}</span></span>
+          </td>
+          <td class="{Style.recordLeadingCell} {Col.chevron}">
+            <button type="button" class="{Style.recordChevronPress}" data-row-mark="{id}" aria-expanded="false"
+                    aria-controls="{detailId}" aria-label="{markName}"><span class="{Style.recordChevronMark}">{Icon.right}</span></button>
           </td>
           <td class="{Style.tableCell}" title="{name}">
             {nameLine}
@@ -344,10 +355,6 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
           <td class="{Style.tableCell} {Style.small} truncate {Col.status}">{stateLine view}</td>
           <td class="{Style.tableCell} {Style.monoFaint} truncate {Col.yields}">{idCell}</td>
           <td class="{Style.tableCell} {Style.monoFaint} tabular-nums truncate {Col.yields}">{createdView view.Record.CreatedAt}</td>
-          <td class="{Style.tableCell} {Col.chevron}">
-            <button type="button" class="{Style.recordChevronPress}" data-row-mark="{id}" aria-expanded="false"
-                    aria-controls="{detailId}" aria-label="{markName}"><span class="{Style.recordChevronMark}">{Icon.right}</span></button>
-          </td>
         </tr>"""
 
 /// One filter chip, wearing the COUNT of what it filters. A real `<a>`, because the filter
@@ -464,13 +471,13 @@ let private tableTemplate
             <thead class="phone:hidden">
               <tr class="{Style.tableRule}">
                 <th scope="col" class="{Col.mark}"><span class="sr-only">attention</span></th>
+                <th scope="col" class="{Col.chevron}"><span class="sr-only">expand</span></th>
                 <th scope="col" class="{Style.tableHead}">name</th>
                 <th scope="col" class="{Style.tableHead} {Col.status}">status</th>
                 <th scope="col" class="{Style.tableHead} {Col.id}">id</th>
                 <th scope="col" class="{Style.tableHead} {Col.created}" aria-sort="{sortedBy}">
                   <a class="{Style.sortHeader}" href="{sortHref}" data-filter="sort">created {sortMark}</a>
                 </th>
-                <th scope="col" class="{Col.chevron}"><span class="sr-only">expand</span></th>
               </tr>
             </thead>
             <tbody>{rows}</tbody>
