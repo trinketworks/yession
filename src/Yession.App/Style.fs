@@ -710,51 +710,45 @@ module Style =
     /// a list you cannot keep your place in, so this clips rather than wraps.
     let recordRowNameText = "block truncate"
 
-    /// A roster row's LEADING rail, shared by its two leading columns — the attention mark
-    /// (`ManagerUi.Col.mark`) and, right after it, the chevron that unfolds the row
-    /// (`ManagerUi.Col.chevron`) — so the two sit on one top-aligned line together rather than
-    /// each settling to a different baseline of its own. Every row's mark and chevron start on
-    /// the page's rail, where the chips and section heads do too, and every name starts the
-    /// same distance in: one 32px column and one 44px column.
+    /// Top-aligned padding for a roster row's two short cells — the attention mark
+    /// (`ManagerUi.Col.mark`) and the chevron that unfolds the row (`ManagerUi.Col.chevron`) —
+    /// so each lands on exactly the name's own line rather than drifting toward the middle of
+    /// whatever the row's tallest cell turns out to be.
     ///
     /// Top, not baseline: a cell this short (`recordMarkSeatWrap`'s 44px, or the chevron
     /// button's own 44px) centred by `align-baseline` would float to the middle of whatever the
     /// row's TALLEST cell turns out to be, which drifts whenever a neighbour's padding does —
-    /// `align-top` instead pins each to ITS OWN padding, 2px, so the two agree with each other
-    /// and with the name's first line without needing to match the row's full height. 2px above
-    /// and below a 44px target makes 48px, the same height `Style.tableCell`'s py-3 makes for
-    /// the name's 24px line (12 + 24 + 12) — so a folded row's three leading cells, each sized
-    /// differently, still land on one line. And an UNFOLDED row keeps the mark and chevron on
-    /// the name's own line rather than sliding them toward the middle of everything it unfolds to.
+    /// `align-top` instead pins each to ITS OWN padding, 2px, so it agrees with the name's first
+    /// line without needing to match the row's full height. 2px above and below a 44px target
+    /// makes 48px, the same height `Style.tableCell`'s py-3 makes for the name's 24px line
+    /// (12 + 24 + 12) — so a folded row's leading mark and trailing chevron, sized differently,
+    /// still land on the name's own line. And an UNFOLDED row keeps them there rather than
+    /// sliding them toward the middle of everything it unfolds to.
     let recordLeadingCell = "py-0.5 align-top"
 
-    /// The mark's own box: a thumb's 44px, grown LEFT into the page's gutter rather than
-    /// right into the chevron beside it, so the mark stays on the rail and the chevron's own
-    /// target is untouched. No press of its own — the row's disclosure is `recordChevronPress`,
-    /// in the column right after it — so this is attention's colour alone, not a control:
-    /// `aria-hidden` at the call site, same as the dot it wraps.
+    /// The mark's own box: a thumb's 44px, grown LEFT into the page's gutter, so the mark sits
+    /// on the page's own rail (`ManagerUi.Col.mark`) at every width. No press of its own — the
+    /// row's disclosure is `recordChevronPress`, in its own column at the row's trailing edge —
+    /// so this is attention's colour alone, not a control: `aria-hidden` at the call site, same
+    /// as the dot it wraps.
     let recordMarkSeatWrap = "relative -ml-3 w-11 h-11 pl-3 flex items-center"
 
-    /// The row's disclosure: a thumb's whole 44px, in its own column right after the mark
-    /// (`ManagerUi.Col.chevron`) — the LEADING edge, not the trailing one, because a chevron at
-    /// a row's trailing edge reads as "this opens another screen" (the convention every list
-    /// that drills into a detail view uses), while one at the leading edge, turning in place, is
-    /// the ordinary shape of "this unfolds" (an accordion header, a file tree's twist). The mark
-    /// beside it is attention's colour alone now (`recordMarkSeatWrap`), and the glyph that used
-    /// to sit at the row's trailing edge saying the name's link leaves is gone, not replaced;
-    /// this is the row's one press. Never yields on a phone, unlike the columns after the name
-    /// (`id`, `status`, `created`) — the one thing a reader must always be able to reach. It
-    /// unfolds the row (`aria-expanded`); no ground of its own, for the same reason the mark
-    /// never wore one — the unfolded lines under it already say the row is open.
+    /// The row's disclosure: a thumb's whole 44px, in its own column at the row's TRAILING edge
+    /// (`ManagerUi.Col.chevron`) — the table's own right rail at every width, where a disclosure
+    /// is looked for. Never yields on a phone, unlike the columns before it (`id`, `status`,
+    /// `created`) — the one thing a reader must always be able to reach. It unfolds the row
+    /// (`aria-expanded`); no ground of its own, for the same reason the mark never wore one —
+    /// the unfolded lines under it already say the row is open.
     let recordChevronPress =
         cls [ "w-11 h-11 flex items-center justify-center bg-transparent border-0 cursor-pointer"
               "text-ink-faint hover:text-ink transition-colors"; focusRing ]
 
-    /// The chevron itself: `Icon.right`, the fold's own disclosure-over-one mark (never
-    /// `rights`, `caret` or a text glyph — principle 5, one mark per job), turned by the same
-    /// `data-expanded` the mark's slide reads below, so the two always agree without a second
-    /// state to drift from the first.
-    let recordChevronMark = cls [ "block"; Motion.turn; "[[data-expanded]_&]:rotate-90" ]
+    /// The chevron itself: `Icon.caret`, the fold's own disclosure-over-one mark (never
+    /// `right`, `rights`, `down` or a text glyph — principle 5, one mark per job; `Icon.down`
+    /// is the jump-to-end arrow, never a disclosure). Pointing down at rest, the ordinary shape
+    /// of "this unfolds beneath", and turned to point up by the same `data-expanded` the mark's
+    /// slide reads below, so the two always agree without a second state to drift from the first.
+    let recordChevronMark = cls [ "block"; Motion.turn; "[[data-expanded]_&]:rotate-180" ]
 
     /// The row's mark, which RIDES when the row unfolds: down a track to the first unfolded
     /// line, which is the one it ranks first, so that line says its word with no mark of its
