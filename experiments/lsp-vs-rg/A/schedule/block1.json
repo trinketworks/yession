@@ -1,0 +1,222 @@
+{
+ "block": 1,
+ "seed": 20261103,
+ "trials": [
+  {
+   "id": "b1-01-R2-LSP",
+   "block": 1,
+   "order": 1,
+   "task": "R2",
+   "cls": "REFERENCES",
+   "cond": "LSP",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read, PLUS a warm F# language server (fsautocomplete, compiler-accurate, each call < 1s), called through Bash:\n  /tmp/lspq/b1-01-R2-LSP definition <file> <line> <symbol-or-column>\n  /tmp/lspq/b1-01-R2-LSP references <file> <line> <symbol-or-column>   (all uses of that exact symbol, workspace-wide)\n  /tmp/lspq/b1-01-R2-LSP hover <file> <line> <symbol-or-column>        (inferred type/signature)\n  /tmp/lspq/b1-01-R2-LSP symbols <name>                                (find declarations by name)\nFiles repo-relative, line and column 1-based; a symbol name finds its first whole-word match on the line, so pass a column when the name occurs twice. Use whichever tools you judge best.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: List every .fs file that references the TYPE `Box` declared at src/Yession.App/Probes.fs:29 (the type only: not the `Box` module, not record fields named `Box`, not other types named `Box`). Include Probes.fs itself if it uses the type beyond its declaration. Answer format: comma-separated repo-relative paths.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-02-D3-RG",
+   "block": 1,
+   "order": 2,
+   "task": "D3",
+   "cls": "DEFINITION",
+   "cond": "RG",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read only. Do not use any language server.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: In tests/Yession.Tests/Support.fs line 760, the parameter annotation `(runner: Runner)` names a TYPE `Runner`. Which file and line declares the type that this `Runner` name resolves to (the nearest declaration the compiler binds, even if it is an abbreviation)? Answer format: `path:line`, repo-relative.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-03-R4-RG",
+   "block": 1,
+   "order": 3,
+   "task": "R4",
+   "cls": "REFERENCES",
+   "cond": "RG",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read only. Do not use any language server.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: List every .fs file that references the TYPE `Connection` declared at src/Yession.App/Client.fs:79 (the type only: not the `Connection` module, not record fields named `Connection`, not other types named `Connection`). Include Client.fs itself if it uses the type beyond its declaration. Answer format: comma-separated repo-relative paths.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-04-T3-LSP",
+   "block": 1,
+   "order": 4,
+   "task": "T3",
+   "cls": "TYPE-DRIVEN",
+   "cond": "LSP",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read, PLUS a warm F# language server (fsautocomplete, compiler-accurate, each call < 1s), called through Bash:\n  /tmp/lspq/b1-04-T3-LSP definition <file> <line> <symbol-or-column>\n  /tmp/lspq/b1-04-T3-LSP references <file> <line> <symbol-or-column>   (all uses of that exact symbol, workspace-wide)\n  /tmp/lspq/b1-04-T3-LSP hover <file> <line> <symbol-or-column>        (inferred type/signature)\n  /tmp/lspq/b1-04-T3-LSP symbols <name>                                (find declarations by name)\nFiles repo-relative, line and column 1-based; a symbol name finds its first whole-word match on the line, so pass a column when the name occurs twice. Use whichever tools you judge best.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: What is the inferred type of the binding `asked` at app/RepoSandboxes.fs:395? Answer format: an F# type, e.g. `Map<int, string option>`.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-05-D2-LSP",
+   "block": 1,
+   "order": 5,
+   "task": "D2",
+   "cls": "DEFINITION",
+   "cond": "LSP",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read, PLUS a warm F# language server (fsautocomplete, compiler-accurate, each call < 1s), called through Bash:\n  /tmp/lspq/b1-05-D2-LSP definition <file> <line> <symbol-or-column>\n  /tmp/lspq/b1-05-D2-LSP references <file> <line> <symbol-or-column>   (all uses of that exact symbol, workspace-wide)\n  /tmp/lspq/b1-05-D2-LSP hover <file> <line> <symbol-or-column>        (inferred type/signature)\n  /tmp/lspq/b1-05-D2-LSP symbols <name>                                (find declarations by name)\nFiles repo-relative, line and column 1-based; a symbol name finds its first whole-word match on the line, so pass a column when the name occurs twice. Use whichever tools you judge best.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: In src/Yession.App/Model.fs line 1772, the record field annotation `Attribution.State` names a TYPE `State`. Which file and line declares that type? Answer format: `path:line`, repo-relative.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-06-T2-LSP",
+   "block": 1,
+   "order": 6,
+   "task": "T2",
+   "cls": "TYPE-DRIVEN",
+   "cond": "LSP",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read, PLUS a warm F# language server (fsautocomplete, compiler-accurate, each call < 1s), called through Bash:\n  /tmp/lspq/b1-06-T2-LSP definition <file> <line> <symbol-or-column>\n  /tmp/lspq/b1-06-T2-LSP references <file> <line> <symbol-or-column>   (all uses of that exact symbol, workspace-wide)\n  /tmp/lspq/b1-06-T2-LSP hover <file> <line> <symbol-or-column>        (inferred type/signature)\n  /tmp/lspq/b1-06-T2-LSP symbols <name>                                (find declarations by name)\nFiles repo-relative, line and column 1-based; a symbol name finds its first whole-word match on the line, so pass a column when the name occurs twice. Use whichever tools you judge best.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: What is the inferred type of the binding `updated` at app/SessionMain.fs:1208? Answer format: an F# type, e.g. `Map<int, string option>`.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-07-T3-RG",
+   "block": 1,
+   "order": 7,
+   "task": "T3",
+   "cls": "TYPE-DRIVEN",
+   "cond": "RG",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read only. Do not use any language server.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: What is the inferred type of the binding `asked` at app/RepoSandboxes.fs:395? Answer format: an F# type, e.g. `Map<int, string option>`.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-08-R3-LSP",
+   "block": 1,
+   "order": 8,
+   "task": "R3",
+   "cls": "REFERENCES",
+   "cond": "LSP",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read, PLUS a warm F# language server (fsautocomplete, compiler-accurate, each call < 1s), called through Bash:\n  /tmp/lspq/b1-08-R3-LSP definition <file> <line> <symbol-or-column>\n  /tmp/lspq/b1-08-R3-LSP references <file> <line> <symbol-or-column>   (all uses of that exact symbol, workspace-wide)\n  /tmp/lspq/b1-08-R3-LSP hover <file> <line> <symbol-or-column>        (inferred type/signature)\n  /tmp/lspq/b1-08-R3-LSP symbols <name>                                (find declarations by name)\nFiles repo-relative, line and column 1-based; a symbol name finds its first whole-word match on the line, so pass a column when the name occurs twice. Use whichever tools you judge best.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: List every .fs file that references the generic TYPE `Runner<'model, 'msg>` declared at src/Yession.Peer/Peer.fs:53 (the type only: not record fields named `Runner`, not other types named `Runner`). Include Peer.fs itself if it uses the type beyond its declaration. Answer format: comma-separated repo-relative paths.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-09-D4-RG",
+   "block": 1,
+   "order": 9,
+   "task": "D4",
+   "cls": "DEFINITION",
+   "cond": "RG",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read only. Do not use any language server.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: In src/Yession.App/Model.fs line 515, the field annotation `Pending : Pending<ConnectionExpectation>` names a generic TYPE `Pending` after the colon. Which file and line declares that type? Answer format: `path:line`, repo-relative.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-10-D2-RG",
+   "block": 1,
+   "order": 10,
+   "task": "D2",
+   "cls": "DEFINITION",
+   "cond": "RG",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read only. Do not use any language server.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: In src/Yession.App/Model.fs line 1772, the record field annotation `Attribution.State` names a TYPE `State`. Which file and line declares that type? Answer format: `path:line`, repo-relative.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-11-R1-RG",
+   "block": 1,
+   "order": 11,
+   "task": "R1",
+   "cls": "REFERENCES",
+   "cond": "RG",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read only. Do not use any language server.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: List every .fs file that references the TYPE `Clock` declared at src/Yession.Domain/Clock.fs:19 (the type only: not the `Clock` module, not record fields named `Clock`, not other types named `Clock`). Include Clock.fs itself if it uses the type beyond its declaration. Answer format: comma-separated repo-relative paths.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-12-T4-LSP",
+   "block": 1,
+   "order": 12,
+   "task": "T4",
+   "cls": "TYPE-DRIVEN",
+   "cond": "LSP",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read, PLUS a warm F# language server (fsautocomplete, compiler-accurate, each call < 1s), called through Bash:\n  /tmp/lspq/b1-12-T4-LSP definition <file> <line> <symbol-or-column>\n  /tmp/lspq/b1-12-T4-LSP references <file> <line> <symbol-or-column>   (all uses of that exact symbol, workspace-wide)\n  /tmp/lspq/b1-12-T4-LSP hover <file> <line> <symbol-or-column>        (inferred type/signature)\n  /tmp/lspq/b1-12-T4-LSP symbols <name>                                (find declarations by name)\nFiles repo-relative, line and column 1-based; a symbol name finds its first whole-word match on the line, so pass a column when the name occurs twice. Use whichever tools you judge best.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: What is the inferred type of the binding `byBytes` at src/Yession.Domain/Agent.fs:511? Answer format: an F# type, e.g. `Map<int, string option>`.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-13-D1-RG",
+   "block": 1,
+   "order": 13,
+   "task": "D1",
+   "cls": "DEFINITION",
+   "cond": "RG",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read only. Do not use any language server.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: In src/Yession.Domain/Sandbox.fs line 469, the parameter annotation `(clock: Clock)` names a TYPE `Clock`. Which file and line declares that type? Answer format: `path:line`, repo-relative.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-14-T2-RG",
+   "block": 1,
+   "order": 14,
+   "task": "T2",
+   "cls": "TYPE-DRIVEN",
+   "cond": "RG",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read only. Do not use any language server.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: What is the inferred type of the binding `updated` at app/SessionMain.fs:1208? Answer format: an F# type, e.g. `Map<int, string option>`.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-15-R4-LSP",
+   "block": 1,
+   "order": 15,
+   "task": "R4",
+   "cls": "REFERENCES",
+   "cond": "LSP",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read, PLUS a warm F# language server (fsautocomplete, compiler-accurate, each call < 1s), called through Bash:\n  /tmp/lspq/b1-15-R4-LSP definition <file> <line> <symbol-or-column>\n  /tmp/lspq/b1-15-R4-LSP references <file> <line> <symbol-or-column>   (all uses of that exact symbol, workspace-wide)\n  /tmp/lspq/b1-15-R4-LSP hover <file> <line> <symbol-or-column>        (inferred type/signature)\n  /tmp/lspq/b1-15-R4-LSP symbols <name>                                (find declarations by name)\nFiles repo-relative, line and column 1-based; a symbol name finds its first whole-word match on the line, so pass a column when the name occurs twice. Use whichever tools you judge best.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: List every .fs file that references the TYPE `Connection` declared at src/Yession.App/Client.fs:79 (the type only: not the `Connection` module, not record fields named `Connection`, not other types named `Connection`). Include Client.fs itself if it uses the type beyond its declaration. Answer format: comma-separated repo-relative paths.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-16-D4-LSP",
+   "block": 1,
+   "order": 16,
+   "task": "D4",
+   "cls": "DEFINITION",
+   "cond": "LSP",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read, PLUS a warm F# language server (fsautocomplete, compiler-accurate, each call < 1s), called through Bash:\n  /tmp/lspq/b1-16-D4-LSP definition <file> <line> <symbol-or-column>\n  /tmp/lspq/b1-16-D4-LSP references <file> <line> <symbol-or-column>   (all uses of that exact symbol, workspace-wide)\n  /tmp/lspq/b1-16-D4-LSP hover <file> <line> <symbol-or-column>        (inferred type/signature)\n  /tmp/lspq/b1-16-D4-LSP symbols <name>                                (find declarations by name)\nFiles repo-relative, line and column 1-based; a symbol name finds its first whole-word match on the line, so pass a column when the name occurs twice. Use whichever tools you judge best.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: In src/Yession.App/Model.fs line 515, the field annotation `Pending : Pending<ConnectionExpectation>` names a generic TYPE `Pending` after the colon. Which file and line declares that type? Answer format: `path:line`, repo-relative.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-17-T4-RG",
+   "block": 1,
+   "order": 17,
+   "task": "T4",
+   "cls": "TYPE-DRIVEN",
+   "cond": "RG",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read only. Do not use any language server.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: What is the inferred type of the binding `byBytes` at src/Yession.Domain/Agent.fs:511? Answer format: an F# type, e.g. `Map<int, string option>`.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-18-D1-LSP",
+   "block": 1,
+   "order": 18,
+   "task": "D1",
+   "cls": "DEFINITION",
+   "cond": "LSP",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read, PLUS a warm F# language server (fsautocomplete, compiler-accurate, each call < 1s), called through Bash:\n  /tmp/lspq/b1-18-D1-LSP definition <file> <line> <symbol-or-column>\n  /tmp/lspq/b1-18-D1-LSP references <file> <line> <symbol-or-column>   (all uses of that exact symbol, workspace-wide)\n  /tmp/lspq/b1-18-D1-LSP hover <file> <line> <symbol-or-column>        (inferred type/signature)\n  /tmp/lspq/b1-18-D1-LSP symbols <name>                                (find declarations by name)\nFiles repo-relative, line and column 1-based; a symbol name finds its first whole-word match on the line, so pass a column when the name occurs twice. Use whichever tools you judge best.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: In src/Yession.Domain/Sandbox.fs line 469, the parameter annotation `(clock: Clock)` names a TYPE `Clock`. Which file and line declares that type? Answer format: `path:line`, repo-relative.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-19-T1-RG",
+   "block": 1,
+   "order": 19,
+   "task": "T1",
+   "cls": "TYPE-DRIVEN",
+   "cond": "RG",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read only. Do not use any language server.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: What is the inferred type of the binding `wrote` at src/Yession.Domain/Cli.fs:384? Answer format: an F# type, e.g. `Map<int, string option>`.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-20-R1-LSP",
+   "block": 1,
+   "order": 20,
+   "task": "R1",
+   "cls": "REFERENCES",
+   "cond": "LSP",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read, PLUS a warm F# language server (fsautocomplete, compiler-accurate, each call < 1s), called through Bash:\n  /tmp/lspq/b1-20-R1-LSP definition <file> <line> <symbol-or-column>\n  /tmp/lspq/b1-20-R1-LSP references <file> <line> <symbol-or-column>   (all uses of that exact symbol, workspace-wide)\n  /tmp/lspq/b1-20-R1-LSP hover <file> <line> <symbol-or-column>        (inferred type/signature)\n  /tmp/lspq/b1-20-R1-LSP symbols <name>                                (find declarations by name)\nFiles repo-relative, line and column 1-based; a symbol name finds its first whole-word match on the line, so pass a column when the name occurs twice. Use whichever tools you judge best.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: List every .fs file that references the TYPE `Clock` declared at src/Yession.Domain/Clock.fs:19 (the type only: not the `Clock` module, not record fields named `Clock`, not other types named `Clock`). Include Clock.fs itself if it uses the type beyond its declaration. Answer format: comma-separated repo-relative paths.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-21-R2-RG",
+   "block": 1,
+   "order": 21,
+   "task": "R2",
+   "cls": "REFERENCES",
+   "cond": "RG",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read only. Do not use any language server.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: List every .fs file that references the TYPE `Box` declared at src/Yession.App/Probes.fs:29 (the type only: not the `Box` module, not record fields named `Box`, not other types named `Box`). Include Probes.fs itself if it uses the type beyond its declaration. Answer format: comma-separated repo-relative paths.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-22-T1-LSP",
+   "block": 1,
+   "order": 22,
+   "task": "T1",
+   "cls": "TYPE-DRIVEN",
+   "cond": "LSP",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read, PLUS a warm F# language server (fsautocomplete, compiler-accurate, each call < 1s), called through Bash:\n  /tmp/lspq/b1-22-T1-LSP definition <file> <line> <symbol-or-column>\n  /tmp/lspq/b1-22-T1-LSP references <file> <line> <symbol-or-column>   (all uses of that exact symbol, workspace-wide)\n  /tmp/lspq/b1-22-T1-LSP hover <file> <line> <symbol-or-column>        (inferred type/signature)\n  /tmp/lspq/b1-22-T1-LSP symbols <name>                                (find declarations by name)\nFiles repo-relative, line and column 1-based; a symbol name finds its first whole-word match on the line, so pass a column when the name occurs twice. Use whichever tools you judge best.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: What is the inferred type of the binding `wrote` at src/Yession.Domain/Cli.fs:384? Answer format: an F# type, e.g. `Map<int, string option>`.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-23-R3-RG",
+   "block": 1,
+   "order": 23,
+   "task": "R3",
+   "cls": "REFERENCES",
+   "cond": "RG",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read only. Do not use any language server.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: List every .fs file that references the generic TYPE `Runner<'model, 'msg>` declared at src/Yession.Peer/Peer.fs:53 (the type only: not record fields named `Runner`, not other types named `Runner`). Include Peer.fs itself if it uses the type beyond its declaration. Answer format: comma-separated repo-relative paths.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  },
+  {
+   "id": "b1-24-D3-LSP",
+   "block": 1,
+   "order": 24,
+   "task": "D3",
+   "cls": "DEFINITION",
+   "cond": "LSP",
+   "prompt": "Answer one navigation question about the F# repo at /home/user/yession (~440 .fs files). Read-only: do not edit or write files, do not build, run tests or run `check`, do not use git. Be quick; stop once confident. Always give rg a path (`rg PATTERN .`); without one it can hang reading stdin.\n\nTools: rg/grep, Grep, Glob and Read, PLUS a warm F# language server (fsautocomplete, compiler-accurate, each call < 1s), called through Bash:\n  /tmp/lspq/b1-24-D3-LSP definition <file> <line> <symbol-or-column>\n  /tmp/lspq/b1-24-D3-LSP references <file> <line> <symbol-or-column>   (all uses of that exact symbol, workspace-wide)\n  /tmp/lspq/b1-24-D3-LSP hover <file> <line> <symbol-or-column>        (inferred type/signature)\n  /tmp/lspq/b1-24-D3-LSP symbols <name>                                (find declarations by name)\nFiles repo-relative, line and column 1-based; a symbol name finds its first whole-word match on the line, so pass a column when the name occurs twice. Use whichever tools you judge best.\nThe repo's AGENTS.md rule \"Finding F# symbols\", verbatim:\n\"\"\"\nNever search for a bare name. F# reuses one identifier for a type, its module, a union case and\nrecord fields. Search for the declaration form, then scope to the owning file:\n\n```\nrg '^\\s*(type|module|let|and)\\s+Foo\\b'\n```\n\nEach `.fsproj` lists `<Compile Include>` in order, and a symbol is declared in its file or an\nearlier one. Text search cannot find an inferred type. Follow the right-hand side to its\ndeclaration, or write the type you expect and let `check` tell you.\n\"\"\"\n\nQuestion: In tests/Yession.Tests/Support.fs line 760, the parameter annotation `(runner: Runner)` names a TYPE `Runner`. Which file and line declares the type that this `Runner` name resolves to (the nearest declaration the compiler binds, even if it is an abbreviation)? Answer format: `path:line`, repo-relative.\n\nEnd your reply with exactly one line: `ANSWER: <answer>`"
+  }
+ ]
+}
