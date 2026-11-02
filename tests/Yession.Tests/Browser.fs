@@ -6215,6 +6215,26 @@ let editorTests =
                 Expect.isTrue whole "the line, its send, and the new stop control all fit the phone at once"
                 return ()
             }
+        // Tapping a queued message is the one way into editing it, and a tap that lands you in
+        // a composer with nothing focused costs a second tap to actually start typing. This is
+        // that tap alone — focus lands in the editor unprompted, caret at the END of what is
+        // already there (where a person resuming an unfinished thought reaches for it), not at
+        // its start.
+        editorCase "opening a queued message focuses the composer, caret at the end" <| fun page ->
+            async {
+                do! Harness.run1 page HarnessPage.state "queue"
+                let one = "#shell " + Sel.hookIs Yession.App.Dom.Hooks.queueOpen "queue-msg-1"
+                do! waitVisible "a queued message's one-line summary" page one
+                do! awaitU (page.ClickAsync one)
+                do! waitVisible "its own editor, in the composer" page "#shell [data-queue-input] .ProseMirror"
+                do! Wait.until "the queued editor to hold focus, unprompted"
+                        (fun () -> Read.focused page "#shell [data-queue-input] .ProseMirror") id
+                // Typed with no click in between: if the caret were anywhere but the end, this
+                // would land mid-word instead of completing the sentence it already holds.
+                do! awaitU (page.Keyboard.TypeAsync ", continued")
+                do! waitOwnText "the caret to have landed at the end, not the start"
+                        page "#shell [data-queue-input] .ProseMirror" "and when that is green, open the PR, continued"
+            }
         // On a phone Send shares its line with the model picker, which holds that line's
         // height whether Send shows or not — so the first character of a draft must move
         // nothing. It used to: Send's row grew from nothing and gained a pad as it came, and

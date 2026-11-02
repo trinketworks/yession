@@ -492,8 +492,17 @@ let create (deps: Deps) : Renderer =
                     | _ -> ""
                 // Who an @ can name, off whatever model is latest at the keystroke.
                 let addressable () = latest |> Option.map ClientModel.addressable |> Option.defaultValue []
-                mountedBodies.[key] <-
-                    (fragment, readOnly, Editor.mountEditor host fragment readOnly reportFocus onSubmit placeholder addressable)
+                let handle = Editor.mountEditor host fragment readOnly reportFocus onSubmit placeholder addressable
+                mountedBodies.[key] <- (fragment, readOnly, handle)
+                // Opening a queued message moves it into the composer already editable
+                // (`readOnly` false) — this mount only happens on that transition (the host
+                // does not persist across Done, so there is nothing later to confuse with a
+                // re-render), so it is the one place that "opened for editing" and "put the
+                // cursor there" can both be satisfied without the view layer reaching into
+                // ProseMirror itself.
+                match fieldOfKey key with
+                | Some (QueueBody _) when not readOnly -> handle.Focus ()
+                | _ -> ()
             match mountedBodies.TryGetValue key with
             | true, (bound, readOnly, handle) when
                 not (System.Object.ReferenceEquals (bound, fragment)) || readOnly <> hostReadOnly host ->

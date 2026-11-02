@@ -203,6 +203,11 @@ module HarnessPage =
     /// whether what it lands on is really the thing ON SCREEN — which only a laid-out page
     /// can answer.
     let freshViewer : PageGlobal<unit -> unit> = PageGlobal.named "__freshViewer"
+    /// Mark every message currently queued as shown, as the catch-up wait does once an entry
+    /// has sat long enough (`ClientModel.timers`'s `queue-shown` wait) — this harness runs no
+    /// timers (see `agentThinks`'s own comment), so the case that opens a queued message for
+    /// editing starts here instead.
+    let queueShown : PageGlobal<unit -> unit> = PageGlobal.named "__queueShown"
     /// Swap the shell to one NAMED state — the camera's switch. Every key above stands for the
     /// question one case asks; this stands for the pictures somebody wants to LOOK at, which
     /// are many more than the cases and have no question each. One key taking a name rather

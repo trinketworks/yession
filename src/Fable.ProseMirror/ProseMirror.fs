@@ -637,6 +637,8 @@ module ProseMirror =
             nodeIsTextblock first && docContentSize first = 0
     [<Emit("$0.hasFocus()")>]
     let viewHasFocus (view: EditorView) : bool = jsNative
+    [<Emit("$0.focus()")>]
+    let viewFocus (view: EditorView) : unit = jsNative
     [<Emit("$0.anchor")>]
     let selAnchor (sel: obj) : int = jsNative
     [<Emit("$0.head")>]

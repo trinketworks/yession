@@ -21,11 +21,14 @@ module Editor =
           Anchor : string      // base64 relative position
           Head : string }      // base64 relative position
 
-    /// A mounted editor: dispose it, and push the current set of remote cursors into it (which
-    /// re-derives the on-screen decorations from their relative positions).
+    /// A mounted editor: dispose it, push the current set of remote cursors into it (which
+    /// re-derives the on-screen decorations from their relative positions), or focus it with
+    /// the caret at the end of its text — opening a queued message for editing wants the
+    /// cursor where a person would resume typing, not at the start of what is already there.
     type EditorHandle =
         { Dispose : unit -> unit
-          PushPresences : RemoteBodyCursor list -> unit }
+          PushPresences : RemoteBodyCursor list -> unit
+          Focus : unit -> unit }
 
     // The attribute and predicate callbacks the block input rules below hand to ProseMirror,
     // which invokes them with the regex match that fired the rule. They used to be JavaScript
@@ -595,4 +598,10 @@ module Editor =
         { Dispose = fun () -> view.destroy ()
           PushPresences =
             fun remotes ->
-                view.dispatch (trSetMeta view.state.tr presenceDecoKey (List.toArray remotes)) }
+                view.dispatch (trSetMeta view.state.tr presenceDecoKey (List.toArray remotes))
+          Focus =
+            fun () ->
+                let tr = view.state.tr
+                let atEnd = docContentSize (trDoc tr)
+                view.dispatch (trScrollIntoView (tr.setSelection (caretAt (trDoc tr) atEnd)))
+                viewFocus view }

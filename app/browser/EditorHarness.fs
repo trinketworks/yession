@@ -1964,6 +1964,8 @@ do
         match TerminalId.create id with
         | Ok terminal -> takeRef terminal
         | Error _ -> ())
+    PageGlobal.set HarnessPage.queueShown (fun () ->
+        model.Synced.Queue |> Map.toList |> List.iter (fun (id, _) -> dispatch (QueueShownMsg id)))
     moreRef <-
         fun _ ->
             dispatch (
