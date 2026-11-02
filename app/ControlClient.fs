@@ -151,21 +151,26 @@ let private postJsonReply (endpoint: ControlEndpoint) (route: ControlRoute) (sec
 /// names the route and the status (policy 403s carry the Manager's reason), and an
 /// unreachable Manager is a value like any other failure. Shared by the secrets and
 /// connections families, whose calls are this and a codec each.
-let private postRoute
+let private postRouteAs
+    (refused: int -> string -> 'e)
+    (failed: string -> 'e)
     (endpoint: ControlEndpoint)
     (secret: string)
     (route: ControlRoute)
     (body: string)
     (decode: string -> Result<'a, string>)
-    : Async<Result<'a, string>> =
+    : Async<Result<'a, 'e>> =
     async {
         try
             let! reply = postJsonReply endpoint route secret body |> Interop.awaitPromise
-            if reply.status = 200 then return decode reply.body
-            else return Error (sprintf "%s refused (%d): %s" (ControlRoute.path route) reply.status reply.body)
+            if reply.status = 200 then return decode reply.body |> Result.mapError failed
+            else return Error (refused reply.status (sprintf "%s refused (%d): %s" (ControlRoute.path route) reply.status reply.body))
         with e ->
-            return Error (sprintf "control unreachable: %s" e.Message)
+            return Error (failed (sprintf "control unreachable: %s" e.Message))
     }
+
+let private postRoute endpoint secret route body decode : Async<Result<'a, string>> =
+    postRouteAs (fun _ said -> said) id endpoint secret route body decode
 
 /// Report whether this session is in use (Plan 11).
 ///
@@ -304,7 +309,7 @@ let connections (endpoint: ControlEndpoint) (secret: string) : SessionConnection
 /// Manager's reason) are values, never exceptions.
 [<RequireQualifiedAccess>]
 type SessionRecords =
-    { Read : RecordId -> Async<Result<StoredRecord option, string>>
+    { Read : RecordId -> Async<Result<StoredRecord option, RecordFailure>>
       /// Replace a record at the revision the caller read (`None`: it found none). `Stale`
       /// means another write landed first: read again, merge, write again.
       Write : RecordId -> int option -> string -> Async<Result<RecordWrite, string>> }
@@ -312,7 +317,9 @@ type SessionRecords =
 let records (endpoint: ControlEndpoint) (secret: string) : SessionRecords =
     { SessionRecords.Read =
         fun target ->
-            postRoute
+            postRouteAs
+                (fun status said -> if status = 403 then RecordFailure.Refused said else RecordFailure.Failed said)
+                RecordFailure.Failed
                 endpoint
                 secret
                 ControlRoute.ReadRecord

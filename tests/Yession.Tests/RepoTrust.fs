@@ -107,7 +107,7 @@ let tests =
                 let trusts, _, _ = trustsOver ()
                 let! _ = trusts.Answer alice repo both git
                 let! read = trusts.Read alice repo
-                Expect.equal (expect read |> Option.map (fun t -> t.Granted)) (Some git) "read back"
+                Expect.equal (expect (Result.mapError RecordFailure.said read) |> Option.map (fun t -> t.Granted)) (Some git) "read back"
             }
 
         testCaseAsync "one person's answer is not another's trust" <|
@@ -115,7 +115,7 @@ let tests =
                 let trusts, _, _ = trustsOver ()
                 let! _ = trusts.Answer alice repo both both
                 let! read = trusts.Read bob repo
-                Expect.equal (expect read) None "bob has not answered"
+                Expect.equal (expect (Result.mapError RecordFailure.said read)) None "bob has not answered"
             }
 
         testCaseAsync "an answer over another session's write keeps both" <|
@@ -126,7 +126,7 @@ let tests =
                     put (RepoTrust.recordOf alice 42L) (RepoTrust.toText (RepoTrust.answer repo git git None)))
                 let! _ = trusts.Answer alice repo (Set.singleton ConnectionRoute.Api) (Set.singleton ConnectionRoute.Api)
                 let! read = trusts.Read alice repo
-                Expect.equal (expect read |> Option.map (fun t -> t.Granted)) (Some both) "both answers kept"
+                Expect.equal (expect (Result.mapError RecordFailure.said read) |> Option.map (fun t -> t.Granted)) (Some both) "both answers kept"
             }
 
         testCaseAsync "a record that does not decode is no trust" <|

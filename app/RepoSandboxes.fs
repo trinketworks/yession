@@ -23,6 +23,7 @@ module Yession.Host.RepoSandboxes
 open Yession.Domain
 open Yession.Domain.Repos
 open Yession.Domain.Sandboxes
+open Yession.Domain.Access
 open Yession.Domain.Agent
 open Yession.Domain.Tools
 open Yession.Domain.Chat
@@ -40,8 +41,8 @@ type private TrustDecision =
     /// Start them, with this credential's act: the person whose trust runs the repo here, or —
     /// for a repo that forwards nobody's GitHub — whoever the fold runs for.
     | RunsWith of CredentialFor
-    /// Hold them, and say why.
-    | Holds of problem: string
+    /// Hold them, and say why — with what refused underneath, where something did.
+    | Holds of problem: string * detail: string option
 
 /// What the last fold made of one repo. `Sandbox = None` is about the FILE itself — it
 /// could not be read — and the distinction matters because those are fixed in different
@@ -51,7 +52,9 @@ type FoldOutcome =
       Sandbox : SandboxRef option
       /// `None` is fine. There is no third state: a declaration either became a sandbox or
       /// has a reason it did not.
-      Problem : string option }
+      Problem : string option
+      /// What refused underneath `Problem`, in its own words, where something did.
+      Detail : string option }
 
 type RepoSandboxes =
     { /// Re-read every checkout and ensure what it declares, on the authority of whoever
@@ -317,7 +320,11 @@ let create
                 match offered, current with
                 | Some person, _ -> return! trusted person
                 | None, Some (Error reason) ->
-                    return Holds (sprintf "waiting for the person whose trust runs %s here: %s" (RepoRef.value repo) reason)
+                    let problem =
+                        match reason with
+                        | RecordFailure.Refused _ -> sprintf "not allowed to check who trusts %s" (RepoRef.value repo)
+                        | RecordFailure.Failed _ -> sprintf "could not check who trusts %s" (RepoRef.value repo)
+                    return Holds (problem, Some (RecordFailure.said reason))
                 | None, _ ->
                     let routes = Set.toList asked
                     if standingAsk told repo <> Some routes then
@@ -331,7 +338,7 @@ let create
                                       RepoTrustAsked.Routes = routes
                                       RepoTrustAsked.Actor = actor
                                       RepoTrustAsked.CausedBy = FoldCause.causeFor repo cause })
-                    return Holds (sprintf "waiting for someone to trust %s" (RepoRef.value repo))
+                    return Holds (sprintf "waiting for someone to trust %s" (RepoRef.value repo), None)
         }
 
     let foldOnce (cause: FoldCause) (onBehalfOf: CredentialFor) : Async<unit> =
@@ -376,7 +383,7 @@ let create
                     let fileProblems =
                         unreadable
                         |> List.map (fun (repo, reason) ->
-                            { Repo = repo; Sandbox = None; Problem = Some reason })
+                            { Repo = repo; Sandbox = None; Problem = Some reason; Detail = None })
                     // What each repo asks for, said when it changes — before anything is
                     // started, so the timeline reads in the order things happened rather
                     // than announcing a set after the sandboxes it describes came up.
@@ -519,7 +526,7 @@ let create
                                   // Nothing starts until somebody here trusts it. The row says
                                   // so, so the answer to "why is my sandbox not running" is in
                                   // the same place as what to do about it.
-                                  | Some (Holds problem) -> return Some { Repo = repo; Sandbox = Some ref; Problem = Some problem }
+                                  | Some (Holds (problem, detail)) -> return Some { Repo = repo; Sandbox = Some ref; Problem = Some problem; Detail = detail }
                                   | decision ->
                                     let credential =
                                         match decision with
@@ -533,7 +540,7 @@ let create
                                             decl
                                     match! run call with
                                     | Error reason ->
-                                        return Some { Repo = repo; Sandbox = Some ref; Problem = Some reason }
+                                        return Some { Repo = repo; Sandbox = Some ref; Problem = Some reason; Detail = None }
                                     | Ok outcome ->
                                         // The gate answers with what happened, and a
                                         // command that ran and failed is not a command that
@@ -547,7 +554,7 @@ let create
                                                 Some (text.Substring 8)
                                             | CommandRan _
                                             | CommandRunning -> None
-                                        return Some { Repo = repo; Sandbox = Some ref; Problem = problem }
+                                        return Some { Repo = repo; Sandbox = Some ref; Problem = problem; Detail = None }
                             })
                         // In PARALLEL, so a repo's sandboxes come up at once rather than one
                         // waiting for the one before it to finish — the `dev` and `gate` of a
@@ -592,6 +599,7 @@ let create
                                           RepoConfigRefused.Repo = outcome.Repo
                                           RepoConfigRefused.Sandbox = outcome.Sandbox
                                           RepoConfigRefused.Reason = reason
+                                          RepoConfigRefused.Detail = outcome.Detail
                                           RepoConfigRefused.Actor = actor
                                           RepoConfigRefused.CausedBy = FoldCause.causeFor outcome.Repo cause })
                     // What the analyzers had to say, each said ONCE: a note already in the log
@@ -737,7 +745,8 @@ let query (current: unit -> RepoSandboxes) : Queries.QueryRegistration =
                             "problem",
                             (match Declarations.whyNotCurrent unread with
                              | Some why -> CellText why
-                             | None -> CellAbsent) ] ]
+                             | None -> CellAbsent)
+                            "detail", CellAbsent ] ]
                 let declarations =
                     folded.Outcomes ()
                     |> List.map (fun outcome ->
@@ -755,6 +764,10 @@ let query (current: unit -> RepoSandboxes) : Queries.QueryRegistration =
                           "problem",
                           (match outcome.Problem with
                            | Some problem -> CellText problem
+                           | None -> CellAbsent)
+                          "detail",
+                          (match outcome.Detail with
+                           | Some detail -> CellText detail
                            | None -> CellAbsent) ])
                 let orphans =
                     folded.Undeclared ()
@@ -765,6 +778,7 @@ let query (current: unit -> RepoSandboxes) : Queries.QueryRegistration =
                            | SessionOwned -> CellAbsent)
                           "sandbox", CellText (SandboxRef.render sandbox)
                           "state", CellText "no longer declared"
-                          "problem", CellAbsent ])
+                          "problem", CellAbsent
+                          "detail", CellAbsent ])
                 return Ok (RowsOf (unread @ declarations @ orphans))
             } }

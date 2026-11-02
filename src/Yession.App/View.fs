@@ -3026,6 +3026,16 @@ module View =
                             let rows = many |> List.map (fun r -> html $"""<li class="{Style.actNoteDetail}">{r}</li>""")
                             [ html $"""<ul class="{Style.actNoteShown}" data-surface-responses>{rows}</ul>""" ]
                     Act.deed act, [], answers @ [ toldRow act ]
+                // What refused underneath, in its own words, only for whoever unfolds it: the line
+                // under the title already says what that means here.
+                | Act.RepoConfigRefused { Repos.RepoConfigRefused.Detail = Some detail } ->
+                    let detailRow =
+                        html $"""
+                            <div class="{Style.actNoteFactRow}" data-act-fact="detail">
+                              <span class="{Style.actNoteFactKey}">{Dom.Text.refusalFactDetail}</span>
+                              <div class="{Style.actNoteFactVal}"><code class="{Style.actNotePath}">{detail}</code></div>
+                            </div>"""
+                    Act.deed act, actNoteParticulars by act, [ detailRow; toldRow act ]
                 | _ -> Act.deed act, actNoteParticulars by act, [ toldRow act ]
             // The fold (`foldArrow`/`foldBody`): the particulars under the title, behind the
             // arrow on the gutter. While the act is still RUNNING the gutter holds the mark

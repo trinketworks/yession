@@ -146,7 +146,7 @@ type RepoTrusts =
     { /// A person's trust in a repository, as their record says now. `Error` is a record that
       /// could not be read — the Manager refused it, or GitHub could not identify the
       /// repository — and every caller reads it as no trust.
-      Read : CredentialOwner -> RepoRef -> Async<Result<RepoTrust option, string>>
+      Read : CredentialOwner -> RepoRef -> Async<Result<RepoTrust option, RecordFailure>>
       /// A person's answer to a card (what it showed, what they ticked), merged into their
       /// record and written. A write that lands first is read and merged again.
       Answer : CredentialOwner -> RepoRef -> Set<ConnectionRoute> -> Set<ConnectionRoute> -> Async<Result<RepoTrust, string>>
@@ -167,7 +167,7 @@ module RepoTrusts =
     let private attempts = 3
 
     let over
-        (read: RecordId -> Async<Result<StoredRecord option, string>>)
+        (read: RecordId -> Async<Result<StoredRecord option, RecordFailure>>)
         (write: RecordId -> int option -> string -> Async<Result<RecordWrite, string>>)
         (identify: CredentialOwner -> RepoRef -> Async<Result<int64, string>>)
         // Whether this owner has a GitHub of their own connected here. Trusting a repo means it
@@ -193,10 +193,10 @@ module RepoTrusts =
         // is written over it at the revision it was read at.
         let decoded (stored: StoredRecord option) : RepoTrust option =
             stored |> Option.bind (fun stored -> RepoTrust.ofText stored.Value |> Result.toOption)
-        let readTrust (owner: CredentialOwner) (repo: RepoRef) : Async<Result<RepoTrust option, string>> =
+        let readTrust (owner: CredentialOwner) (repo: RepoRef) : Async<Result<RepoTrust option, RecordFailure>> =
             async {
                 match! idOf owner repo with
-                | Error reason -> return Error reason
+                | Error reason -> return Error (RecordFailure.Failed reason)
                 | Ok id ->
                     match! read (RepoTrust.recordOf owner id) with
                     | Error reason -> return Error reason
@@ -219,7 +219,7 @@ module RepoTrusts =
                         let rec attempt (left: int) =
                             async {
                                 match! read target with
-                                | Error reason -> return Error reason
+                                | Error failure -> return Error (RecordFailure.said failure)
                                 | Ok stored ->
                                     let next = RepoTrust.answer repo shown ticked (decoded stored)
                                     match! write target (stored |> Option.map (fun s -> s.Revision)) (RepoTrust.toText next) with

@@ -1320,6 +1320,8 @@ module Dom =
         let sandboxFactCheckout = "checkout"
         let sandboxFactForwarding = "forwarding"
         let sandboxFactAdjusted = "adjusted"
+        /// The key on a refusal's fold row holding what refused underneath, in its own words.
+        let refusalFactDetail = "detail"
         /// A repo's capability ask's one fact label (`View.capabilityFacts`).
         let capabilityFactGrants = "grants"
         // A tool call's two blocks (`View.toolCall`): what it was given, what it answered.
