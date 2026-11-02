@@ -42,6 +42,7 @@ type Act =
     | RepoCapabilitiesApproved of RepoCapabilitiesApproved
     | RepoTrustAsked of RepoTrustAsked
     | RepoTrusted of RepoTrusted
+    | RepoAwaitsPerson of RepoAwaitsPerson
     | RepoConfigRefused of RepoConfigRefused
     | RepoConfigWarned of RepoConfigWarned
     | SandboxStarting of WorkSandboxStarting
@@ -92,6 +93,7 @@ module Act =
         | Act.RepoCapabilitiesApproved a -> RepoCapabilitiesApproved.phrase a
         | Act.RepoTrustAsked a -> RepoTrustAsked.phrase a
         | Act.RepoTrusted t -> RepoTrusted.phrase t
+        | Act.RepoAwaitsPerson a -> RepoAwaitsPerson.phrase a
         | Act.RepoConfigRefused r -> RepoConfigRefused.phrase r
         | Act.RepoConfigWarned w -> RepoConfigWarned.phrase w
         | Act.SandboxStarting s -> WorkSandboxStarting.phrase s
@@ -141,6 +143,7 @@ module Act =
         | Act.RepoCapabilitiesApproved _
         | Act.RepoTrustAsked _
         | Act.RepoTrusted _
+        | Act.RepoAwaitsPerson _
         | Act.RepoConfigRefused _
         | Act.RepoConfigWarned _
         | Act.SandboxStopped _
@@ -211,6 +214,7 @@ module Act =
         | Act.RepoCapabilitiesApproved _
         | Act.RepoTrustAsked _
         | Act.RepoTrusted _
+        | Act.RepoAwaitsPerson _
         | Act.SandboxStopped _
         // The diff is not a phrase: a screen draws it as lines, and the agent already holds
         // the texts it sent. The headline's counts are the whole of what prose says.
@@ -254,6 +258,7 @@ module Act =
         | Act.RepoCapabilitiesApproved _ -> "approved", "repo's capabilities", "repos' capabilities"
         | Act.RepoTrustAsked _ -> "waited for trust", "repo", "repos"
         | Act.RepoTrusted _ -> "trusted", "repo", "repos"
+        | Act.RepoAwaitsPerson _ -> "waited for somebody", "repo", "repos"
         | Act.RepoConfigRefused _ -> "refused", "repo config", "repo configs"
         | Act.RepoConfigWarned _ -> "noted", "repo config", "repo configs"
         | Act.SandboxStarting _

@@ -2508,7 +2508,7 @@ module View =
               {askInside track actionsRow}
             </section>"""
 
-    /// A repo waiting for somebody here to trust it with their GitHub (`RepoTrustWaits`), as the
+    /// A repo waiting for somebody here to trust it with their GitHub (`Waits`), as the
     /// SAME ask card the launch surface is (`askCard`), in the same slot: docked above the
     /// composer, the blue lead, the question in the head with the way out in its gutter, rows
     /// to hold, one button that commits. It is the launch's next question — the repo somebody

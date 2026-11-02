@@ -31,6 +31,7 @@ type SessionEvent =
     // Control/presence facts appended by the Session on connect/disconnect (Step 03).
     | PeerJoined of PeerJoined
     | PeerLeft of PeerLeft
+    | PersonArrived of PersonArrived
     // A message consumed off the queue: the body snapshotted at drain time by the Session.
     // Immutable — later edits never touch it. Drafts themselves are ephemeral WIP
     // in the synced state and are never durable facts (only their send is).
@@ -136,6 +137,8 @@ type SessionEvent =
     // does. Trust is the person's own record; that this session runs the repo on it is here.
     | RepoTrustAsked of RepoTrustAsked
     | RepoTrusted of RepoTrusted
+    // A repo's sandboxes wait for the person they run with to be signed in here.
+    | RepoAwaitsPerson of RepoAwaitsPerson
     // The shell profile (Plan 25): where a shell opened in one sandbox starts. One event
     // for set and for clear, because "what does a new terminal do" has one answer at a
     // time — a second verb would let the two disagree about which was last.

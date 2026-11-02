@@ -88,7 +88,7 @@ let private trustWaiting (model: ClientModel) : ClientModel =
               RepoTrustAsked.Routes = [ ConnectionRoute.Git; ConnectionRoute.Api ]
               RepoTrustAsked.Actor = ActorRef.Configured hello
               RepoTrustAsked.CausedBy = None }
-    { model with TrustWaits = RepoTrustWaits.apply RepoTrustWaits.empty [ asked ] }
+    { model with Waits = Waits.apply Waits.empty [ asked ] }
 
 let private offeredTests =
     testList "when it is offered" [
@@ -116,7 +116,7 @@ let private offeredTests =
 
         testCase "an ask answered while in front hands the front to the oldest" <| fun () ->
             let forward = trustWaiting (clientAt 1L fresh) |> Support.step (BringAskForwardMsg "trust:octo/hello")
-            let answered = { forward with TrustWaits = RepoTrustWaits.empty }
+            let answered = { forward with Waits = Waits.empty }
             Expect.equal (ClientModel.frontAsk answered) (Some Ask.Launch) "the launch again"
 
         testCase "a connected client that has read an empty log to its end is offered it" <| fun () ->

@@ -477,6 +477,7 @@ module ConversationProjection =
         match envelope.Event with
         | PeerJoined _ -> proj     // presence, not a conversation item
         | PeerLeft _ -> proj       // presence, not a conversation item
+        | PersonArrived _ -> proj  // presence too: what it ends is in `Waits`
         | SessionNamed _ -> proj   // what a chapter is CALLED, not something said in one
         | MessageSent m ->
             { proj with
@@ -604,6 +605,8 @@ module ConversationProjection =
         | SessionEvent.RepoTrustAsked a ->
             proj |> causedNote a.MessageId a.CausedBy a.Actor (Act.RepoTrustAsked a) envelope
         | SessionEvent.RepoTrusted t -> proj |> noted t.MessageId t.Actor (Act.RepoTrusted t) envelope
+        | SessionEvent.RepoAwaitsPerson a ->
+            proj |> causedNote a.MessageId a.CausedBy a.Actor (Act.RepoAwaitsPerson a) envelope
         | SessionEvent.RepoConfigRefused r ->
             proj |> causedNote r.MessageId r.CausedBy r.Actor (Act.RepoConfigRefused r) envelope
         | SessionEvent.RepoConfigWarned w ->
@@ -836,48 +839,84 @@ module ConversationProjection =
                 | Choice2Of2 (s: WorkSandboxStopped) -> running |> List.filter (fun r -> r.Sandbox <> s.Sandbox))
             []
 
-/// Which repos wait for somebody here to trust them with their GitHub, and by which routes.
+/// What something held in this session waits for. A condition is data, and the event that ends
+/// it is named beside it in `Waits.apply`, so a wait is in the log rather than in whichever
+/// callback was meant to check it again. A wait that lived only in a callback is how a repo
+/// held at boot stayed down until a repo verb happened to run.
+[<RequireQualifiedAccess>]
+type WaitCondition =
+    /// Somebody here to trust the repo with their GitHub, by these routes. A card asks it, and
+    /// `RepoTrusted` ends it.
+    | Trust of routes: ConnectionRoute list
+    /// This person to be signed in to this session, so their trust can be read. `PersonArrived`
+    /// ends it.
+    | PersonHere of Principal
+
+/// Something held, and what for. Only a repo's sandboxes are held today.
+[<RequireQualifiedAccess>]
+type Hold = { Repo : RepoRef; For : WaitCondition }
+
+/// What this session is waiting on, and why.
 ///
 /// Folded from the events by BOTH sides — the Process to know what is held, a client to know
 /// which card to show — so the card somebody sees and the sandbox that is waiting are two
 /// readings of one log rather than two answers that can disagree.
 ///
-/// A repo waits from the fold's last ask (`RepoTrustAsked`) until somebody here trusts it
-/// (`RepoTrusted`), or until it leaves the session.
-module RepoTrustWaits =
+/// A repo waits for trust from the fold's last ask (`RepoTrustAsked`), and for its person from
+/// `RepoAwaitsPerson`. Somebody trusting it ends both, since it then runs with them; so does
+/// the repo leaving the session.
+module Waits =
+
+    /// Which kind of condition a hold is, so one repo can wait on one of each.
+    let private kind (condition: WaitCondition) : string =
+        match condition with
+        | WaitCondition.Trust _ -> "trust"
+        | WaitCondition.PersonHere _ -> "person"
 
     /// A fold state rather than a function over the whole log, because a client sees the log
     /// in PAGES and re-reading all of it per page is the cost this projection exists to avoid.
-    /// Each repo with the place it took in the line when it FIRST asked, and the next place to
-    /// give. A repo that asks again for more keeps its place: it is the same question still
-    /// standing, not a new one at the back.
-    type Pending = private Pending of waits: Map<string, int * RepoRef * ConnectionRoute list> * next: int
+    /// Each hold with the place it took in the line when it FIRST began, and the next place to
+    /// give. A hold that begins again keeps its place: it is the same wait still standing, not
+    /// a new one at the back.
+    type Pending = private Pending of holds: Map<string * string, int * Hold> * next: int
 
     let empty : Pending = Pending (Map.empty, 0)
 
     let apply (Pending (state, next)) (events: SessionEvent list) : Pending =
+        let hold (repo: RepoRef) (condition: WaitCondition) (state, next) =
+            let key = RepoRef.value repo, kind condition
+            let held = { Hold.Repo = repo; Hold.For = condition }
+            match Map.tryFind key state with
+            | Some (place, _) -> Map.add key (place, held) state, next
+            | None -> Map.add key (next, held) state, next + 1
+        let release (ended: Hold -> bool) (state, next) =
+            state |> Map.filter (fun _ (_, held) -> not (ended held)), next
+        let about (repo: RepoRef) (held: Hold) = RepoRef.value held.Repo = RepoRef.value repo
         events
         |> List.fold
-            (fun (state, next) event ->
+            (fun acc event ->
                 match event with
-                | SessionEvent.RepoTrustAsked a ->
-                    let key = RepoRef.value a.Repo
-                    match Map.tryFind key state with
-                    | Some (place, _, _) -> Map.add key (place, a.Repo, a.Routes) state, next
-                    | None -> Map.add key (next, a.Repo, a.Routes) state, next + 1
-                | SessionEvent.RepoTrusted t -> Map.remove (RepoRef.value t.Repo) state, next
-                | SessionEvent.RepoRemoved r -> Map.remove (RepoRef.value r.Repo) state, next
-                | _ -> state, next)
+                | SessionEvent.RepoTrustAsked a -> hold a.Repo (WaitCondition.Trust a.Routes) acc
+                | SessionEvent.RepoAwaitsPerson a -> hold a.Repo (WaitCondition.PersonHere a.Person) acc
+                | SessionEvent.RepoTrusted t -> release (about t.Repo) acc
+                | SessionEvent.RepoRemoved r -> release (about r.Repo) acc
+                | SessionEvent.PersonArrived p ->
+                    release (fun held -> held.For = WaitCondition.PersonHere p.Person) acc
+                | _ -> acc)
             (state, next)
         |> Pending
 
-    /// Who is still waiting on somebody, in the order they first asked.
-    let waiting (Pending (state, _)) : (RepoRef * ConnectionRoute list) list =
-        state
-        |> Map.toList
-        |> List.map snd
-        |> List.sortBy (fun (place, _, _) -> place)
-        |> List.map (fun (_, repo, routes) -> repo, routes)
+    /// Everything held, in the order it began waiting.
+    let waiting (Pending (state, _)) : Hold list =
+        state |> Map.toList |> List.map snd |> List.sortBy fst |> List.map snd
+
+    /// The repos waiting for somebody to trust them, and by which routes: the cards to show.
+    let trustAsks (pending: Pending) : (RepoRef * ConnectionRoute list) list =
+        waiting pending
+        |> List.choose (fun held ->
+            match held.For with
+            | WaitCondition.Trust routes -> Some (held.Repo, routes)
+            | WaitCondition.PersonHere _ -> None)
 
     /// The whole log at once — the Process's reading, where there are no pages.
-    let pending (events: SessionEvent list) : (RepoRef * ConnectionRoute list) list = apply empty events |> waiting
+    let pending (events: SessionEvent list) : Hold list = apply empty events |> waiting

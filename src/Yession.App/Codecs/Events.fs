@@ -55,6 +55,12 @@ module Events =
             Decode.object (fun get ->
                 { PeerLeft.PeerId = get.Required.Field "peerId" Codec.peerId.Decode }) }
 
+    let private personArrived : Codec<PersonArrived> =
+        { Encode = fun (p: PersonArrived) -> Encode.object [ "person", Codec.principal.Encode p.Person ]
+          Decode =
+            Decode.object (fun get ->
+                { PersonArrived.Person = get.Required.Field "person" Codec.principal.Decode }) }
+
     let private messageSent : Codec<MessageSent> =
         { Encode =
             fun (p: MessageSent) ->
@@ -1290,6 +1296,24 @@ module Events =
                   RepoTrustAsked.CausedBy =
                     get.Optional.Field "causedBy" (Decode.option Codec.cause.Decode) |> Option.flatten }) }
 
+    let private repoAwaitsPerson : Codec<RepoAwaitsPerson> =
+        { Encode =
+            fun (p: RepoAwaitsPerson) ->
+                Encode.object
+                    [ "messageId", Codec.messageId.Encode p.MessageId
+                      "repo", Codec.repoRef.Encode p.Repo
+                      "person", Codec.principal.Encode p.Person
+                      "actor", Codec.actor.Encode p.Actor
+                      "causedBy", Encode.option Codec.cause.Encode p.CausedBy ]
+          Decode =
+            Decode.object (fun get ->
+                { RepoAwaitsPerson.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
+                  RepoAwaitsPerson.Repo = get.Required.Field "repo" Codec.repoRef.Decode
+                  RepoAwaitsPerson.Person = get.Required.Field "person" Codec.principal.Decode
+                  RepoAwaitsPerson.Actor = get.Required.Field "actor" Codec.actor.Decode
+                  RepoAwaitsPerson.CausedBy =
+                    get.Optional.Field "causedBy" (Decode.option Codec.cause.Decode) |> Option.flatten }) }
+
     let private repoTrusted : Codec<RepoTrusted> =
         { Encode =
             fun (p: RepoTrusted) ->
@@ -1642,6 +1666,8 @@ module Events =
                     Encode.object [ "type", Encode.string "peerJoined"; "payload", peerJoined.Encode p ]
                 | PeerLeft p ->
                     Encode.object [ "type", Encode.string "peerLeft"; "payload", peerLeft.Encode p ]
+                | PersonArrived p ->
+                    Encode.object [ "type", Encode.string "personArrived"; "payload", personArrived.Encode p ]
                 | MessageSent p ->
                     Encode.object [ "type", Encode.string "messageSent"; "payload", messageSent.Encode p ]
                 | SessionNamed p ->
@@ -1750,6 +1776,8 @@ module Events =
                     Encode.object [ "type", Encode.string "repoTrustAsked"; "payload", repoTrustAsked.Encode p ]
                 | RepoTrusted p ->
                     Encode.object [ "type", Encode.string "repoTrusted"; "payload", repoTrusted.Encode p ]
+                | RepoAwaitsPerson p ->
+                    Encode.object [ "type", Encode.string "repoAwaitsPerson"; "payload", repoAwaitsPerson.Encode p ]
                 | ShellProfileSet p ->
                     Encode.object [ "type", Encode.string "shellProfileSet"; "payload", shellProfileSet.Encode p ]
                 | SessionEvent.FileChanged p ->
@@ -1795,6 +1823,7 @@ module Events =
                 | "sessionStarted" -> Decode.field "payload" sessionStarted.Decode |> Decode.map SessionStarted
                 | "peerJoined" -> Decode.field "payload" peerJoined.Decode |> Decode.map PeerJoined
                 | "peerLeft" -> Decode.field "payload" peerLeft.Decode |> Decode.map PeerLeft
+                | "personArrived" -> Decode.field "payload" personArrived.Decode |> Decode.map PersonArrived
                 | "messageSent" -> Decode.field "payload" messageSent.Decode |> Decode.map MessageSent
                 | "sessionNamed" -> Decode.field "payload" sessionNamed.Decode |> Decode.map SessionNamed
                 | "agentTurnStarted" -> Decode.field "payload" agentTurnStarted.Decode |> Decode.map AgentTurnStarted
@@ -1850,6 +1879,7 @@ module Events =
                     Decode.field "payload" repoCapabilitiesApproved.Decode |> Decode.map RepoCapabilitiesApproved
                 | "repoTrustAsked" -> Decode.field "payload" repoTrustAsked.Decode |> Decode.map RepoTrustAsked
                 | "repoTrusted" -> Decode.field "payload" repoTrusted.Decode |> Decode.map RepoTrusted
+                | "repoAwaitsPerson" -> Decode.field "payload" repoAwaitsPerson.Decode |> Decode.map RepoAwaitsPerson
                 | "workSandboxStopped" -> Decode.field "payload" workSandboxStopped.Decode |> Decode.map WorkSandboxStopped
                 | "shellProfileSet" -> Decode.field "payload" shellProfileSet.Decode |> Decode.map ShellProfileSet
                 | "fileChanged" -> Decode.field "payload" fileChanged.Decode |> Decode.map SessionEvent.FileChanged

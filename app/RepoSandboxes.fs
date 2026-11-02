@@ -27,6 +27,7 @@ open Yession.Domain.Access
 open Yession.Domain.Agent
 open Yession.Domain.Tools
 open Yession.Domain.Chat
+open Yession.Domain.Link
 open Yession.Session
 
 /// What a repo's selection comes to: the lines a person reads, and the routes its sandboxes
@@ -43,6 +44,14 @@ type private TrustDecision =
     | RunsWith of CredentialFor
     /// Hold them, and say why — with what refused underneath, where something did.
     | Holds of problem: string * detail: string option
+    /// Hold them until the person they run with is signed in here (`RepoAwaitsPerson`).
+    | Awaits of Principal
+
+/// Why the person a repo runs with could not be read in this fold.
+type private TrusterUnread =
+    /// Not signed in to this session, so nothing was asked: the Manager would refuse.
+    | Away of Principal
+    | ReadFailed of RecordFailure
 
 /// What the last fold made of one repo. `Sandbox = None` is about the FILE itself — it
 /// could not be read — and the distinction matters because those are fixed in different
@@ -54,7 +63,10 @@ type FoldOutcome =
       /// has a reason it did not.
       Problem : string option
       /// What refused underneath `Problem`, in its own words, where something did.
-      Detail : string option }
+      Detail : string option
+      /// The problem is a wait the log already holds (`RepoAwaitsPerson`), so it is not said
+      /// again as a refusal.
+      Awaited : bool }
 
 type RepoSandboxes =
     { /// Re-read every checkout and ensure what it declares, on the authority of whoever
@@ -174,9 +186,9 @@ let private trusterOf (events: SessionEvent list) (repo: RepoRef) : Principal op
 
 /// The routes of the card this repo has standing — what it last asked trust for — or `None`
 /// when nothing is asked: somebody answered it, or it never asked. The same fold as the
-/// client's (`RepoTrustWaits`), so a card on a screen and a held sandbox cannot disagree.
+/// client's (`Waits`), so a card on a screen and a held sandbox cannot disagree.
 let private standingAsk (events: SessionEvent list) (repo: RepoRef) : ConnectionRoute list option =
-    RepoTrustWaits.pending events
+    Waits.apply Waits.empty events |> Waits.trustAsks
     |> List.tryFind (fun (waiting, _) -> RepoRef.value waiting = RepoRef.value repo)
     |> Option.map snd
 
@@ -225,6 +237,10 @@ let create
     // Everybody's trust, read from their own records: what decides whether a repo that forwards
     // GitHub may start, and with whose.
     (trusts: RepoTrusts)
+    // Whether this person is signed in to this session, which is when the Manager answers a
+    // read of their records here. Asked before reading, so a repo waits for its person rather
+    // than asking for a read that would be refused.
+    (present: Principal -> bool)
     (sandboxes: unit -> WorkSandboxes.WorkSandboxes)
     (run: RunGatedCommand)
     (log: EventLog<SessionEvent>)
@@ -269,9 +285,10 @@ let create
     /// answering the card (`FoldCause.Offered`). Nothing else makes anybody its truster. A
     /// person who joins, a boot and a branch switch only read who it already is.
     ///
-    /// The person it runs with may not be readable — not signed in to this launch yet after a
-    /// restart, or the Manager refused. Then it waits for them without a card: a card would
-    /// hand the repo to whoever arrived first, and its owner coming back resumes it.
+    /// The person it runs with may not be readable. Not signed in to this launch yet, after a
+    /// restart, it waits for them (`RepoAwaitsPerson`) without asking the Manager; refused or
+    /// failed, it holds and says so. Either way without a card: a card would hand the repo to
+    /// whoever arrived first, and its owner coming back resumes it.
     let decideTrust (told: SessionEvent list) (cause: FoldCause) (repo: RepoRef) (asked: Set<ConnectionRoute>) : Async<TrustDecision> =
         async {
             let answering (person: Principal) =
@@ -297,11 +314,12 @@ let create
                 async {
                     match trusterOf told repo with
                     | None -> return None
+                    | Some truster when not (present truster) -> return Some (Error (Away truster))
                     | Some truster ->
                         match! answering truster with
                         | Ok true -> return Some (Ok truster)
                         | Ok false -> return None
-                        | Error reason -> return Some (Error reason)
+                        | Error reason -> return Some (Error (ReadFailed reason))
                 }
             match current with
             // Settling a card that stood, so it leaves every screen once somebody runs it.
@@ -319,7 +337,21 @@ let create
                     }
                 match offered, current with
                 | Some person, _ -> return! trusted person
-                | None, Some (Error reason) ->
+                | None, Some (Error (Away person)) ->
+                    let waiting = { Hold.Repo = repo; Hold.For = WaitCondition.PersonHere person }
+                    if not (Waits.pending told |> List.contains waiting) then
+                        let actor = ActorRef.Configured repo
+                        do!
+                            append
+                                actor
+                                (SessionEvent.RepoAwaitsPerson
+                                    { RepoAwaitsPerson.MessageId = mintMessageId ()
+                                      RepoAwaitsPerson.Repo = repo
+                                      RepoAwaitsPerson.Person = person
+                                      RepoAwaitsPerson.Actor = actor
+                                      RepoAwaitsPerson.CausedBy = FoldCause.causeFor repo cause })
+                    return Awaits person
+                | None, Some (Error (ReadFailed reason)) ->
                     let problem =
                         match reason with
                         | RecordFailure.Refused _ -> sprintf "not allowed to check who trusts %s" (RepoRef.value repo)
@@ -383,7 +415,7 @@ let create
                     let fileProblems =
                         unreadable
                         |> List.map (fun (repo, reason) ->
-                            { Repo = repo; Sandbox = None; Problem = Some reason; Detail = None })
+                            { Repo = repo; Sandbox = None; Problem = Some reason; Detail = None; Awaited = false })
                     // What each repo asks for, said when it changes — before anything is
                     // started, so the timeline reads in the order things happened rather
                     // than announcing a set after the sandboxes it describes came up.
@@ -493,6 +525,17 @@ let create
                     // of somebody who trusts it here, and waits while nobody's trust covers it
                     // (`decideTrust`). In turn rather than at once, because each may write the
                     // log, and the next reads it.
+                    // Whoever a repo was waiting for and is here now has arrived: said once each,
+                    // before deciding, so the waits this fold settles are ended in the log by the
+                    // same reading that resumes them.
+                    for person in
+                        Waits.pending told
+                        |> List.choose (fun held ->
+                            match held.For with
+                            | WaitCondition.PersonHere person when present person -> Some person
+                            | _ -> None)
+                        |> List.distinct do
+                        do! append (Principal.toActor person) (SessionEvent.PersonArrived { PersonArrived.Person = person })
                     let! decided =
                         async {
                             let decided = ref Map.empty
@@ -526,7 +569,16 @@ let create
                                   // Nothing starts until somebody here trusts it. The row says
                                   // so, so the answer to "why is my sandbox not running" is in
                                   // the same place as what to do about it.
-                                  | Some (Holds (problem, detail)) -> return Some { Repo = repo; Sandbox = Some ref; Problem = Some problem; Detail = detail }
+                                  | Some (Holds (problem, detail)) ->
+                                      return Some { Repo = repo; Sandbox = Some ref; Problem = Some problem; Detail = detail; Awaited = false }
+                                  | Some (Awaits person) ->
+                                      return
+                                          Some
+                                              { Repo = repo
+                                                Sandbox = Some ref
+                                                Problem = Some (sprintf "waiting for %s to open this session" (Principal.token person))
+                                                Detail = None
+                                                Awaited = true }
                                   | decision ->
                                     let credential =
                                         match decision with
@@ -540,7 +592,7 @@ let create
                                             decl
                                     match! run call with
                                     | Error reason ->
-                                        return Some { Repo = repo; Sandbox = Some ref; Problem = Some reason; Detail = None }
+                                        return Some { Repo = repo; Sandbox = Some ref; Problem = Some reason; Detail = None; Awaited = false }
                                     | Ok outcome ->
                                         // The gate answers with what happened, and a
                                         // command that ran and failed is not a command that
@@ -554,7 +606,7 @@ let create
                                                 Some (text.Substring 8)
                                             | CommandRan _
                                             | CommandRunning -> None
-                                        return Some { Repo = repo; Sandbox = Some ref; Problem = problem; Detail = None }
+                                        return Some { Repo = repo; Sandbox = Some ref; Problem = problem; Detail = None; Awaited = false }
                             })
                         // In PARALLEL, so a repo's sandboxes come up at once rather than one
                         // waiting for the one before it to finish — the `dev` and `gate` of a
@@ -583,6 +635,7 @@ let create
                     let told = page.Events |> List.map (fun e -> e.Event)
                     for outcome in outcomes do
                         match outcome.Problem with
+                        | _ when outcome.Awaited -> ()
                         | None -> ()
                         | Some reason when lastRefusal told outcome.Repo outcome.Sandbox = Some reason -> ()
                         | Some reason ->
@@ -760,6 +813,7 @@ let query (current: unit -> RepoSandboxes) : Queries.QueryRegistration =
                               match outcome.Sandbox, outcome.Problem with
                               | None, _ -> "unreadable"
                               | Some _, None -> "declared"
+                              | Some _, Some _ when outcome.Awaited -> "waiting"
                               | Some _, Some _ -> "not started")
                           "problem",
                           (match outcome.Problem with

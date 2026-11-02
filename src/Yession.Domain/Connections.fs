@@ -106,6 +106,15 @@ type ConnectionStatusList = { Connections : ConnectionStatus list }
 
 module ConnectionStatusList =
 
+    /// Whether this person is signed in to the launch the frame is for: a person verified
+    /// into a launch is one whose own connections it may read, and the frame lists exactly
+    /// those. A peer is never verified into anything, and its records are not the Manager's
+    /// to refuse, so a peer is always here.
+    let present (statuses: Map<ConnectionId, ConnectionStatus>) (person: Principal) : bool =
+        match person with
+        | Principal.User user -> statuses |> Map.exists (fun id _ -> id.Scope = UserScope user)
+        | Principal.Peer _ -> true
+
     /// Whose authority a `forward:` could newly be resolved on, between two frames — in the
     /// shape the `yession.yaml` fold takes it: `Some person` for a credential of theirs,
     /// `None` for one the session reaches with nobody named (its own scope, or the

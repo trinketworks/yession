@@ -1611,12 +1611,12 @@ let private launchTrustModel : ClientModel =
               RepoTrustAsked.Routes = [ ConnectionRoute.Git; ConnectionRoute.Api ]
               RepoTrustAsked.Actor = ActorRef.Configured launchRepo
               RepoTrustAsked.CausedBy = None }
-    { launchCloningModel with TrustWaits = RepoTrustWaits.apply RepoTrustWaits.empty [ asked ] }
+    { launchCloningModel with Waits = Waits.apply Waits.empty [ asked ] }
 
 /// Two questions waiting at once: the launch, still choosing, and a repo asking to be trusted.
 /// The slot stacks them (`View.askSlot`), the launch in front as the oldest.
 let private askStackModel : ClientModel =
-    { launchModel with TrustWaits = launchTrustModel.TrustWaits }
+    { launchModel with Waits = launchTrustModel.Waits }
 
 /// Connected, the log read through, nothing said — and the opening question already answered
 /// "none", so no card stands over the empty conversation.
