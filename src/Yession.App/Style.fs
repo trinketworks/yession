@@ -3913,6 +3913,9 @@ module Style =
     /// scroll's own foot is the gap above them.
     let surfaceActions = cls [ askInset; "shrink-0 pb-6 phone:pb-4" ]
     let surfaceActionsLine = "min-w-0"
+    /// Who answered, while the answer waits on the agent: the status voice the card's own
+    /// waits speak in (`statusWait`), under the button that gave it.
+    let surfaceAwaiting = cls [ statusWait; "pt-3 min-w-0"; readingColumn ]
     let surfaceColumn = "flex flex-col gap-3 min-w-0"
     let surfaceRow = "flex flex-wrap items-center gap-3 min-w-0"
     /// A card inside a surface: one step up the greys, which is what nesting is said with.

@@ -695,6 +695,12 @@ module Dom =
         /// What the pressed button says while the answer is on its way, in the box its own
         /// label leaves (`Style.whenBusy`), as the launch card's START says `cloning…`.
         let surfaceSending = "sending…"
+        /// What the pressed button says once the answer is on the record, in the same box,
+        /// until the agent's turn on it ends.
+        let surfaceAnsweredWord = "answered"
+        /// The line under an answered surface, for every reader: who answered, and that it is
+        /// the agent's move now.
+        let surfaceAnsweredBy (who: string) : string = sprintf "%s answered · waiting on the agent" who
         let surfaceUnsupported (kind: string) : string =
             sprintf "The agent put a %s here, which this app does not show yet." kind
 

@@ -647,6 +647,69 @@ let private dismissTests =
                 "the durable form decodes to the event"
     ]
 
+let private turnId = Yession.Domain.AgentTurnId.create "t1" |> expect
+let private turnStarted =
+    Yession.Domain.SessionEvent.AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.Woke (SurfaceAnswered "pick") }
+let private turnEnded =
+    Yession.Domain.SessionEvent.AgentMessageCompleted { AgentTurnId = turnId; MessageId = messageId; Body = "Rebased." }
+let private pressed = Yession.Domain.SessionEvent.SurfaceActionTaken answered
+
+let private answeredTests =
+    testList "Answered" [
+        testCase "an answer waits on the agent from the moment it is recorded" <| fun () ->
+            Expect.equal
+                (SurfaceAnswers.ofEvents [ pressed ] |> Map.tryFind "pick")
+                (Some { AwaitedAnswer.Answer = answered; AwaitedAnswer.Taken = false })
+                "Ada's answer, not yet taken up"
+
+        testCase "the turn the answer owes ends the wait" <| fun () ->
+            Expect.equal (SurfaceAnswers.ofEvents [ pressed; turnStarted; turnEnded ]) Map.empty "live again"
+            Expect.equal
+                (SurfaceAnswers.ofEvents
+                    [ pressed
+                      turnStarted
+                      Yession.Domain.SessionEvent.AgentTurnFailed { AgentTurnId = turnId; Reason = "boom"; ProcessEnded = None } ])
+                Map.empty
+                "a failed turn ends it too"
+
+        // The turn already running did not read the answer; the one it wakes does.
+        testCase "an answer given during a turn outlives that turn" <| fun () ->
+            let during = SurfaceAnswers.ofEvents [ turnStarted; pressed; turnEnded ]
+            Expect.isTrue (Map.containsKey "pick" during) "still waiting after the running turn ends"
+            Expect.equal (List.fold SurfaceAnswers.apply during [ turnStarted; turnEnded ]) Map.empty "the next turn ends it"
+
+        testCase "a dismissal leaves nothing waiting" <| fun () ->
+            Expect.equal
+                (SurfaceAnswers.ofEvents [ pressed; Yession.Domain.SessionEvent.SurfaceDismissed dismissed ])
+                Map.empty
+                "the surface is gone"
+
+        // Drawn for Ivy, who did not press: what the log says reaches every reader, not only
+        // the one whose command was in flight.
+        testCase "an answered surface stands still for everyone, and says who answered" <| fun () ->
+            let init = ClientModel.init (peer "ivy" "Ivy")
+            let model =
+                { init with
+                    Synced = { init.Synced with Surfaces = Map.ofList [ "pick", choiceSurface [ "choice", branches [ "main" ] ] ] }
+                    SurfaceAnswers = SurfaceAnswers.ofEvents [ Yession.Domain.SessionEvent.SurfaceActionTaken { answered with Component = "submit" } ] }
+            let page = render model
+            let surface = page.Substring (page.IndexOf "data-surface=\"pick\"")
+            let submit = tagWith "data-surface-component=\"submit\"" surface
+            Expect.stringContains submit "aria-busy=\"true\"" "the button that answered holds"
+            Expect.stringContains surface Dom.Text.surfaceAnsweredWord "and says it answered"
+            Expect.isFalse (surface.Contains Dom.Text.surfaceSending) "not that anything is on its way"
+            Expect.stringContains (tagWith "data-surface-answered" surface) "role=\"status\"" "a status line says who"
+            Expect.stringContains surface "waiting on the agent" "and what it waits on"
+            Expect.stringContains (tagWith "data-surface-choice=\"dev\"" surface) "aria-disabled=\"true\"" "no second answer"
+            Expect.stringContains (tagWith "data-surface-dismiss" surface) "aria-disabled=\"true\"" "nor a dismissal"
+            Expect.isFalse (surface.Contains Style.surfaceLeadBar) "no longer waiting on the reader"
+
+        testCase "an unanswered surface says nothing about an answer" <| fun () ->
+            let page = render (withSurface (choiceSurface [ "choice", branches [ "main" ] ]))
+            Expect.isFalse (page.Contains "data-surface-answered") "no status line"
+            Expect.stringContains page Style.surfaceLeadBar "the lead says it waits on the reader"
+    ]
+
 /// `model` with `surface` drawn as `surfaceId` beside what it already holds, and a message
 /// folded so the client sees it arrive (`ClientModel.asks`).
 let private drawn (surfaceId: string) (surface: Surface) (model: ClientModel) : ClientModel =
@@ -682,6 +745,7 @@ let tests =
         stackTests
         toolTests
         pressTests
+        answeredTests
         projectionTests
         dismissTests
     ]

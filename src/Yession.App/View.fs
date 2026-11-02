@@ -2613,7 +2613,13 @@ module View =
                 | Ask.Trust (repo, shown) -> trustCard dispatch repo shown model
                 | Ask.Surface surfaceId ->
                     match Map.tryFind surfaceId model.Synced.Surfaces with
-                    | Some surface -> SurfaceView.view dispatch (model.Asked |> Map.toList |> List.map snd) surfaceId surface
+                    | Some surface ->
+                        let answered =
+                            Map.tryFind surfaceId model.SurfaceAnswers
+                            |> Option.map (fun awaited ->
+                                { SurfaceView.Answered.By = Entity.actorName model (Principal.toActor awaited.Answer.By)
+                                  SurfaceView.Answered.Component = awaited.Answer.Component })
+                        SurfaceView.view dispatch (model.Asked |> Map.toList |> List.map snd) answered surfaceId surface
                     | None -> Lit.nothing
             let behind = ClientModel.asks model |> List.filter (fun ask -> Ask.key ask <> Ask.key front)
             html $"""<div class="{Style.askStack}" data-ask-stack>{behind |> List.map (askLine dispatch model)}{card}</div>"""

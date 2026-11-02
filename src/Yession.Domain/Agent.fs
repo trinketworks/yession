@@ -1382,3 +1382,37 @@ module AgentWake =
     /// Whether a turn is owed at all. `pending` says who; this says whether, for the readers
     /// that only need the question answered.
     let due (events: SessionEvent list) : bool = pendingReason events |> Option.isSome
+
+/// A surface somebody has answered, while the agent has not yet finished the turn that answer
+/// owes it (`AgentWake`, `SurfaceAnswered`). Every peer reads the same log, so every peer sees
+/// the same surface stand still under the same name — not only the one who pressed, whose
+/// own `sending…` ends the moment the Session records the press.
+[<RequireQualifiedAccess>]
+type AwaitedAnswer =
+    { Answer : Surfaces.SurfaceActionTaken
+      /// Whether a turn has started since the press. The press is the agent's to act on from
+      /// then, and the turn's end is the end of the wait: the surface is live again if the
+      /// agent left it up.
+      Taken : bool }
+
+/// Which surfaces wait on the agent, as a fold over the log one event at a time (the App folds
+/// what arrives; a test folds a list).
+[<RequireQualifiedAccess>]
+module SurfaceAnswers =
+
+    let empty : Map<string, AwaitedAnswer> = Map.empty
+
+    let apply (awaited: Map<string, AwaitedAnswer>) (event: SessionEvent) : Map<string, AwaitedAnswer> =
+        match event with
+        // A second press before the agent ran replaces the first: it is the one the turn reads.
+        | SessionEvent.SurfaceActionTaken a -> Map.add a.SurfaceId { Answer = a; Taken = false } awaited
+        // A dismissal takes the surface down, so nothing of it waits.
+        | SessionEvent.SurfaceDismissed d -> Map.remove d.SurfaceId awaited
+        | AgentTurnStarted _ -> awaited |> Map.map (fun _ answer -> { answer with Taken = true })
+        // A press that lands during a turn is not that turn's: the turn after it is.
+        | AgentMessageCompleted _
+        | AgentTurnFailed _
+        | AgentTurnInterrupted _ -> awaited |> Map.filter (fun _ answer -> not answer.Taken)
+        | _ -> awaited
+
+    let ofEvents (events: SessionEvent list) : Map<string, AwaitedAnswer> = List.fold apply empty events
