@@ -227,12 +227,16 @@ is a tilt: in fast, back with a hair of overshoot. A pressed control is *held* (
 
 A settled status's dot is still; nothing left of it beats. A status still under way — a
 command live now, or a wait — turns instead: a quarter arc, always `ink-dim`, turning one way
-round a ring at an uneven pace within the lap rather than a constant rate, never reversing and
-never varying in colour or opacity. Pending's own attention mark (see Attention) is the very
-same arc, at whatever ink its level carries instead of `ink-dim`: a machine's work is the same
-"still going" as any other, so it wears the one mark rather than a shape of its own. Every one
-of these owes the surface 3:1 at every frame of its travel. `motion-reduce` rides every one: it
-keeps the fill and drops the geometry.
+round a ring at a plain constant rate, never reversing and never varying in colour or opacity.
+An uneven pace within the lap was tried once — surging through the middle, easing at the ends —
+and read as the mark catching on the gap rather than working, so the turn stays even. The arc
+turns over a faint full ring of its own ink, the track it is going round, so it reads as
+travelling a path rather than a stroke adrift with nothing under it; the track never animates
+and never varies, at rest or turning alike. Pending's own attention mark (see Attention) is the
+very same arc and track, at whatever ink its level carries instead of `ink-dim`: a machine's
+work is the same "still going" as any other, so it wears the one mark rather than a shape of
+its own. Every one of these owes the surface 3:1 at every frame of its travel. `motion-reduce`
+rides every one: it keeps the fill and drops the geometry.
 
 Working alone is not drawn to this rule at all: its attention mark is the agent's own cube,
 turning in the hand — the exact mark that turns inline in the transcript while the agent
@@ -267,7 +271,7 @@ carry a rank (WCAG 1.4.1).
 | Wrong | disc in a ring, the whole box | `err` | the ring draws round and the core springs in, once | nothing moves until a person fixes it: sign in again, a PR conflicted or failed |
 | Wanted | disc | `green` | the arc closes and fills, then a halo breathes out three times | a person's turn: the agent is waiting |
 | Working | the agent's own cube, not drawn to the box and ink columns at all | `agent`, always | turns in the hand, continuously, for as long as the turn does — the same cube and the same turn as the transcript's | the agent at work: a turn is running |
-| Pending | a quarter arc turning round a ring (the status spin, `Icon.spin`) | `ink-dim` | the arc turns, 1.6s a lap at an uneven pace, for as long as the work does | a machine's work, needs nobody: a command the agent left running, checks, the queue, a launch |
+| Pending | a quarter arc turning over a faint full-ring track (the status spin, `Icon.spin`) | `ink-dim` | the arc turns, 1.6s a lap at a constant rate, for as long as the work does | a machine's work, needs nobody: a command the agent left running, checks, the queue, a launch |
 | Absent | empty ring | `ink-dim` | none | no agent, chosen knowingly |
 | Rest | point | `ink-faint` | none | nothing to say: stopped, or everything watched is fine |
 

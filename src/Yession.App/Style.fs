@@ -411,11 +411,16 @@ module Style =
     let statusSpin = "inline-block w-3 h-3 align-[-2px] text-ink-dim overflow-visible"
     /// The spin mark leading a word or a count on its line, as `statusDot` leads a settled one.
     let statusSpinLead = cls [ statusSpin; "mr-1" ]
-    /// The arc's turn, clockwise, at an uneven pace within the lap rather than a constant
-    /// rate — it surges through the middle of each turn and eases through the top, so it
-    /// reads as working at it, never as a gauge ticking round or a thing rocking in place.
+    /// The arc's turn, clockwise, at a plain constant rate — not a gauge ticking round, since
+    /// nothing varies its speed, but not seeming to stick on the gap or the far side either,
+    /// which an uneven pace tried once and read as the opposite of "still going".
     let statusSpinCw =
         "origin-center [transform-box:fill-box] animate-status-spin-cw motion-reduce:animate-none"
+    /// The faint full ring the arc (`statusSpinCw`) turns over — the track it is going round,
+    /// so the arc reads as travelling a path rather than a loose stroke with nowhere to be.
+    /// Never animates and never varies: the same low opacity at rest as while the arc turns,
+    /// so `motion-reduce` leaves it exactly as it was (docs/visual-design.md, Motion).
+    let statusSpinTrack = "opacity-25"
     /// The settled dot with a halo round it: something has happened that the person reading
     /// has not seen yet (`ClientModel.unseen`). An `outline` rather than a border, so the gap
     /// between the two is the surface it sits on, whichever that is — and so this stays a
