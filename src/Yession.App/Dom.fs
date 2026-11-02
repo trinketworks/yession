@@ -1196,7 +1196,7 @@ module Dom =
             | None, None -> ""
         /// The mechanism, in the banner's detail note.
         let terminalCannotRunWhy =
-            "The shell stopped marking where commands start and end."
+            "The shell stopped saying where commands start and end."
         /// What the shell printed when the session stopped waiting for it: the evidence.
         let terminalShellPrinted (said: string) =
             if said = "" then "The shell printed nothing after the command."
