@@ -647,11 +647,39 @@ let private dismissTests =
                 "the durable form decodes to the event"
     ]
 
+/// `model` with `surface` drawn as `surfaceId` beside what it already holds, and a message
+/// folded so the client sees it arrive (`ClientModel.asks`).
+let private drawn (surfaceId: string) (surface: Surface) (model: ClientModel) : ClientModel =
+    { model with Synced = { model.Synced with Surfaces = Map.add surfaceId surface model.Synced.Surfaces } }
+    |> step (EditSurfaceMsg ("nothing-here", "/choice", branches []))
+
+let private stackTests =
+    testList "Stack" [
+        // A surface is a question waiting on the reader like any other, so it stands in the
+        // ask slot's stack, in the order the questions came, not the order their ids sort in.
+        testCase "surfaces stand in the order they arrived" <| fun () ->
+            let model = ClientModel.init (peer "ada" "Ada") |> drawn "zeta" (choiceSurface []) |> drawn "alpha" (choiceSurface [])
+            Expect.equal (ClientModel.asks model) [ Ask.Surface "zeta"; Ask.Surface "alpha" ] "first drawn, first"
+
+        testCase "a surface behind the front one is a line, one press away" <| fun () ->
+            let page = render (ClientModel.init (peer "ada" "Ada") |> drawn "zeta" (choiceSurface []) |> drawn "alpha" (choiceSurface []))
+            Expect.equal
+                (page.Contains "data-surface=\"zeta\"", page.Contains "data-ask-line=\"surface:alpha\"")
+                (true, true)
+                "the oldest is drawn; the newer waits as its line"
+
+        testCase "a surface whose root has not arrived asks nothing yet" <| fun () ->
+            let rootless = surfaceOf (choiceComponents |> List.filter (fun c -> c.Id <> "root")) []
+            let model = ClientModel.init (peer "ada" "Ada") |> drawn "early" rootless
+            Expect.equal (ClientModel.asks model) [] "no question to stand"
+    ]
+
 let tests =
     testList "Agent surfaces" [
         syncTests
         modelTests
         viewTests
+        stackTests
         toolTests
         pressTests
         projectionTests

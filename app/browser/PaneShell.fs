@@ -489,12 +489,14 @@ let private toStartIn () : unit =
     |> focusOn
 
 /// Onto the question of the card at the front of the ask slot (`DomMove.FocusAsk`): the pane
-/// on screen's heading, not one in a pane waiting off to the side, which is `inert`.
+/// on screen's heading, not one in a pane waiting off to the side, which is `inert`. An agent's
+/// surface has no heading of ours, so the keyboard goes to its first control: its way out.
 let private toAsk () : unit =
     let headings = document.querySelectorAll "[data-ask-stack] > section h2"
     seq { for i in 0 .. headings.length - 1 -> headings.item i }
     |> Seq.tryFind (fun heading -> (heading.closest "[inert]").IsNone)
     |> Option.map (fun heading -> heading :?> HTMLElement)
+    |> Option.orElseWith (fun () -> find "[data-ask-stack] > section button")
     |> focusOn
 
 /// Onto the message composer's field — this peer's own, the one that is not read-only — or,

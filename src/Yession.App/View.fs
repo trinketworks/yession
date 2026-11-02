@@ -2575,16 +2575,19 @@ module View =
             </section>"""
 
     /// Who asks, and what, as an ask's line says it while another's card is in front.
-    let private askLineWords (ask: Ask) : string * string =
+    let private askLineWords (model: ClientModel) (ask: Ask) : string * string =
         match ask with
         | Ask.Launch -> Dom.Text.repoPickerAsker, Dom.Text.repoPickerTitle
         | Ask.Trust (repo, _) -> RepoRef.value repo, Dom.Text.trustTitle
+        | Ask.Surface surfaceId ->
+            Dom.Text.surfaceAsker,
+            A2ui.Project.title model.Synced.Surfaces surfaceId |> Option.defaultValue Dom.Text.surfaceUntitled
 
     /// An ask waiting behind the card in front: ONE line, the head it would wear folded to who
     /// asks and what, and the line is the press that brings its card forward. The same blue
     /// lead, because it is waiting on you just as the card is.
-    let private askLine (dispatch: ClientMsg -> unit) (ask: Ask) : TemplateResult =
-        let who, question = askLineWords ask
+    let private askLine (dispatch: ClientMsg -> unit) (model: ClientModel) (ask: Ask) : TemplateResult =
+        let who, question = askLineWords model ask
         let key = Ask.key ask
         html $"""
             <button type="button" class="{Style.askLine}" data-ask-line="{key}"
@@ -2608,8 +2611,12 @@ module View =
                 match front with
                 | Ask.Launch -> askCard actions dispatch model
                 | Ask.Trust (repo, shown) -> trustCard dispatch repo shown model
+                | Ask.Surface surfaceId ->
+                    match Map.tryFind surfaceId model.Synced.Surfaces with
+                    | Some surface -> SurfaceView.view dispatch (model.Asked |> Map.toList |> List.map snd) surfaceId surface
+                    | None -> Lit.nothing
             let behind = ClientModel.asks model |> List.filter (fun ask -> Ask.key ask <> Ask.key front)
-            html $"""<div class="{Style.askStack}" data-ask-stack>{behind |> List.map (askLine dispatch)}{card}</div>"""
+            html $"""<div class="{Style.askStack}" data-ask-stack>{behind |> List.map (askLine dispatch model)}{card}</div>"""
 
     /// Who did something, as the transcript heads what they said: their square and their name
     /// in the caps voice, the agent's in blue. One face wherever an author heads what follows —
@@ -5758,9 +5765,6 @@ module View =
     /// that is fixed above them — which they must do only while it is there.
     let view (actions: ViewActions) (model: ClientModel) (dispatch: ClientMsg -> unit) : TemplateResult =
         let shellState = if (connectionReport model).IsSome then Style.degradedShell else ""
-        let asked = model.Asked |> Map.toList |> List.map snd
-        let surfaces =
-            model.Synced.Surfaces |> Map.toList |> List.map (fun (id, surface) -> SurfaceView.view dispatch asked id surface)
         html $"""
             <div class="contents {shellState}">
             {sidebar actions dispatch model}
@@ -5775,7 +5779,6 @@ module View =
                   {askSlot actions dispatch model}
                 </div>
                 <div class="{Style.dock}">
-                  {surfaces}
                   {queue dispatch model}
                   {drafts actions dispatch model}
                 </div>
