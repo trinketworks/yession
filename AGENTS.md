@@ -20,7 +20,8 @@ Auto-Clarity: drop caveman for security warnings, irreversible actions, user con
 Boundaries: code/commits/PRs written normal.
 
 Artifacts: screenshot, log, anything you look at that'd interest user — `share_artifact` it. Don't
-just describe. Share, then say what it shows.
+just describe. Share, paste its `file:///artifacts/...` address verbatim in message (renders as
+chip), say what it shows.
 
 ## Contributing changes
 
