@@ -65,7 +65,13 @@ type RepoListing =
       /// agent needs to do anything with a repo it just cloned, and the one nothing used
       /// to tell it. Answering "added octo/hello" and leaving the path to be guessed is
       /// how a clone turns into `ls ~/repos`, twice, and then a turn that ran out of steps.
-      Path : string }
+      ///
+      /// Said from where terminals start NOW, so it changes when the shell profile does.
+      /// Anything compared with a profile takes `Checkout` instead.
+      Path : string
+      /// The same checkout said from the default sandbox's root: what a profile pointing
+      /// at it holds, whatever the profile is at the moment.
+      Checkout : Yession.Domain.Sandboxes.RootPath }
 
 /// One repo the log records, as git read its checkout: listed, or unreadable with
 /// git's reason.

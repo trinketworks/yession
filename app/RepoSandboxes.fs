@@ -462,7 +462,7 @@ let create
                         |> List.choose (fun (repo, path) ->
                             RepoRead.listed reads
                             |> List.tryFind (fun listing -> RepoRef.value listing.Repo = RepoRef.value repo)
-                            |> Option.map (fun listing -> repo, CheckoutPath.under listing.Path path))
+                            |> Option.map (fun listing -> repo, RootPath.under listing.Checkout path))
                     let lastProfile =
                         told
                         |> List.choose (fun event ->
@@ -502,7 +502,7 @@ let create
                                 (Authority.configuredBy repo onBehalfOf)
                                 (FoldCause.causeFor repo cause)
                                 SandboxRef.defaultRef
-                                cwd
+                                (cwd |> Option.map RootPath.value)
                         // A profile that could not be set is the file's to hear about, said
                         // once, like an analyzer's note: the session carries on where it was.
                         let failed =

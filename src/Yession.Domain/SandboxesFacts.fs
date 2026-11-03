@@ -2,6 +2,163 @@ namespace Yession.Domain.Sandboxes
 
 open Yession.Domain
 
+/// The path vocabulary everything OUTSIDE a sandbox speaks: a directory as a terminal in
+/// that sandbox reaches it — relative to where a shell there starts when it is under
+/// there, absolute when it is not.
+///
+/// `repos/octo/hello` is the whole path anybody in the session can act on, and it stays
+/// that length however long the operator's data directory is. The absolute form is the
+/// same fact wearing somebody's home directory —
+/// `/Users/someone/.yession/sessions/40V9FY6MT534HDMBX6W5HS8PGR/workspace/repos/…` — which
+/// every answer then carries and nobody who reads it can do anything with.
+///
+/// BOTH directions live here, in one module, because they are one fact seen twice: what
+/// `reachedFrom` hands out, `resolvedFrom` has to take back. Converted in two places they
+/// converted differently, and did — the repo verbs answered `repos/octo/hello` while the
+/// shell profile stored what the sandbox's `pwd` said, so the note about where terminals
+/// start wore the operator's home directory, and deleting that very checkout matched no
+/// profile and cleared none.
+module SandboxPath =
+
+    /// A path names a directory whether or not it carries a trailing slash, and which it
+    /// is says nothing about what it means.
+    let private trimmed (path: string) = path.TrimEnd '/'
+
+    /// An absolute path as a terminal REACHES it: relative to `root` when it is under
+    /// there, unchanged when it is not — a named sandbox reaching the shared repos
+    /// directory from its own workspace, anywhere else on the filesystem. A relative path
+    /// that is only true somewhere else is worse than a long one.
+    ///
+    /// On a directory BOUNDARY, never a bare prefix: `/data/s/work` does not contain
+    /// `/data/s/workspace/repos`, and answering `space/repos` for it would be a path to
+    /// nowhere.
+    ///
+    /// The root ITSELF is `.` — the one relative path that is always true, and the only
+    /// other answer would be the absolute one this exists to keep out of sight.
+    let reachedFrom (root: string option) (path: string) : string =
+        match root with
+        | Some root when trimmed path = trimmed root -> "."
+        | Some root when path.StartsWith (trimmed root + "/") -> path.Substring ((trimmed root).Length + 1)
+        | _ -> path
+
+    /// The absolute directory a spawn actually runs in: `path` resolved against the
+    /// sandbox's own `root`. THE one place a relative path in this vocabulary acquires its
+    /// meaning, and it acquires it from the sandbox — the only thing that knows what its
+    /// root is.
+    ///
+    /// An absolute path is already an answer. `None` is a caller with no opinion, which is
+    /// the root itself.
+    /// The variable a path STARTS with, and what follows it: `~` and `~/x` are `HOME`,
+    /// `$NAME/x` and `${NAME}/x` are `NAME`. A file tool takes paths "as a terminal in that
+    /// sandbox would", and a terminal expands these — while the tools, handing the path to
+    /// `cat` as an argument, did not, so the `$TMPDIR` that `execute_command` tells an agent to
+    /// write under came back as "no such file" from `read_file` (session NR5KB8B5). Only a
+    /// LEADING one, which is the shape scratch paths have; and only a name, never an
+    /// expression, so resolving it is a lookup and never an evaluation.
+    let leadingVariable (path: string) : (string * string) option =
+        let isName (name: string) =
+            name <> ""
+            && (System.Char.IsLetter name.[0] || name.[0] = '_')
+            && name |> Seq.forall (fun c -> System.Char.IsLetterOrDigit c || c = '_')
+        if path = "~" then Some ("HOME", "")
+        elif path.StartsWith "~/" then Some ("HOME", path.Substring 1)
+        elif path.StartsWith "${" && path.Contains "}" then
+            let close = path.IndexOf '}'
+            let name = path.Substring (2, close - 2)
+            if isName name then Some (name, path.Substring (close + 1)) else None
+        elif path.StartsWith "$" then
+            let name = path.Substring 1 |> Seq.takeWhile (fun c -> System.Char.IsLetterOrDigit c || c = '_') |> System.String.Concat
+            if isName name then Some (name, path.Substring (1 + name.Length)) else None
+        else None
+
+    let resolvedFrom (root: string option) (path: string option) : string option =
+        match path, root with
+        | None, _ -> root
+        | Some path, _ when path.StartsWith "/" -> Some path
+        // `reachedFrom`'s answer for the root itself, taken back — the two arms are one
+        // mapping, and a round trip that returned `/ws/.` would be that mapping losing.
+        | Some ".", Some root -> Some root
+        | Some path, Some root -> Some (sprintf "%s/%s" (trimmed root) path)
+        // A relative path and no root: the backend's own idea of where it stands is the
+        // only thing left, which is what an unconfined spawn has always used.
+        | Some path, None -> Some path
+
+/// A path a file wrote, resolved under a checkout and CLAMPED there. The decoder already
+/// refuses a path that climbs out — that is the upstream fix, made where a person can
+/// correct their file — and this is the downstream guard: a path reaching here some other
+/// way still cannot name a directory above the checkout, because there is no arithmetic
+/// here that could produce one.
+module CheckoutPath =
+
+    let under (checkout: string) (dir: string) : string =
+        let resolved =
+            dir.Split ([| '/'; '\\' |])
+            |> Array.fold
+                (fun acc segment ->
+                    match segment with
+                    | "" | "." -> acc
+                    | ".." -> (match acc with [] -> [] | _ :: rest -> rest)
+                    | segment -> segment :: acc)
+                []
+            |> List.rev
+        match resolved with
+        | [] -> checkout.TrimEnd '/'
+        | segments -> checkout.TrimEnd '/' + "/" + String.concat "/" segments
+
+/// A directory said from its sandbox's ROOT — where a spawn that names no directory runs —
+/// and so the same string for as long as the sandbox exists. The shell profile is stored
+/// in this vocabulary, and anything compared with a profile has to be in it too.
+///
+/// A TYPE, not a string, because the session speaks a second vocabulary that looks the
+/// same: what `SandboxPath.reachedFrom` answers against where terminals start NOW, which is
+/// what a listing tells a terminal and a file tool. That one moves whenever the profile
+/// does. Compared with a profile it made a fold that never settled: with the profile at
+/// the workspace, the listing said `repos/octo/hello` and the fold moved the profile
+/// there; from there the listing said `.`, and the fold moved it back (session 3V9P,
+/// twelve times in two days). Removing that checkout cleared nothing for the same reason.
+/// Two strings, two meanings, and nothing to say which was which; with one of them a
+/// type, mixing them does not compile.
+[<Struct>]
+type RootPath = private RootPath of string
+
+module RootPath =
+
+    let private trimmed (path: string) = path.TrimEnd '/'
+
+    /// The root itself.
+    let root : RootPath = RootPath "."
+
+    /// An absolute directory as the sandbox whose root is `root` reaches it.
+    let reached (root: string option) (absolute: string) : RootPath =
+        RootPath (SandboxPath.reachedFrom root absolute)
+
+    /// A path the log already holds in this vocabulary: a stored profile, read back.
+    let stored (path: string) : RootPath = RootPath (trimmed path |> fun p -> if p = "" then "." else p)
+
+    let value (RootPath path) : string = path
+
+    let isRoot (RootPath path) : bool = path = "."
+
+    /// `dir`, written relative to the checkout at `checkout`, clamped inside it
+    /// (`CheckoutPath.under`).
+    let under (RootPath checkout) (dir: string) : RootPath =
+        match CheckoutPath.under checkout dir with
+        | under when checkout = "." && under.StartsWith "./" -> RootPath (under.Substring 2)
+        | under -> RootPath under
+
+    /// Is `path` the directory `tree`, or somewhere inside it? On a directory BOUNDARY,
+    /// never a bare prefix: `repos/hello-world` starts with `repos/hello` and is a
+    /// different checkout. The root contains everything.
+    let isInside (RootPath tree) (RootPath path) : bool =
+        let tree = trimmed tree
+        let path = trimmed path
+        tree = "." || path = tree || path.StartsWith (tree + "/")
+
+    /// Where a terminal starts, as the end of a sentence: "new terminals in dev start …".
+    /// The root is said in words, because `.` at the end of a sentence reads as nothing.
+    let describe (path: RootPath) : string =
+        if isRoot path then "where the sandbox puts them" else sprintf "in %s" (value path)
+
 /// The facts a sandbox records — an environment identified, started or stopped, a work sandbox's life, and the shell profile set on it.
 ///
 /// These sit BELOW `SessionEvent`, because the union names them, while the
@@ -158,7 +315,7 @@ and ShellProfileSet =
       Sandbox : SandboxRef
       /// Where a shell opened in that sandbox starts. `None` is the CLEAR — back to the
       /// sandbox's own default, which is what every terminal did before this plan.
-      WorkingDirectory : string option
+      WorkingDirectory : RootPath option
       Actor : ActorRef
       /// The person behind the agent that set it, or behind the fold that applied a repo's
       /// `session.shell-profile`. `None` when a person set it themselves.
@@ -257,7 +414,7 @@ module ShellProfileSet =
 
     let particulars (p: ShellProfileSet) : Phrase list =
         match p.WorkingDirectory with
-        | Some cwd -> [ Phrase.text (sprintf "terminals start in %s" cwd) ]
+        | Some cwd -> [ Phrase.text ("terminals start " + RootPath.describe cwd) ]
         | None -> [ Phrase.text "terminals start where the sandbox puts them" ]
 
 module SandboxSetupQueued =

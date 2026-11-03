@@ -49,6 +49,6 @@ let query (terminals: unit -> SessionTerminals.SessionTerminals) : Queries.Query
                             [ "sandbox", CellText (SandboxRef.render sandbox)
                               "cwd",
                               (match profile.WorkingDirectory with
-                               | Some cwd -> CellText cwd
+                               | Some cwd -> CellText (RootPath.value cwd)
                                | None -> CellAbsent) ])))
             } }

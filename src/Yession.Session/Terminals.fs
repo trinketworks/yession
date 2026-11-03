@@ -878,7 +878,7 @@ module SessionTerminals =
           /// deleting a tree knows only that it is going, and a caller left to work out
           /// WHICH profiles that invalidates is a caller that can get it wrong somewhere no
           /// cheap test reaches.
-          ClearProfilesUnder : Authority -> string -> Async<SandboxRef list>
+          ClearProfilesUnder : Authority -> RootPath -> Async<SandboxRef list>
           /// Every sandbox's profile as it stands — what the `shell_profile` query reads.
           Profiles : unit -> ShellProfileProjection
           /// Reclaim any lease that has gone idle with something queued behind it (Plan 13,
@@ -1637,7 +1637,8 @@ module SessionTerminals =
                     // with a code nothing else uses, and the exit arm below reads it, says so,
                     // and starts again without the profile. The profile is left alone: it is a
                     // person's to fix, not ours to guess at.
-                    let profileCwd = ShellProfileProjection.workingDirectory sandbox profiles
+                    let profileCwd =
+                        ShellProfileProjection.workingDirectory sandbox profiles |> Option.map RootPath.value
                     let profileExit = 97
                     let rcWith (cwd: string option) =
                         match cwd with
@@ -2360,7 +2361,8 @@ module SessionTerminals =
                                               WorkingDirectory =
                                                 terminal.Sandbox
                                                 |> Option.bind (fun sandbox ->
-                                                    ShellProfileProjection.workingDirectory sandbox profiles) }
+                                                    ShellProfileProjection.workingDirectory sandbox profiles
+                                                    |> Option.map RootPath.value) }
                                             onChunk
                                     match spawned with
                                     | Error reason -> return CommandExecutionFailed reason
@@ -2873,7 +2875,7 @@ module SessionTerminals =
                                         |> Array.filter (fun line -> line <> "")
                                         |> List.ofArray
                                     match said with
-                                    | [ root; resolved ] -> return Ok (Some (SandboxPath.reachedFrom (Some root) resolved))
+                                    | [ root; resolved ] -> return Ok (Some (RootPath.reached (Some root) resolved))
                                     | _ ->
                                         // `cd` succeeded and the two `pwd`s did not answer,
                                         // which no shell does. Refused rather than stored: a
@@ -2942,7 +2944,7 @@ module SessionTerminals =
                     // nothing else uses is an agent that will hand that path back.
                     let where =
                         match resolved with
-                        | Some path -> sprintf "new terminals in %s start in %s." name path
+                        | Some path -> sprintf "new terminals in %s start %s." name (RootPath.describe path)
                         | None -> sprintf "new terminals in %s start where the sandbox puts them." name
                     let mine =
                         match retired with
@@ -2966,14 +2968,14 @@ module SessionTerminals =
         /// a place they already start in. The terminals open in it keep running — a shell
         /// whose directory is deleted is a fact of the filesystem, not ours to tidy — and the
         /// next one to open lands somewhere that exists.
-        let clearProfilesUnder (authority: Authority) (tree: string) : Async<SandboxRef list> =
+        let clearProfilesUnder (authority: Authority) (tree: RootPath) : Async<SandboxRef list> =
             let actor = Authority.author authority
             async {
                 let affected =
                     ShellProfileProjection.listed profiles
                     |> List.filter (fun (_, profile) ->
                         match profile.WorkingDirectory with
-                        | Some cwd -> ShellProfile.isInside tree cwd
+                        | Some cwd -> RootPath.isInside tree cwd
                         | None -> false)
                     |> List.map fst
                 for sandbox in affected do

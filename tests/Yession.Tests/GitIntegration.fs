@@ -362,6 +362,7 @@ let private serviceBuilt
           Network = DockerFixture.quietNetwork ()
           ReposDir = reposDir
           StartsAt = fun () -> None
+          Root = None
           ExtraReadPaths = [ fixtures ]
           Git = git
           AllowedDomains = []
@@ -863,7 +864,7 @@ let private srtTests =
             let! listed = service.ListRepos ()
             Expect.equal
                 (expect listed)
-                [ RepoRead.Listed { Repo = repo; Branch = "main"; Dirty = false; Path = sprintf "%s/octo/hello" (reposIn root) } ]
+                [ RepoRead.Listed { Repo = repo; Branch = "main"; Dirty = false; Path = sprintf "%s/octo/hello" (reposIn root); Checkout = RootPath.stored (sprintf "%s/octo/hello" (reposIn root)) } ]
                 "the listing names the repo the log records, as git reads it, and says where"
         }
 
@@ -988,6 +989,7 @@ let private srtTests =
                       Network = DockerFixture.quietNetwork ()
                       ReposDir = relRepos
                       StartsAt = fun () -> None
+                      Root = None
                       ExtraReadPaths = [ fixturesIn fixtures ]
                       Git = namedGit
                       AllowedDomains = []
@@ -1295,7 +1297,7 @@ let private srtTests =
             let! added = service.AddRepo caller repo
             let listing = (expect added).Answer
             let! removed = service.RemoveRepo caller repo false
-            Expect.equal (expect removed) listing.Path "the same path the listing reported"
+            Expect.equal (expect removed) listing.Checkout "the same checkout the listing reported"
         }
 
         testCaseAsync "remove deletes the checkout and records who asked" <| async {

@@ -1033,7 +1033,9 @@ Async.StartImmediate (
                         fun () ->
                             SandboxPath.resolvedFrom
                                 (workspaceFor SandboxRef.defaultRef)
-                                (ShellProfileProjection.workingDirectory SandboxRef.defaultRef (terminals.Profiles ()))
+                                (ShellProfileProjection.workingDirectory SandboxRef.defaultRef (terminals.Profiles ())
+                                 |> Option.map RootPath.value)
+                      Root = workspaceFor SandboxRef.defaultRef
                       ExtraReadPaths = []
                       Git = Repos.gitExecutable (Sandboxes.ambientEnv ())
                       AllowedDomains =
@@ -1541,7 +1543,8 @@ Async.StartImmediate (
                 // `default` runs under, and answering with the host path for one told it to
                 // copy the bytes somewhere only the container could see.
                 (Sandboxes.artifactsVisibleTo workBackend artifactsDir)
-                (fun sandbox -> ShellProfileProjection.workingDirectory sandbox (terminals.Profiles ()))
+                (fun sandbox ->
+                    ShellProfileProjection.workingDirectory sandbox (terminals.Profiles ()) |> Option.map RootPath.value)
                 TerminalShell.posix
         host.SetStaging artifacts.Staging
         terminalCommands <- host.TerminalCommands

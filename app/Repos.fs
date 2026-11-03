@@ -339,6 +339,10 @@ type ReposConfig =
       /// start into the checkout, after which every file tool read it as
       /// `repos/…/repos/…` and answered "no such file" (session NR5KB8B5).
       StartsAt : unit -> string option
+      /// The default sandbox's ROOT, where it runs a spawn that names no directory. The
+      /// shell profile is said from here (`RootPath`), so a checkout compared with one is
+      /// too.
+      Root : string option
       /// Paths beyond `ReposDir` the git sandbox may READ. Empty in production; the
       /// test harness names its local bare-repo fixtures here. None of them may be an
       /// ANCESTOR of `ReposDir`: when both sit under a read-denied region (a HOME, which
@@ -444,7 +448,7 @@ type ReposService =
       /// `force` is required to delete a checkout with uncommitted changes. An UNREADABLE
       /// checkout needs none: clearing one is what this verb was advertised for long before
       /// it existed, and refusing there would leave no way out of an interrupted clone.
-      RemoveRepo : RepoCaller -> RepoRef -> bool -> Async<Result<string, string>> }
+      RemoveRepo : RepoCaller -> RepoRef -> bool -> Async<Result<RootPath, string>> }
 
 let private outputLimit = 20000
 
@@ -631,6 +635,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// reports, and the only path anything outside the git sandbox can act on.
         let visiblePathOf (repo: RepoRef) =
             SandboxPath.reachedFrom (config.StartsAt ()) (pathOf repo)
+        /// The same checkout from the default sandbox's root, which does not move.
+        let checkoutOf (repo: RepoRef) = RootPath.reached config.Root (pathOf repo)
         /// A checkout is here when its owner directory, its own directory and its `.git` are
         /// each a DIRECTORY, by `lstat`. A work sandbox can write the repos directory, so any of
         /// the three can be a symlink to another repository on the host, and every verb would
@@ -745,7 +751,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                                     { Repo = repo
                                       Branch = branch.Stdout.Trim ()
                                       Dirty = status.Stdout.Trim () <> ""
-                                      Path = visiblePathOf repo }
+                                      Path = visiblePathOf repo
+                                      Checkout = checkoutOf repo }
             }
 
         let mintMessageId () : MessageId =
@@ -1028,7 +1035,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                         return Ok (if said = "" then "(clean: nothing to show)" else capText outputLimit said)
                 })
 
-        let removeRepo (caller: RepoCaller) (repo: RepoRef) (force: bool) : Async<Result<string, string>> =
+        let removeRepo (caller: RepoCaller) (repo: RepoRef) (force: bool) : Async<Result<RootPath, string>> =
             async {
                 // The log's repos are the listing's, so one it records is removable even with
                 // its directory gone: the listing shows it as unreadable, and this is the verb
@@ -1045,7 +1052,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                                     caller.Actor
                                     (SessionEvent.RepoRemoved
                                         { MessageId = mintMessageId (); Repo = repo; Actor = caller.Actor })
-                            return Ok (visiblePathOf repo)
+                            return Ok (checkoutOf repo)
                         }
                     // Uncommitted work is the one thing removal cannot undo: `add_repo` brings
                     // back the commits and nothing else. So it is refused, and `force` is a
