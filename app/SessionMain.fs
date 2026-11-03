@@ -1549,6 +1549,7 @@ Async.StartImmediate (
             RepoSandboxes.create
                 (fun () -> reposService)
                 repoTrusts
+                (fun person -> ConnectionStatusList.present connectionStatus person)
                 (fun () -> workSandboxes)
                 host.RunGated
                 log

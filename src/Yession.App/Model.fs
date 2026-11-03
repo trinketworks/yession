@@ -650,7 +650,7 @@ type QueriesViewState =
       /// The latest value per query name. Absent = not answered yet.
       Values : Map<string, QueryValue> }
 
-/// One reader's hand on the trust cards (`RepoTrustWaits`): the routes they unticked, and the
+/// One reader's hand on the trust cards (`Waits`): the routes they unticked, and the
 /// cards they put off. Keyed by repo, and each put-off card by what it showed, so a card that
 /// asks for something new is a new card rather than one this reader already put away.
 [<RequireQualifiedAccess>]
@@ -2132,7 +2132,7 @@ type ClientModel =
       ///
       /// Folded from the same events the Process holds them on, so what a person is asked and
       /// what a sandbox is waiting for are two readings of one log rather than two answers.
-      TrustWaits    : RepoTrustWaits.Pending
+      Waits    : Waits.Pending
       /// This reader's own hand on those cards: what they unticked, and which they put off.
       /// View state, local to this client: the answer reaches the session as one command.
       TrustCards    : TrustCards
@@ -3027,7 +3027,7 @@ module ClientModel =
           PageFault = None
           Synced = (SyncedSessionState.empty CollabText.ylmish)
           Conversation = ConversationProjection.empty
-          TrustWaits = RepoTrustWaits.empty
+          Waits = Waits.empty
           TrustCards = TrustCards.empty
           AskFront = None
           AskOrder = []
@@ -3167,11 +3167,11 @@ module ClientModel =
 
     /// Every question waiting on this reader, in the order they would have arrived: the launch
     /// is the session's first question, repos waiting to be trusted follow in the order they
-    /// asked (`RepoTrustWaits.waiting`), then the agent's surfaces.
+    /// asked (`Waits.trustAsks`), then the agent's surfaces.
     let private waitingAsks (model: ClientModel) : Ask list =
         let launch = if launchOffered model then [ Ask.Launch ] else []
         let trust =
-            TrustCards.showing (RepoTrustWaits.waiting model.TrustWaits) model.TrustCards
+            TrustCards.showing (Waits.trustAsks model.Waits) model.TrustCards
             |> List.map Ask.Trust
         // A surface whose root has not arrived asks nothing yet (`SurfaceView.view`).
         let surfaces =
@@ -5433,7 +5433,7 @@ module ClientModel =
                 Conversation = conversation
                 Launch = launch
                 Repos = freshEvents |> List.fold (fun proj e -> Repos.ReposProjection.applyEvent proj e.Event) model.Repos
-                TrustWaits = RepoTrustWaits.apply model.TrustWaits (freshEvents |> List.map (fun e -> e.Event))
+                Waits = Waits.apply model.Waits (freshEvents |> List.map (fun e -> e.Event))
                 Timeline = timeline
                 Agent = agent
                 SurfaceAnswers =

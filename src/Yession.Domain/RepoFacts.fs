@@ -150,6 +150,19 @@ and [<RequireQualifiedAccess>] RepoTrustAsked =
       Actor : ActorRef
       CausedBy : Cause option }
 
+/// A repo's sandboxes wait for the person they run with to be in this session. Their trust is
+/// their own record, and the Manager answers a read of it only once they are signed in to this
+/// session — so after a restart the repo waits for them rather than asking, and is not handed to
+/// whoever came first. `PersonArrived` ends it.
+and [<RequireQualifiedAccess>] RepoAwaitsPerson =
+    { MessageId : MessageId
+      Repo : RepoRef
+      /// Whom it runs with: the person in its last `RepoTrusted`.
+      Person : Principal
+      /// The repo's file, as the party waiting.
+      Actor : ActorRef
+      CausedBy : Cause option }
+
 /// A repo's sandboxes run with this person's GitHub here.
 ///
 /// Their trust in the repo is their own record, kept across sessions (`RepoTrust`). This is the
@@ -283,6 +296,15 @@ module RepoTrustAsked =
                     "to be trusted (%s)"
                     (a.Routes |> List.map routeWords |> String.concat ", ")
             ))
+
+module RepoAwaitsPerson =
+
+    let phrase (a: RepoAwaitsPerson) : Phrase =
+        Phrase.deed
+            "is waiting"
+            [ Segment.Text "for "
+              Segment.Ref (EntityRef.Actor (Principal.toActor a.Person))
+              Segment.Text " to open this session" ]
 
 module RepoTrusted =
 

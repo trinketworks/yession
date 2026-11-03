@@ -638,7 +638,7 @@ let private forwardingGitHub (routes: ConnectionRoute list) : ResourceName list 
 
 /// The fold over nobody's trust: every case here that is not about trust.
 let private createFold repos sandboxes gate log capabilities =
-    RepoSandboxes.create repos (RepoTrusts.none "nobody keeps trust in these cases") sandboxes gate log capabilities
+    RepoSandboxes.create repos (RepoTrusts.none "nobody keeps trust in these cases") (fun _ -> true) sandboxes gate log capabilities
 
 let private ada = Principal.User (UserId.create "ada" |> expect)
 let private bob = Principal.User (UserId.create "bob" |> expect)
@@ -685,9 +685,33 @@ let private selecting () =
     let r = repo "octo/hello"
     r, checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ github ]\n")
 
-/// The fold over these people's trust, for a repo whose sandboxes forward GitHub by both routes.
+/// The fold over these people's trust with these people here, for a repo whose sandboxes
+/// forward GitHub by both routes.
+let private trustingFoldHere
+    (present: Principal -> bool)
+    (trusts: RepoTrusts)
+    (r: RepoRef)
+    (dir: string)
+    (gate: RunGatedCommand)
+    (log: EventLog<SessionEvent>)
+    =
+    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) trusts present (cell WorkSandboxes.unavailable) gate log (forwardingGitHub both)
+
+/// The same, with everybody here.
 let private trustingFold (trusts: RepoTrusts) (r: RepoRef) (dir: string) (gate: RunGatedCommand) (log: EventLog<SessionEvent>) =
-    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) trusts (cell WorkSandboxes.unavailable) gate log (forwardingGitHub both)
+    trustingFoldHere (fun _ -> true) trusts r dir gate log
+
+/// What the log holds the session waiting on.
+let private heldIn (log: EventLog<SessionEvent>) =
+    async {
+        let! page = log.Read None System.Int32.MaxValue
+        return Waits.pending (page.Events |> List.map (fun e -> e.Event))
+    }
+
+/// A reader of trust that counts how often it was asked, over these people's records.
+let private countingTrust (answers: (Principal * Set<ConnectionRoute>) list) (asked: int ref) : RepoTrusts =
+    let inner = trustOf answers []
+    { inner with RepoTrusts.Read = fun owner repo -> async { asked.Value <- asked.Value + 1; return! inner.Read owner repo } }
 
 /// How many cards the log has asked.
 let private trustAsks (log: EventLog<SessionEvent>) =
@@ -706,6 +730,14 @@ let private trustAsked (r: RepoRef) (routes: ConnectionRoute list) =
           RepoTrustAsked.Routes = routes
           RepoTrustAsked.Actor = ActorRef.Configured r
           RepoTrustAsked.CausedBy = None }
+
+let private awaits (r: RepoRef) (person: Principal) =
+    SessionEvent.RepoAwaitsPerson
+        { RepoAwaitsPerson.MessageId = MessageId.create (sprintf "await-%s" (RepoRef.value r)) |> expect
+          RepoAwaitsPerson.Repo = r
+          RepoAwaitsPerson.Person = person
+          RepoAwaitsPerson.Actor = ActorRef.Configured r
+          RepoAwaitsPerson.CausedBy = None }
 
 let private trusted (r: RepoRef) (person: Principal) =
     SessionEvent.RepoTrusted
@@ -1475,10 +1507,67 @@ let foldTests =
                 let seen = ResizeArray<GatedCall> ()
                 let log = foldLog ()
                 do! trustedHere log r ada
-                let folded = trustingFold (trustOf [ ada, Set.ofList both ] [ ada ]) r dir (recordingGate seen) log
+                let folded = trustingFoldHere (fun _ -> false) (trustOf [ ada, Set.ofList both ] []) r dir (recordingGate seen) log
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let! asks = trustAsks log
                 Expect.equal (seen.Count, asks) (0, 0) "held, and nobody else asked"
+            }
+
+        // The Manager refuses a read of the records of somebody not signed in here, so the fold
+        // does not ask: it would only be told no, and the refusal used to be what the timeline
+        // showed on every resumed session.
+        testCaseAsync "a repo whose truster is not here asks nothing of their records" <|
+            async {
+                let r, dir = selecting ()
+                let log = foldLog ()
+                do! trustedHere log r ada
+                let asked = ref 0
+                let folded = trustingFoldHere (fun _ -> false) (countingTrust [ ada, Set.ofList both ] asked) r dir (recordingGate (ResizeArray ())) log
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                Expect.equal asked.Value 0 "no read"
+            }
+
+        testCaseAsync "a repo whose truster is not here waits for them, in the log" <|
+            async {
+                let r, dir = selecting ()
+                let log = foldLog ()
+                do! trustedHere log r ada
+                let folded = trustingFoldHere (fun _ -> false) (trustOf [ ada, Set.ofList both ] []) r dir (recordingGate (ResizeArray ())) log
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                let! held = heldIn log
+                Expect.equal held [ { Hold.Repo = r; Hold.For = WaitCondition.PersonHere ada } ] "one wait, however often it folds"
+            }
+
+        testCaseAsync "its truster arriving starts the repo on their authority" <|
+            async {
+                let r, dir = selecting ()
+                let seen = ResizeArray<GatedCall> ()
+                let log = foldLog ()
+                do! trustedHere log r ada
+                let here = ref false
+                let folded = trustingFoldHere (fun _ -> here.Value) (trustOf [ ada, Set.ofList both ] []) r dir (recordingGate seen) log
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                here.Value <- true
+                do! folded.Fold (FoldCause.Connected (CredentialFor.Person ada)) (CredentialFor.Person ada)
+                Expect.equal
+                    (seen |> Seq.map (fun call -> Authority.credential call.Authority) |> List.ofSeq)
+                    [ CredentialFor.Person ada ]
+                    "started once, on her authority"
+            }
+
+        testCaseAsync "its truster arriving ends the wait" <|
+            async {
+                let r, dir = selecting ()
+                let log = foldLog ()
+                do! trustedHere log r ada
+                let here = ref false
+                let folded = trustingFoldHere (fun _ -> here.Value) (trustOf [ ada, Set.ofList both ] []) r dir (recordingGate (ResizeArray ())) log
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                here.Value <- true
+                do! folded.Fold (FoldCause.Connected (CredentialFor.Person ada)) (CredentialFor.Person ada)
+                let! held = heldIn log
+                Expect.equal held [] "nothing waits"
             }
 
         // Why it waits is one plain line, and what the Manager said is kept for the fold.
@@ -1572,22 +1661,22 @@ let foldTests =
         // readings of one fact rather than two answers free to disagree.
         testCase "a trust ask is pending until somebody trusts the repo" <| fun () ->
             let r = repo "octo/hello"
-            Expect.equal (RepoTrustWaits.pending [ trustAsked r both ]) [ r, both ] "somebody has to answer"
+            Expect.equal (Waits.trustAsks (Waits.apply Waits.empty [ trustAsked r both ])) [ r, both ] "somebody has to answer"
 
         testCase "trusting a repo settles its ask" <| fun () ->
             let r = repo "octo/hello"
-            Expect.equal (RepoTrustWaits.pending [ trustAsked r both; trusted r ada ]) [] "settled"
+            Expect.equal (Waits.trustAsks (Waits.apply Waits.empty [ trustAsked r both; trusted r ada ])) [] "settled"
 
         // The ask slot stands questions oldest first, so the fold has to know which is oldest:
         // the order repos asked in, not the order their names sort in.
         testCase "repos wait in the order they asked" <| fun () ->
             let zeta, alpha = repo "octo/zeta", repo "octo/alpha"
-            Expect.equal (RepoTrustWaits.pending [ trustAsked zeta both; trustAsked alpha both ]) [ zeta, both; alpha, both ] "first asked, first"
+            Expect.equal (Waits.trustAsks (Waits.apply Waits.empty [ trustAsked zeta both; trustAsked alpha both ])) [ zeta, both; alpha, both ] "first asked, first"
 
         testCase "a repo asking again keeps its place" <| fun () ->
             let zeta, alpha = repo "octo/zeta", repo "octo/alpha"
             let order =
-                RepoTrustWaits.pending [ trustAsked zeta [ ConnectionRoute.Git ]; trustAsked alpha both; trustAsked zeta both ]
+                Waits.trustAsks (Waits.apply Waits.empty [ trustAsked zeta [ ConnectionRoute.Git ]; trustAsked alpha both; trustAsked zeta both ])
                 |> List.map fst
             Expect.equal order [ zeta; alpha ] "the same question still standing"
 
@@ -1598,7 +1687,32 @@ let foldTests =
                     { RepoRemoved.MessageId = MessageId.create "m3" |> expect
                       RepoRemoved.Repo = r
                       RepoRemoved.Actor = Principal.toActor ada }
-            Expect.equal (RepoTrustWaits.pending [ trustAsked r both; removed ]) [] "nothing to answer"
+            Expect.equal (Waits.trustAsks (Waits.apply Waits.empty [ trustAsked r both; removed ])) [] "nothing to answer"
+
+        testCase "a person arriving ends every wait for them, and nobody else's" <| fun () ->
+            let zeta, alpha, beta = repo "octo/zeta", repo "octo/alpha", repo "octo/beta"
+            let held =
+                Waits.pending
+                    [ awaits zeta ada
+                      awaits alpha ada
+                      awaits beta bob
+                      SessionEvent.PersonArrived { Yession.Domain.Link.PersonArrived.Person = ada } ]
+            Expect.equal held [ { Hold.Repo = beta; Hold.For = WaitCondition.PersonHere bob } ] "only bob's is left"
+
+        // A wait outlives the process that began it, so both halves come back off the log.
+        testCase "a repo waiting for its person round-trips through the log" <| fun () ->
+            let codec = Yession.App.Codecs.Events.sessionEvent
+            let event = awaits (repo "octo/hello") ada
+            Expect.equal (Codec.fromString codec (Codec.toString codec event)) (Ok event) "round-trip"
+
+        testCase "a person arriving round-trips through the log" <| fun () ->
+            let codec = Yession.App.Codecs.Events.sessionEvent
+            let event = SessionEvent.PersonArrived { Yession.Domain.Link.PersonArrived.Person = ada }
+            Expect.equal (Codec.fromString codec (Codec.toString codec event)) (Ok event) "round-trip"
+
+        testCase "a repo trusted while it waits for its person stops waiting" <| fun () ->
+            let r = repo "octo/hello"
+            Expect.equal (Waits.pending [ awaits r ada; trusted r bob ]) [] "it runs with bob now"
 
         // Where the session's terminals start is the one thing a file asks of the session,
         // and it is asked the way a sandbox is: through the gate, as the file, on the

@@ -17,3 +17,8 @@ type PeerJoined =
 
 and PeerLeft =
     { PeerId : PeerId }
+
+/// A person is signed in to this session: the Manager now answers a read of their records here.
+/// Recorded when something was waiting for them (`RepoAwaitsPerson`), which it ends.
+and PersonArrived =
+    { Person : Principal }

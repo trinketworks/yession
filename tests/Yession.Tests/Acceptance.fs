@@ -82,7 +82,7 @@ let private representativeModel : ClientModel =
       Said = None
       Showings = 0
       Session = Some sessionId
-      TrustWaits = RepoTrustWaits.empty
+      Waits = Waits.empty
       TrustCards = TrustCards.empty
       AskFront = None
       AskOrder = []
@@ -667,7 +667,7 @@ let private uiChecklistTests =
                       RepoTrusted.Actor = Principal.toActor ada }
             let model =
                 { representativeModel with
-                    TrustWaits = RepoTrustWaits.apply RepoTrustWaits.empty [ asked waiting; asked settled; trusted ] }
+                    Waits = Waits.apply Waits.empty [ asked waiting; asked settled; trusted ] }
             let html = Support.render model
             // Counted rather than matched, so the assertion is about how MANY there are —
             // which is the promise — and not about any of the words around them.
@@ -697,7 +697,7 @@ let private uiChecklistTests =
                       RepoTrustAsked.CausedBy = None }
             let putOff = TrustCards.putOff repo [ ConnectionRoute.Git ] TrustCards.empty
             let shownWhen routes =
-                TrustCards.showing (RepoTrustWaits.pending [ asked routes ]) putOff |> List.length
+                TrustCards.showing (Waits.trustAsks (Waits.apply Waits.empty [ asked routes ])) putOff |> List.length
             Expect.equal
                 (shownWhen [ ConnectionRoute.Git ], shownWhen [ ConnectionRoute.Git; ConnectionRoute.Api ])
                 (0, 1)
