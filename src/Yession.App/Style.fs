@@ -3858,15 +3858,23 @@ module Style =
     /// and gutter, spent on Delete and Done instead of the list — the same row, a different
     /// moment, because a reader should feel the band hold its ground rather than a second box
     /// appearing beside it.
-    let queueEditBar = "flex items-center justify-between min-h-10 py-2 px-4 wide:px-rail bg-surface"
+    ///
+    /// `justify-end`, not `justify-between`: the two controls are one action group (finish
+    /// editing), not two unrelated things pinned to the row's opposite edges. `gap-2` is the
+    /// whole of the distance between them — close enough to read as a pair, same as a
+    /// dialog's footer. The far-apart spacing this replaced was reasoning for a *scrolling
+    /// list* of rows, which this single static bar never was.
+    let queueEditBar = "flex items-center justify-end gap-2 min-h-10 py-2 px-4 wide:px-rail bg-surface"
 
     /// Done: the way out of editing a queued message, back to the list and the local peer's
-    /// own composer — `draftNew`'s own voice (the bare caps word a composer's escape hatch
-    /// speaks in), not `self-end`: this one rides a row beside Delete rather than trailing a
-    /// column.
-    let queueDone =
-        "bg-transparent border-0 cursor-pointer px-2 py-1 " + caps
-        + " text-ink-faint hover:text-blue transition-colors " + focusRing
+    /// own composer — and the one verb of THIS surface (docs/visual-design.md, "One verb per
+    /// surface"). A tick, not a word: the same bare-blue weight the composer's own Send
+    /// wears (`btnComposerSend`) — blue being what the doctrine spends on the one bare verb
+    /// that IS the surface's act — with `Icon.check` standing in for `Icon.send` because this
+    /// one finishes editing rather than sends. Sized and hit-grown like Delete beside it
+    /// (`queueVerbDelete`), so the pair reads as two icons of one size, not a bin beside a
+    /// pill.
+    let queueDone = cls [ btnIconBareBase; "cursor-pointer text-blue hover:text-blue-up-1 pressed:text-blue-up-1"; hitTouch ]
 
     // --- Agent surfaces: what the agent draws for people to answer (A2UI) ----------------------
     // The agent says WHAT is on a surface, in the basic catalog's words; this product says how it

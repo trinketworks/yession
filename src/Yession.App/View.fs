@@ -1489,7 +1489,7 @@ module View =
             html $"""
                 <section class="{Style.queueEditBar}" data-message-queue>
                   <button type="button" class="{deleteFace}" aria-label="{deleteLabel}" data-queue-delete="{QueueId.value id}" data-queue-delete-armed="{if armed then "true" else "false"}" @click={Ev(fun _ -> dispatch onDelete)}>{Icon.bin}</button>
-                  <button type="button" class="{Style.queueDone}" data-queue-done @click={Ev(fun _ -> dispatch CloseQueueEditMsg)}>Done</button>
+                  <button type="button" class="{Style.queueDone}" aria-label="Done" data-queue-done @click={Ev(fun _ -> dispatch CloseQueueEditMsg)}>{Icon.check}</button>
                 </section>"""
         | None ->
             // Only entries the wait has cleared (`ClientModel.QueueShown`) — most sends drain
