@@ -454,7 +454,8 @@ let startFull
                 log
                 mintMessageId
                 sandboxes.EnvironmentFor
-                (fun sandbox -> ShellProfileProjection.workingDirectory sandbox (terminals.Profiles ()))
+                (fun sandbox ->
+                    ShellProfileProjection.workingDirectory sandbox (terminals.Profiles ()) |> Option.map RootPath.value)
                 TerminalShell.posix
 
         // The agent's ONE execution path (Plan 13, stage 3b). It queues a command where

@@ -5796,7 +5796,7 @@ let private shellProfileTests =
                 let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some "/repos/gone")
                 Expect.equal
                     (terminals.Profiles () |> ShellProfileProjection.workingDirectory SandboxRef.defaultRef)
-                    (Some checkout)
+                    (Some (RootPath.stored checkout))
                     "a refusal changes nothing"
             }
 
@@ -5810,7 +5810,7 @@ let private shellProfileTests =
                 Expect.isOk set "the path the repo tools answer with is a path this takes"
                 Expect.equal
                     (terminals.Profiles () |> ShellProfileProjection.workingDirectory SandboxRef.defaultRef)
-                    (Some checkout)
+                    (Some (RootPath.stored checkout))
                     "one vocabulary, in and out"
             }
 
@@ -5824,7 +5824,7 @@ let private shellProfileTests =
                 Expect.isOk set "an absolute directory the sandbox has is still a directory it has"
                 Expect.equal
                     (terminals.Profiles () |> ShellProfileProjection.workingDirectory SandboxRef.defaultRef)
-                    (Some checkout)
+                    (Some (RootPath.stored checkout))
                     "the sandbox's own root never leaves the sandbox"
             }
 
@@ -5875,7 +5875,7 @@ let private shellProfileTests =
                     [ SessionEvent.ShellProfileSet
                         { MessageId = MessageId.create "m-old" |> expect
                           Sandbox = SandboxRef.defaultRef
-                          WorkingDirectory = Some checkout
+                          WorkingDirectory = Some (RootPath.stored checkout)
                           Actor = ActorRef.Agent; OnBehalfOf = None; CausedBy = None } ]
                     |> List.fold ShellProfileProjection.applyEvent ShellProfileProjection.empty
                 let terminals, _, _ =
@@ -5976,7 +5976,7 @@ let private shellProfileTests =
                 // exists.
                 let terminals, _, _, _, _ = fixture ()
                 let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
-                let! _ = terminals.ClearProfilesUnder agentForAda "repos/octo"
+                let! _ = terminals.ClearProfilesUnder agentForAda (RootPath.stored "repos/octo")
                 Expect.equal
                     (terminals.Profiles () |> ShellProfileProjection.workingDirectory SandboxRef.defaultRef)
                     None
@@ -5993,7 +5993,7 @@ let private shellProfileTests =
                 // that had been deleted.
                 let terminals, _, _, _, _ = fixture ()
                 let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkoutAt)
-                let! cleared = terminals.ClearProfilesUnder agentForAda checkout
+                let! cleared = terminals.ClearProfilesUnder agentForAda (RootPath.stored checkout)
                 Expect.equal (cleared |> List.map SandboxRef.render) [ "default" ] "the tree the repo verb named finds it"
             }
 
@@ -6003,7 +6003,7 @@ let private shellProfileTests =
                 // moved without having to ask.
                 let terminals, _, _, _, _ = fixture ()
                 let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
-                let! cleared = terminals.ClearProfilesUnder agentForAda checkout
+                let! cleared = terminals.ClearProfilesUnder agentForAda (RootPath.stored checkout)
                 Expect.equal (cleared |> List.map SandboxRef.render) [ "default" ] "the one it cleared, named"
             }
 
@@ -6011,11 +6011,11 @@ let private shellProfileTests =
             async {
                 let terminals, _, _, _, _ = fixture ()
                 let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
-                let! cleared = terminals.ClearProfilesUnder agentForAda "repos/octo/hell"
+                let! cleared = terminals.ClearProfilesUnder agentForAda (RootPath.stored "repos/octo/hell")
                 Expect.isEmpty cleared "a prefix is not a parent"
                 Expect.equal
                     (terminals.Profiles () |> ShellProfileProjection.workingDirectory SandboxRef.defaultRef)
-                    (Some checkout)
+                    (Some (RootPath.stored checkout))
                     "and the profile still points where it did"
             }
 
@@ -6023,7 +6023,7 @@ let private shellProfileTests =
             async {
                 let terminals, _, shells, _, _ = fixture ()
                 let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
-                let! _ = terminals.ClearProfilesUnder agentForAda checkout
+                let! _ = terminals.ClearProfilesUnder agentForAda (RootPath.stored checkout)
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 Expect.equal (shellStarts shells) ([ None ], []) "nothing is asked for a directory that has gone"
             }
@@ -6065,7 +6065,7 @@ let private shellProfileTests =
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 Expect.equal
                     (terminals.Profiles () |> ShellProfileProjection.workingDirectory SandboxRef.defaultRef)
-                    (Some checkout)
+                    (Some (RootPath.stored checkout))
                     "a failed spawn is not a decision"
             }
     ]

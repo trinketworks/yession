@@ -570,7 +570,8 @@ let private listedAt (reposDir: string) (r: RepoRef) : RepoRead =
         { Repo = r
           Branch = "main"
           Dirty = false
-          Path = sprintf "%s/%s" reposDir (RepoRef.relativePath r) }
+          Path = sprintf "%s/%s" reposDir (RepoRef.relativePath r)
+          Checkout = RootPath.stored (sprintf "%s/%s" reposDir (RepoRef.relativePath r)) }
 
 /// A checkout git could not read, as the listing reports one.
 let private unreadableAt (reposDir: string) (r: RepoRef) : RepoRead =
@@ -1735,6 +1736,60 @@ let foldTests =
                     Expect.equal (Authority.credential call.Authority) (CredentialFor.Person ada) "on the authority of whoever added it"
                     Expect.stringContains call.Args "added" "and caused by the add"
                 | other -> failwithf "expected one call, got %A" (other |> List.map (fun c -> c.Summary))
+            }
+
+        // A fold that reads what its own write moves never settles. The listing says where a
+        // checkout is from where terminals start NOW, so once the profile was in the checkout
+        // it said `.`, the fold applied `.`, and from there it said `repos/…` again: session
+        // 3V9P moved its profile twelve times in two days, one fold undoing the last.
+        testCaseAsync "a shell profile the file applied is not applied again once terminals start there" <|
+            async {
+                let r = repo "octo/hello"
+                let dir = checkout r (Some "version: 2\nsession:\n  shell-profile: .\n")
+                let at = sprintf "%s/%s" dir (RepoRef.relativePath r)
+                let log = foldLog ()
+                let mutable profile : RootPath option = None
+                let listing () =
+                    let startsAt = SandboxPath.resolvedFrom (Some dir) (profile |> Option.map RootPath.value)
+                    [ RepoRead.Listed
+                          { Repo = r
+                            Branch = "main"
+                            Dirty = false
+                            Path = SandboxPath.reachedFrom startsAt at
+                            Checkout = RootPath.reached (Some dir) at } ]
+                let seen = ResizeArray<GatedCall> ()
+                // Applies what it is asked, as `set_shell_profile` does: the profile moves, and
+                // the log says so.
+                let applying : RunGatedCommand =
+                    fun call ->
+                        async {
+                            seen.Add call
+                            let cwd =
+                                match call.Summary.Split " -> " with
+                                | [| _; "wherever the sandbox puts them" |] -> None
+                                | [| _; path |] -> Some (RootPath.stored path)
+                                | _ -> failwithf "not a profile: %s" call.Summary
+                            profile <- cwd
+                            let! _ =
+                                log.Append
+                                    (Authority.author call.Authority)
+                                    (SessionEvent.ShellProfileSet
+                                        { MessageId = MessageId.create (sprintf "set-%d" seen.Count) |> expect
+                                          Sandbox = SandboxRef.defaultRef
+                                          WorkingDirectory = cwd
+                                          Actor = Authority.author call.Authority
+                                          OnBehalfOf = None
+                                          CausedBy = None })
+                            return Ok { Handle = None; Tool = call.Tool; Summary = call.Summary; Status = CommandRan "ok" }
+                        }
+                let folded =
+                    createFold (cell (Some (reposReading dir listing))) (cell WorkSandboxes.unavailable) applying log noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Connected (CredentialFor.Person ada)) (CredentialFor.Person ada)
+                Expect.equal
+                    (seen |> List.ofSeq |> List.map (fun c -> c.Summary))
+                    [ "set_shell_profile default -> octo/hello" ]
+                    "set once, at the checkout, and left there"
             }
 
         testCaseAsync "two repos that both declare a shell profile get neither, and are each told why" <|

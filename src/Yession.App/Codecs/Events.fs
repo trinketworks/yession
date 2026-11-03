@@ -1399,7 +1399,7 @@ module Events =
                       // The CLEAR rides as an absent value, which is what makes it
                       // indistinguishable from a line an older build wrote — and that is the
                       // right answer for both: no profile.
-                      "workingDirectory", Encode.option Encode.string p.WorkingDirectory
+                      "workingDirectory", Encode.option Encode.string (p.WorkingDirectory |> Option.map RootPath.value)
                       "actor", Codec.actor.Encode p.Actor
                       "onBehalfOf", Encode.option Codec.principal.Encode p.OnBehalfOf
                       "causedBy", Encode.option Codec.cause.Encode p.CausedBy ]
@@ -1407,7 +1407,8 @@ module Events =
             Decode.object (fun get ->
                 { ShellProfileSet.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
                   ShellProfileSet.Sandbox = get.Required.Field "sandbox" Codec.sandboxRef.Decode
-                  ShellProfileSet.WorkingDirectory = get.Optional.Field "workingDirectory" Decode.string
+                  ShellProfileSet.WorkingDirectory =
+                    get.Optional.Field "workingDirectory" Decode.string |> Option.map RootPath.stored
                   ShellProfileSet.Actor = get.Required.Field "actor" Codec.actor.Decode
                   // Optional in, as on a start: an older line named nobody behind its actor.
                   ShellProfileSet.OnBehalfOf =

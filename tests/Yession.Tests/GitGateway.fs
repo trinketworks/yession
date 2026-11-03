@@ -1102,6 +1102,7 @@ let private sessionRepos
           Network = DockerFixture.quietNetwork ()
           ReposDir = reposDir
           StartsAt = fun () -> None
+          Root = None
           ExtraReadPaths = []
           Git = Repos.gitExecutable (Sandboxes.ambientEnv ())
           AllowedDomains = []

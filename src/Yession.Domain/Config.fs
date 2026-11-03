@@ -17,28 +17,6 @@ open Yession.Domain
 // which repo arrived first. Anything session-wide without such an answer (approval gates,
 // MCP servers, a dependency on another repo) stays the operator's.
 
-/// A path a file wrote, resolved under a checkout and CLAMPED there. The decoder already
-/// refuses a path that climbs out — that is the upstream fix, made where a person can
-/// correct their file — and this is the downstream guard: a path reaching here some other
-/// way still cannot name a directory above the checkout, because there is no arithmetic
-/// here that could produce one.
-module CheckoutPath =
-
-    let under (checkout: string) (dir: string) : string =
-        let resolved =
-            dir.Split ([| '/'; '\\' |])
-            |> Array.fold
-                (fun acc segment ->
-                    match segment with
-                    | "" | "." -> acc
-                    | ".." -> (match acc with [] -> [] | _ :: rest -> rest)
-                    | segment -> segment :: acc)
-                []
-            |> List.rev
-        match resolved with
-        | [] -> checkout.TrimEnd '/'
-        | segments -> checkout.TrimEnd '/' + "/" + String.concat "/" segments
-//
 // This file is the MODEL: what a declaration is. Reading one from the file is the
 // Session's (`Yession.Session.ConfigFile`), because the Session is what reads a checkout.
 

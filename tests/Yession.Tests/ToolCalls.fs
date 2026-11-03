@@ -194,7 +194,7 @@ let private servicesOver (service: Repos.ReposService) : Commands.CommandService
 /// somebody has already said where terminals start.
 let private servicesProfiledOver (cwd: string) (service: Repos.ReposService) : Commands.CommandServices =
     let profile : ShellProfileProjection =
-        { Profiles = Map.ofList [ SandboxRef.defaultRef, { WorkingDirectory = Some cwd } ] }
+        { Profiles = Map.ofList [ SandboxRef.defaultRef, { WorkingDirectory = Some (RootPath.stored cwd) } ] }
     { servicesOver service with
         Terminals = fun () -> { SessionTerminals.unavailable with Profiles = fun () -> profile } }
 
@@ -203,7 +203,7 @@ let private cloningAt (branch: string) =
     openToolSession (
         servicesOver (
             reposAnswering (fun repo ->
-                async { return Ok { Repo = repo; Branch = branch; Dirty = false; Path = "/repos/octo/hello" } })))
+                async { return Ok { Repo = repo; Branch = branch; Dirty = false; Path = "/repos/octo/hello"; Checkout = RootPath.stored ("/repos/octo/hello") } })))
 
 /// A session whose `add_repo` does not come back until the test says so — a clone in
 /// progress, which is what every first `add_repo` is for its first several seconds.
@@ -216,7 +216,7 @@ let private slowlyCloning () : ToolSession * (unit -> unit) =
                 reposAnswering (fun repo ->
                     async {
                         do! cloning
-                        return Ok { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos/octo/hello" }
+                        return Ok { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos/octo/hello"; Checkout = RootPath.stored ("/repos/octo/hello") }
                     })))
     session, fun () -> finish ()
 
@@ -260,7 +260,7 @@ let private declaringDev (record: SandboxRequest -> unit) : Commands.CommandServ
             Container = Some { ContainerSpec.defaults with Image = Some { Name = "ghcr.io/octo/dev"; Tag = Some "3" } }
             Setup = Some "make deps"
             Uses = [ ResourceName.create "github" |> expect ] }
-    { servicesOver (reposAnswering (fun repo -> async { return Ok { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos" } })) with
+    { servicesOver (reposAnswering (fun repo -> async { return Ok { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos"; Checkout = RootPath.stored ("/repos") } })) with
         DeclaredSandboxes = fun () -> Read (Map.ofList [ dev, declared ])
         Sandboxes =
             fun () ->
@@ -283,7 +283,7 @@ let private declaringDev (record: SandboxRequest -> unit) : Commands.CommandServ
 
 /// Services whose queued commands land in `seen` instead of a terminal.
 let private servicesQueueing (seen: ResizeArray<CommandRequest>) (sandboxes: WorkSandboxes.WorkSandboxes) =
-    { servicesOver (reposAnswering (fun repo -> async { return Ok { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos" } })) with
+    { servicesOver (reposAnswering (fun repo -> async { return Ok { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos"; Checkout = RootPath.stored ("/repos") } })) with
         Sandboxes = fun () -> sandboxes
         RunCommand =
             fun () ->
@@ -357,7 +357,7 @@ let private tests' =
                                 async {
                                     return
                                         Ok
-                                            { Repos.Recorded.Answer = { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos/octo/hello" }
+                                            { Repos.Recorded.Answer = { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos/octo/hello"; Checkout = RootPath.stored ("/repos/octo/hello") }
                                               Repos.Recorded.RecordedAs = Some added }
                                 } }
                 let session =
@@ -804,7 +804,7 @@ let private adaActs = ada
 let private adaActor = Principal.toActor ada
 
 let private cloned (branch: string) (repo: RepoRef) : Result<RepoListing, string> =
-    Ok { Repo = repo; Branch = branch; Dirty = false; Path = "repos/octo/hello" }
+    Ok { Repo = repo; Branch = branch; Dirty = false; Path = "repos/octo/hello"; Checkout = RootPath.stored ("repos/octo/hello") }
 
 /// Admit, then run the work in line — what the Host does in the background.
 let private launched (session: ToolSession) (repo: RepoRef) (branch: string option) =
@@ -822,7 +822,7 @@ let private launchTests =
 
         testCaseAsync "a session that already has a repo is not launched into, and names the one it has" <|
             async {
-                let held = reposHolding [ { Repo = hello; Branch = "main"; Dirty = false; Path = "repos/octo/hello" } ] (cloned "main")
+                let held = reposHolding [ { Repo = hello; Branch = "main"; Dirty = false; Path = "repos/octo/hello"; Checkout = RootPath.stored ("repos/octo/hello") } ] (cloned "main")
                 let session = openToolSession (servicesRecording held)
                 let! admitted = session.Launch adaActs (RepoRef.create "octo/other" |> expect) None
                 match admitted with

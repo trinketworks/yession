@@ -505,7 +505,7 @@ let private frameSerializationTests =
                   ShellProfileSet
                     { MessageId = messageId
                       Sandbox = SandboxRef.defaultRef
-                      WorkingDirectory = Some "/repos/octo/hello"
+                      WorkingDirectory = Some (RootPath.stored "/repos/octo/hello")
                       Actor = ActorRef.Agent; OnBehalfOf = None; CausedBy = Some (Cause.Item messageId) }
                   ShellProfileSet
                     { MessageId = messageId
@@ -778,7 +778,7 @@ let private shellProfileTests =
         ShellProfileSet
             { MessageId = MessageId.create "msg-1" |> expect
               Sandbox = sandbox
-              WorkingDirectory = cwd
+              WorkingDirectory = cwd |> Option.map RootPath.stored
               Actor = ActorRef.Agent; OnBehalfOf = None; CausedBy = None }
     let fold events =
         events |> List.fold ShellProfileProjection.applyEvent ShellProfileProjection.empty
@@ -786,7 +786,7 @@ let private shellProfileTests =
     let setBy actor cwd : ShellProfileSet =
         { MessageId = MessageId.create "msg-0" |> expect
           Sandbox = SandboxRef.defaultRef
-          WorkingDirectory = cwd
+          WorkingDirectory = cwd |> Option.map RootPath.stored
           Actor = actor; OnBehalfOf = None; CausedBy = None }
     testList "Shell profile (Plan 25)" [
         testCase "the newest set for a sandbox wins" <| fun () ->
@@ -796,7 +796,7 @@ let private shellProfileTests =
                       profileSet SandboxRef.defaultRef (Some "/repos/two") ]
             Expect.equal
                 (ShellProfileProjection.workingDirectory SandboxRef.defaultRef folded)
-                (Some "/repos/two")
+                (Some (RootPath.stored "/repos/two"))
                 "a profile is replaced, never accumulated"
 
         testCase "a set leaves the other sandboxes alone" <| fun () ->
@@ -806,7 +806,7 @@ let private shellProfileTests =
                       profileSet (sandboxNamed "test") (Some "/repos/two") ]
             Expect.equal
                 (ShellProfileProjection.workingDirectory SandboxRef.defaultRef folded)
-                (Some "/repos/one")
+                (Some (RootPath.stored "/repos/one"))
                 "a path is only a path inside the filesystem that has it"
 
         testCase "a clear returns its sandbox to no profile" <| fun () ->
@@ -843,18 +843,18 @@ let private shellProfileTests =
 
         testCase "a directory under a tree is inside it, and so is the tree itself" <| fun () ->
             // What a caller deleting a checkout asks about every profile it might invalidate.
-            Expect.isTrue (ShellProfile.isInside "/repos/octo/hello" "/repos/octo/hello") "the tree itself"
-            Expect.isTrue (ShellProfile.isInside "/repos/octo/hello" "/repos/octo/hello/src") "and anything under it"
-            Expect.isTrue (ShellProfile.isInside "/repos/octo/hello/" "/repos/octo/hello") "however either side spells a directory"
+            Expect.isTrue (RootPath.isInside (RootPath.stored "/repos/octo/hello") (RootPath.stored "/repos/octo/hello")) "the tree itself"
+            Expect.isTrue (RootPath.isInside (RootPath.stored "/repos/octo/hello") (RootPath.stored "/repos/octo/hello/src")) "and anything under it"
+            Expect.isTrue (RootPath.isInside (RootPath.stored "/repos/octo/hello/") (RootPath.stored "/repos/octo/hello")) "however either side spells a directory"
 
         testCase "a sibling that merely shares a prefix is not inside it" <| fun () ->
             // The bug a bare `StartsWith` has, and the reason this is a function rather than
             // an inline test at the caller: `/repos/octo/hello-world` is a different checkout,
             // and clearing its profile because `/repos/octo/hello` went would be silent.
             Expect.isFalse
-                (ShellProfile.isInside "/repos/octo/hello" "/repos/octo/hello-world")
+                (RootPath.isInside (RootPath.stored "/repos/octo/hello") (RootPath.stored "/repos/octo/hello-world"))
                 "a prefix is not a parent unless it ends on a directory boundary"
-            Expect.isFalse (ShellProfile.isInside "/repos/octo/hello" "/repos/octo") "nor is the parent inside the child"
+            Expect.isFalse (RootPath.isInside (RootPath.stored "/repos/octo/hello") (RootPath.stored "/repos/octo")) "nor is the parent inside the child"
 
         testCase "a profile change reads in the timeline as a sentence" <| fun () ->
             // Everyone in the session is affected — the next terminal a PERSON opens lands
@@ -878,6 +878,22 @@ let private shellProfileTests =
                 Expect.equal item.Author ActorRef.Agent "attributed to whoever set it"
             | other -> failwithf "expected one act-note, got %A" other
 
+        testCase "a profile at the sandbox's root says where in words" <| fun () ->
+            // Stored as `.`, which at the end of a sentence reads as nothing at all.
+            let envelope : EventEnvelope<SessionEvent> =
+                { EventId = EventId.fresh ()
+                  SessionId = SessionId.create "session-1" |> expect
+                  Offset = EventOffset.create 1L |> expect
+                  Actor = ActorRef.Agent
+                  Timestamp = DateTimeOffset (2026, 8, 22, 0, 0, 0, TimeSpan.Zero)
+                  Event = profileSet SandboxRef.defaultRef (Some ".") }
+            let proj, _ =
+                ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
+            Expect.equal
+                (proj.Items |> List.map ConversationItem.said)
+                [ "set shell profile for default (terminals start where the sandbox puts them)" ]
+                "the root is where the sandbox puts them"
+
         testCase "a ShellProfileSet with no directory is the clear" <| fun () ->
             let pinned =
                 """{"type":"shellProfileSet","payload":{"messageId":"msg-1","sandbox":"default","actor":{"kind":"agent"}}}"""
@@ -891,7 +907,7 @@ let private shellProfileTests =
                 ShellProfileSet
                     { MessageId = MessageId.create "msg-1" |> expect
                       Sandbox = SandboxRef.defaultRef
-                      WorkingDirectory = Some "repos/octo/one"
+                      WorkingDirectory = Some (RootPath.stored "repos/octo/one")
                       Actor = ActorRef.Configured one; OnBehalfOf = None
                       CausedBy = Some (Cause.Item (MessageId.create "added" |> expect)) }
             Expect.equal
@@ -903,28 +919,28 @@ let private shellProfileTests =
         // never of the order the repos arrived in.
         testCase "one declaring repo applies its directory, as itself" <| fun () ->
             Expect.equal
-                (ConfiguredProfile.decide [ one, "repos/octo/one" ] None)
-                (ConfiguredProfile.Apply (one, "repos/octo/one"))
+                (ConfiguredProfile.decide [ one, RootPath.stored "repos/octo/one" ] None)
+                (ConfiguredProfile.Apply (one, RootPath.stored "repos/octo/one"))
                 "nothing set yet: the file's directory"
             Expect.equal
-                (ConfiguredProfile.decide [ one, "repos/octo/one" ] (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one/"))))
+                (ConfiguredProfile.decide [ one, RootPath.stored "repos/octo/one" ] (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one/"))))
                 ConfiguredProfile.Leave
                 "already applied: nothing to do, however a directory is spelled"
             Expect.equal
-                (ConfiguredProfile.decide [ one, "repos/octo/one/src" ] (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one"))))
-                (ConfiguredProfile.Apply (one, "repos/octo/one/src"))
+                (ConfiguredProfile.decide [ one, RootPath.stored "repos/octo/one/src" ] (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one"))))
+                (ConfiguredProfile.Apply (one, RootPath.stored "repos/octo/one/src"))
                 "a file that moved its directory moves the profile"
 
         testCase "a profile somebody set is theirs, whatever the files say" <| fun () ->
             for actor in [ ActorRef.Agent; ActorRef.PeerRef (PeerId.create "ada" |> expect) ] do
                 for cwd in [ Some "elsewhere"; None ] do
                     Expect.equal
-                        (ConfiguredProfile.decide [ one, "repos/octo/one" ] (Some (setBy actor cwd)))
+                        (ConfiguredProfile.decide [ one, RootPath.stored "repos/octo/one" ] (Some (setBy actor cwd)))
                         ConfiguredProfile.Leave
                         "a set or a clear by a person, or the agent for one, is not moved"
 
         testCase "two declaring repos apply neither, and the one that had applied withdraws" <| fun () ->
-            let both = [ one, "repos/octo/one"; two, "repos/octo/two" ]
+            let both = [ one, RootPath.stored "repos/octo/one"; two, RootPath.stored "repos/octo/two" ]
             Expect.equal (ConfiguredProfile.decide both None) ConfiguredProfile.Leave "nothing set: nothing to set"
             Expect.equal
                 (ConfiguredProfile.decide both (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one"))))
@@ -948,10 +964,10 @@ let private shellProfileTests =
 
         testCase "each of several declaring repos is told who else declares" <| fun () ->
             let three = RepoRef.create "octo/three" |> expect
-            let told = ConfiguredProfile.conflicts [ one, "a"; two, "b"; three, "c" ] |> Map.ofList
+            let told = ConfiguredProfile.conflicts [ one, RootPath.stored "a"; two, RootPath.stored "b"; three, RootPath.stored "c" ] |> Map.ofList
             Expect.equal (Map.count told) 3 "every one of them"
             Expect.stringContains (told |> Map.find one) "octo/three, octo/two also declare" "the others, by name"
-            Expect.isEmpty (ConfiguredProfile.conflicts [ one, "a" ]) "one alone conflicts with nobody"
+            Expect.isEmpty (ConfiguredProfile.conflicts [ one, RootPath.stored "a" ]) "one alone conflicts with nobody"
     ]
 
 let private repoTests =

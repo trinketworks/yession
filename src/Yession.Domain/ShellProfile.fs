@@ -29,26 +29,12 @@ open Yession.Domain
 type ShellProfile =
     { /// Where a shell opened under this profile starts. `None` = the sandbox's own
       /// default, which is what every terminal did before this plan.
-      WorkingDirectory : string option }
+      WorkingDirectory : RootPath option }
 
 module ShellProfile =
 
     /// No profile: the sandbox decides, as it always did.
     let none : ShellProfile = { WorkingDirectory = None }
-
-    /// Is `cwd` the directory `tree`, or somewhere inside it? What a caller deleting a tree
-    /// asks about every profile it might have invalidated (Plan 26).
-    ///
-    /// A prefix on a DIRECTORY BOUNDARY, never a bare `StartsWith`: `/repos/hello-world`
-    /// starts with `/repos/hello` and is a different checkout, so the naive test would clear
-    /// a profile that is still perfectly good. Trailing slashes are trimmed on both sides
-    /// because a path that names a directory may or may not carry one, and which it is says
-    /// nothing about what it means.
-    let isInside (tree: string) (cwd: string) : bool =
-        let trimmed (path: string) = path.TrimEnd '/'
-        let tree = trimmed tree
-        let cwd = trimmed cwd
-        tree <> "" && (cwd = tree || cwd.StartsWith (tree + "/"))
 
 /// Every sandbox's profile, projected from the log. Per sandbox and not per session
 /// because a path is only a path inside the filesystem that has it: the default sandbox's
@@ -79,7 +65,7 @@ module ShellProfileProjection =
 
     /// Where a shell opened in this sandbox starts, if anywhere — what a spawn asks, and
     /// the only thing it asks.
-    let workingDirectory (sandbox: SandboxRef) (proj: ShellProfileProjection) : string option =
+    let workingDirectory (sandbox: SandboxRef) (proj: ShellProfileProjection) : RootPath option =
         proj |> tryFind sandbox |> Option.bind (fun profile -> profile.WorkingDirectory)
 
     /// The sandboxes that have one, in name order — the query's rows.
@@ -97,7 +83,7 @@ type ConfiguredProfile =
     /// The profile already is what the files make of it, or a person chose it.
     | Leave
     /// Point it at this directory, as this repo's file.
-    | Apply of RepoRef * string
+    | Apply of RepoRef * RootPath
     /// Clear the profile this repo's file set: no single file declares one any more.
     | Withdraw of RepoRef
 
@@ -105,10 +91,11 @@ module ConfiguredProfile =
 
     let private sameRepo (a: RepoRef) (b: RepoRef) = RepoRef.value a = RepoRef.value b
 
-    /// `declared` is every repo whose file has the key, its directory already resolved to
-    /// where the default sandbox's terminals reach it. `last` is the newest
+    /// `declared` is every repo whose file has the key, its directory already resolved
+    /// from the default sandbox's root — the vocabulary a profile is stored in, so the
+    /// comparison below is between two of the same thing. `last` is the newest
     /// `ShellProfileSet` for that sandbox.
-    let decide (declared: (RepoRef * string) list) (last: ShellProfileSet option) : ConfiguredProfile =
+    let decide (declared: (RepoRef * RootPath) list) (last: ShellProfileSet option) : ConfiguredProfile =
         let configured =
             last
             |> Option.bind (fun set ->
@@ -120,14 +107,14 @@ module ConfiguredProfile =
         | _ ->
             match declared, configured with
             | [ repo, path ], Some (setBy, Some current) when
-                sameRepo repo setBy && current.TrimEnd '/' = path.TrimEnd '/' -> ConfiguredProfile.Leave
+                sameRepo repo setBy && current = path -> ConfiguredProfile.Leave
             | [ repo, path ], _ -> ConfiguredProfile.Apply (repo, path)
             | _, Some (setBy, Some _) -> ConfiguredProfile.Withdraw setBy
             | _ -> ConfiguredProfile.Leave
 
     /// What each declaring repo is told when more than one declares: the others' names, and
     /// that none of them applies. Empty for one or none.
-    let conflicts (declared: (RepoRef * string) list) : (RepoRef * string) list =
+    let conflicts (declared: (RepoRef * RootPath) list) : (RepoRef * string) list =
         match declared with
         | [] | [ _ ] -> []
         | _ ->
