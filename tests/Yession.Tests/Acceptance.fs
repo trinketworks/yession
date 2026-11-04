@@ -1441,11 +1441,11 @@ let private uiChecklistTests =
                 1
                 "one editable draft body, the joined one — the queued message is a summary"
 
-        testCase "opening a queued message moves it into the composer, Delete and Done where the list was" <| fun () ->
+        testCase "opening a queued message moves it into the composer, Delete and Done on its action row" <| fun () ->
             let html = Support.render { representativeModel with EditingQueue = Some queueId }
             let required =
                 [ "the message is editable, in the composer's own slot", Dom.attr Dom.Hooks.queueInput "queue-ui"
-                  "Delete, where the list used to be", Dom.attr Dom.Hooks.queueDelete "queue-ui"
+                  "Delete, on the composer's own action row", Dom.attr Dom.Hooks.queueDelete "queue-ui"
                   "and Done beside it", Dom.Hooks.queueDone ]
             for label, needle in required do
                 Expect.isTrue (html.Contains needle) (sprintf "%s (%s)" label needle)
