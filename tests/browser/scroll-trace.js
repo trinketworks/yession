@@ -19,6 +19,7 @@
     const orig = Element.prototype[name];
     Element.prototype[name] = function (...a) {
       trace.push(`${at()} ${name} ${this.tagName}${this === conv() ? "(conv)" : ""} ${JSON.stringify(a)} ${stack()}`);
+      if (name === "scrollTo" && a[0] && a[0].behavior === "smooth") { window.__sentAt = desc.get.call(this); window.__stillFrames = 0; window.__moved = false; }
       return orig.apply(this, a);
     };
   }
@@ -35,6 +36,7 @@
   let n = 0;
   const frame = () => {
     const c = conv();
+    if (c && window.__sentAt !== undefined && !window.__moved) { if (desc.get.call(c) === window.__sentAt) window.__stillFrames++; else window.__moved = true; }
     trace.push(`${at()} frame top=${c && c.scrollTop} h=${c && c.scrollHeight} ch=${c && c.clientHeight} sent=${sent()} same=${c === first}`);
     if (++n < 40) requestAnimationFrame(frame);
   };

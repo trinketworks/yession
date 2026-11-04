@@ -5525,6 +5525,8 @@ let editorTests =
                   let! _ = page.EvaluateAsync (System.IO.File.ReadAllText "tests/browser/scroll-trace.js") |> Async.AwaitTask
                   let! stopped = Probe.reading page Yession.App.Probes.Measure.SmoothScrollToTop
                   let! trace = page.EvaluateAsync<string> "JSON.stringify(window.__trace)" |> Async.AwaitTask
+                  let! still = page.EvaluateAsync<string> "String(window.__stillFrames) + (window.__moved ? '' : ' (never moved)')" |> Async.AwaitTask
+                  printfn "SCROLL STILL FRAMES #%d: %s, stopped at %A" copy still stopped
                   if stopped <> [ 0.0 ] then printfn "SCROLL TRACE #%d %A: %s" copy stopped trace
                   let reached = match stopped with [ at ] -> at | _ -> failwith "there is no conversation to scroll"
                   let! report = Harness.ask page HarnessPage.benchScrollEnd
