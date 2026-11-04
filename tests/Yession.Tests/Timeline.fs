@@ -3354,35 +3354,6 @@ let private listTests =
                 |> Support.step (DismissTabMsg terminalA)
             Expect.equal (model.Tabs, ClientModel.selectedTerminal model) ([ terminalB ], Some terminalB) "gone, and nothing moved"
 
-        // F5. Put away from the `all` page the row stays — it is the closed terminal's row —
-        // and only the press has gone, so the keyboard stays on the row rather than being sent
-        // to a strip the reader is not looking at.
-        testCase "a closed tab put away from the all page leaves focus on its row" <| fun () ->
-            let model =
-                heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
-                |> Support.step (ShowInPaneMsg (Reading terminalA))
-                |> Support.step (ShowInPaneMsg (Reading terminalB))
-                |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
-                |> Support.step ToggleSwitcherMsg
-            let _, effects = ClientModel.update (DismissTabMsg terminalA) model
-            Expect.equal
-                (effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false))
-                [ ClientEffect.Move (DomMove.FocusSwitcherRow terminalA) ]
-                "on the row it was put away from"
-
-        testCase "a closed row on the all page offers to put its tab away" <| fun () ->
-            let model =
-                heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
-                |> Support.step (ShowInPaneMsg (Reading terminalA))
-                |> Support.step (ShowInPaneMsg (Reading terminalB))
-                |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
-                |> Support.step ToggleSwitcherMsg
-                |> Support.step ToggleClosedMsg
-            Expect.stringContains
-                (markupAt Dom.Hooks.contentList (Support.render model))
-                (Dom.attr Dom.Hooks.terminalListDismiss "term-a")
-                "the closed tab's ×, from its row"
-
         testCase "a running terminal's tab can be put away" <| fun () ->
             let model =
                 clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))

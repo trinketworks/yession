@@ -6458,10 +6458,6 @@ module ClientModel =
             | WalkListMsg (key, from) -> walkList key from model |> Option.map ClientEffect.Move |> Option.toList
             // The × that was pressed leaves with its tab: onto the tab that took its place, or
             // the pane's empty press when there is none.
-            // Except put away from the `all` page: the row stays, as the closed terminal's row,
-            // and only the press that put its tab away has left — so the hand stays on the row.
-            | DismissTabMsg terminal when model.Tabs <> next.Tabs && model.Switcher ->
-                [ ClientEffect.Move (DomMove.FocusSwitcherRow terminal) ]
             | DismissTabMsg terminal when model.Tabs <> next.Tabs ->
                 match dismissLanding model terminal with
                 | Some tab -> [ ClientEffect.Move (DomMove.FocusTab tab) ]

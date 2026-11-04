@@ -4851,8 +4851,8 @@ module View =
     /// thumb has no hover (docs/visual-design.md, principle 4). They were shown only on the
     /// selected row, on an armed one, and elsewhere under the pointer; the saved width cost
     /// every reader without a pointer the verbs altogether.
-    /// A closed row's verbs are its recording's (`replay`) and its tab's (`put away`), where
-    /// an open one's are its rewind and its kill. A row's state is the mark the pivot wears
+    /// A closed row's verb is its stream's `attach`, where it has one, and an open one's is
+    /// its stop. Its tab is closed from the tab, not from here. A row's state is the mark the pivot wears
     /// for it (`terminalMark`), whoever holds its keyboard is their own colour beside it, and
     /// the one state with no glyph — a recording the cap ate — is the only one that says a
     /// word.
@@ -4910,15 +4910,6 @@ module View =
                         <button type="button" class="{Style.terminalListAct}" data-terminal-reattach="{id}"
                                 aria-label="Attach {name} again" title="Attach {name} again"
                                 @click={Ev(fun _ -> dispatch (ReattachTerminalMsg view.TerminalId))}>{Dom.Text.reattach}</button>"""
-            // A closed terminal's tab, put away — the closed tab's ×, from here. Only while it
-            // HAS a tab: a closed terminal nobody opened here has nothing to put away.
-            let putAway =
-                if view.IsOpen || not (List.contains view.TerminalId model.Tabs) then Lit.nothing
-                else
-                    html $"""
-                        <button type="button" class="{Style.terminalListAct}" data-terminal-list-dismiss="{id}"
-                                aria-label="{Dom.Text.dismissTab name}" title="{Dom.Text.dismissTab name}"
-                                @click={Ev(fun _ -> dispatch (DismissTabMsg view.TerminalId))}>{Dom.Text.putAway}</button>"""
             // A terminal that ended while the list holds it above the fold says so where its
             // stop was, so a stop's press is answered on the row it was made on. A device
             // stream's `attach` says enough already. Under the fold, the heading says it.
@@ -4956,7 +4947,7 @@ module View =
                     </span>
                     {subtitle}
                   </button>
-                  <span class="{Style.terminalListVerbs}">{reattach}{putAway}{stopped}{killControl dispatch model view}</span>
+                  <span class="{Style.terminalListVerbs}">{reattach}{stopped}{killControl dispatch model view}</span>
                 </div>"""
         // A file's row, in the same shape as a terminal's. Reachability is the whole point of
         // it: a file is otherwise findable only by its chip in a message, so one shared two
