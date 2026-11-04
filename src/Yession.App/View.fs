@@ -1471,8 +1471,45 @@ module View =
               {catchUpBar model}
             </header>"""
 
+    /// An agent's surface this reader put away (`FoldSurfaceMsg`), as one line in the queue's
+    /// band: the agent's square and the question, pressed to open it again as the card in
+    /// front (`UnfoldSurfaceMsg`), as a queued message's line opens it for editing. Its one
+    /// tool takes the surface down for everyone (`DismissSurfaceMsg`), armed by a first press
+    /// as a queued message's delete is, and still while an answer or a dismissal is on its way
+    /// or the agent has yet to act on one.
+    let private foldedSurface (dispatch: ClientMsg -> unit) (model: ClientModel) (surfaceId: string) : TemplateResult =
+        let title = A2ui.Project.title model.Synced.Surfaces surfaceId |> Option.defaultValue Dom.Text.surfaceUntitled
+        let sending = SurfaceView.sending (model.Asked |> Map.toList |> List.map snd) surfaceId
+        let still = sending <> SurfaceView.Sending.Nothing || Map.containsKey surfaceId model.SurfaceAnswers
+        let armed = model.SurfaceDismissArmed = Some surfaceId
+        let face = if armed then Style.queueVerbDeleteArmed else Style.queueVerbDelete
+        let label = if armed then Dom.Text.surfaceDismissConfirm else Dom.Text.surfaceDismissLabel
+        let press _ =
+            if not still then dispatch (if armed then DismissSurfaceMsg surfaceId else ArmSurfaceDismissMsg (Some surfaceId))
+        let flag on = if on then "true" else "false"
+        html $"""
+            <article class="{Style.queueItem}" data-surface-folded="{surfaceId}">
+              <button type="button" class="{Style.queueSummary}" aria-label="{Dom.Text.surfaceUnfoldLabel}"
+                      @click={Ev(fun _ -> dispatch (UnfoldSurfaceMsg surfaceId))}>
+                <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model ActorRef.Agent ]}"></span>
+                <span class="{Style.queueSummaryBody}">{title}</span>
+              </button>
+              <div class="{Style.queueTools}">
+                <button type="button" class="{face}" aria-label="{label}" title="{label}" data-surface-dismiss
+                        data-surface-dismiss-armed="{flag armed}" aria-busy="{flag (sending = SurfaceView.Sending.Dismissal)}"
+                        aria-disabled="{flag still}" @click={Ev press}>{Icon.bin}</button>
+              </div>
+            </article>"""
+
     let private queue (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let synced = model.Synced
+        // Surfaces put away stand above the queued messages, in the band both share; a surface
+        // whose root has gone is not drawn, as its card would not be.
+        let folded =
+            synced.Surfaces
+            |> Map.toList
+            |> List.filter (fun (id, surface) -> Set.contains id model.FoldedSurfaces && Map.containsKey "root" surface.Components)
+            |> List.map (fst >> foldedSurface dispatch model)
         match ClientModel.editingQueue model with
         | Some id ->
             // The band's OWN surface, while this entry sits in the composer instead of the
@@ -1486,7 +1523,11 @@ module View =
             let deleteFace = if armed then Style.queueVerbDeleteArmed else Style.queueVerbDelete
             let deleteLabel = if armed then "Confirm delete" else "Delete"
             let onDelete = if armed then DeleteQueuedMsg id else ArmQueueDeleteMsg (Some id)
+            // The surfaces put away keep their lines above the bar: editing a message puts
+            // nothing else away.
+            let above = if List.isEmpty folded then Lit.nothing else html $"""<section class="{Style.queue}">{folded}</section>"""
             html $"""
+                {above}
                 <section class="{Style.queueEditBar}" data-message-queue>
                   <button type="button" class="{deleteFace}" aria-label="{deleteLabel}" data-queue-delete="{QueueId.value id}" data-queue-delete-armed="{if armed then "true" else "false"}" @click={Ev(fun _ -> dispatch onDelete)}>{Icon.bin}</button>
                   <button type="button" class="{Style.queueDone}" aria-label="Done" data-queue-done @click={Ev(fun _ -> dispatch CloseQueueEditMsg)}>{Icon.check}</button>
@@ -1497,11 +1538,6 @@ module View =
             // stays closed for them. A reorder press still reaches an entry fresh off this
             // filter: it reads `synced.Queue` by id, never this list's order.
             let entries = QueueOrder.sorted synced.Queue |> List.filter (fun entry -> Set.contains entry.QueueId model.QueueShown)
-            let head =
-                match entries with
-                | [] -> Lit.nothing
-                | _ ->
-                    html $"""<div class="{Style.queueHead}"><span class="{Style.queueCount}">queued · {List.length entries}</span></div>"""
             let items =
                 entries
                 |> List.map (fun entry ->
@@ -1522,8 +1558,8 @@ module View =
                             <button type="button" class="{Style.queueVerb}" aria-label="Move down" data-queue-down="{QueueId.value id}" @click={Ev(fun _ -> match QueueOrder.moveDown synced.Queue id with Some o -> dispatch (ReorderQueuedMsg (id, o)) | None -> ())}>{Icon.down}</button>
                           </div>
                         </article>""")
-            let band = if List.isEmpty entries then Style.queueEmpty else Style.queue
-            html $"""<section class="{band}" data-message-queue>{head}{items}</section>"""
+            let band = if List.isEmpty entries && List.isEmpty folded then Style.queueEmpty else Style.queue
+            html $"""<section class="{band}" data-message-queue>{folded}{items}</section>"""
 
     /// The model picker, riding the composer's own row beside Send and Interrupt rather than
     /// two taps down in Settings. Choosing a model is a per-turn decision, so it belongs

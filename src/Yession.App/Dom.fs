@@ -495,7 +495,13 @@ module Dom =
         let surfaceChoice = "data-surface-choice"
         /// A component this renderer does not draw yet, carrying the catalog's name for it.
         let surfaceUnsupported = "data-surface-unsupported"
-        /// The app's own control that takes a surface down unanswered, on every surface.
+        /// The × on every surface, which puts it away to its line above the composer for this
+        /// reader alone (`FoldSurfaceMsg`).
+        let surfaceFold = "data-surface-fold"
+        /// A surface put away, as its line in the dock's band, carrying its surface id.
+        let surfaceFolded = "data-surface-folded"
+        /// The app's own control that takes a surface down unanswered for everyone, on every
+        /// put-away surface's line; `data-surface-dismiss-armed` says a second press does it.
         let surfaceDismiss = "data-surface-dismiss"
         /// The call's outcome, in the SAME tokens a block's status uses (`running` / `ok` /
         /// `failed`) rather than a parallel vocabulary meaning the same three things.
@@ -680,7 +686,10 @@ module Dom =
         // An agent's surface: what it is called to a screen reader, what its × says, and what
         // it says in place of a component this app does not draw yet.
         let agentSurface = "From the agent"
+        let surfaceFoldLabel = "Put this away for now"
+        let surfaceUnfoldLabel = "Open the agent's question"
         let surfaceDismissLabel = "Dismiss this without answering"
+        let surfaceDismissConfirm = "Confirm dismiss"
         /// Who asks, on a surface's line while another ask's card is in front.
         let surfaceAsker = "agent asks"
         /// What a surface's line says when the surface has no text to name it by.

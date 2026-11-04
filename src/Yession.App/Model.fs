@@ -2148,6 +2148,14 @@ type ClientModel =
       /// turn the answer owes it (`SurfaceAnswers`). Folded from the log, so every reader sees
       /// one surface stand still under one name.
       SurfaceAnswers : Map<string, Yession.Domain.Agent.AwaitedAnswer>
+      /// The agent's surfaces this reader put away with their × (`FoldSurfaceMsg`): each stands
+      /// as one line above the composer, beside the queued messages, rather than as a card.
+      /// One reader's, like `AskFront`: putting a question aside is not answering it, and the
+      /// others still have it in front of them.
+      FoldedSurfaces : Set<string>
+      /// A put-away surface whose dismiss was pressed once: the next press takes it down for
+      /// everyone (`ArmSurfaceDismissMsg`), as a queued message's delete arms first.
+      SurfaceDismissArmed : string option
       /// The launch surface's state — choosing the session's first repo. View state, local
       /// to this client: choosing is one person's act on one screen, and what it produces
       /// reaches everyone through the log.
@@ -2489,6 +2497,12 @@ type ClientMsg =
     /// (`DismissSurface`), which takes it down for everyone; it reaches everyone as
     /// `SurfaceDismissed`.
     | DismissSurfaceMsg of surfaceId: string
+    /// This reader put a surface away to its line above the composer (`FoldedSurfaces`).
+    | FoldSurfaceMsg of surfaceId: string
+    /// This reader opened a put-away surface again, and it comes to the front of the slot.
+    | UnfoldSurfaceMsg of surfaceId: string
+    /// The first press of a put-away surface's two-press dismiss, or its arming taken back.
+    | ArmSurfaceDismissMsg of surfaceId: string option
     /// This client sent the session a command, under this request id. Dispatched by the one
     /// verb that sends commands (`Client.Connection.Ask`), BEFORE the command leaves, so no
     /// answer can arrive ahead of the record of what it answers.
@@ -3032,6 +3046,8 @@ module ClientModel =
           AskFront = None
           AskOrder = []
           SurfaceAnswers = SurfaceAnswers.empty
+          FoldedSurfaces = Set.empty
+          SurfaceDismissArmed = None
           Launch = Launch.empty
           Repos = Repos.ReposProjection.empty
           Timeline = TimelineProjection.empty
@@ -3173,11 +3189,12 @@ module ClientModel =
         let trust =
             TrustCards.showing (Waits.trustAsks model.Waits) model.TrustCards
             |> List.map Ask.Trust
-        // A surface whose root has not arrived asks nothing yet (`SurfaceView.view`).
+        // A surface whose root has not arrived asks nothing yet (`SurfaceView.view`), and one
+        // this reader put away waits as its line above the composer instead.
         let surfaces =
             model.Synced.Surfaces
             |> Map.toList
-            |> List.filter (fun (_, surface) -> Map.containsKey "root" surface.Components)
+            |> List.filter (fun (id, surface) -> Map.containsKey "root" surface.Components && not (Set.contains id model.FoldedSurfaces))
             |> List.map (fst >> Ask.Surface)
         launch @ trust @ surfaces
 
@@ -3186,7 +3203,13 @@ module ClientModel =
     /// brings an ask is the moment it arrived. Those already waiting when the client first
     /// reads the session join in the order `waitingAsks` lists them: the launch, repos in the
     /// order they asked, then surfaces.
+    ///
+    /// A put-away surface the agent took down leaves `FoldedSurfaces` too, so a later surface
+    /// the agent gives the same id arrives as a card rather than already put away.
     let private reconcileAsks (model: ClientModel) : ClientModel =
+        let model =
+            let folded = model.FoldedSurfaces |> Set.filter (fun id -> Map.containsKey id model.Synced.Surfaces)
+            if folded.Count = model.FoldedSurfaces.Count then model else { model with FoldedSurfaces = folded }
         let present = waitingAsks model |> List.map Ask.key
         let kept = model.AskOrder |> List.filter (fun key -> List.contains key present)
         let arrived = present |> List.filter (fun key -> not (List.contains key kept))
@@ -5067,6 +5090,13 @@ module ClientModel =
                     After = armedMs
                     Fire = ArmQueueDeleteMsg None } ]
             | None -> []
+        let surfaceDismissArmed =
+            match model.SurfaceDismissArmed with
+            | Some surfaceId ->
+                [ { Key = [ "surface-dismiss-armed"; surfaceId ]
+                    After = armedMs
+                    Fire = ArmSurfaceDismissMsg None } ]
+            | None -> []
         // One wait per entry still in the doc and not yet shown, on the same clock as
         // `effort`'s `catchUpQuietMs` — the cause is the one it already names (a send one
         // round trip behind itself). An id already shown needs no more waiting for, and one
@@ -5091,7 +5121,7 @@ module ClientModel =
                           After = int Pending.deadlineMillis
                           Fire = PendingWaitedMsg (since + Pending.deadlineMillis) }
                 | Pending.Ready | Pending.Sending | Pending.Refused _ -> None)
-        effort @ waited @ dwell @ copied @ queueDeleteArmed @ queueShown @ pending @ quiet @ GitHubPoll.timer model.GitHub
+        effort @ waited @ dwell @ copied @ queueDeleteArmed @ surfaceDismissArmed @ queueShown @ pending @ quiet @ GitHubPoll.timer model.GitHub
 
     /// Fold a message into the model — the state half of `update`, its only caller.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
@@ -6117,8 +6147,15 @@ module ClientModel =
         | ReattachTerminalMsg _
         | InterruptTerminalMsg _
         | TrustRepoMsg _
-        | PressSurfaceMsg _
-        | DismissSurfaceMsg _ -> model
+        | PressSurfaceMsg _ -> model
+        | DismissSurfaceMsg _ -> { model with SurfaceDismissArmed = None }
+        | FoldSurfaceMsg surfaceId -> { model with FoldedSurfaces = Set.add surfaceId model.FoldedSurfaces }
+        | UnfoldSurfaceMsg surfaceId ->
+            { model with
+                FoldedSurfaces = Set.remove surfaceId model.FoldedSurfaces
+                AskFront = Some (Ask.key (Ask.Surface surfaceId))
+                SurfaceDismissArmed = None }
+        | ArmSurfaceDismissMsg next -> { model with SurfaceDismissArmed = next }
         // The reader's own hand on a trust card, kept here because nobody else's screen has it.
         | ToggleTrustRouteMsg (repo, route) -> { model with TrustCards = TrustCards.toggle repo route model.TrustCards }
         | NotNowTrustMsg (repo, shown) -> { model with TrustCards = TrustCards.putOff repo shown model.TrustCards }
@@ -6452,7 +6489,8 @@ module ClientModel =
             | StartInMsg _ -> [ ClientEffect.Move DomMove.FocusStartIn ]
             // The line pressed is gone — its ask is the card now — so the keyboard goes to
             // that card's question rather than being left on `body`.
-            | BringAskForwardMsg _ -> [ ClientEffect.Move DomMove.FocusAsk ]
+            | BringAskForwardMsg _
+            | UnfoldSurfaceMsg _ -> [ ClientEffect.Move DomMove.FocusAsk ]
             // Down the list's rows, by the order it draws them: the walk is the model's, and only
             // the focus it lands is the document's.
             | WalkListMsg (key, from) -> walkList key from model |> Option.map ClientEffect.Move |> Option.toList
