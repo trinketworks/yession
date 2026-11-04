@@ -3869,9 +3869,15 @@ let editorTests =
         // the selection is visible, and drawn inside the pivot rather than clipped by it.
         // Read where the colours settle: an item's colour TRANSITIONS, so the frame the
         // selection landed in shows the colour it started from.
+        //
+        // Opened from the KEYBOARD, so no pointer is in the page. An item under the hand takes
+        // full ink too (`Style.pivotItem`), and a click leaves the pointer where the toggle
+        // was: the opening column slides the items under it. The hover moves on only with a
+        // frame, so a runner short of frames can read an item it has passed as hovered, in full
+        // ink, and so the same colour as the selected one.
         editorCase "the selected pivot item is told apart from the others, inside the pivot" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.Locator("#shell [data-content-toggle='show']").PressAsync "Enter")
                 do! waitPresent "an item to be selected beside one that is not" page "#shell [data-pane-strip] [role=tab][aria-selected=true]"
                 do! waitPresent "an item to be selected beside one that is not" page "#shell [data-pane-strip] [role=tab][aria-selected=false]"
                 // Where the colours settle: an item's colour transitions.
@@ -3893,7 +3899,7 @@ let editorTests =
                           sprintf "the pivot overflows %gpx vertically" (scroll.Height - scroll.ClientHeight)
                       | _ -> ()
                       if onColour = offColour then "the selected item is the same colour as the others" ]
-                Expect.isEmpty faults "the selected item is drawn whole and unlike the others"
+                Expect.equal (String.concat "; " faults) "" "the selected item is drawn whole and unlike the others"
             }
 
         // The focus ring is drawn outside a control's edge by default, and the strip clips at
