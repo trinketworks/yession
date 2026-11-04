@@ -638,8 +638,15 @@ let private forwardingGitHub (routes: ConnectionRoute list) : ResourceName list 
               RepoSandboxes.GitHubRoutes = routes }
 
 /// The fold over nobody's trust: every case here that is not about trust.
+/// Where the fold hands what the files declare for a sandbox's terminals: nowhere, in the
+/// cases that are not about it.
+let private declaringNothing : SandboxRef -> RootPath option -> Async<unit> = fun _ _ -> async { return () }
+
+let private createFoldDeclaring declare repos sandboxes gate log capabilities =
+    RepoSandboxes.create repos (RepoTrusts.none "nobody keeps trust in these cases") (fun _ -> true) sandboxes gate declare log capabilities
+
 let private createFold repos sandboxes gate log capabilities =
-    RepoSandboxes.create repos (RepoTrusts.none "nobody keeps trust in these cases") (fun _ -> true) sandboxes gate log capabilities
+    createFoldDeclaring declaringNothing repos sandboxes gate log capabilities
 
 let private ada = Principal.User (UserId.create "ada" |> expect)
 let private bob = Principal.User (UserId.create "bob" |> expect)
@@ -696,7 +703,7 @@ let private trustingFoldHere
     (gate: RunGatedCommand)
     (log: EventLog<SessionEvent>)
     =
-    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) trusts present (cell WorkSandboxes.unavailable) gate log (forwardingGitHub both)
+    RepoSandboxes.create (cell (Some (reposOver dir [ r ]))) trusts present (cell WorkSandboxes.unavailable) gate declaringNothing log (forwardingGitHub both)
 
 /// The same, with everybody here.
 let private trustingFold (trusts: RepoTrusts) (r: RepoRef) (dir: string) (gate: RunGatedCommand) (log: EventLog<SessionEvent>) =
@@ -1638,6 +1645,7 @@ let foldTests =
                         (fun _ -> false)
                         (cell WorkSandboxes.unavailable)
                         (recordingGate (ResizeArray ()))
+                        declaringNothing
                         log
                         (forwardingGitHub both)
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
@@ -1835,81 +1843,66 @@ let foldTests =
             let r = repo "octo/hello"
             Expect.equal (Waits.pending [ awaits r ada; trusted r bob ]) [] "it runs with bob now"
 
-        // Where the session's terminals start is the one thing a file asks of the session,
-        // and it is asked the way a sandbox is: through the gate, as the file, on the
-        // authority of whoever triggered the fold, pointing back at the add that caused it.
-        testCaseAsync "a repo's session.shell-profile reaches the gate as that repo, caused by its add" <|
+        // Where the session's terminals start is the one thing a file asks of the session.
+        // It is a reading of the files, so the fold hands it to the terminal manager and
+        // records nothing: the files are read again next time.
+        testCaseAsync "a repo's session.shell-profile is declared for the default sandbox" <|
             async {
                 let r = repo "octo/hello"
                 let dir = checkout r (Some "version: 2\nsession:\n  shell-profile: src\n")
-                let seen = ResizeArray<GatedCall> ()
+                let declared = ResizeArray<SandboxRef * RootPath option> ()
                 let folded =
-                    createFold (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
-                let ada = Principal.User (UserId.create "ada" |> expect)
-                let added = MessageId.create "added" |> expect
-                do! folded.Fold (FoldCause.Changed (r, Some added)) (CredentialFor.Person ada)
-                match List.ofSeq seen with
-                | [ call ] ->
-                    Expect.equal call.Tool "set_shell_profile" "the verb a person would use"
-                    Expect.equal call.Summary (sprintf "set_shell_profile default -> %s/octo/hello/src" dir) "the default sandbox, at the checkout's src"
-                    Expect.equal (Authority.author call.Authority) (ActorRef.Configured r) "authored by the file"
-                    Expect.equal (Authority.credential call.Authority) (CredentialFor.Person ada) "on the authority of whoever added it"
-                    Expect.stringContains call.Args "added" "and caused by the add"
-                | other -> failwithf "expected one call, got %A" (other |> List.map (fun c -> c.Summary))
+                    createFoldDeclaring
+                        (fun sandbox path -> async { declared.Add (sandbox, path) })
+                        (cell (Some (reposOver dir [ r ])))
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray<GatedCall> ()))
+                        (foldLog ())
+                        noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                Expect.equal
+                    (declared |> List.ofSeq |> List.map (fun (sandbox, path) -> SandboxRef.render sandbox, path))
+                    [ "default", Some (RootPath.stored (sprintf "%s/octo/hello/src" dir)) ]
+                    "the default sandbox, at the checkout's src"
             }
 
-        // A fold that reads what its own write moves never settles. The listing says where a
-        // checkout is from where terminals start NOW, so once the profile was in the checkout
-        // it said `.`, the fold applied `.`, and from there it said `repos/…` again: session
-        // 3V9P moved its profile twelve times in two days, one fold undoing the last.
-        testCaseAsync "a shell profile the file applied is not applied again once terminals start there" <|
+        // A fold that WROTE the profile read what its own write moved, and never settled:
+        // session 3V9P moved its profile twelve times in two days, one fold undoing the last.
+        testCaseAsync "a fold that declares a shell profile writes nothing and asks the gate nothing" <|
             async {
                 let r = repo "octo/hello"
                 let dir = checkout r (Some "version: 2\nsession:\n  shell-profile: .\n")
-                let at = sprintf "%s/%s" dir (RepoRef.relativePath r)
-                let log = foldLog ()
-                let mutable profile : RootPath option = None
-                let listing () =
-                    let startsAt = SandboxPath.resolvedFrom (Some dir) (profile |> Option.map RootPath.value)
-                    [ RepoRead.Listed
-                          { Repo = r
-                            Branch = "main"
-                            Dirty = false
-                            Path = SandboxPath.reachedFrom startsAt at
-                            Checkout = RootPath.reached (Some dir) at } ]
                 let seen = ResizeArray<GatedCall> ()
-                // Applies what it is asked, as `set_shell_profile` does: the profile moves, and
-                // the log says so.
-                let applying : RunGatedCommand =
-                    fun call ->
-                        async {
-                            seen.Add call
-                            let cwd =
-                                match call.Summary.Split " -> " with
-                                | [| _; "wherever the sandbox puts them" |] -> None
-                                | [| _; path |] -> Some (RootPath.stored path)
-                                | _ -> failwithf "not a profile: %s" call.Summary
-                            profile <- cwd
-                            let! _ =
-                                log.Append
-                                    (Authority.author call.Authority)
-                                    (SessionEvent.ShellProfileSet
-                                        { MessageId = MessageId.create (sprintf "set-%d" seen.Count) |> expect
-                                          Sandbox = SandboxRef.defaultRef
-                                          WorkingDirectory = cwd
-                                          Actor = Authority.author call.Authority
-                                          OnBehalfOf = None
-                                          CausedBy = None })
-                            return Ok { Handle = None; Tool = call.Tool; Summary = call.Summary; Status = CommandRan "ok" }
-                        }
+                let log = foldLog ()
                 let folded =
-                    createFold (cell (Some (reposReading dir listing))) (cell WorkSandboxes.unavailable) applying log noCapabilities
+                    createFold (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) log noCapabilities
                 do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 do! folded.Fold (FoldCause.Connected (CredentialFor.Person ada)) (CredentialFor.Person ada)
+                let! page = log.Read None System.Int32.MaxValue
                 Expect.equal
-                    (seen |> List.ofSeq |> List.map (fun c -> c.Summary))
-                    [ "set_shell_profile default -> octo/hello" ]
-                    "set once, at the checkout, and left there"
+                    ((seen |> List.ofSeq |> List.map (fun c -> c.Tool)) @ (page.Events |> List.map (fun e -> Yession.Session.Bootstrap.describe e.Event)))
+                    []
+                    "no call, no event"
+            }
+
+        testCaseAsync "two repos that both declare a shell profile declare nothing" <|
+            async {
+                let one, two = repo "octo/one", repo "octo/two"
+                let dir = TestFiles.tempDir "yession-config-"
+                for r in [ one; two ] do
+                    TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
+                    TestFiles.write (pathIn dir r) "version: 2\nsession:\n  shell-profile: .\n"
+                let declared = ResizeArray<RootPath option> ()
+                let folded =
+                    createFoldDeclaring
+                        (fun _ path -> async { declared.Add path })
+                        (cell (Some (reposOver dir [ one; two ])))
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray<GatedCall> ()))
+                        (foldLog ())
+                        noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                Expect.equal (List.ofSeq declared) [ None ] "neither file wins"
             }
 
         testCaseAsync "two repos that both declare a shell profile get neither, and are each told why" <|

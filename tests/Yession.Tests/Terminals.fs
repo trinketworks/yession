@@ -5733,7 +5733,7 @@ let private shellProfileTests =
                 // entrypoint is valid, and a line typed before the first prompt mark reaches
                 // no transcript (Plan 25's objection to a typed `cd`, answered by #580).
                 let terminals, _, shells, _, _ = fixture ()
-                let! set = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! set = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 Expect.isOk set "the directory is there, so the profile takes"
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 Expect.equal (shellStarts shells) ([ None ], [ checkout ]) "the shell is spawned where the sandbox puts one, and told to cd to the profile's directory"
@@ -5746,7 +5746,7 @@ let private shellProfileTests =
                 // move is the one nobody named, and it moves by being reopened.
                 let terminals, _, shells, _, _ = fixture ()
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 Expect.equal (shellStarts shells) ([ None ], []) "nothing is re-spawned or re-directed under a terminal already open"
             }
 
@@ -5764,7 +5764,7 @@ let private shellProfileTests =
                     scriptedEnvironment (fun arg -> (if arg = PathOperand.value (PathOperand.ofPath checkout) then [ Stdout, probeAnswer checkoutAt ] else []), 0)
                 let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
                 let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
-                let! set = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! set = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 Expect.isOk set "this fixture answers the probe with the directory it landed in"
                 let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 let id = opened |> expect
@@ -5783,7 +5783,7 @@ let private shellProfileTests =
                 // Asked of the SANDBOX, not of this process: under docker the path is inside a
                 // container we cannot see, and under srt the sandbox's read scope is not ours.
                 let terminals, _, _, _, _ = fixture ()
-                let! set = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some "/repos/gone")
+                let! set = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some "/repos/gone")
                 match set with
                 | Ok _ -> failwith "a directory that is not there must not become the profile"
                 | Error reason -> Expect.isTrue (reason.Contains "/repos/gone") "the refusal names the path"
@@ -5792,8 +5792,8 @@ let private shellProfileTests =
         testCaseAsync "a refused directory leaves the profile as it was" <|
             async {
                 let terminals, _, _, _, _ = fixture ()
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some "/repos/gone")
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some "/repos/gone")
                 Expect.equal
                     (terminals.Profiles () |> ShellProfileProjection.workingDirectory SandboxRef.defaultRef)
                     (Some (RootPath.stored checkout))
@@ -5806,7 +5806,7 @@ let private shellProfileTests =
         testCaseAsync "a path from the repo verbs goes in as given, and is stored as it came" <|
             async {
                 let terminals, _, _, _, _ = fixture ()
-                let! set = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! set = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 Expect.isOk set "the path the repo tools answer with is a path this takes"
                 Expect.equal
                     (terminals.Profiles () |> ShellProfileProjection.workingDirectory SandboxRef.defaultRef)
@@ -5820,7 +5820,7 @@ let private shellProfileTests =
         testCaseAsync "an absolute path is stored the way a terminal reaches it" <|
             async {
                 let terminals, _, _, _, _ = fixture ()
-                let! set = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkoutAt)
+                let! set = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkoutAt)
                 Expect.isOk set "an absolute directory the sandbox has is still a directory it has"
                 Expect.equal
                     (terminals.Profiles () |> ShellProfileProjection.workingDirectory SandboxRef.defaultRef)
@@ -5833,7 +5833,7 @@ let private shellProfileTests =
                 // An agent told it set the profile to a path in a vocabulary nothing else uses
                 // is an agent that will hand that path back to the next tool.
                 let terminals, _, _, _, _ = fixture ()
-                let! set = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkoutAt)
+                let! set = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkoutAt)
                 let said = set |> expect
                 Expect.isTrue (said.Contains (sprintf "start in %s." checkout)) "the answer names the reachable path"
                 Expect.isFalse (said.Contains checkoutAt) "and not the one only the sandbox can use"
@@ -5842,15 +5842,15 @@ let private shellProfileTests =
         testCaseAsync "a relative path that is nowhere in the sandbox is still refused" <|
             async {
                 let terminals, _, _, _, _ = fixture ()
-                let! set = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some "repos/octo/absent")
+                let! set = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some "repos/octo/absent")
                 Expect.isError set "resolving is not the same as accepting"
             }
 
         testCaseAsync "a clear returns new terminals to wherever the sandbox puts them" <|
             async {
                 let terminals, _, shells, _, _ = fixture ()
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef None
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef None
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 Expect.equal (shellStarts shells) ([ None ], []) "back to what every terminal did before there were profiles"
             }
@@ -5859,7 +5859,7 @@ let private shellProfileTests =
             async {
                 let terminals, _, shells, _, _ = fixture ()
                 let other = SandboxRef.parse "test" |> expect
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell other) (TerminalTitle.fromProse "build")
                 Expect.equal (shellStarts shells) ([ None ], []) "a path is only a path inside the filesystem that has it"
             }
@@ -5903,9 +5903,40 @@ let private shellProfileTests =
                 let terminals, _, _, _, _ = fixture ()
                 let! first = terminals.AgentTerminal SandboxRef.defaultRef "git status"
                 let before = first |> expect
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 let! next = terminals.AgentTerminal SandboxRef.defaultRef "git status"
                 Expect.notEqual (next |> expect) before "the next command runs in a shell opened under the new profile"
+            }
+
+        // What a repo's file declares (`session.shell-profile`): no event, the same effect.
+        testCaseAsync "a declared profile is where the next terminal starts" <|
+            async {
+                let terminals, _, shells, _, _ = fixture ()
+                do! terminals.Declare SandboxRef.defaultRef (Some (RootPath.stored checkout))
+                let! _ = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+                Expect.equal (shellStarts shells) ([ None ], [ checkout ]) "told to cd to the declared directory"
+            }
+
+        testCaseAsync "a declaration that moves where terminals start retires the agent's idle command terminal" <|
+            async {
+                let terminals, _, _, _, _ = fixture ()
+                let! first = terminals.AgentTerminal SandboxRef.defaultRef "git status"
+                let before = first |> expect
+                do! terminals.Declare SandboxRef.defaultRef (Some (RootPath.stored checkout))
+                let! next = terminals.AgentTerminal SandboxRef.defaultRef "git status"
+                Expect.notEqual (next |> expect) before "the next command runs in a shell opened there"
+            }
+
+        testCaseAsync "a declaration behind a set profile leaves the agent's command terminal alone" <|
+            async {
+                // It moves nothing: the set one is in effect, before and after.
+                let terminals, _, _, _, _ = fixture ()
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
+                let! first = terminals.AgentTerminal SandboxRef.defaultRef "git status"
+                let before = first |> expect
+                do! terminals.Declare SandboxRef.defaultRef (Some (RootPath.stored "repos/octo/other"))
+                let! next = terminals.AgentTerminal SandboxRef.defaultRef "git status"
+                Expect.equal (next |> expect) before "the same shell"
             }
 
         testCaseAsync "a terminal the agent NAMED is left alone" <|
@@ -5915,7 +5946,7 @@ let private shellProfileTests =
                 let terminals, _, _, _, _ = fixture ()
                 let! opened = terminals.OpenAgentTerminal SandboxRef.defaultRef "tests"
                 let id = opened |> expect
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 Expect.isTrue (terminals.IsOpen id) "a named terminal keeps its shell"
             }
 
@@ -5924,7 +5955,7 @@ let private shellProfileTests =
                 let terminals, _, _, _, _ = fixture ()
                 let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "mine")
                 let id = opened |> expect
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 Expect.isTrue (terminals.IsOpen id) "a human's shell is not a default's to end"
             }
 
@@ -5942,7 +5973,7 @@ let private shellProfileTests =
                 Async.StartImmediate (terminals.RunBlock id (entry "a1" id agentForAda 1.0) "npm test" started)
                 do! awaitStarted
                 Expect.isTrue (terminals.Busy () |> Set.contains (TerminalId.value id)) "the block is running"
-                let! set = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! set = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 Expect.isOk set "the profile still changes"
                 Expect.isTrue (terminals.IsOpen id) "but the running command is not killed for it"
                 release ()
@@ -5954,7 +5985,7 @@ let private shellProfileTests =
                 // that refuses to open because of a DEFAULT is a worse failure than the default
                 // being wrong, so it falls back once and records the reason where people read.
                 let terminals, _, shells, linesOf, vanish = fixture ()
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 vanish ()
                 let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 let id = opened |> expect
@@ -5975,7 +6006,7 @@ let private shellProfileTests =
                 // has been deleted would send every future terminal somewhere that no longer
                 // exists.
                 let terminals, _, _, _, _ = fixture ()
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 let! _ = terminals.ClearProfilesUnder agentForAda (RootPath.stored "repos/octo")
                 Expect.equal
                     (terminals.Profiles () |> ShellProfileProjection.workingDirectory SandboxRef.defaultRef)
@@ -5992,7 +6023,7 @@ let private shellProfileTests =
                 // cleared nothing, and left every future terminal opening into a checkout
                 // that had been deleted.
                 let terminals, _, _, _, _ = fixture ()
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkoutAt)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkoutAt)
                 let! cleared = terminals.ClearProfilesUnder agentForAda (RootPath.stored checkout)
                 Expect.equal (cleared |> List.map SandboxRef.render) [ "default" ] "the tree the repo verb named finds it"
             }
@@ -6002,7 +6033,7 @@ let private shellProfileTests =
                 // The caller says so in its own answer, so the model learns its next terminal
                 // moved without having to ask.
                 let terminals, _, _, _, _ = fixture ()
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 let! cleared = terminals.ClearProfilesUnder agentForAda (RootPath.stored checkout)
                 Expect.equal (cleared |> List.map SandboxRef.render) [ "default" ] "the one it cleared, named"
             }
@@ -6010,7 +6041,7 @@ let private shellProfileTests =
         testCaseAsync "a profile in a sibling that shares a prefix is left alone" <|
             async {
                 let terminals, _, _, _, _ = fixture ()
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 let! cleared = terminals.ClearProfilesUnder agentForAda (RootPath.stored "repos/octo/hell")
                 Expect.isEmpty cleared "a prefix is not a parent"
                 Expect.equal
@@ -6022,7 +6053,7 @@ let private shellProfileTests =
         testCaseAsync "the next terminal after a cleared profile opens where the sandbox puts it" <|
             async {
                 let terminals, _, shells, _, _ = fixture ()
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 let! _ = terminals.ClearProfilesUnder agentForAda (RootPath.stored checkout)
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 Expect.equal (shellStarts shells) ([ None ], []) "nothing is asked for a directory that has gone"
@@ -6034,7 +6065,7 @@ let private shellProfileTests =
                 // settings section. Nobody writes a panel; what is pinned is that the rows say
                 // what the manager holds.
                 let terminals, _, _, _, _ = fixture ()
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 let registration = Yession.Host.ShellProfile.query (fun () -> terminals)
                 match! registration.Read () with
                 | Error e -> failwithf "the query failed: %s" e
@@ -6060,7 +6091,7 @@ let private shellProfileTests =
                 // Left alone for a person to fix: a manager that cleared it on one failed spawn
                 // would silently undo a decision nobody revisited.
                 let terminals, _, _, _, vanish = fixture ()
-                let! _ = terminals.SetProfile agentForAda None SandboxRef.defaultRef (Some checkout)
+                let! _ = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
                 vanish ()
                 let! _ = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 Expect.equal

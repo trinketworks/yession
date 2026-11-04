@@ -862,10 +862,12 @@ module SessionTerminals =
           /// The directory arrives, and is stored, in the vocabulary the rest of the session
           /// speaks (`SandboxPath`): as a terminal in that sandbox reaches it. What the
           /// sandbox resolves it to is the sandbox's own business and stays there.
-          ///
-          /// The cause is what made it change when that was not its author's own idea — a
-          /// repo's `session.shell-profile`, applied when the repo was added.
-          SetProfile : Authority -> Cause option -> SandboxRef -> string option -> Async<Result<string, string>>
+          SetProfile : Authority -> SandboxRef -> string option -> Async<Result<string, string>>
+          /// What the repos' files declare for a sandbox (`session.shell-profile`), as it
+          /// stands now. Recorded nowhere: the files are the record, and a fold reads them
+          /// again every time. In effect only where nobody has SET a profile
+          /// (`ShellProfileProjection.workingDirectory`).
+          Declare : SandboxRef -> RootPath option -> Async<unit>
           /// Clear every profile whose directory is inside this tree, because the tree is
           /// about to stop existing (Plan 26; Plan 25's upstream half). Answers with the
           /// sandboxes it cleared, so the caller can say so.
@@ -931,7 +933,8 @@ module SessionTerminals =
           AwayFromPrompt = fun () -> Set.empty
           Interactive = fun _ -> false
           Activity = fun _ _ -> None
-          SetProfile = fun _ _ _ _ -> async { return Error "this session has no terminals" }
+          SetProfile = fun _ _ _ -> async { return Error "this session has no terminals" }
+          Declare = fun _ _ -> async { return () }
           ClearProfilesUnder = fun _ _ -> async { return [] }
           Profiles = fun () -> ShellProfileProjection.empty
           ReclaimIdle = fun _ -> async { return () }
@@ -2808,7 +2811,31 @@ module SessionTerminals =
         /// Validate, append, apply, answer — one verb, because a caller that could do the
         /// second without the first is a caller that can point every future terminal at a
         /// directory that is not there.
-        let setProfile (authority: Authority) (causedBy: Cause option) (sandbox: SandboxRef) (cwd: string option) : Async<Result<string, string>> =
+        /// The agent's GENERAL-PURPOSE terminal in this sandbox is retired when where its
+        /// terminals start moves, and only that one. Left alone, a profile change would be
+        /// invisible in exactly the flow that motivates it: set the profile, run `pwd`, get
+        /// the old directory, conclude the tool did nothing. It is the manager's own — minted
+        /// on demand, never named by anyone — so the next command reopens it in the new
+        /// directory and nothing is lost but a shell's history. Terminals the agent NAMED,
+        /// and the people's, were asked for: taking somebody's shell away because a default
+        /// changed is not a default's business. A BUSY one is left alone too, because killing
+        /// a running command to change a default is the wrong trade in the one direction
+        /// that cannot be undone.
+        ///
+        /// `Some true` closed it, `Some false` left it running, `None` there was none.
+        let retireAgentTerminal (name: string) : Async<bool option> =
+            async {
+                match agentTerminals.TryGetValue name with
+                | true, id when isOpen id ->
+                    if Set.contains (TerminalId.value id) busy then
+                        return Some false
+                    else
+                        let! _ = closeTerminal id ActorRef.System "the shell profile changed" None
+                        return Some true
+                | _ -> return None
+            }
+
+        let setProfile (authority: Authority) (sandbox: SandboxRef) (cwd: string option) : Async<Result<string, string>> =
             let actor = Authority.author authority
             async {
                 let name = SandboxRef.render sandbox
@@ -2915,29 +2942,10 @@ module SessionTerminals =
                               WorkingDirectory = resolved
                               Actor = actor
                               OnBehalfOf = Authority.onBehalfOf authority
-                              CausedBy = causedBy }
+                              CausedBy = None }
                     do! appendAs actor event
                     profiles <- ShellProfileProjection.applyEvent profiles event
-                    // The agent's GENERAL-PURPOSE terminal in this sandbox is retired, and
-                    // only that one. Left alone, a profile change would be invisible in
-                    // exactly the flow that motivates it: set the profile, run `pwd`, get
-                    // the old directory, conclude the tool did nothing. It is the manager's
-                    // own — minted on demand, never named by anyone — so the next command
-                    // reopens it in the new directory and nothing is lost but a shell's
-                    // history. Terminals the agent NAMED, and the people's, were asked for:
-                    // taking somebody's shell away because a default changed is not a
-                    // default's business. A BUSY one is left alone too, because killing a
-                    // running command to change a default is the wrong trade in the one
-                    // direction that cannot be undone.
-                    let retired =
-                        match agentTerminals.TryGetValue name with
-                        | true, id when isOpen id -> Some (id, not (Set.contains (TerminalId.value id) busy))
-                        | _ -> None
-                    match retired with
-                    | Some (id, true) ->
-                        let! _ = closeTerminal id ActorRef.System "the shell profile changed" None
-                        ()
-                    | _ -> ()
+                    let! retired = retireAgentTerminal name
                     // What was STORED, not what the caller typed: the answer, the timeline
                     // note and the query say one thing, and it is the thing anybody here can
                     // act on. An agent told it set the profile to a path in a vocabulary
@@ -2948,8 +2956,8 @@ module SessionTerminals =
                         | None -> sprintf "new terminals in %s start where the sandbox puts them." name
                     let mine =
                         match retired with
-                        | Some (_, true) -> [ "Your command terminal was closed and reopens there on your next command." ]
-                        | Some (_, false) ->
+                        | Some true -> [ "Your command terminal was closed and reopens there on your next command." ]
+                        | Some false ->
                             [ "Your command terminal has a command running. It stays open and keeps the directory it is in." ]
                         | None -> []
                     return
@@ -2972,7 +2980,10 @@ module SessionTerminals =
             let actor = Authority.author authority
             async {
                 let affected =
-                    ShellProfileProjection.listed profiles
+                    // The SET ones only: a declared profile is the files', and the fold
+                    // that follows a removal reads them again.
+                    profiles.Profiles
+                    |> Map.toList
                     |> List.filter (fun (_, profile) ->
                         match profile.WorkingDirectory with
                         | Some cwd -> RootPath.isInside tree cwd
@@ -2990,6 +3001,18 @@ module SessionTerminals =
                     do! appendAs actor event
                     profiles <- ShellProfileProjection.applyEvent profiles event
                 return affected
+            }
+
+        /// A declaration that moves where this sandbox's terminals start retires the agent's
+        /// idle command terminal, as a set does; one that changes nothing in effect — a set
+        /// is in front of it, or it is what was declared already — touches nothing.
+        let declare (sandbox: SandboxRef) (path: RootPath option) : Async<unit> =
+            async {
+                let before = ShellProfileProjection.workingDirectory sandbox profiles
+                profiles <- ShellProfileProjection.declare sandbox path profiles
+                if ShellProfileProjection.workingDirectory sandbox profiles <> before then
+                    let! _ = retireAgentTerminal (SandboxRef.render sandbox)
+                    ()
             }
 
         { Open = openTerminal
@@ -3026,6 +3049,7 @@ module SessionTerminals =
                         (readTranscript id fromSeq None)
                 | _ -> None
           SetProfile = setProfile
+          Declare = declare
           ClearProfilesUnder = clearProfilesUnder
           Profiles = fun () -> profiles
           ReclaimIdle = reclaimIdle

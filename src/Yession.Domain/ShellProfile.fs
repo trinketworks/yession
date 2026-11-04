@@ -36,81 +36,80 @@ module ShellProfile =
     /// No profile: the sandbox decides, as it always did.
     let none : ShellProfile = { WorkingDirectory = None }
 
-/// Every sandbox's profile, projected from the log. Per sandbox and not per session
-/// because a path is only a path inside the filesystem that has it: the default sandbox's
-/// workspace, a named sandbox's, and a docker sandbox's bind are three different trees,
-/// and one session-wide string would be a fact in one of them and a broken shell in the
-/// rest.
+/// Every sandbox's profile: the ones somebody SET, projected from the log, and the one the
+/// repos' files DECLARE, held beside them. Per sandbox and not per session because a path
+/// is only a path inside the filesystem that has it: the default sandbox's workspace, a
+/// named sandbox's, and a docker sandbox's bind are three different trees, and one
+/// session-wide string would be a fact in one of them and a broken shell in the rest.
+///
+/// Two layers, and only the first is an event. A set is somebody's decision, so it is
+/// recorded, shown, and outlives the process. A declaration is a reading of the files as
+/// they stand, recomputed on every fold, so writing it down only made a second copy that
+/// could disagree with the files — and did, a fold comparing the two and rewriting the log
+/// twelve times in two days (session 3V9P). The set wins wherever there is one.
 type ShellProfileProjection =
-    { Profiles : Map<SandboxRef, ShellProfile> }
+    { Profiles : Map<SandboxRef, ShellProfile>
+      Declared : Map<SandboxRef, RootPath> }
 
 module ShellProfileProjection =
 
-    let empty : ShellProfileProjection = { Profiles = Map.empty }
+    let empty : ShellProfileProjection = { Profiles = Map.empty; Declared = Map.empty }
 
     /// Fold one event. The newest set wins, and a set carrying no directory REMOVES the
     /// entry rather than storing an empty profile — so "has a profile" and "starts
     /// somewhere" are the same question, which is the only way the query and the spawn can
     /// agree without either of them knowing about the other.
+    ///
+    /// A set authored by a repo's FILE is passed over. Those are what the fold used to
+    /// write for `session.shell-profile`; the declared layer now reads the file itself, so
+    /// replaying one would put back the copy it replaced.
     let applyEvent (proj: ShellProfileProjection) (event: SessionEvent) : ShellProfileProjection =
         match event with
+        | ShellProfileSet p when (match p.Actor with Configured _ -> true | _ -> false) -> proj
         | ShellProfileSet p ->
             match p.WorkingDirectory with
-            | Some _ -> { Profiles = proj.Profiles |> Map.add p.Sandbox { WorkingDirectory = p.WorkingDirectory } }
-            | None -> { Profiles = proj.Profiles |> Map.remove p.Sandbox }
+            | Some _ -> { proj with Profiles = proj.Profiles |> Map.add p.Sandbox { WorkingDirectory = p.WorkingDirectory } }
+            | None -> { proj with Profiles = proj.Profiles |> Map.remove p.Sandbox }
         | _ -> proj
 
-    let tryFind (sandbox: SandboxRef) (proj: ShellProfileProjection) : ShellProfile option =
-        proj.Profiles |> Map.tryFind sandbox
+    /// What the files declare for this sandbox now: a directory, or nothing.
+    let declare (sandbox: SandboxRef) (path: RootPath option) (proj: ShellProfileProjection) : ShellProfileProjection =
+        match path with
+        | Some path -> { proj with Declared = proj.Declared |> Map.add sandbox path }
+        | None -> { proj with Declared = proj.Declared |> Map.remove sandbox }
 
-    /// Where a shell opened in this sandbox starts, if anywhere — what a spawn asks, and
-    /// the only thing it asks.
+    /// Where a shell opened in this sandbox starts, if anywhere: the set one, else the
+    /// declared one, else wherever the sandbox puts it. What a spawn asks, and the only
+    /// thing it asks.
     let workingDirectory (sandbox: SandboxRef) (proj: ShellProfileProjection) : RootPath option =
-        proj |> tryFind sandbox |> Option.bind (fun profile -> profile.WorkingDirectory)
+        match proj.Profiles |> Map.tryFind sandbox with
+        | Some profile -> profile.WorkingDirectory
+        | None -> proj.Declared |> Map.tryFind sandbox
 
-    /// The sandboxes that have one, in name order — the query's rows.
+    /// The sandboxes that have one, set or declared, in name order — the query's rows.
     let listed (proj: ShellProfileProjection) : (SandboxRef * ShellProfile) list =
-        proj.Profiles |> Map.toList |> List.sortBy (fst >> SandboxRef.render)
+        Seq.append (Map.keys proj.Profiles) (Map.keys proj.Declared)
+        |> Seq.distinct
+        |> Seq.map (fun sandbox -> sandbox, { WorkingDirectory = workingDirectory sandbox proj })
+        |> List.ofSeq
+        |> List.sortBy (fst >> SandboxRef.render)
 
 /// What the repos' files make of the `default` sandbox's profile (`session.shell-profile`).
 ///
 /// COMPUTED from which repos declare one, never from the order they arrived in: exactly one
-/// declaring repo applies, none or several apply nothing, and a profile a person (or the
-/// agent for one) set is theirs and no file moves it. A "first repo wins" rule would make
-/// the outcome depend on history nobody chose; this one a test can state from its inputs.
-[<RequireQualifiedAccess>]
-type ConfiguredProfile =
-    /// The profile already is what the files make of it, or a person chose it.
-    | Leave
-    /// Point it at this directory, as this repo's file.
-    | Apply of RepoRef * RootPath
-    /// Clear the profile this repo's file set: no single file declares one any more.
-    | Withdraw of RepoRef
-
+/// declaring repo applies, none or several apply nothing. A "first repo wins" rule would
+/// make the outcome depend on history nobody chose; this one a test can state from its
+/// inputs. Whether it is the profile in EFFECT is the projection's to say: a set wins.
 module ConfiguredProfile =
 
     let private sameRepo (a: RepoRef) (b: RepoRef) = RepoRef.value a = RepoRef.value b
 
     /// `declared` is every repo whose file has the key, its directory already resolved
-    /// from the default sandbox's root — the vocabulary a profile is stored in, so the
-    /// comparison below is between two of the same thing. `last` is the newest
-    /// `ShellProfileSet` for that sandbox.
-    let decide (declared: (RepoRef * RootPath) list) (last: ShellProfileSet option) : ConfiguredProfile =
-        let configured =
-            last
-            |> Option.bind (fun set ->
-                match set.Actor with
-                | Configured repo -> Some (repo, set.WorkingDirectory)
-                | _ -> None)
-        match last, configured with
-        | Some _, None -> ConfiguredProfile.Leave
-        | _ ->
-            match declared, configured with
-            | [ repo, path ], Some (setBy, Some current) when
-                sameRepo repo setBy && current = path -> ConfiguredProfile.Leave
-            | [ repo, path ], _ -> ConfiguredProfile.Apply (repo, path)
-            | _, Some (setBy, Some _) -> ConfiguredProfile.Withdraw setBy
-            | _ -> ConfiguredProfile.Leave
+    /// from the default sandbox's root.
+    let declared (declared: (RepoRef * RootPath) list) : RootPath option =
+        match declared with
+        | [ _, path ] -> Some path
+        | _ -> None
 
     /// What each declaring repo is told when more than one declares: the others' names, and
     /// that none of them applies. Empty for one or none.

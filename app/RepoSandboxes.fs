@@ -243,6 +243,10 @@ let create
     (present: Principal -> bool)
     (sandboxes: unit -> WorkSandboxes.WorkSandboxes)
     (run: RunGatedCommand)
+    // Where the files say a sandbox's terminals start (`session.shell-profile`), handed to
+    // the terminal manager as the fold reads it: a reading, not an act, so it goes past
+    // the gate and into no log.
+    (declareProfile: SandboxRef -> RootPath option -> Async<unit>)
     (log: EventLog<SessionEvent>)
     // What a selection of resource names comes to. The fold needs it because a capability
     // set is a fact about a REPO, not about one of its sandboxes, and only the fold sees all
@@ -442,9 +446,10 @@ let create
                     // Where the session's own terminals start, as the files say it
                     // (`session.shell-profile`). Before the starts, because it waits on
                     // nothing they bring up: the default sandbox is the session's own. Which
-                    // file applies, if any, is `ConfiguredProfile`'s to decide; this only
-                    // resolves each path to where the default sandbox reaches it and carries
-                    // the decision out through the same gate as everything else here.
+                    // file applies, if any, is `ConfiguredProfile`'s to decide, and whether
+                    // it is in effect is the projection's (a set wins); this only resolves
+                    // each path from the default sandbox's root and hands the answer over.
+                    // Nothing is written: the files are the record, read again next fold.
                     let profileKey = "session.shell-profile"
                     let declaredProfiles =
                         read.ShellProfiles
@@ -452,14 +457,6 @@ let create
                             RepoRead.listed reads
                             |> List.tryFind (fun listing -> RepoRef.value listing.Repo = RepoRef.value repo)
                             |> Option.map (fun listing -> repo, RootPath.under listing.Checkout path))
-                    let lastProfile =
-                        told
-                        |> List.choose (fun event ->
-                            match event with
-                            | SessionEvent.ShellProfileSet p when
-                                SandboxRef.render p.Sandbox = SandboxRef.render SandboxRef.defaultRef -> Some p
-                            | _ -> None)
-                        |> List.tryLast
                     let warn (repo: RepoRef) (warning: string) =
                         async {
                             if not (alreadyNoted told repo profileKey warning) then
@@ -478,36 +475,7 @@ let create
                         }
                     for repo, warning in ConfiguredProfile.conflicts declaredProfiles do
                         do! warn repo warning
-                    let change =
-                        match ConfiguredProfile.decide declaredProfiles lastProfile with
-                        | ConfiguredProfile.Leave -> None
-                        | ConfiguredProfile.Apply (repo, path) -> Some (repo, Some path)
-                        | ConfiguredProfile.Withdraw repo -> Some (repo, None)
-                    match change with
-                    | None -> ()
-                    | Some (repo, cwd) ->
-                        let call =
-                            Commands.setShellProfileCall
-                                (Authority.configuredBy repo onBehalfOf)
-                                (FoldCause.causeFor repo cause)
-                                SandboxRef.defaultRef
-                                (cwd |> Option.map RootPath.value)
-                        // A profile that could not be set is the file's to hear about, said
-                        // once, like an analyzer's note: the session carries on where it was.
-                        let failed =
-                            async {
-                                match! run call with
-                                | Error reason -> return Some reason
-                                | Ok outcome ->
-                                    match outcome.Status with
-                                    | CommandRefusedBy (_, reason) -> return Some (defaultArg reason "refused")
-                                    | CommandRan text when text.StartsWith "failed: " -> return Some (text.Substring 8)
-                                    | CommandRan _
-                                    | CommandRunning -> return None
-                            }
-                        match! failed with
-                        | Some reason -> do! warn repo (sprintf "the shell profile could not be set: %s" reason)
-                        | None -> ()
+                    do! declareProfile SandboxRef.defaultRef (ConfiguredProfile.declared declaredProfiles)
                     // Who each repo's sandboxes run with. One that forwards nobody's GitHub
                     // runs on the authority of whoever folded, as every start here always has:
                     // it spends nothing of theirs. One that forwards GitHub runs with the GitHub

@@ -585,9 +585,9 @@ precedence rule, nothing shadows anything. The session refuses a clash inside on
 its author wrote it.
 
 The one session-wide key is `session.shell-profile`: where the `default` sandbox's terminals
-start, relative to the checkout. It applies only while exactly one repo declares it, and no
-file moves a profile that a person or the agent set (`ConfiguredProfile` in
-`src/Yession.Domain/ShellProfile.fs`). Anything else session-wide stays the operator's (see
+start, relative to the checkout. It applies only while exactly one repo declares it, and a
+profile that a person or the agent set wins over it. The fold reads it again each time and
+records nothing (`ShellProfileProjection` in `src/Yession.Domain/ShellProfile.fs`). Anything else session-wide stays the operator's (see
 [GAPS.md](GAPS.md)). The header of `src/Yession.Domain/Config.fs` holds the design and the
 rule for every future key.
 

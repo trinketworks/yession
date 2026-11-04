@@ -255,41 +255,23 @@ let private readStartArgs (values: string list) : Result<string * string * Cause
                 "start_work_sandbox got %d arguments. It takes a sandbox, a declaration, an optional cause and an optional waiting id"
                 (List.length other))
 
-/// The directory a CAUSED `set_shell_profile` carries: present or absent as a value, because
-/// the caused form has a fixed arity and its absence cannot be a shorter list.
-let private profileDirectory : Codec<string option> =
-    { Encode = Encode.option Encode.string; Decode = Decode.option Decode.string }
-
-/// One `set_shell_profile` call, built where the dispatch entry that reads it lives — for
-/// the agent's capability and for the fold applying a repo's `session.shell-profile`.
-///
-/// An uncaused call is the shape it always was: one argument clears, two set. A caused one
-/// is three — the sandbox, the directory as a value, the cause — so the arity alone says
-/// which reading applies and a directory can never be read as a cause.
-let setShellProfileCall (authority: Authority) (causedBy: Cause option) (sandbox: SandboxRef) (cwd: string option) : GatedCall =
+/// One `set_shell_profile` call, built where the dispatch entry that reads it lives: one
+/// argument clears, two set.
+let setShellProfileCall (authority: Authority) (sandbox: SandboxRef) (cwd: string option) : GatedCall =
     let name = SandboxRef.render sandbox
     { Tool = setShellProfileTool
-      Args =
-        encodeArgs (
-            match causedBy with
-            | None -> name :: Option.toList cwd
-            | Some cause -> [ name; Codec.toString profileDirectory cwd; Codec.toString Codec.cause cause ])
+      Args = encodeArgs (name :: Option.toList cwd)
       Summary =
         match cwd with
         | Some cwd -> sprintf "set_shell_profile %s -> %s" name cwd
         | None -> sprintf "set_shell_profile %s -> wherever the sandbox puts them" name
       Authority = authority }
 
-/// `setShellProfileCall`'s arguments read back: the sandbox, the directory, and the cause.
-let private readProfileArgs (values: string list) : Result<string * string option * Cause option, string> =
+/// `setShellProfileCall`'s arguments read back: the sandbox and the directory.
+let private readProfileArgs (values: string list) : Result<string * string option, string> =
     match values with
-    | [ name ] -> Ok (name, None, None)
-    | [ name; cwd ] -> Ok (name, Some cwd, None)
-    | [ name; cwd; cause ] ->
-        match Codec.fromString profileDirectory cwd, Codec.fromString Codec.cause cause with
-        | Ok cwd, Ok cause -> Ok (name, cwd, Some cause)
-        | Error e, _ -> Error (sprintf "not a directory: %s" e)
-        | _, Error e -> Error (sprintf "not a cause: %s" e)
+    | [ name ] -> Ok (name, None)
+    | [ name; cwd ] -> Ok (name, Some cwd)
     | other ->
         Error (
             sprintf
@@ -716,13 +698,13 @@ let dispatch (services: CommandServices) : CommandDispatch =
                 // `readProfileArgs`) so the encode and this decode stay the one shape.
                 match readProfileArgs args with
                 | Error e -> return Error e
-                | Ok (rawName, cwd, causedBy) ->
+                | Ok (rawName, cwd) ->
                     match SandboxRef.parse rawName with
                     | Error e -> return Error (sprintf "not a sandbox: %s" e)
                     | Ok name ->
                         return!
                             andPublish services ShellProfile.queryName (
-                                (services.Terminals ()).SetProfile invocation.Authority causedBy name cwd)
+                                (services.Terminals ()).SetProfile invocation.Authority name cwd)
             }
 
           // The two file commands (the file verbs). Acts on the shared checkout, so they
@@ -837,8 +819,8 @@ let dispatch (services: CommandServices) : CommandDispatch =
 ///
 /// Where terminals start is NOT set here. It was, as the person, which recorded a default
 /// the launch chose as a choice they made. A repo that wants its checkout as the shell's
-/// home says so in its `yession.yaml` (`session.shell-profile`), and the fold applies it as
-/// that repo's — the one place a file's effects are authored.
+/// home says so in its `yession.yaml` (`session.shell-profile`), which the fold reads and
+/// the terminal manager applies wherever nobody has set a profile.
 [<RequireQualifiedAccess>]
 type LaunchFailure =
     { /// Which of the launch's calls did not succeed, as the gate knew it.
@@ -1181,7 +1163,7 @@ let private sandboxCapabilitiesFor
                       [ SandboxRef.render name ]
                       (sprintf "stop_work_sandbox %s" (SandboxRef.render name))
               SetShellProfile =
-                fun name cwd -> capabilities.RunGated (setShellProfileCall (Authority.agentFor turnActor) None name cwd) } }
+                fun name cwd -> capabilities.RunGated (setShellProfileCall (Authority.agentFor turnActor) name cwd) } }
 
 /// Every command verb bound to ONE turn's actor: the acting party on the events is the agent,
 /// the credential is the turn human's (Plan 08). The Host leaves these as denials because
