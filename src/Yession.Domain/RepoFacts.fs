@@ -154,9 +154,17 @@ and [<RequireQualifiedAccess>] RepoTrustAsked =
 /// their own record, and the Manager answers a read of it only once they are signed in to this
 /// session — so after a restart the repo waits for them rather than asking, and is not handed to
 /// whoever came first. `PersonArrived` ends it.
+///
+/// One per SANDBOX, and its `MessageId` is the start's: the timeline item it opens is the one
+/// `WorkSandboxStarting`, then `WorkSandboxStarted` or `WorkSandboxStartFailed`, resolve in
+/// place, the way a command's chip goes from running to ran. A wait is the first state of
+/// the start, not a note beside it.
 and [<RequireQualifiedAccess>] RepoAwaitsPerson =
     { MessageId : MessageId
       Repo : RepoRef
+      /// The sandbox that starts once they are here. `None` on a line written before a wait
+      /// was per sandbox, which reads as the repo's note it was.
+      Sandbox : SandboxRef option
       /// Whom it runs with: the person in its last `RepoTrusted`.
       Person : Principal
       /// The repo's file, as the party waiting.
@@ -300,11 +308,20 @@ module RepoTrustAsked =
 module RepoAwaitsPerson =
 
     let phrase (a: RepoAwaitsPerson) : Phrase =
-        Phrase.deed
-            "is waiting"
-            [ Segment.Text "for "
-              Segment.Ref (EntityRef.Actor (Principal.toActor a.Person))
-              Segment.Text " to open this session" ]
+        match a.Sandbox with
+        | Some sandbox ->
+            Phrase.deed
+                "waiting"
+                [ Segment.Text "for "
+                  Segment.Ref (EntityRef.Actor (Principal.toActor a.Person))
+                  Segment.Text " before starting sandbox "
+                  Segment.Ref (EntityRef.Sandbox sandbox) ]
+        | None ->
+            Phrase.deed
+                "is waiting"
+                [ Segment.Text "for "
+                  Segment.Ref (EntityRef.Actor (Principal.toActor a.Person))
+                  Segment.Text " to open this session" ]
 
 module RepoTrusted =
 

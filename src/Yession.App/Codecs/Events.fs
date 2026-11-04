@@ -1302,6 +1302,7 @@ module Events =
                 Encode.object
                     [ "messageId", Codec.messageId.Encode p.MessageId
                       "repo", Codec.repoRef.Encode p.Repo
+                      "sandbox", Encode.option Codec.sandboxRef.Encode p.Sandbox
                       "person", Codec.principal.Encode p.Person
                       "actor", Codec.actor.Encode p.Actor
                       "causedBy", Encode.option Codec.cause.Encode p.CausedBy ]
@@ -1309,6 +1310,8 @@ module Events =
             Decode.object (fun get ->
                 { RepoAwaitsPerson.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
                   RepoAwaitsPerson.Repo = get.Required.Field "repo" Codec.repoRef.Decode
+                  // Absent on a line written before a wait was per sandbox.
+                  RepoAwaitsPerson.Sandbox = get.Optional.Field "sandbox" Codec.sandboxRef.Decode
                   RepoAwaitsPerson.Person = get.Required.Field "person" Codec.principal.Decode
                   RepoAwaitsPerson.Actor = get.Required.Field "actor" Codec.actor.Decode
                   RepoAwaitsPerson.CausedBy =

@@ -193,6 +193,11 @@ let private editFileTool = "edit_file"
 let private writeFileTool = "write_file"
 let private shareArtifactTool = "share_artifact"
 
+/// The cause a start with a waiting id carries: present or absent as a value, because that
+/// form has a fixed arity and an absent cause cannot be a shorter list.
+let private startCause : Codec<Cause option> =
+    { Encode = Encode.option Codec.cause.Encode; Decode = Decode.option Codec.cause.Decode }
+
 /// One `start_work_sandbox` call, built where the dispatch entry that reads it lives.
 ///
 /// The encoding is private and stays private: a caller that spelled these arguments itself
@@ -201,13 +206,24 @@ let private shareArtifactTool = "share_artifact"
 /// `yession.yaml` — goes through here.
 ///
 /// The cause rides with the arguments, because the start is where it is recorded and the
-/// gate is the only road there.
-let startWorkSandboxCall (authority: Authority) (causedBy: Cause option) (sandbox: SandboxRef) (decl: SandboxDecl) : GatedCall =
+/// gate is the only road there. So does the id a wait for this start already holds
+/// (`RepoAwaitsPerson`), for the same reason: the start is what moves that item on.
+let startWorkSandboxCall
+    (authority: Authority)
+    (causedBy: Cause option)
+    (opened: MessageId option)
+    (sandbox: SandboxRef)
+    (decl: SandboxDecl)
+    : GatedCall =
     { Tool = startWorkSandboxTool
       Args =
         encodeArgs (
             [ SandboxRef.render sandbox; ConfigFile.encodeSandbox decl ]
-            @ (causedBy |> Option.map (Codec.toString Codec.cause) |> Option.toList))
+            @ (match causedBy, opened with
+               | None, None -> []
+               | Some cause, None -> [ Codec.toString Codec.cause cause ]
+               | _, Some opened ->
+                   [ Codec.toString startCause causedBy; Codec.toString Codec.messageId opened ]))
       Summary =
         match decl.Uses with
         | [] -> sprintf "start_work_sandbox %s" (SandboxRef.render sandbox)
@@ -218,19 +234,25 @@ let startWorkSandboxCall (authority: Authority) (causedBy: Cause option) (sandbo
                 (uses |> List.map ResourceName.value |> String.concat ", ")
       Authority = authority }
 
-/// `startWorkSandboxCall`'s arguments read back: the sandbox, its declaration, and what caused
-/// the start when anything did. Beside the encoding so the two cannot drift apart.
-let private readStartArgs (values: string list) : Result<string * string * Cause option, string> =
+/// `startWorkSandboxCall`'s arguments read back: the sandbox, its declaration, what caused
+/// the start when anything did, and the id a wait already holds for it. Beside the encoding
+/// so the two cannot drift apart.
+let private readStartArgs (values: string list) : Result<string * string * Cause option * MessageId option, string> =
     match values with
-    | [ name; declared ] -> Ok (name, declared, None)
+    | [ name; declared ] -> Ok (name, declared, None, None)
     | [ name; declared; cause ] ->
         Codec.fromString Codec.cause cause
-        |> Result.map (fun c -> name, declared, Some c)
+        |> Result.map (fun c -> name, declared, Some c, None)
         |> Result.mapError (sprintf "not a cause: %s")
+    | [ name; declared; cause; opened ] ->
+        match Codec.fromString startCause cause, Codec.fromString Codec.messageId opened with
+        | Ok cause, Ok opened -> Ok (name, declared, cause, Some opened)
+        | Error e, _ -> Error (sprintf "not a cause: %s" e)
+        | _, Error e -> Error (sprintf "not a message id: %s" e)
     | other ->
         Error (
             sprintf
-                "start_work_sandbox got %d arguments. It takes a sandbox, a declaration and an optional cause"
+                "start_work_sandbox got %d arguments. It takes a sandbox, a declaration, an optional cause and an optional waiting id"
                 (List.length other))
 
 /// The directory a CAUSED `set_shell_profile` carries: present or absent as a value, because
@@ -575,7 +597,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                 // One shape, so the declarative route and the interactive one cannot
                 // diverge — which is the reason this gate is a capability at all.
                 match readStartArgs (args) with
-                | Ok (name, declared, causedBy) ->
+                | Ok (name, declared, causedBy, opened) ->
                     match SandboxRef.parse name with
                     | Error e -> return Error (sprintf "not a sandbox: %s" e)
                     | Ok name ->
@@ -593,7 +615,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
                             match SandboxDecl.toRequest checkout decl with
                             | Error e -> return Error e
                             | Ok request ->
-                                match! (services.Sandboxes ()).Ensure invocation.Authority causedBy name request with
+                                match! (services.Sandboxes ()).Ensure invocation.Authority causedBy opened name request with
                                 | Error e -> return Error e
                                 | Ok outcome ->
                                     let entry = WorkSandboxes.SandboxOutcome.sandbox outcome
@@ -1151,7 +1173,7 @@ let private sandboxCapabilitiesFor
                   match startAs services name decl with
                   | Error e -> async { return Error e }
                   | Ok (name, decl) ->
-                      capabilities.RunGated (startWorkSandboxCall (Authority.agentFor turnActor) None name decl)
+                      capabilities.RunGated (startWorkSandboxCall (Authority.agentFor turnActor) None None name decl)
               Stop =
                 fun name ->
                   gated

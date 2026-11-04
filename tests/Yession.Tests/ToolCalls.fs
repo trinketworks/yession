@@ -234,7 +234,7 @@ let private answered (result: Result<string, string>) : string =
 let private registryReporting (outcome: WorkSandboxes.RunningSandbox -> WorkSandboxes.SandboxOutcome) (spec: EnvironmentSpec) =
     { WorkSandboxes.unavailable with
         Ensure =
-            fun _ _ name _ ->
+            fun _ _ _ name _ ->
                 async {
                     return
                         Ok (
@@ -266,7 +266,7 @@ let private declaringDev (record: SandboxRequest -> unit) : Commands.CommandServ
             fun () ->
                 { WorkSandboxes.unavailable with
                     Ensure =
-                        fun _ _ name request ->
+                        fun _ _ _ name request ->
                             async {
                                 record request
                                 return
