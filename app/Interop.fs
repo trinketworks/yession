@@ -352,8 +352,8 @@ let parseOrExit (spec: Yession.Domain.Cli.Spec) (currentVersion: string) : Yessi
 
 /// A server answering on one port at several addresses, opened as the sandboxes that need
 /// them appear. What the git gateway and the credential proxy listen on: each sandbox backend
-/// reaches this host at its own address (`Sandboxes.hostAddressFrom`), and a listener on
-/// every interface would also answer the host's other networks, which no sandbox is on.
+/// reaches this host at its own address (`Sandboxes.hostAddressFrom`), and answering on every
+/// interface would also answer the host's other networks, which no sandbox is on.
 ///
 /// One port for all of them, because a sandbox is told a URL with the port in it before it
 /// is known which address it will dial.
@@ -364,60 +364,59 @@ type Doors =
       Open : string -> Async<Result<unit, string>>
       Close : unit -> Async<unit> }
 
-/// Open `serve ()` on each of `first`, on one port the OS chooses for the first, then
-/// `Open` more. `serve` makes a fresh server for each address, with the same handlers.
-let openDoors (what: string) (serve: unit -> HttpServer) (first: string list) : Async<Doors> =
-    let listenOn (address: string) (port: int) : Async<Result<HttpServer, string>> =
-        Async.FromContinuations (fun (cont, _, _) ->
-            let server = serve ()
-            server.onceError (fun error ->
-                cont (Error (sprintf "%s cannot listen on %s:%d: %s" what address port (StreamError.describe error))))
-            server.listen (port, address, fun () -> cont (Ok server)) |> ignore)
-    let mutable servers : HttpServer list = []
-    let mutable opened : Map<string, JS.Promise<Result<unit, string>>> = Map.empty
+/// An address as a socket reports the local end of a connection: an IPv4 address that
+/// arrived at a dual-stack listener is spelled `::ffff:a.b.c.d`, and IPv6 in any case.
+let private doorAddress (address: string) : string =
+    let lower = address.ToLowerInvariant ()
+    if lower.StartsWith "::ffff:" && lower.Contains "." then lower.Substring 7 else lower
+
+/// Open `server` on one port the OS chooses, answering at each of `first`, then `Open` more.
+///
+/// ONE listener, on the wildcard, and the doors are the addresses a connection is ADMITTED
+/// at: one that arrives at any other address of this host is destroyed before HTTP reads a
+/// byte of it, so the host's other networks get no answer. Bound at the wildcard because that
+/// is the only bind that makes the OS choose a port free at EVERY address at once. A listener
+/// per address chose its port at the first address and asked for the same number at the
+/// others afterwards — at start, and again when a native daemon's network appeared — and
+/// whatever already held that number there (another listener, an outgoing connection's
+/// source port) failed the door with EADDRINUSE. The kernel checks a `:0` bind only against
+/// the address it is given, so that collision was never rare enough to ignore, only rare
+/// enough to look like a flake.
+///
+/// IPv6 is listened on only where a door names an IPv6 address, because a host without it
+/// refuses the IPv6 wildcard outright; dual-stack, it answers IPv4 doors too.
+let openDoors (what: string) (server: HttpServer) (first: string list) : Async<Doors> =
+    let addresses = first |> List.map doorAddress |> List.distinct
+    let wildcard = if addresses |> List.exists (fun a -> a.Contains ":") then "::" else "0.0.0.0"
+    let mutable doors : Set<string> = Set.ofList addresses
     async {
-        let addresses = List.distinct first
-        let! port =
-            match addresses with
-            | [] -> async { return failwithf "%s has no address to listen on" what }
-            | head :: _ ->
+        if List.isEmpty addresses then failwithf "%s has no address to listen on" what
+        server.onConnection (fun socket ->
+            match socket.localAddress with
+            | Some local when doors.Contains (doorAddress local) -> ()
+            | _ -> socket.destroy ())
+        let! listening =
+            Async.FromContinuations (fun (cont, _, _) ->
+                server.onceError (fun error ->
+                    cont (Error (sprintf "%s cannot listen on %s: %s" what wildcard (StreamError.describe error))))
+                server.listen (0, wildcard, fun () -> cont (Ok ())) |> ignore)
+        match listening with
+        | Error reason -> return failwith reason
+        | Ok () ->
+            let openAt (address: string) : Async<Result<unit, string>> =
                 async {
-                    match! listenOn head 0 with
-                    | Ok server ->
-                        servers <- [ server ]
-                        opened <- Map.add head (Async.StartAsPromise (async { return Ok () })) opened
-                        return serverPort server
-                    | Error reason -> return failwith reason
+                    let address = doorAddress address
+                    if address.Contains ":" && wildcard <> "::" then
+                        return
+                            Error (
+                                sprintf "%s listens on IPv4 only, so it cannot answer at %s" what address
+                            )
+                    else
+                        doors <- Set.add address doors
+                        return Ok ()
                 }
-        let openAt (address: string) : Async<Result<unit, string>> =
-            match Map.tryFind address opened with
-            | Some pending -> awaitPromise pending
-            | None ->
-                let pending =
-                    Async.StartAsPromise (
-                        async {
-                            match! listenOn address port with
-                            | Ok server ->
-                                servers <- server :: servers
-                                return Ok ()
-                            | Error reason ->
-                                // Not kept: the next sandbox to need the address asks again.
-                                opened <- Map.remove address opened
-                                return Error reason
-                        })
-                opened <- Map.add address pending opened
-                awaitPromise pending
-        for address in List.tail addresses do
-            match! openAt address with
-            | Ok () -> ()
-            | Error reason -> failwith reason
-        return
-            { Port = port
-              Open = openAt
-              Close =
-                fun () ->
-                    async {
-                        for server in servers do
-                            do! Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ()))
-                    } }
+            return
+                { Port = serverPort server
+                  Open = openAt
+                  Close = fun () -> Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ())) }
     }

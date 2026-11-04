@@ -461,7 +461,7 @@ let start (addresses: string list) (upstream: string) (report: string -> unit) :
                             })
 
     async {
-        let! doors = openDoors "the git gateway" (fun () -> createServer handler) addresses
+        let! doors = openDoors "the git gateway" (createServer handler) addresses
         return
             { Port = doors.Port
               Open = doors.Open

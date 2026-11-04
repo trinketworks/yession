@@ -681,7 +681,7 @@ let start
         server.onConnect (Func<_, _, _, _> onPortConnect)
         server
     async {
-        let! doors = openDoors "the credential proxy" serve addresses
+        let! doors = openDoors "the credential proxy" (serve ()) addresses
         return
             { Port = doors.Port
               Open = doors.Open

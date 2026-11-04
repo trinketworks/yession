@@ -1340,6 +1340,14 @@ type Socket =
     /// The peer's address, and nothing once the socket has been torn down.
     abstract remoteAddress : string option
 
+    /// The address of THIS host the peer dialled, and nothing once the socket has been torn
+    /// down. A server on the wildcard reads it to learn which of the host's networks a
+    /// connection came in on.
+    abstract localAddress : string option
+
+    /// Tear the connection down at once, with nothing written to it.
+    abstract destroy : unit -> unit
+
     /// The connection is gone, whichever end let go of it. What a server watches to learn that
     /// the far side has dropped a request it was holding open — the honest observation of that,
     /// where anything on the client's side would only say what the client thinks.
@@ -1983,6 +1991,11 @@ type HttpServer =
     /// for it first and fails with a sentence instead.
     [<Emit("$0.once('error', $1)")>]
     abstract onceError : handler: (StreamError -> unit) -> unit
+
+    /// Every connection as it is accepted, before HTTP has read a byte of it. A handler that
+    /// destroys the socket here is the server never having answered it.
+    [<Emit("$0.on('connection', $1)")>]
+    abstract onConnection : handler: (Socket -> unit) -> unit
 
     /// Stop accepting connections, and call back once every open one has ended. Node hands the
     /// callback an `Error` when the server was not listening and nothing when it closed, which

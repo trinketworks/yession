@@ -434,7 +434,9 @@ let private withGateway (upstream: string) (body: GitGateway.Gateway -> Async<un
 let private withGatewayAtLoopback (body: GitGateway.Gateway -> Async<unit>) : Async<unit> =
     withGatewayAtReporting [ "127.0.0.1" ] "http://127.0.0.1:1" ignore body
 
-/// Whether anything accepts a TCP connection at `address:port`.
+/// Whether anything ANSWERS an HTTP request at `address:port`: a reply, whatever it says. A
+/// connection that is accepted and torn down unread is no answer — that is what the gateway
+/// does with one that arrived at an address it was not opened at.
 let private answersAt (address: string) (port: int) : Async<bool> =
     Async.FromContinuations (fun (cont, _, _) ->
         let mutable settled = false
@@ -443,20 +445,29 @@ let private answersAt (address: string) (port: int) : Async<bool> =
                 settled <- true
                 cont answer
         let probe = connectTcp (port, address)
-        probe.onceConnect (fun () ->
+        probe.onceConnect (fun () -> probe.writeText "GET / HTTP/1.1\r\nHost: probe\r\nConnection: close\r\n\r\n")
+        probe.onData (fun _ ->
             probe.destroy ()
             finish true)
+        probe.onEnd (fun () -> finish false)
         probe.onError (fun _ -> finish false))
+
+/// Whether ANOTHER listener can take `address:port` — the bind a door opened later used to
+/// make itself, and lose to whatever got there first.
+let private bindableAt (address: string) (port: int) : Async<bool> =
+    Async.FromContinuations (fun (cont, _, _) ->
+        let other = createServer (fun _ res -> res.``end`` "")
+        other.onceError (fun _ -> cont false)
+        other.listen (port, address, fun () -> other.close (fun _ -> cont true)) |> ignore)
 
 let private doorTests =
     testList "where the gateway answers" [
-        // Linux loopback is all of 127/8, so `127.0.0.2` is an address a listener on every
-        // interface would answer and one on `127.0.0.1` does not. macOS configures only
-        // `127.0.0.1` on `lo0`: a bind to `127.0.0.2` is EADDRNOTAVAIL and a connect to it
-        // sits in a timeout — which is also why `hostDoorsFrom` never names it there. Skipped
-        // rather than asserted on macOS: the invariant is real and this platform has no second
-        // loopback address to express it with, which is what a visible skip says and a quiet
-        // pass does not.
+        // Linux loopback is all of 127/8, so `127.0.0.2` is an address of this host's that
+        // the gateway was not opened at. macOS configures only `127.0.0.1` on `lo0`: a bind
+        // to `127.0.0.2` is EADDRNOTAVAIL and a connect to it sits in a timeout — which is
+        // also why `hostDoorsFrom` never names it there. Skipped rather than asserted on
+        // macOS: the invariant is real and this platform has no second loopback address to
+        // express it with, which is what a visible skip says and a quiet pass does not.
         (if ``process``.platform = Node.Base.Platform.Darwin then
             ptestCase "the gateway does not answer at an address it was not opened at (Linux only: macOS has no second loopback address)" (fun () -> ())
          else
@@ -480,6 +491,23 @@ let private doorTests =
                             Expect.equal opened (Ok ()) "opened"
                             let! answered = answersAt "127.0.0.2" gateway.Port
                             Expect.isTrue answered "the port a sandbox was told"
+                        })
+            }))
+
+        // The port a sandbox is told is the gateway's at EVERY address from the moment it
+        // starts, so a door opened later has nothing to lose a race to. It used to be chosen
+        // at the first address only and bound at the others when they opened, where whatever
+        // already held that number failed the door with EADDRINUSE — on a macOS runner, at
+        // the VM's address, as "the git gateway cannot listen on 192.168.64.8:49256".
+        (if ``process``.platform = Node.Base.Platform.Darwin then
+            ptestCase "nothing else can take the gateway's port at an address it has not opened yet (Linux only: macOS has no second loopback address)" (fun () -> ())
+         else
+            testCaseAsync "nothing else can take the gateway's port at an address it has not opened yet" (async {
+                do!
+                    withGatewayAtLoopback (fun gateway ->
+                        async {
+                            let! taken = bindableAt "127.0.0.2" gateway.Port
+                            Expect.isFalse taken "the port is held at the address a later door opens at"
                         })
             }))
     ]
