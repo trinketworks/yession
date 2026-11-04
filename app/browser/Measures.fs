@@ -410,16 +410,10 @@ let private smoothScrollToTop () : JS.Promise<float list> =
         Scrolling.intoView el "start"
         el.scrollTop <- el.scrollHeight
         nextFrame ()
-        |> Promise.bind (fun () ->
+        |> Promise.map (fun () ->
+            let from = el.scrollTop
             Scrolling.smoothlyTo el 0.0
-            // Until it stops moving for three frames, wherever that is.
-            let rec settle (last: float) (still: int) : JS.Promise<float list> =
-                nextFrame ()
-                |> Promise.bind (fun () ->
-                    let now = el.scrollTop
-                    let still = if now = last then still + 1 else 0
-                    if still >= 3 then Promise.lift [ now ] else settle now still)
-            settle el.scrollTop 0)
+            [ from ])
 
 let private chapterPlaceholder () : float list =
     match first Root.Document "#shell [data-chapter-name='msg-filler-8']" with
