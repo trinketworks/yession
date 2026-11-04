@@ -5514,13 +5514,17 @@ let editorTests =
         // `restoreSurfaceScroll`). Only a browser has a scroll in flight to take away, so
         // only a browser can watch it survive. Smooth rather than flung: the same in-flight
         // scroll, and one with a stated destination to check against.
-        editorCaseIn 390 844 "a scroll in progress is not taken away by the renders that land during it" <| fun page ->
+        for copy in 1 .. 60 do
+          editorCaseIn 390 844 (sprintf "a scroll in progress is not taken away by the renders that land during it #%d" copy) <| fun page ->
             async {
                 do! waitVisible "the shell's conversation" page "#shell [data-conversation]"
                 // Two hundred items, a record a frame for four hundred frames — the scroll has
                 // to reach the top well inside that, so every frame of it has a render in it.
                 do! Harness.run4 page HarnessPage.benchScrollBegin 200 400 16 true
+                let! _ = page.EvaluateAsync (System.IO.File.ReadAllText "tests/browser/scroll-trace.js") |> Async.AwaitTask
                 let! stopped = Probe.reading page Yession.App.Probes.Measure.SmoothScrollToTop
+                let! trace = page.EvaluateAsync<string> "JSON.stringify(window.__trace)" |> Async.AwaitTask
+                if stopped <> [ 0.0 ] then printfn "SCROLL TRACE #%d %A: %s" copy stopped trace
                 let reached = match stopped with [ at ] -> at | _ -> failwith "there is no conversation to scroll"
                 let! report = Harness.ask page HarnessPage.benchScrollEnd
                 use doc = System.Text.Json.JsonDocument.Parse report
