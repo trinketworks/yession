@@ -227,6 +227,14 @@ Async.StartImmediate(
                     Webhooks = Cli.valueOf ManagerCli.webhookOption args }
                 (Some ManagerUi.tryHandle)
 
+        // Where it listens, said the moment it does. A Manager told `--port 0` is otherwise
+        // unaddressable until its boot has finished — `management UI at` comes after the
+        // default session's launch — and that launch is a session fetching OIDC discovery
+        // from this Manager, through whatever fronts it. So a proxy in front of a Manager on
+        // a port the OS chose has to learn the port here, before it is asked to forward.
+        manager.EndpointPort
+        |> Option.iter (fun port -> printfn "Yession Manager: listening at http://127.0.0.1:%d/" port)
+
         // Ensure the default session exists (an existing registration is resume).
         let sessionId = SessionId.create defaultSession |> expect
         match manager.TryFind sessionId with

@@ -1505,24 +1505,28 @@ let private managerBehindFrontDoor (name: string) =
         let! door, doorOrigin, mapIt, stallIt = startFrontDoor ()
         let dataDir =
             sprintf "tests/Yession.Tests/out/.data/%s-%d" name (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
-        let! managerPort = freePort ()
-        let origin = sprintf "http://127.0.0.1:%d" managerPort
+        // Bound before the Manager is, because the Manager is told it: it is the OIDC issuer
+        // a launched session fetches discovery against (`frontOrigin`).
+        let! front = frontOrigin ()
         let! pm =
             ProcessManager.createWithUi
                 { ProcessManager.Options.defaults dataDir nodePath [ "app/SessionMain.js" ] with
                     Strategy = Some Strategy.localhost
-                    Listen = ProcessManager.Listener.Port managerPort
-                    // Two origins deliberately. The Manager keeps its own, because it is the
-                    // OIDC issuer a launched session fetches discovery against and that has
-                    // to be an address which really answers; the SESSIONS are published at
-                    // the door, which is the half `/open` has to wait for.
-                    Public = PublicAccess.create origin (doorOrigin + "/s/{id}") |> expect }
+                    // Two origins deliberately. The Manager's answers, because it is the OIDC
+                    // issuer a launched session fetches discovery against; the SESSIONS are
+                    // published at the door, which is the half `/open` has to wait for.
+                    Public = PublicAccess.create front.Origin (doorOrigin + "/s/{id}") |> expect }
                 (Some ManagerUi.tryHandle)
+        front.PointAt pm.EndpointPort.Value
+        let origin = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
         pm.CreateSession name "" |> expect |> ignore
         let sessionId = SessionId.create name |> expect
         let! launched = pm.Launch sessionId
         Expect.isTrue (Result.isOk launched) "the session launches"
-        return pm, origin, mapIt, stallIt, door
+        let close () =
+            door.close ignore
+            front.Close ()
+        return pm, origin, mapIt, stallIt, close
     }
 
 /// The one module script a Manager page names, resolved from the page's own address, answers
@@ -1547,21 +1551,21 @@ let private readinessTests =
     testList "Is the session reachable yet (Plan 11)" [
         testCaseAsync "a session the front door has not mapped yet is not ready" <|
             async {
-                let! pm, baseUrl, _, _, door = managerBehindFrontDoor "ready-miss"
+                let! pm, baseUrl, _, _, close = managerBehindFrontDoor "ready-miss"
                 let! answer = TestHttp.get (baseUrl + "/sessions/ready-miss/ready")
                 Expect.equal answer.Status 503 "the session is running and its published address is not"
                 do! pm.StopAll ()
-                door.close ignore
+                close ()
             }
 
         testCaseAsync "a session whose published address answers is ready" <|
             async {
-                let! pm, baseUrl, mapIt, _, door = managerBehindFrontDoor "ready-hit"
+                let! pm, baseUrl, mapIt, _, close = managerBehindFrontDoor "ready-hit"
                 mapIt ()
                 let! answer = TestHttp.get (baseUrl + "/sessions/ready-hit/ready")
                 Expect.equal answer.Status 200 "the door routes to it now, so it is reachable"
                 do! pm.StopAll ()
-                door.close ignore
+                close ()
             }
 
         // An address that takes the request and never answers is not ready either, and the
@@ -1569,12 +1573,12 @@ let private readinessTests =
         // ever, and the screen's own give-up never fired.
         testCaseAsync "a session whose published address never answers is not ready, and is told so in time" <|
             async {
-                let! pm, baseUrl, _, stallIt, door = managerBehindFrontDoor "ready-stall"
+                let! pm, baseUrl, _, stallIt, close = managerBehindFrontDoor "ready-stall"
                 stallIt ()
                 let! answer = TestHttp.get (baseUrl + "/sessions/ready-stall/ready")
                 Expect.equal answer.Status 503 "the address did not answer within the bound"
                 do! pm.StopAll ()
-                door.close ignore
+                close ()
             }
 
         // The downstream half of the same fault. Whatever goes wrong upstream, a browser is
@@ -2340,12 +2344,12 @@ let private reapingTests =
                 // Every lifecycle event the Manager emits, so the reap's REASON is read from
                 // the telemetry that operators read, not inferred from the session being gone.
                 let events = ResizeArray<string * (string * Telemetry.AttributeValue) list> ()
-                // A free port rather than a fixed one, like the fronted registry test below:
-                // the Manager must actually ANSWER on the origin it declares, because a
-                // launched session fetches OIDC discovery against it (Plan 10).
-                // Declaring one it does not answer on fails the launch, not the assertion.
-                let! managerPort = freePort ()
-                let origin = sprintf "http://127.0.0.1:%d" managerPort
+                // The Manager must actually ANSWER on the origin it declares, because a
+                // launched session fetches OIDC discovery against it (Plan 10). Declaring one
+                // it does not answer on fails the launch, not the assertion. So the origin is
+                // one bound before the Manager is, standing in front of it (`frontOrigin`).
+                let! front = frontOrigin ()
+                let origin = front.Origin
                 // The idle window passes when the case turns this, not three real seconds and
                 // a sweep later.
                 let clock = virtualClock (DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero))
@@ -2357,11 +2361,11 @@ let private reapingTests =
                             // Path-mounted: a session's address is derived from its ID, so it
                             // is the same string before and after a reap however the OS
                             // reassigns ports. That is the guarantee that replaced pinning.
-                            Listen = ProcessManager.Listener.Port managerPort
                             Public = PublicAccess.create origin (origin + "/s/{id}") |> expect
                             IdleTimeout = Some (TimeSpan.FromSeconds 3.0)
                             OnEvent = fun name attrs -> lock events (fun () -> events.Add (name, attrs)) }
                         (Some ManagerUi.tryHandle)
+                front.PointAt pm.EndpointPort.Value
                 let baseUrl = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
                 let sessionId = SessionId.create "reap-1" |> expect
                 pm.CreateSession "reap-1" "Reap One" |> expect |> ignore
@@ -2421,6 +2425,7 @@ let private reapingTests =
                 Expect.equal (address ()) (origin + "/s/reap-1") "and it is unchanged by the reap"
 
                 do! pm.StopAll ()
+                front.Close ()
             }
     ]
 
@@ -3780,18 +3785,19 @@ let private registryStreamTests =
                 // The Manager's public origin is a loopback one HERE because it is also the
                 // OIDC issuer the launched session fetches discovery against — the standing
                 // requirement that a fronted Manager's URL resolve from its own host, which
-                // a made-up hostname would not.
-                let! managerPort = freePort ()
-                let managerUrl = sprintf "http://127.0.0.1:%d" managerPort
+                // a made-up hostname would not. Bound before the Manager is, because the
+                // Manager is told it (`frontOrigin`).
+                let! front = frontOrigin ()
+                let managerUrl = front.Origin
                 let sessionUrl = "http://home.example.ts.net:{port}"
                 let access = PublicAccess.create managerUrl sessionUrl |> expect
                 let! pm =
                     ProcessManager.createWithUi
                         { ProcessManager.Options.defaults dataDir nodePath [ "app/SessionMain.js" ] with
                             Strategy = Some Strategy.localhost
-                            Listen = ProcessManager.Listener.Port managerPort
                             Public = access }
                         (Some ManagerUi.tryHandle)
+                front.PointAt pm.EndpointPort.Value
                 let baseUrl = sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value
 
                 let frames = ResizeArray<ControlWire.SessionRegistryFrame> ()
@@ -3852,6 +3858,7 @@ let private registryStreamTests =
 
                 cancel.Stop ()
                 do! pm.StopAll ()
+                front.Close ()
             }
 
         testCaseAsync "the stream is gated by the Manager's strategy: the deny-everything default refuses it" <|
