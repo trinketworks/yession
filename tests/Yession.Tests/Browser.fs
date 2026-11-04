@@ -5555,11 +5555,31 @@ let editorTests =
                 // Two hundred items, a record a frame for four hundred frames — the scroll has
                 // to reach the top well inside that, so every frame of it has a render in it.
                 do! Harness.run4 page HarnessPage.benchScrollBegin 200 400 16 true
+                // The page still opening is not a render landing. The composer's line unfolds
+                // over 200ms as the page arrives (`line-unfold`), and the conversation's box
+                // shrinks with it frame by frame; following the end through that is the
+                // ResizeObserver's job (`Tail`), and a scroll sent before its first frame has
+                // not moved, so the reader still reads as following and is put back. Traced
+                // on master: sent at ~480ms with the box 10px short of shrunk, the observer's
+                // `toEnd` wrote 1ms later and the scroll never left the bottom — 16 of 20 runs
+                // on a quiet 4-core box. So the page is let finish opening first.
+                do! Probe.settled page
                 let! started = Probe.reading page Yession.App.Probes.Measure.SmoothScrollToTop
                 if List.isEmpty started then failwith "there is no conversation to scroll"
-                do! Wait.until "the scroll to reach the top it was sent to, through every render on the way"
-                        (fun () -> Probe.scroll page "#shell [data-conversation]")
-                        (Option.exists (fun s -> s.Top = 0.0))
+                // Until it arrives, or until something writes to the scroll — which ends a smooth
+                // scroll, so there is no arriving after it, and waiting on would only time out
+                // without saying what took it.
+                let arrivedOrTaken () =
+                    async {
+                        let! scroll = Probe.scroll page "#shell [data-conversation]"
+                        let! takenBy = Probe.verdict page Yession.App.Probes.Measure.ScrollTakenAway
+                        return scroll |> Option.exists (fun s -> s.Top = 0.0), takenBy
+                    }
+                do! Wait.until "the scroll to reach the top it was sent to, through every render on the way, or to be taken away"
+                        arrivedOrTaken (fun (arrived, takenBy) -> arrived || not (List.isEmpty takenBy))
+                let! arrived, takenBy = arrivedOrTaken ()
+                Expect.equal takenBy [] "nothing wrote to the conversation's scroll while it was on its way to the top"
+                Expect.isTrue arrived "the scroll reached the top"
                 let! report = Harness.ask page HarnessPage.benchScrollEnd
                 use doc = System.Text.Json.JsonDocument.Parse report
                 let renders = doc.RootElement.GetProperty("renders").GetInt32 ()

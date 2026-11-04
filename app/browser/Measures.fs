@@ -403,6 +403,10 @@ let private loneRecordInQuietFrame () : JS.Promise<string list> =
                 | None -> attempt (tries + 1))
     attempt 0
 
+/// The conversation `smoothScrollToTop` last sent, and every write to its scroll since.
+let mutable private smoothlyScrolled : Element option = None
+let private scrollWrites = ResizeArray<string> ()
+
 let private smoothScrollToTop () : JS.Promise<float list> =
     match first Root.Document "#shell [data-conversation]" with
     | None -> Promise.lift []
@@ -413,7 +417,22 @@ let private smoothScrollToTop () : JS.Promise<float list> =
         |> Promise.map (fun () ->
             let from = el.scrollTop
             Scrolling.smoothlyTo el 0.0
+            // After the scroll is sent, so its own sending is not counted against it.
+            scrollWrites.Clear ()
+            match smoothlyScrolled with
+            | Some noted when obj.ReferenceEquals (noted, el) -> ()
+            | Some _
+            | None -> Scrolling.noteWrites el scrollWrites.Add
+            smoothlyScrolled <- Some el
             [ from ])
+
+let private scrollTakenAway () : string list =
+    match smoothlyScrolled, first Root.Document "#shell [data-conversation]" with
+    | None, _ -> [ "no smooth scroll has been sent (SmoothScrollToTop)" ]
+    | Some _, None -> "the conversation left the page" :: List.ofSeq scrollWrites
+    | Some sent, Some now when not (obj.ReferenceEquals (sent, now)) ->
+        "the conversation was replaced while it scrolled" :: List.ofSeq scrollWrites
+    | Some _, Some _ -> List.ofSeq scrollWrites
 
 let private chapterPlaceholder () : float list =
     match first Root.Document "#shell [data-chapter-name='msg-filler-8']" with
@@ -731,6 +750,7 @@ let private implement (measure: Probes.Measure) : Implementation =
     | Probes.Measure.Burst -> Implementation.Reading (fun _ -> burst ())
     | Probes.Measure.LoneRecordInQuietFrame -> Implementation.Verdict (fun _ -> loneRecordInQuietFrame ())
     | Probes.Measure.SmoothScrollToTop -> Implementation.Reading (fun _ -> smoothScrollToTop ())
+    | Probes.Measure.ScrollTakenAway -> verdictNow (fun _ -> scrollTakenAway ())
     | Probes.Measure.ChapterPlaceholder -> readingNow (fun _ -> chapterPlaceholder ())
     | Probes.Measure.ItemActionsUnderThumb -> verdictNow (fun _ -> itemActionsUnderThumb ())
     | Probes.Measure.AgentCaretOnLetters -> verdictNow (fun _ -> agentCaretOnLetters ())
