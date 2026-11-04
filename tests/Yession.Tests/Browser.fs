@@ -5542,19 +5542,28 @@ let editorTests =
         // `restoreSurfaceScroll`). Only a browser has a scroll in flight to take away, so
         // only a browser can watch it survive. Smooth rather than flung: the same in-flight
         // scroll, and one with a stated destination to check against.
+        //
+        // The top is WAITED for, not read once the scroll stands still. A scroll taken away
+        // stays where it was taken, so it never gets there; one that was not taken away always
+        // does. Standing still cannot tell those apart from a scroll that has not begun:
+        // Chromium moves a smooth scroll a frame or more after it is asked for, and on a busy
+        // runner more than the three frames this once read as "stopped". It then failed with
+        // the scroll at its start, 54492, while nothing had taken it.
         editorCaseIn 390 844 "a scroll in progress is not taken away by the renders that land during it" <| fun page ->
             async {
                 do! waitVisible "the shell's conversation" page "#shell [data-conversation]"
                 // Two hundred items, a record a frame for four hundred frames — the scroll has
                 // to reach the top well inside that, so every frame of it has a render in it.
                 do! Harness.run4 page HarnessPage.benchScrollBegin 200 400 16 true
-                let! stopped = Probe.reading page Yession.App.Probes.Measure.SmoothScrollToTop
-                let reached = match stopped with [ at ] -> at | _ -> failwith "there is no conversation to scroll"
+                let! started = Probe.reading page Yession.App.Probes.Measure.SmoothScrollToTop
+                if List.isEmpty started then failwith "there is no conversation to scroll"
+                do! Wait.until "the scroll to reach the top it was sent to, through every render on the way"
+                        (fun () -> Probe.scroll page "#shell [data-conversation]")
+                        (Option.exists (fun s -> s.Top = 0.0))
                 let! report = Harness.ask page HarnessPage.benchScrollEnd
                 use doc = System.Text.Json.JsonDocument.Parse report
                 let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
                 let startedAt = doc.RootElement.GetProperty("scrolledFrom").GetDouble ()
-                Expect.equal reached 0.0 "the scroll reached the top it was sent to, through every render on the way"
                 // Anti-vacuity: a conversation that fit the screen had no scroll to lose, and
                 // a stream that never rendered had nothing to lose it to.
                 Expect.isTrue (startedAt > 0.0) "the conversation scrolls, so there was a scroll to take away"

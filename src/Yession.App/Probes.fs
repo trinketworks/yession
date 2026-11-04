@@ -383,8 +383,11 @@ module Probes =
         /// A lone record dispatched from inside a frame nothing has been drawn in yet, and the
         /// page read back in the same breath: empty when it is already on the page.
         | LoneRecordInQuietFrame
-        /// The conversation put at its end, then sent smoothly to its top, and read once it has
-        /// stood still three frames: where it stopped.
+        /// The conversation put at its end, then sent smoothly to its top: where it started
+        /// from. It answers as the scroll begins, not when it ends. Where it ends is the case's
+        /// to wait for, because nothing in the page can tell a scroll that has not moved yet
+        /// from one that was stopped before it could: Chromium moves a smooth scroll a frame
+        /// or more after it is asked for, and more on a busy machine.
         | SmoothScrollToTop
         /// The chapter name field for `msg-filler-8`: 1 or 0 for whether it is empty, whether
         /// it has a placeholder to offer, and whether that placeholder is painted in any ink.
