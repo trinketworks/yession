@@ -431,7 +431,15 @@ let tests =
                         // The composer, at the same phone pace. What a keystroke costs should not
                         // grow with the conversation above it — nothing the key changed is in
                         // there — and the sweep says whether it does.
-                        let rendersPerKey = ResizeArray<float> ()
+                        // Renders per keystroke, per size: a COUNT, and not a series of render
+                        // times. How many renders a key sets off is what a change that stops a
+                        // keystroke redrawing the page moves, and the right answer is none — a
+                        // series of render times would then have nothing in it. And timed, the
+                        // renders split by runner speed: the harness times only a render its
+                        // dispatch draws, not one deferred to the frame's end, so at a thousand
+                        // items a slow runner timed three of fifty. A keystroke's cost, renders
+                        // and all, is `compose.type`: one sample per key on any hardware.
+                        let rendersPerKey = ResizeArray<int * float> ()
                         for items in composeSizes do
                             do! Harness.run1 phonePage HarnessPage.benchComposeBegin items
                             let composer = (phonePage.Locator "#shell [data-draft-input]").First
@@ -452,8 +460,8 @@ let tests =
                             if drawn < items then
                                 failwithf "the compose scenario asked for %d items and the page drew %d" items drawn
                             printfn "  typed %d keys over %d items in %d renders" keys items renders
-                            rendersPerKey.Add (float renders / float keys)
-                            collected.AddRange (seriesFrom report items [ "type", "compose.type"; "render", "compose.render" ])
+                            rendersPerKey.Add (items, float renders / float keys)
+                            collected.AddRange (seriesFrom report items [ "type", "compose.type" ])
                         do! awaitU (phoneContext.CloseAsync ())
 
                         let all = List.ofSeq collected
@@ -505,12 +513,16 @@ let tests =
                               // Flat is near 1. Today every keystroke renders every item, and
                               // this is the number that says by how much.
                               { Ratio.Name = "compose.type.slope"; Ratio.Unit = "x"; Ratio.Value = composeSlope
-                                Ratio.Over = sprintf "%d/%d items" (List.max composeSizes) (List.min composeSizes) }
-                              // Renders per keystroke, a COUNT: what a change that stops a
-                              // keystroke redrawing the page would move, whatever the hardware.
-                              { Ratio.Name = "compose.renders"; Ratio.Unit = "x"
-                                Ratio.Value = (Seq.sum rendersPerKey) / float rendersPerKey.Count
-                                Ratio.Over = sprintf "%d keys at %.0fms" samples composeEveryMs } ]
+                                Ratio.Over = sprintf "%d/%d items" (List.max composeSizes) (List.min composeSizes) } ]
+                            // Renders per keystroke at each size, a COUNT: what a change that
+                            // stops a keystroke redrawing the page would move. Per size because
+                            // the page draws at most once a frame, so where a render outlasts the
+                            // gap between keys, renders merge, and an average over the sweep
+                            // would mix that in with the sizes where they do not.
+                            @ [ for (items, perKey) in rendersPerKey ->
+                                    { Ratio.Name = sprintf "compose.renders@%d" items; Ratio.Unit = "x"
+                                      Ratio.Value = perKey
+                                      Ratio.Over = sprintf "%d keys at %.0fms" samples composeEveryMs } ]
 
                         // Anti-vacuity. Every one of these has a silent failure that produces a
                         // perfectly plausible report: a scenario that never ran leaves an empty

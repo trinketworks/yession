@@ -2322,14 +2322,19 @@ do
     //
     // A keystroke is timed from the browser's own event timestamp to the first task after the
     // frame it lands in — after the frame's own work, which is where the caret's render runs —
-    // so the number is input to the next thing a person could see.
+    // so the number is input to the next thing a person could see. One sample per key, however
+    // many renders the key set off, so the cost is measured even where the answer is none.
+    //
+    // The renders are COUNTED, not timed. `dispatch` times only a render it draws itself; one
+    // whose model came after the frame's render is drawn at the frame's end, untimed, and which
+    // way a render goes depends on how long the one before it took. On a slow runner at a
+    // thousand items most of them went the untimed way, and a series of render times came back
+    // with three samples from fifty renders.
     let mutable composeFinish : (int -> JS.Promise<string>) option = None
     PageGlobal.set HarnessPage.benchComposeBegin (fun items ->
         model <- shellModelOf Replies items
         render ()
         let keys = ResizeArray<float> ()
-        let times = ResizeArray<float> ()
-        renderTimes <- Some times
         let rendersAtBegin = Render.renders ()
         let mutable pressed = 0
         let listener : Browser.Types.Event -> unit =
@@ -2356,11 +2361,9 @@ do
                         do! nextFrame () |> Async.AwaitPromise
                         frames <- frames + 1
                     Browser.Dom.document.removeEventListener ("keydown", listener, true)
-                    renderTimes <- None
                     return
                         JS.JSON.stringify
                             {| ``type`` = keys.ToArray ()
-                               render = times.ToArray ()
                                renders = Render.renders () - rendersAtBegin
                                keys = pressed
                                items = int (conversation ()).children.length |}
