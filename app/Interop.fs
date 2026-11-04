@@ -400,7 +400,7 @@ let openDoorsAsking
         Async.FromContinuations (fun (cont, _, _) ->
             let server = serve ()
             server.onceError (fun error ->
-                let inUse = Errors.errno (unbox<exn> (box error)) = Some "EADDRINUSE"
+                let inUse = StreamError.errno error = Some "EADDRINUSE"
                 cont (Error (sprintf "%s cannot listen on %s:%d: %s" what address port (StreamError.describe error), inUse)))
             server.listen (port, address, fun () -> cont (Ok server)) |> ignore)
     let closeAll (servers: HttpServer list) : Async<unit> =
@@ -452,9 +452,10 @@ let openDoorsAsking
         for group in groups do
             let! bound, port = allocate group
             servers <- bound @ servers
-            for address in group do
-                ports <- Map.add address port ports
-                opened <- Map.add address (Async.StartAsPromise (async { return Ok () })) opened
+            ports <- group |> List.fold (fun held address -> Map.add address port held) ports
+            opened <-
+                group
+                |> List.fold (fun held address -> Map.add address (Async.StartAsPromise (async { return Ok () })) held) opened
         let firstPort = Map.find (List.head (List.head groups)) ports
         let openAt (address: string) : Async<Result<unit, string>> =
             match Map.tryFind address opened with
