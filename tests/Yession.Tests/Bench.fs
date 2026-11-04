@@ -84,6 +84,17 @@ let private phone = 390, 844
 let private streamRecords = 100
 let private streamEveryMs = 50
 
+/// The fourth sweep, in conversation ITEMS again but for a different wait: a keystroke in the
+/// composer. The session typing was reported slow in held about two thousand rows (114
+/// replies, 1,369 tool calls, 232 commands); a thousand replies is past where a phone stopped
+/// keeping up with a thumb, and as far as this suite's allowance reaches.
+let private composeSizes = [ 20; 200; 1_000 ]
+/// The pace a thumb types at: a key every this many milliseconds, not as fast as the driver
+/// can send them. Where a keystroke's renders take longer than this, the next key waits on
+/// them, and that wait is the lag a person feels; a driver typing faster than anybody does
+/// would add a backlog nobody makes.
+let private composeEveryMs = 120.0f
+
 /// The scroll scenario runs the main thread at a QUARTER speed (`Emulation.setCPUThrottlingRate`).
 /// A render that takes 5ms on the runner and 20ms on a phone lands in a frame on the phone and
 /// between two on the runner, so unthrottled the frame series could not see the collision this
@@ -252,7 +263,7 @@ let private flingWhileStreaming (page: IPage) (cdp: ICDPSession) (records: int) 
 
 let tests =
     testList "Client performance" [
-        testCaseAsync "the editor, the collaboration path, the transcript read, the scroll and the open, swept by size" <|
+        testCaseAsync "the editor, the collaboration path, the transcript read, the scroll, the open and the composer, swept by size" <|
             async {
                 let server = serveStatic harnessRoot
                 let! pw = await (Playwright.CreateAsync ())
@@ -416,6 +427,33 @@ let tests =
                                 items carried records renders
                             rendersPerRecord.Add (float renders / float records)
                             collected.AddRange (seriesFrom report items [ "frame", "scroll.frame"; "render", "scroll.render" ])
+
+                        // The composer, at the same phone pace. What a keystroke costs should not
+                        // grow with the conversation above it — nothing the key changed is in
+                        // there — and the sweep says whether it does.
+                        let rendersPerKey = ResizeArray<float> ()
+                        for items in composeSizes do
+                            do! Harness.run1 phonePage HarnessPage.benchComposeBegin items
+                            let composer = (phonePage.Locator "#shell [data-draft-input]").First
+                            do! awaitU (composer.ClickAsync ())
+                            do! awaitU (
+                                phonePage.Keyboard.TypeAsync (
+                                    String.replicate samples "x", KeyboardTypeOptions (Delay = composeEveryMs)))
+                            let! report = Harness.await1 phonePage HarnessPage.benchComposeEnd samples
+                            use doc = JsonDocument.Parse report
+                            let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
+                            let keys = doc.RootElement.GetProperty("keys").GetInt32 ()
+                            let drawn = doc.RootElement.GetProperty("items").GetInt32 ()
+                            // Anti-vacuity: keys that went somewhere else were not typed into
+                            // the composer, and a conversation shorter than asked for is a
+                            // sweep measuring one size several times.
+                            if keys < samples then
+                                failwithf "typed %d keys and %d reached the composer over %d items" samples keys items
+                            if drawn < items then
+                                failwithf "the compose scenario asked for %d items and the page drew %d" items drawn
+                            printfn "  typed %d keys over %d items in %d renders" keys items renders
+                            rendersPerKey.Add (float renders / float keys)
+                            collected.AddRange (seriesFrom report items [ "type", "compose.type"; "render", "compose.render" ])
                         do! awaitU (phoneContext.CloseAsync ())
 
                         let all = List.ofSeq collected
@@ -432,6 +470,9 @@ let tests =
                         let renderAt = medianOf "scroll.render"
                         let scrollSlope =
                             renderAt (List.max conversationSizes) / renderAt (List.min conversationSizes)
+                        let composeAt = medianOf "compose.type"
+                        let composeSlope =
+                            composeAt (List.max composeSizes) / composeAt (List.min composeSizes)
                         let ratios =
                             [ // The one number that barely moves with the hardware it was taken
                               // on, and the only one that answers the question this suite was
@@ -459,7 +500,17 @@ let tests =
                               // change would show.
                               { Ratio.Name = "scroll.renders"; Ratio.Unit = "x"
                                 Ratio.Value = (Seq.sum rendersPerRecord) / float rendersPerRecord.Count
-                                Ratio.Over = sprintf "%d records at %dms" streamRecords streamEveryMs } ]
+                                Ratio.Over = sprintf "%d records at %dms" streamRecords streamEveryMs }
+                              // Does a keystroke grow with the conversation above the composer?
+                              // Flat is near 1. Today every keystroke renders every item, and
+                              // this is the number that says by how much.
+                              { Ratio.Name = "compose.type.slope"; Ratio.Unit = "x"; Ratio.Value = composeSlope
+                                Ratio.Over = sprintf "%d/%d items" (List.max composeSizes) (List.min composeSizes) }
+                              // Renders per keystroke, a COUNT: what a change that stops a
+                              // keystroke redrawing the page would move, whatever the hardware.
+                              { Ratio.Name = "compose.renders"; Ratio.Unit = "x"
+                                Ratio.Value = (Seq.sum rendersPerKey) / float rendersPerKey.Count
+                                Ratio.Over = sprintf "%d keys at %.0fms" samples composeEveryMs } ]
 
                         // Anti-vacuity. Every one of these has a silent failure that produces a
                         // perfectly plausible report: a scenario that never ran leaves an empty

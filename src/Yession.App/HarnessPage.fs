@@ -89,6 +89,13 @@ module HarnessPage =
     /// Open a session the way the app opens one it has never seen — everything over the
     /// network, `pageSize` events to a page, a page every `everyMs` — and say what the page did.
     let benchOpenCold : PageGlobal<System.Func<int, int, int, JS.Promise<string>>> = PageGlobal.named "__benchOpenCold"
+    /// Begin the compose scenario: a conversation of `items`, and every keystroke that reaches
+    /// the composer timed to the frame it paints on, with the renders it set off counted. The
+    /// TYPING is the driver's to do, with real key events, once this returns.
+    let benchComposeBegin : PageGlobal<int -> unit> = PageGlobal.named "__benchComposeBegin"
+    /// End it once `keys` keystrokes have each been timed (or a few seconds of frames have gone
+    /// by without them): stop the clocks, and hand back what they recorded.
+    let benchComposeEnd : PageGlobal<int -> JS.Promise<string>> = PageGlobal.named "__benchComposeEnd"
     let typed : PageGlobal<string> = PageGlobal.named "__typed"
     /// Hand the shell a terminal SCREEN, as the Session does over the data channel
     /// (Plan 14, stage 6). Exposed so the E2E can drive the one path that puts a real emulator

@@ -2300,6 +2300,77 @@ do
             report ()
         | None -> failwith "__benchScrollEnd without a __benchScrollBegin — nothing was being measured")
 
+    // --- Typing in the composer of a long session (the `bench` compose scenario) -------------
+    //
+    // A person writing a message on a phone in a session that has been going for days.
+    // Reported against a session of nineteen thousand events — 114 replies, 1,369 tool calls,
+    // 232 commands — where typing had become slow enough to notice. A keystroke there is a
+    // render of the whole page: the editor's own Yjs transaction reaches the program as a
+    // remote one (`Ylmish.Binding.subscribe` signals every update whose origin is not its own),
+    // and the caret it moved is reported a frame later (`CaretMovedMsg`), and each is the view,
+    // Lit's diff and every sync after it, over every item in the conversation. Nothing the
+    // keystroke changed is in the conversation, so this is the cost that should NOT grow with
+    // it, and the sweep is what says whether it does.
+    //
+    // This page has no Ylmish binding, so the first of those two arrives another way: the
+    // draft-slot rule (`DraftSlot.follow`, wired above as the app wires it) reads the slot off
+    // the doc, finds it unpublished because nothing here writes the model back, and publishes
+    // it again on every keystroke. The dispatch is a different message and the render is the
+    // same render, which is what is timed.
+    //
+    // A keystroke is timed from the browser's own event timestamp to the first task after the
+    // frame it lands in — after the frame's own work, which is where the caret's render runs —
+    // so the number is input to the next thing a person could see.
+    let mutable composeFinish : (int -> JS.Promise<string>) option = None
+    PageGlobal.set HarnessPage.benchComposeBegin (fun items ->
+        model <- shellModelOf Replies items
+        render ()
+        let keys = ResizeArray<float> ()
+        let times = ResizeArray<float> ()
+        renderTimes <- Some times
+        let rendersAtBegin = Render.renders ()
+        let mutable pressed = 0
+        let listener : Browser.Types.Event -> unit =
+            fun event ->
+                // A key goes where focus is, so where focus is says whether it reached the
+                // composer.
+                let inComposer =
+                    match Browser.Dom.document.activeElement with
+                    | null -> false
+                    | active -> (active.closest "#shell [data-draft-input]").IsSome
+                if inComposer then
+                    pressed <- pressed + 1
+                    let at = event.timeStamp
+                    onFrame (fun () -> JS.setTimeout (fun () -> keys.Add (now () - at)) 0 |> ignore)
+        Browser.Dom.document.addEventListener ("keydown", listener, true)
+        composeFinish <-
+            Some (fun expected ->
+                async {
+                    // A keystroke's sample lands a frame and a task after it, so the last few
+                    // are still in flight when the driver's typing returns. Bounded: a key that
+                    // never reached the composer must come back short, not hang.
+                    let mutable frames = 0
+                    while keys.Count < expected && frames < 600 do
+                        do! nextFrame () |> Async.AwaitPromise
+                        frames <- frames + 1
+                    Browser.Dom.document.removeEventListener ("keydown", listener, true)
+                    renderTimes <- None
+                    return
+                        JS.JSON.stringify
+                            {| ``type`` = keys.ToArray ()
+                               render = times.ToArray ()
+                               renders = Render.renders () - rendersAtBegin
+                               keys = pressed
+                               items = int (conversation ()).children.length |}
+                }
+                |> Async.StartAsPromise))
+    PageGlobal.set HarnessPage.benchComposeEnd (fun expected ->
+        match composeFinish with
+        | Some report ->
+            composeFinish <- None
+            report expected
+        | None -> failwith "__benchComposeEnd without a __benchComposeBegin — nothing was being measured")
+
     // --- Opening a session from what was kept (the `bench` open scenario) ---------------------
     //
     // A person opening a session they have been in before. Measured on the home deployment
