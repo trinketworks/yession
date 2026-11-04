@@ -32,6 +32,14 @@ module Events =
     [<Emit("$0 instanceof PointerEvent")>]
     let private isPointer (event: Event) : bool = jsNative
 
+    [<Emit("$0 instanceof WheelEvent")>]
+    let private isWheel (event: Event) : bool = jsNative
+
+    // `TouchEvent` is not defined at all in a desktop Firefox, so the test asks whether it is
+    // before it asks `instanceof` of it.
+    [<Emit("typeof TouchEvent !== 'undefined' && $0 instanceof TouchEvent")>]
+    let private isTouch (event: Event) : bool = jsNative
+
     [<Emit("$0 instanceof PageTransitionEvent")>]
     let private isPageTransition (event: Event) : bool = jsNative
 
@@ -54,6 +62,12 @@ module Events =
     /// The event as a pointer event, or `None` for anything else.
     let asPointer (event: Event) : PointerEvent option = narrowed isPointer event
 
+    /// The event as a wheel's turn, or `None` for anything else.
+    let asWheel (event: Event) : WheelEvent option = narrowed isWheel event
+
+    /// The event as a touch, or `None` for anything else.
+    let asTouch (event: Event) : TouchEvent option = narrowed isTouch event
+
     /// The event as a `pageshow` or `pagehide`, or `None` for anything else.
     let asPageTransition (event: Event) : PageTransitionEvent option = narrowed isPageTransition event
 
@@ -68,6 +82,12 @@ module Events =
 
     /// A handler for `pointerdown`, `pointermove` and their kind.
     let pointer (handler: PointerEvent -> unit) : Event -> unit = only asPointer handler
+
+    /// A handler for `wheel`.
+    let wheel (handler: WheelEvent -> unit) : Event -> unit = only asWheel handler
+
+    /// A handler for `touchstart`, `touchmove` and their kind.
+    let touch (handler: TouchEvent -> unit) : Event -> unit = only asTouch handler
 
     /// A handler for `pageshow` and `pagehide`.
     let pageTransition (handler: PageTransitionEvent -> unit) : Event -> unit = only asPageTransition handler

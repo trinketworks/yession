@@ -4119,6 +4119,31 @@ let private tabTests =
                 |> moved (ReaderMove.Scrolled (false, TailPlace.Near))
             Expect.isFalse (ClientModel.following blocksA nearer) "on the way back is not back"
 
+        testCase "a reader who asks a surface to scroll up has left its end before the scroll moves" <| fun () ->
+            let asked = clientOf [] |> moved ReaderMove.Leaving
+            Expect.isFalse (ClientModel.following blocksA asked) "a scroll started is a reader leaving"
+
+        testCase "a reader who asked to scroll up follows the end again on scrolling back to it" <| fun () ->
+            let back =
+                clientOf []
+                |> moved ReaderMove.Leaving
+                |> moved (ReaderMove.Scrolled (false, TailPlace.AtEnd))
+            Expect.isTrue (ClientModel.following blocksA back) "back at the end, by their own scroll"
+
+        testCase "a reader far back who asks to scroll further up is still offered the way back" <| fun () ->
+            let further =
+                clientOf []
+                |> moved (ReaderMove.Scrolled (true, TailPlace.Far))
+                |> moved ReaderMove.Leaving
+            Expect.isTrue (ClientModel.offersLatest blocksA further) "asking to leave again takes nothing back"
+
+        testCase "a finger drawn down a surface and lifted with nothing moved leaves its reader following" <| fun () ->
+            let tapped =
+                clientOf []
+                |> moved ReaderMove.Leaving
+                |> moved (ReaderMove.Stayed TailPlace.AtEnd)
+            Expect.isTrue (ClientModel.following blocksA tapped) "a tap that wandered is not a scroll"
+
         testCase "a render that grows a surface does not stop its reader following it" <| fun () ->
             let grown = clientOf [] |> moved (ReaderMove.Measured TailPlace.Far)
             Expect.isTrue (ClientModel.following blocksA grown) "only the reader moves their intent"

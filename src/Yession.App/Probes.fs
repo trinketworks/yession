@@ -390,10 +390,17 @@ module Probes =
         /// or more after it is asked for, and more on a busy machine. What stopped it is
         /// `ScrollTakenAway`'s to say.
         | SmoothScrollToTop
-        /// Every write that has landed on the conversation's scroll since `SmoothScrollToTop`
-        /// sent it, each with the value written, where the scroll stood, and the page's own
-        /// frames that wrote it — any one of them ended the smooth scroll — and a line saying
-        /// so if the conversation was replaced under it. Empty while nothing has taken it.
+        /// The composer grown 160px taller, so the conversation's box shrinks under its reader
+        /// as it does while the composer's line unfolds: at once with a parameter of 0, or with
+        /// 1 inside the next wheel turned or key pressed on the conversation — after it is asked
+        /// for and before the scroll it asks for can move. Watches the conversation's scroll from
+        /// the moment it is armed (`ScrollTakenAway`). Empty once armed.
+        | ComposerGrows
+        /// Every write that has landed on the conversation's scroll since the watch began —
+        /// `SmoothScrollToTop` sent its scroll, or `ComposerGrows` was armed — each with the value
+        /// written, where the scroll stood, and the page's own frames that wrote it — any one of
+        /// them ends a scroll in flight — and a line saying so if the conversation was replaced
+        /// under it. Empty while nothing has taken it.
         | ScrollTakenAway
         /// The chapter name field for `msg-filler-8`: 1 or 0 for whether it is empty, whether
         /// it has a placeholder to offer, and whether that placeholder is painted in any ink.
@@ -464,6 +471,7 @@ module Probes =
             | Measure.Burst -> "burst"
             | Measure.LoneRecordInQuietFrame -> "lone-record-in-quiet-frame"
             | Measure.SmoothScrollToTop -> "smooth-scroll-to-top"
+            | Measure.ComposerGrows -> "composer-grows"
             | Measure.ScrollTakenAway -> "scroll-taken-away"
             | Measure.ChapterPlaceholder -> "chapter-placeholder"
             | Measure.ItemActionsUnderThumb -> "item-actions-under-thumb"
@@ -499,6 +507,7 @@ module Probes =
               Measure.Burst
               Measure.LoneRecordInQuietFrame
               Measure.SmoothScrollToTop
+              Measure.ComposerGrows
               Measure.ScrollTakenAway
               Measure.ChapterPlaceholder
               Measure.ItemActionsUnderThumb

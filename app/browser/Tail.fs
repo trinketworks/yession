@@ -29,6 +29,22 @@ module Yession.Browser.Tail
 // asked the wrong way: the gesture is visible as the reader MOVING, and a distance cannot tell a
 // reader moving away from content arriving.
 //
+// A reader who has STARTED to scroll up has left, before the scroll moves (`intent` below).
+// A smooth scroll, a wheel's or a finger's fling, a key's page is a frame or more from its first
+// move, and until it moves the reader still stands at the end: a box resized in that frame — the
+// composer's line unfolding as the page opens shrinks the conversation frame by frame — put
+// them back with a write to the scroll, and the write ended the scroll before it began (16 of
+// 20 scrolls started as a page opened, traced by hand). So the wheel turned up, the finger
+// drawn down, the key that pages up, aimed at a surface that can go up, tell the model the
+// reader is leaving (`ReaderMove.Leaving`), and the model stops following. Following resumes
+// as it always has: the reader's own scroll arriving back at the end, a jump back, a send. A
+// scroll DOWN says nothing — at the end it has nowhere to go, and on its way back the scroll
+// arriving is what counts — so `End`, `PageDown` and a wheel turned down leave a follower
+// following. Nor does a key typed into a field: the composer is not the conversation, and a
+// field's arrows move its caret. A finger is the one ask that can come to nothing — a tap
+// wanders a pixel — so a finger lifted with the scroll unmoved says so (`ReaderMove.Stayed`),
+// and a reader still at the end follows it again.
+//
 // The live screen had neither half. It was not one of the pinned surfaces at all, so taking the
 // keyboard opened it at the top of 16,000px of scrollback, with the prompt being typed at
 // nowhere on screen.
@@ -76,6 +92,47 @@ let private placeOf (el: HTMLElement) : TailPlace =
 /// has in flight, in Chromium and WebKit alike, so a write nobody needed is a gesture taken away.
 let private toEnd (el: HTMLElement) : unit =
     if not (atEnd el) then el.scrollTop <- el.scrollHeight
+
+// --- What a reader asks of a surface, before it moves ------------------------------------------
+
+/// The surface a reader's input aimed at `target` would scroll UP, if there is one: the surface
+/// the target is in, with room above its reader, and no scroller between the two that has room
+/// above and so takes the scroll first. A surface at its top has nowhere up to go — a short
+/// conversation is at its top and its end at once — and a reader who asked it to go there has
+/// not left anything.
+let private upwardIn (target: EventTarget) : HTMLElement option =
+    EventTargets.asElement target
+    |> Option.bind (fun aimed ->
+        aimed.closest selector
+        |> Option.map (fun surface -> surface :?> HTMLElement)
+        |> Option.filter (fun surface ->
+            let rec takenFirst (node: Element) : bool =
+                if obj.ReferenceEquals (node, surface) then false
+                elif node.scrollTop > 0.0 then true
+                else
+                    match node.parentElement with
+                    | null -> false
+                    | parent -> takenFirst parent
+            surface.scrollTop > 0.0 && not (takenFirst aimed)))
+
+/// Whether a key pages, scrolls a line or jumps UP. Only on its own: with a modifier it is a
+/// shortcut, not a scroll.
+let private scrollsUp (pressed: KeyboardEvent) : bool =
+    not (pressed.ctrlKey || pressed.altKey || pressed.metaKey)
+    && (match pressed.key with
+        | "PageUp"
+        | "Home"
+        | "ArrowUp" -> true
+        | " " -> pressed.shiftKey
+        | _ -> false)
+
+/// Whether a key pressed on `target` goes to the target rather than to the scroll: typed into a
+/// field (an arrow moves the caret, a space is a space), or a space pressing the control it is on.
+let private takenByTarget (pressed: KeyboardEvent) (target: Element) : bool =
+    let typed =
+        target.matches "input, textarea, select"
+        || (EventTargets.asHTMLElement target |> Option.exists (fun el -> el.isContentEditable))
+    typed || (pressed.key = " " && target.matches "button, summary, [role='button']")
 
 // --- What a press opens, it opens UPWARD ------------------------------------------------------
 //
@@ -171,6 +228,15 @@ let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) :
     /// The readers of the model the last render was handed, and only to tell a reader the
     /// model has just made follow from one who already was (`Restore`).
     let mutable shown : Map<TailSurface, Behind> = Map.empty
+
+    /// Where the finger on a surface last was, down the page, so a move can say which way it
+    /// went: drawn DOWN, the content follows it and the scroll goes up.
+    let mutable fingerAt : float option = None
+
+    /// The surface this touch said its reader was leaving, and where its scroll stood then. A
+    /// finger that wanders a pixel down in a tap has asked for nothing the browser will scroll,
+    /// and lifting it with the scroll unmoved says so (`ReaderMove.Stayed`).
+    let mutable leftByTouch : (HTMLElement * float) option = None
 
     /// The press the next render is owed, if there is one. Rendering takes it (`Restore`), so
     /// a press nothing re-rendered for is not kept past the render after it. Elements rather
@@ -330,6 +396,13 @@ let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) :
         for el, move in moves do
             tell el move
 
+    /// A reader asked a surface to scroll up (`upwardIn`) and the scroll has not moved: they
+    /// are leaving, and the model is told before a resize or a render can put them back.
+    let intent (target: EventTarget) : HTMLElement option =
+        let aimed = upwardIn target
+        aimed |> Option.iter (fun el -> tell el ReaderMove.Leaving)
+        aimed
+
     /// Bound once per page.
     ///
     /// Scroll: captured, because scroll does not bubble and the surfaces are Lit's to replace.
@@ -345,6 +418,11 @@ let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) :
     /// the render that opens it has to find the place already taken (`Press`). A key that
     /// presses a control is a click too, and the click says which it was: one a key made
     /// counts no clicks (`detail` is 0), one a pointer made counts at least one.
+    ///
+    /// Wheel, touch and keydown: a reader asking a surface to scroll up (`intent`). Heard as
+    /// they bubble, after whatever they reached has had its say: one it cancelled scrolls
+    /// nothing. Passive, as the browser makes every wheel and touch listener on the document,
+    /// so none of them holds a scroll back.
     let attach () : unit =
         document.addEventListener (
             "click",
@@ -376,6 +454,45 @@ let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) :
                     tell el (ReaderMove.Scrolled (up, placeOf el))
                 | _ -> ()),
             true)
+        document.addEventListener (
+            "wheel",
+            Events.wheel (fun turned ->
+                if turned.deltaY < 0.0 && not turned.ctrlKey && not turned.defaultPrevented then
+                    intent turned.target |> ignore))
+        document.addEventListener (
+            "touchstart",
+            Events.touch (fun touched ->
+                leftByTouch <- None
+                fingerAt <- if touched.touches.Length = 1 then Some touched.touches.[0].clientY else None))
+        document.addEventListener (
+            "touchmove",
+            Events.touch (fun moved ->
+                if moved.touches.Length = 1 then
+                    let y = moved.touches.[0].clientY
+                    match fingerAt with
+                    | Some was when y > was && not moved.defaultPrevented && leftByTouch.IsNone ->
+                        leftByTouch <- intent moved.target |> Option.map (fun el -> el, el.scrollTop)
+                    | Some _
+                    | None -> ()
+                    fingerAt <- Some y
+                else fingerAt <- None))
+        let lifted (_: Event) : unit =
+            match leftByTouch with
+            | Some (el, top) when el.scrollTop = top -> tell el (ReaderMove.Stayed (placeOf el))
+            | Some _
+            | None -> ()
+            leftByTouch <- None
+            fingerAt <- None
+        document.addEventListener ("touchend", lifted)
+        document.addEventListener ("touchcancel", lifted)
+        document.addEventListener (
+            "keydown",
+            Events.key (fun pressed ->
+                match EventTargets.asElement pressed.target with
+                | Some target when scrollsUp pressed && not pressed.defaultPrevented && not (takenByTarget pressed target) ->
+                    intent pressed.target |> ignore
+                | Some _
+                | None -> ()))
         document.addEventListener (
             "toggle",
             (fun event ->
