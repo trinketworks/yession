@@ -403,6 +403,23 @@ let private loneRecordInQuietFrame () : JS.Promise<string list> =
                 | None -> attempt (tries + 1))
     attempt 0
 
+/// The conversation whose scroll is being watched, and every write to that scroll since the
+/// watch began (`watchScroll`). One watch for every case that asks whether something took a
+/// reader's scroll away: `SmoothScrollToTop` starts it once its scroll is sent, `ComposerGrows`
+/// as it is armed, and `ScrollTakenAway` reads it.
+let mutable private scrollWatched : Element option = None
+let private scrollWrites = ResizeArray<string> ()
+
+/// Begin watching a conversation's scroll from now: writes noted before are forgotten, and an
+/// element already noting its writes is not wrapped twice.
+let private watchScroll (el: Element) : unit =
+    scrollWrites.Clear ()
+    match scrollWatched with
+    | Some noted when obj.ReferenceEquals (noted, el) -> ()
+    | Some _
+    | None -> Scrolling.noteWrites el scrollWrites.Add
+    scrollWatched <- Some el
+
 let private smoothScrollToTop () : JS.Promise<float list> =
     match first Root.Document "#shell [data-conversation]" with
     | None -> Promise.lift []
@@ -413,20 +430,23 @@ let private smoothScrollToTop () : JS.Promise<float list> =
         |> Promise.map (fun () ->
             let from = el.scrollTop
             Scrolling.smoothlyTo el 0.0
+            // After the scroll is sent, so its own sending is not counted against it.
+            watchScroll el
             [ from ])
 
-/// The writes to the conversation's scroll since the composer grew (`composerGrows`), or `None`
-/// before it has.
-let mutable private scrollWrites : ResizeArray<string> option = None
+let private scrollTakenAway () : string list =
+    match scrollWatched, first Root.Document "#shell [data-conversation]" with
+    | None, _ -> [ "nothing is watching the conversation's scroll (SmoothScrollToTop, ComposerGrows)" ]
+    | Some _, None -> "the conversation left the page" :: List.ofSeq scrollWrites
+    | Some watched, Some now when not (obj.ReferenceEquals (watched, now)) ->
+        "the conversation was replaced while it scrolled" :: List.ofSeq scrollWrites
+    | Some _, Some _ -> List.ofSeq scrollWrites
 
 let private composerGrows (onScrollAsked: bool) : string list =
     match first Root.Document "#shell [data-conversation]", first Root.Document "#shell [data-composer-tray]" with
     | Some conversation, Some tray ->
-        let grow () =
-            let writes = ResizeArray<string> ()
-            Scrolling.noteWrites conversation writes.Add
-            scrollWrites <- Some writes
-            setStyleProperty (tray :?> HTMLElement) "padding-bottom" "160px"
+        watchScroll conversation
+        let grow () = setStyleProperty (tray :?> HTMLElement) "padding-bottom" "160px"
         if onScrollAsked then
             // Bubbling at the window: after the page's own listeners, the product's among them,
             // have heard it, and before the browser's scroll in answer to it has moved.
@@ -762,7 +782,7 @@ let private implement (measure: Probes.Measure) : Implementation =
     | Probes.Measure.LoneRecordInQuietFrame -> Implementation.Verdict (fun _ -> loneRecordInQuietFrame ())
     | Probes.Measure.SmoothScrollToTop -> Implementation.Reading (fun _ -> smoothScrollToTop ())
     | Probes.Measure.ComposerGrows -> verdictNow (fun onScrollAsked -> composerGrows (onScrollAsked = 1))
-    | Probes.Measure.ScrollWrites -> verdictNow (fun _ -> scrollWrites |> Option.map List.ofSeq |> Option.defaultValue [])
+    | Probes.Measure.ScrollTakenAway -> verdictNow (fun _ -> scrollTakenAway ())
     | Probes.Measure.ChapterPlaceholder -> readingNow (fun _ -> chapterPlaceholder ())
     | Probes.Measure.ItemActionsUnderThumb -> verdictNow (fun _ -> itemActionsUnderThumb ())
     | Probes.Measure.AgentCaretOnLetters -> verdictNow (fun _ -> agentCaretOnLetters ())

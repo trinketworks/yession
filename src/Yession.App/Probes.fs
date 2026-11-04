@@ -387,19 +387,21 @@ module Probes =
         /// from. It answers as the scroll begins, not when it ends. Where it ends is the case's
         /// to wait for, because nothing in the page can tell a scroll that has not moved yet
         /// from one that was stopped before it could: Chromium moves a smooth scroll a frame
-        /// or more after it is asked for, and more on a busy machine.
+        /// or more after it is asked for, and more on a busy machine. What stopped it is
+        /// `ScrollTakenAway`'s to say.
         | SmoothScrollToTop
         /// The composer grown 160px taller, so the conversation's box shrinks under its reader
         /// as it does while the composer's line unfolds: at once with a parameter of 0, or with
         /// 1 inside the next wheel turned or key pressed on the conversation — after it is asked
-        /// for and before the scroll it asks for can move. From then every write to the
-        /// conversation's scroll is noted (`ScrollWrites`). Empty once armed.
+        /// for and before the scroll it asks for can move. Watches the conversation's scroll from
+        /// the moment it is armed (`ScrollTakenAway`). Empty once armed.
         | ComposerGrows
-        /// Every write to the conversation's scroll since `ComposerGrows` grew the composer, each
-        /// with the value written, where the scroll stood and the page's own frames that wrote
-        /// it — any one of them ends a scroll the browser has in flight. Empty while there is
-        /// none, and until the composer has grown.
-        | ScrollWrites
+        /// Every write that has landed on the conversation's scroll since the watch began —
+        /// `SmoothScrollToTop` sent its scroll, or `ComposerGrows` was armed — each with the value
+        /// written, where the scroll stood, and the page's own frames that wrote it — any one of
+        /// them ends a scroll in flight — and a line saying so if the conversation was replaced
+        /// under it. Empty while nothing has taken it.
+        | ScrollTakenAway
         /// The chapter name field for `msg-filler-8`: 1 or 0 for whether it is empty, whether
         /// it has a placeholder to offer, and whether that placeholder is painted in any ink.
         | ChapterPlaceholder
@@ -470,7 +472,7 @@ module Probes =
             | Measure.LoneRecordInQuietFrame -> "lone-record-in-quiet-frame"
             | Measure.SmoothScrollToTop -> "smooth-scroll-to-top"
             | Measure.ComposerGrows -> "composer-grows"
-            | Measure.ScrollWrites -> "scroll-writes"
+            | Measure.ScrollTakenAway -> "scroll-taken-away"
             | Measure.ChapterPlaceholder -> "chapter-placeholder"
             | Measure.ItemActionsUnderThumb -> "item-actions-under-thumb"
             | Measure.AgentCaretOnLetters -> "agent-caret-on-letters"
@@ -506,7 +508,7 @@ module Probes =
               Measure.LoneRecordInQuietFrame
               Measure.SmoothScrollToTop
               Measure.ComposerGrows
-              Measure.ScrollWrites
+              Measure.ScrollTakenAway
               Measure.ChapterPlaceholder
               Measure.ItemActionsUnderThumb
               Measure.AgentCaretOnLetters
