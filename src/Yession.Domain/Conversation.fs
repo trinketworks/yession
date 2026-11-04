@@ -371,6 +371,32 @@ module ConversationProjection =
     /// facts of how it settled. A log written before the running half existed has no such
     /// item, so the act is appended as it always was; an id is either there or not, so the
     /// two readings never both fire.
+    /// A RUNNING item: appended, or, when an earlier state of the same act already holds
+    /// the id, that item moved on in place.
+    let private opened
+        (messageId: MessageId)
+        (causedBy: Cause option)
+        (actor: ActorRef)
+        (act: Act)
+        (envelope: EventEnvelope<SessionEvent>)
+        (proj: ConversationProjection)
+        : ConversationProjection =
+        if proj.Recent |> List.exists (fun i -> i.MessageId = messageId) then
+            { proj with
+                Recent =
+                    proj.Recent
+                    |> updateItem messageId (fun item -> { item with Content = ItemContent.Act act; Status = Running }) }
+        else
+            { proj with
+                Recent =
+                    { MessageId = messageId
+                      Author = actor
+                      Content = ItemContent.Act act
+                      Status = Running
+                      Offset = envelope.Offset
+                      Woke = None; CausedBy = causedBy }
+                    :: proj.Recent }
+
     let private resolved
         (messageId: MessageId)
         (causedBy: Cause option)
@@ -575,16 +601,10 @@ module ConversationProjection =
         // it holds its place while the work runs, and the `Started`/`StartFailed` below,
         // carrying this same MessageId, resolve it in place. This is the item that fills the
         // dead air a person used to see between "asks for" and "started sandbox".
-        | SessionEvent.WorkSandboxStarting s ->
-            { proj with
-                Recent =
-                    { MessageId = s.MessageId
-                      Author = s.Actor
-                      Content = ItemContent.Act (Act.SandboxStarting s)
-                      Status = Running
-                      Offset = envelope.Offset
-                      Woke = None; CausedBy = s.CausedBy }
-                    :: proj.Recent }
+        //
+        // A start that WAITED already has its item: the wait opened it (`RepoAwaitsPerson`),
+        // under this same id, and the start takes it over in place.
+        | SessionEvent.WorkSandboxStarting s -> proj |> opened s.MessageId s.CausedBy s.Actor (Act.SandboxStarting s) envelope
         // Resolve the running item this start's `WorkSandboxStarting` opened, in place. A
         // start from a log written before `Starting` existed has no such item — so it is
         // appended, exactly as it was before, and the two readings never both fire because
@@ -605,8 +625,14 @@ module ConversationProjection =
         | SessionEvent.RepoTrustAsked a ->
             proj |> causedNote a.MessageId a.CausedBy a.Actor (Act.RepoTrustAsked a) envelope
         | SessionEvent.RepoTrusted t -> proj |> noted t.MessageId t.Actor (Act.RepoTrusted t) envelope
+        // A sandbox's wait is the first state of its start: a RUNNING item, under the id the
+        // start will carry, so "waiting for … before starting sandbox dev" becomes "starting",
+        // then "started", in one place. A line from before waits were per sandbox stays the
+        // repo's note.
         | SessionEvent.RepoAwaitsPerson a ->
-            proj |> causedNote a.MessageId a.CausedBy a.Actor (Act.RepoAwaitsPerson a) envelope
+            match a.Sandbox with
+            | Some _ -> proj |> opened a.MessageId a.CausedBy a.Actor (Act.RepoAwaitsPerson a) envelope
+            | None -> proj |> causedNote a.MessageId a.CausedBy a.Actor (Act.RepoAwaitsPerson a) envelope
         | SessionEvent.RepoConfigRefused r ->
             proj |> causedNote r.MessageId r.CausedBy r.Actor (Act.RepoConfigRefused r) envelope
         | SessionEvent.RepoConfigWarned w ->
@@ -920,3 +946,21 @@ module Waits =
 
     /// The whole log at once — the Process's reading, where there are no pages.
     let pending (events: SessionEvent list) : Hold list = apply empty events |> waiting
+
+    /// The wait a sandbox's start has not yet taken over: the newest `RepoAwaitsPerson` for it
+    /// whose id no `WorkSandboxStarting`, `WorkSandboxStarted` or `WorkSandboxStartFailed` has
+    /// carried since. Its id is what the start carries, so the item the wait opened moves on
+    /// in place; whatever ends the wait without a start closes it under that id too.
+    let openStart (events: SessionEvent list) (sandbox: SandboxRef) : Repos.RepoAwaitsPerson option =
+        let isThis (other: SandboxRef) = SandboxRef.render other = SandboxRef.render sandbox
+        events
+        |> List.fold
+            (fun (acc: Repos.RepoAwaitsPerson option) event ->
+                let carries (messageId: MessageId) = acc |> Option.exists (fun a -> a.MessageId = messageId)
+                match event with
+                | SessionEvent.RepoAwaitsPerson a when a.Sandbox |> Option.exists isThis -> Some a
+                | SessionEvent.WorkSandboxStarting s when carries s.MessageId -> None
+                | SessionEvent.WorkSandboxStarted s when carries s.MessageId -> None
+                | SessionEvent.WorkSandboxStartFailed s when carries s.MessageId -> None
+                | _ -> acc)
+            None

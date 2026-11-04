@@ -257,7 +257,8 @@ type WorkSandboxes =
       /// nobody: what a sandbox's blocks spend is each block's own act's credential
       /// (`Loans`). The authority is here for attribution only: the start records who it
       /// was for. The cause is what made it come up, when that was not the ask itself.
-      Ensure : Authority -> Cause option -> SandboxRef -> SandboxRequest -> Async<Result<SandboxOutcome, string>>
+      /// The id, when given, is the one a wait for this start already holds (`ensure`).
+      Ensure : Authority -> Cause option -> MessageId option -> SandboxRef -> SandboxRequest -> Async<Result<SandboxOutcome, string>>
       Stop : ActorRef -> SandboxRef -> Async<Result<unit, string>>
       /// The environment a terminal runs in. Total, because a terminal has to be told no
       /// in the same shape it is told anything else — an unknown name resolves to an
@@ -651,7 +652,14 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                 return ()
             }
 
-        let ensure (authority: Authority) (causedBy: Cause option) (name: SandboxRef) (request: SandboxRequest) : Async<Result<SandboxOutcome, string>> =
+        let ensureAs
+            (messageId: MessageId)
+            (began: bool ref)
+            (authority: Authority)
+            (causedBy: Cause option)
+            (name: SandboxRef)
+            (request: SandboxRequest)
+            : Async<Result<SandboxOutcome, string>> =
             async {
                 let actor = Authority.author authority
                 let onBehalfOf = Authority.onBehalfOf authority
@@ -698,7 +706,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                             // timeline shows the sandbox coming up rather than dead air
                             // until it is already up. A provision or create failure above
                             // never reached here, so it opens no running act.
-                            let messageId = mintMessageId ()
+                            began.Value <- true
                             do!
                                 append
                                     actor
@@ -754,6 +762,58 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                                               OnBehalfOf = onBehalfOf
                                               CausedBy = causedBy })
                                 return Ok (SandboxStarted entry)
+            }
+
+        /// `opened` is the id a wait for this start already put in the timeline
+        /// (`RepoAwaitsPerson`): the start carries it, so that item moves on in place. A
+        /// start that ends before it opens its running act — refused, already running —
+        /// closes that item itself under the same id, because the wait is the start's
+        /// first state and nobody else knows it is still showing.
+        let ensure
+            (authority: Authority)
+            (causedBy: Cause option)
+            (opened: MessageId option)
+            (name: SandboxRef)
+            (request: SandboxRequest)
+            : Async<Result<SandboxOutcome, string>> =
+            async {
+                let began = ref false
+                let messageId = opened |> Option.defaultWith mintMessageId
+                let! result = ensureAs messageId began authority causedBy name request
+                match opened with
+                | Some messageId when not began.Value ->
+                    let actor = Authority.author authority
+                    let onBehalfOf = Authority.onBehalfOf authority
+                    match result with
+                    | Error reason ->
+                        do!
+                            append
+                                actor
+                                (SessionEvent.WorkSandboxStartFailed
+                                    { MessageId = messageId
+                                      Sandbox = name
+                                      Reason = reason
+                                      Actor = actor
+                                      OnBehalfOf = onBehalfOf
+                                      CausedBy = causedBy })
+                    | Ok outcome ->
+                        let entry = SandboxOutcome.sandbox outcome
+                        do!
+                            append
+                                actor
+                                (SessionEvent.WorkSandboxStarted
+                                    { MessageId = messageId
+                                      Sandbox = name
+                                      Backend = entry.Backend
+                                      Description = config.Describe name
+                                      Checkout = config.Checkout name
+                                      Forwarded = ForwardedRoutes.names entry.Forwarded
+                                      Realisation = entry.Environment.Realisation ()
+                                      Actor = actor
+                                      OnBehalfOf = onBehalfOf
+                                      CausedBy = causedBy })
+                | _ -> ()
+                return result
             }
 
         let stop (actor: ActorRef) (name: SandboxRef) : Async<Result<unit, string>> =
@@ -868,7 +928,7 @@ let singleton (backend: string) (environment: SessionEnvironment.SessionEnvironm
           StartedAt = None
           Environment = environment }
     { Ensure =
-        fun _ _ name _ ->
+        fun _ _ _ name _ ->
             async {
                 if name <> SandboxRef.defaultRef then
                     return Error "this session has only its default sandbox"
@@ -909,7 +969,7 @@ let unavailable : WorkSandboxes =
           StartedBy = None
           StartedAt = None
           Environment = SessionEnvironment.unavailable }
-    { Ensure = fun _ _ _ _ -> async { return Error "this session has no environment" }
+    { Ensure = fun _ _ _ _ _ -> async { return Error "this session has no environment" }
       Stop = fun _ _ -> async { return Error "this session has no environment" }
       EnvironmentFor = fun _ -> SessionEnvironment.unavailable
       Loans = SessionTerminals.BlockLoans.none

@@ -337,20 +337,9 @@ let create
                     }
                 match offered, current with
                 | Some person, _ -> return! trusted person
-                | None, Some (Error (Away person)) ->
-                    let waiting = { Hold.Repo = repo; Hold.For = WaitCondition.PersonHere person }
-                    if not (Waits.pending told |> List.contains waiting) then
-                        let actor = ActorRef.Configured repo
-                        do!
-                            append
-                                actor
-                                (SessionEvent.RepoAwaitsPerson
-                                    { RepoAwaitsPerson.MessageId = mintMessageId ()
-                                      RepoAwaitsPerson.Repo = repo
-                                      RepoAwaitsPerson.Person = person
-                                      RepoAwaitsPerson.Actor = actor
-                                      RepoAwaitsPerson.CausedBy = FoldCause.causeFor repo cause })
-                    return Awaits person
+                // Said per sandbox, by the rows below: a wait is the first state of each
+                // sandbox's start, so it is opened where the start is.
+                | None, Some (Error (Away person)) -> return Awaits person
                 | None, Some (Error (ReadFailed reason)) ->
                     let problem =
                         match reason with
@@ -554,6 +543,21 @@ let create
                                     decided.Value <- Map.add (RepoRef.value repo) decision decided.Value
                             return decided.Value
                         }
+                    // A wait a sandbox's start opened (`RepoAwaitsPerson`), ended without that
+                    // start: its item would otherwise stand in the timeline waiting forever.
+                    // Closed as the start's failure, under the wait's own id, because that is
+                    // what it now is: this sandbox did not start, and here is why.
+                    let closeWait (waited: RepoAwaitsPerson) (sandbox: SandboxRef) (reason: string) =
+                        let actor = ActorRef.Configured waited.Repo
+                        append
+                            actor
+                            (SessionEvent.WorkSandboxStartFailed
+                                { MessageId = waited.MessageId
+                                  Sandbox = sandbox
+                                  Reason = reason
+                                  Actor = actor
+                                  OnBehalfOf = None
+                                  CausedBy = FoldCause.causeFor waited.Repo cause })
                     let! rows =
                         declared
                         |> Map.toList
@@ -570,8 +574,25 @@ let create
                                   // so, so the answer to "why is my sandbox not running" is in
                                   // the same place as what to do about it.
                                   | Some (Holds (problem, detail)) ->
+                                      // Held for some other reason now, so a wait this start
+                                      // opened will not move on: closed, saying why.
+                                      match Waits.openStart told ref with
+                                      | Some waited -> do! closeWait waited ref problem
+                                      | None -> ()
                                       return Some { Repo = repo; Sandbox = Some ref; Problem = Some problem; Detail = detail; Awaited = false }
                                   | Some (Awaits person) ->
+                                      if Waits.openStart told ref |> Option.isNone then
+                                          let actor = ActorRef.Configured repo
+                                          do!
+                                              append
+                                                  actor
+                                                  (SessionEvent.RepoAwaitsPerson
+                                                      { RepoAwaitsPerson.MessageId = mintMessageId ()
+                                                        RepoAwaitsPerson.Repo = repo
+                                                        RepoAwaitsPerson.Sandbox = Some ref
+                                                        RepoAwaitsPerson.Person = person
+                                                        RepoAwaitsPerson.Actor = actor
+                                                        RepoAwaitsPerson.CausedBy = FoldCause.causeFor repo cause })
                                       return
                                           Some
                                               { Repo = repo
@@ -588,6 +609,7 @@ let create
                                         Commands.startWorkSandboxCall
                                             (Authority.configuredBy repo credential)
                                             (FoldCause.causeFor repo cause)
+                                            (Waits.openStart told ref |> Option.map (fun waited -> waited.MessageId))
                                             ref
                                             decl
                                     match! run call with
@@ -623,6 +645,26 @@ let create
                         // happening at once made visible.
                         |> Async.Parallel
                     outcomes <- fileProblems @ (rows |> Array.toList |> List.choose id)
+                    // A sandbox nobody declares any more has no row above to close its wait:
+                    // its repo left the session, or its file stopped naming it.
+                    let listedRepos = RepoRead.listed reads |> List.map (fun l -> RepoRef.value l.Repo) |> Set.ofList
+                    let waitedFor =
+                        told
+                        |> List.choose (fun event ->
+                            match event with
+                            | SessionEvent.RepoAwaitsPerson a -> a.Sandbox
+                            | _ -> None)
+                        |> List.distinctBy SandboxRef.render
+                    for sandbox in waitedFor do
+                        if not (declared |> Map.exists (fun ref _ -> SandboxRef.render ref = SandboxRef.render sandbox)) then
+                            match Waits.openStart told sandbox with
+                            | Some waited ->
+                                let repo = RepoRef.value waited.Repo
+                                let reason =
+                                    if Set.contains repo listedRepos then sprintf "%s no longer declares it" repo
+                                    else sprintf "%s was removed from this session" repo
+                                do! closeWait waited sandbox reason
+                            | None -> ()
                     // Say the refusals that are NEW. A start already announces itself, so
                     // without this the two outcomes of a declaration were split — one on the
                     // timeline, one behind a query nobody opens until they suspect a problem,

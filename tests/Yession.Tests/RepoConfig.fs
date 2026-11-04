@@ -709,6 +709,21 @@ let private heldIn (log: EventLog<SessionEvent>) =
         return Waits.pending (page.Events |> List.map (fun e -> e.Event))
     }
 
+/// Everything the log holds, as events.
+let private toldIn (log: EventLog<SessionEvent>) =
+    async {
+        let! page = log.Read None System.Int32.MaxValue
+        return page.Events |> List.map (fun e -> e.Event)
+    }
+
+/// The waits a log holds, in order.
+let private waitsIn (told: SessionEvent list) =
+    told
+    |> List.choose (fun event ->
+        match event with
+        | SessionEvent.RepoAwaitsPerson a -> Some a
+        | _ -> None)
+
 /// A reader of trust that counts how often it was asked, over these people's records.
 let private countingTrust (answers: (Principal * Set<ConnectionRoute>) list) (asked: int ref) : RepoTrusts =
     let inner = trustOf answers []
@@ -736,6 +751,7 @@ let private awaits (r: RepoRef) (person: Principal) =
     SessionEvent.RepoAwaitsPerson
         { RepoAwaitsPerson.MessageId = MessageId.create (sprintf "await-%s" (RepoRef.value r)) |> expect
           RepoAwaitsPerson.Repo = r
+          RepoAwaitsPerson.Sandbox = None
           RepoAwaitsPerson.Person = person
           RepoAwaitsPerson.Actor = ActorRef.Configured r
           RepoAwaitsPerson.CausedBy = None }
@@ -1570,6 +1586,110 @@ let foldTests =
                 let! held = heldIn log
                 Expect.equal held [] "nothing waits"
             }
+
+        // A wait is the first state of each sandbox's start, so there is one per sandbox, and
+        // a refold finds it standing rather than opening another.
+        testCaseAsync "a repo whose truster is not here opens one waiting start per sandbox" <|
+            async {
+                let r, dir = selecting ()
+                let log = foldLog ()
+                do! trustedHere log r ada
+                let folded = trustingFoldHere (fun _ -> false) (trustOf [ ada, Set.ofList both ] []) r dir (recordingGate (ResizeArray ())) log
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                let! told = toldIn log
+                Expect.equal
+                    (waitsIn told |> List.map (fun a -> a.Sandbox |> Option.map SandboxRef.render))
+                    [ Some "octo/hello:dev" ]
+                    "one, for dev"
+            }
+
+        testCaseAsync "its truster arriving starts each sandbox under the id its wait opened" <|
+            async {
+                let r, dir = selecting ()
+                let seen = ResizeArray<GatedCall> ()
+                let log = foldLog ()
+                do! trustedHere log r ada
+                let here = ref false
+                let folded = trustingFoldHere (fun _ -> here.Value) (trustOf [ ada, Set.ofList both ] []) r dir (recordingGate seen) log
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                here.Value <- true
+                do! folded.Fold (FoldCause.Connected (CredentialFor.Person ada)) (CredentialFor.Person ada)
+                let! told = toldIn log
+                let waited = waitsIn told |> List.map (fun a -> MessageId.value a.MessageId)
+                Expect.equal
+                    (seen |> Seq.map (fun call -> waited |> List.filter call.Args.Contains) |> List.ofSeq)
+                    [ waited ]
+                    "the start carries the wait's id, so its item moves on in place"
+            }
+
+        // Nothing will start it now, so the item it opened would otherwise wait forever.
+        testCaseAsync "a repo removed while it waits closes its waiting start, saying so" <|
+            async {
+                let r, dir = selecting ()
+                let log = foldLog ()
+                do! trustedHere log r ada
+                let removed = ref false
+                let listing () = if removed.Value then [] else [ listedAt dir r ]
+                let folded =
+                    RepoSandboxes.create
+                        (cell (Some (reposReading dir listing)))
+                        (trustOf [ ada, Set.ofList both ] [])
+                        (fun _ -> false)
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray ()))
+                        log
+                        (forwardingGitHub both)
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                removed.Value <- true
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                let! told = toldIn log
+                let waited = waitsIn told |> List.map (fun a -> a.MessageId)
+                Expect.equal
+                    (told
+                     |> List.choose (fun event ->
+                         match event with
+                         | SessionEvent.WorkSandboxStartFailed f when f.Reason.Contains "removed" -> Some f.MessageId
+                         | _ -> None))
+                    waited
+                    "closed as the start's failure, under the wait's id"
+            }
+
+        // The timeline half: one item, from waiting to started, as a command's chip goes from
+        // running to ran.
+        testCase "a waiting start that starts is one item, reading as started" <| fun () ->
+            let r = repo "octo/hello"
+            let dev = SandboxRef.parse "octo/hello:dev" |> expect
+            let id = MessageId.create "start" |> expect
+            let events : SessionEvent list =
+                [ SessionEvent.RepoAwaitsPerson
+                      { RepoAwaitsPerson.MessageId = id
+                        RepoAwaitsPerson.Repo = r
+                        RepoAwaitsPerson.Sandbox = Some dev
+                        RepoAwaitsPerson.Person = ada
+                        RepoAwaitsPerson.Actor = ActorRef.Configured r
+                        RepoAwaitsPerson.CausedBy = None }
+                  SessionEvent.WorkSandboxStarting
+                      { MessageId = id; Sandbox = dev; Backend = "docker"; Description = None
+                        Actor = ActorRef.Configured r; OnBehalfOf = None; CausedBy = None }
+                  SessionEvent.WorkSandboxStarted
+                      { MessageId = id; Sandbox = dev; Backend = "docker"; Description = None; Checkout = None
+                        Forwarded = []; Realisation = []
+                        Actor = ActorRef.Configured r; OnBehalfOf = None; CausedBy = None } ]
+            let envelopes =
+                events
+                |> List.mapi (fun i event ->
+                    { EventId = EventId.fresh ()
+                      SessionId = SessionId.create "fold" |> expect
+                      Offset = EventOffset.create (int64 (i + 1)) |> expect
+                      Actor = ActorRef.Configured r
+                      Timestamp = System.DateTimeOffset (2026, 11, 4, 0, 0, 0, System.TimeSpan.Zero)
+                      Event = event })
+            let proj, _ = ConversationProjection.applyEvents None envelopes ConversationProjection.empty
+            Expect.equal
+                (proj.Items |> List.map ConversationItem.headline)
+                [ "started sandbox octo/hello:dev (docker)" ]
+                "one item, moved on in place"
 
         // Why it waits is one plain line, and what the Manager said is kept for the fold.
         testCaseAsync "a truster the Manager refuses to read holds the repo, said plainly with the refusal kept apart" <|
