@@ -172,6 +172,25 @@ let private awaitPrinted
                                 (said.ToString ()))))
         |> ignore)
 
+/// A loopback port nothing is listening on: bound at `:0`, so the OS chooses it, read back, and
+/// released — for the one child here that refuses `0`.
+///
+/// It leaves a race: between the release and `jmp run`'s own bind, anything can take the
+/// number, and the exporter then fails to bind. Nothing else in the suite may do this, which is
+/// why it is private to the one file whose external tool forces it; everything else is told
+/// `0` and asked afterwards, or is fronted by a listener that is already bound
+/// (`Support.frontOrigin`).
+let private freePort () : Async<int> =
+    async {
+        let server = createServer (fun _ res -> res.``end`` "")
+        let! listening =
+            Async.FromContinuations (fun (cont, _, _) ->
+                server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
+        let port = serverPort listening
+        do! Async.FromContinuations (fun (cont, _, _) -> listening.close (fun _ -> cont ()))
+        return port
+    }
+
 /// Spawn both halves and wait for the provider to say where it is.
 ///
 /// The provider's port is OS-assigned and read back off its readiness line, so concurrent

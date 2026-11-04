@@ -28,14 +28,13 @@ open System.Net.Sockets
 // There is then no number for two cases to share, and adding a case requires knowing nothing
 // about what any other case bound.
 
-/// A loopback port nothing is listening on: taken at `:0`, so the OS chooses it, and released.
-///
-/// Wanted only where a port has to be known BEFORE the thing that binds it has started — a
-/// Manager whose own origin is the OIDC issuer a booting session fetches discovery against, a
-/// Caddyfile that has to name its upstream. Everything else is told `0` and says where it
-/// landed. The race the release leaves is the narrowest one available, and it cannot produce a
-/// passing-but-wrong run: a collision fails the bind loudly.
-let internal freeLoopbackPort () : int =
+/// A loopback port nothing was listening on a moment ago: taken at `:0`, so the OS chooses it,
+/// and released. Private to `listenOnLoopback`, which binds it at once itself: a number handed
+/// to anyone else to bind later is a number anything can take in between, and it failed the
+/// suite that way more than once (a Manager told `--port <n>`, a stand-in GitHub bound after
+/// the session that dials it had booted). A server whose address another process must be told
+/// is started FIRST, here or as a door in front of it, and its origin handed on.
+let private freeLoopbackPort () : int =
     let probe = new TcpListener (IPAddress.Loopback, 0)
     probe.Start ()
     let port = (probe.LocalEndpoint :?> IPEndPoint).Port
@@ -54,8 +53,12 @@ type internal Serving =
 
 /// Start an `HttpListener` on a loopback origin of its own.
 ///
-/// There is no `:0` to hand it — a prefix names a port — so one is taken and released, and the
-/// window that leaves is closed by trying again rather than by anybody picking a number.
+/// There is no `:0` to hand it — a prefix names a port — so one is taken and released and
+/// bound here, by the one party that took it, before the origin is handed to anybody. A number
+/// taken in that window costs this listener another try and nobody else anything: the origin
+/// does not exist outside this function until `Start` has bound it. That is what separates this
+/// from the race the suite has removed elsewhere, where the number escaped to another process
+/// that bound it later and had no way to choose again.
 let internal listenOnLoopback () : Serving =
     let rec attempt (triesLeft: int) =
         let origin = sprintf "http://127.0.0.1:%d" (freeLoopbackPort ())

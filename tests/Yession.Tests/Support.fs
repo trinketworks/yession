@@ -44,27 +44,48 @@ let user msg = Ylmish.Program.Message.User msg
 
 // --- Ports, handed out rather than chosen ------------------------------------------------
 
-/// A loopback port nothing is listening on: bound at `:0`, so the OS chooses it, read back,
-/// and released.
+/// A Manager's public origin, bound before the Manager is: a loopback HTTP server on a port the
+/// OS chose at `:0`, forwarding every request — path, method, headers and body unchanged — to
+/// the port it is pointed at (`PointAt`) once the Manager behind it has bound one.
 ///
-/// Wanted only where a port has to be known BEFORE the thing that binds it starts — a
-/// Manager's public origin is its OIDC issuer, and a session it launches fetches discovery
-/// against it; `jmp run` refuses `0` outright. Everything else here is told `0` and asked
-/// afterwards (`SessionHost.Port` is the bound port, not the requested one).
+/// For the case whose Manager has to be TOLD its origin at creation: it is the OIDC issuer a
+/// session it launches fetches discovery against, so it must answer, and it is fixed before the
+/// Manager listens. It used to be a port taken at `:0`, released, and handed to the Manager to
+/// bind — and whatever took the number in between (a listener beside it, an outgoing
+/// connection's source port) failed that bind with EADDRINUSE. Here the origin is a listener
+/// that is already bound, so there is no number for anything to take.
 ///
-/// The race the release leaves is the narrowest one available and it cannot produce a
-/// passing-but-wrong run: a collision fails the bind loudly. What it replaces is a suite
-/// picking a number by hand, which fails as EADDRINUSE or as a wait that never settles —
-/// and cannot be run twice at once at all.
-let freePort () : Async<int> =
+/// Fronted is also the deployment's own shape: a Manager behind a proxy answers at the proxy's
+/// origin and not at its own port.
+type FrontOrigin =
+    { Origin : string
+      /// Forward to the Manager on this loopback port. Asked before it is told, it answers 502.
+      PointAt : int -> unit
+      Close : unit -> unit }
+
+let frontOrigin () : Async<FrontOrigin> =
     async {
-        let server = createServer (fun _ res -> res.``end`` "")
+        let mutable behind : int option = None
+        let handler (req: IncomingMessage) (res: ServerResponse) =
+            match behind with
+            | None ->
+                res.writeHead (502, [ ResponseHeader.ContentType "text/plain" ])
+                res.``end`` "nothing stands behind this origin yet"
+            | Some port ->
+                let up =
+                    httpRequest (sprintf "http://127.0.0.1:%d%s" port req.url) req.``method`` (req.headerEntries ()) (fun answer ->
+                        res.relayHead (answer.statusCode, answer.headerEntries ())
+                        answer.pipe res)
+                up.onError (fun _ -> res.destroy ())
+                req.pipe up
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) ->
                 server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        let port = serverPort listening
-        do! Async.FromContinuations (fun (cont, _, _) -> listening.close (fun _ -> cont ()))
-        return port
+        return
+            { Origin = sprintf "http://127.0.0.1:%d" (serverPort listening)
+              PointAt = fun port -> behind <- Some port
+              Close = fun () -> listening.close ignore }
     }
 
 // --- The sandbox seam's deterministic test double ----------------------------------------

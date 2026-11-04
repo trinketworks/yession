@@ -521,6 +521,21 @@ let private productStartInfo (args: string list) (env: (string * string) list) :
     psi.UseShellExecute <- false
     psi
 
+/// The port a Manager told `--port 0` came up on, off the line it prints the moment it listens
+/// (`listening at`). What a door in front of such a Manager forwards to: the door is the
+/// Manager's public origin, bound before the Manager boots, and the Manager's own port is known
+/// only once it has bound one. Returned as a readiness predicate `ready` is wrapped in, because
+/// the line arrives on the way to readiness, not at it.
+///
+/// This is what replaced a port taken at `:0`, released, and handed to the Manager to bind:
+/// whatever took the number in between crashed the Manager on EADDRINUSE before it said a
+/// word, and the case reported it as a host that "never reported readiness".
+let private hearingManagerPort (port: TaskCompletionSource<int>) (ready: string -> bool) : string -> bool =
+    fun line ->
+        if line.Contains "Yession Manager: listening at" then
+            urlIn line |> Option.iter (fun url -> port.TrySetResult (Uri(url).Port) |> ignore)
+        ready line
+
 /// Boot the real product entry on ports the OS picks, in a data dir nothing else touches.
 ///
 /// `--port 0` is what makes a case's host its own: the shipped default is a fixed 8321, so
@@ -577,8 +592,7 @@ let private reportingAll (name: string) (pages: (IPage * Evidence) list) (body: 
 /// One CONTEXT per peer, never two pages in one: a peer id lives in origin-partitioned
 /// localStorage, so two pages in one context are one person in two tabs rather than the two
 /// collaborators a convergence case is about.
-let private peersCase (env: (string * string) list) (name: string) (peers: int) (body: Host -> IPage list -> Async<unit>) =
-    testCaseAsync name <|
+let private runPeers (env: (string * string) list) (name: string) (peers: int) (body: Host -> IPage list -> Async<unit>) : Async<unit> =
         async {
             let host = startHost env
             let! outcome =
@@ -617,6 +631,9 @@ let private peersCase (env: (string * string) list) (name: string) (peers: int) 
             | Choice1Of2 () -> ()
             | Choice2Of2 e -> raise e
         }
+
+let private peersCase (env: (string * string) list) (name: string) (peers: int) (body: Host -> IPage list -> Async<unit>) =
+    testCaseAsync name (runPeers env name peers body)
 
 /// A case with one peer in it.
 let private sessionCase (name: string) (body: IPage -> Async<unit>) =
@@ -1277,94 +1294,99 @@ let tests =
         let fixture = Path.Combine (dir, "fixture")
         let release = Path.Combine (dir, "release")
         let wrapper = Path.Combine (dir, "git")
-        // Known before the session boots, which is when it reads the variable; bound in the body.
-        let api = sprintf "http://127.0.0.1:%d" (freeLoopbackPort ())
-        sessionCaseOn [ "YESSION_BIN_GIT", wrapper; "YESSION_GITHUB_API_URL", api ] "an added repo is in the transcript while its clone is still running" <|
-            fun page ->
+        let name = "an added repo is in the transcript while its clone is still running"
+        testCaseAsync name <| async {
+        // The GitHub the session asks, bound BEFORE the session boots, which is when it reads
+        // the variable: an origin that is already listening is one nothing can take in
+        // between. (It used to be a port taken and released here and bound in the body, and
+        // a port taken in that window failed the case with "Address already in use".)
+        let api = listenOnLoopback ()
+        Async.Start (
             async {
-                // From PATH, not /bin or /usr/bin: a Nix devshell has neither git nor sleep there.
-                let onPath name =
-                    Environment.GetEnvironmentVariable("PATH").Split Path.PathSeparator
-                    |> Array.map (fun d -> Path.Combine (d, name))
-                    |> Array.find File.Exists
-                let realGit = onPath "git"
-                let sleep = onPath "sleep"
-                let git (args: string list) =
-                    let psi = ProcessStartInfo realGit
-                    args |> List.iter psi.ArgumentList.Add
-                    psi.WorkingDirectory <- fixture
-                    use p = Process.Start psi
-                    p.WaitForExit ()
-                    if p.ExitCode <> 0 then failwithf "git %s exited %d" (String.Join (" ", args)) p.ExitCode
-                if Directory.Exists dir then Directory.Delete (dir, true)
-                Directory.CreateDirectory fixture |> ignore
-                File.WriteAllText (Path.Combine (fixture, "README"), "fixture\n")
-                git [ "init"; "-q"; "-b"; "main" ]
-                git [ "add"; "README" ]
-                git [ "-c"; "user.name=fixture"; "-c"; "user.email=fixture@example.invalid"; "commit"; "-q"; "-m"; "fixture" ]
-                // Every verb but the clone is the real git. The clone waits for the case, then
-                // clones the fixture into the place it was asked to, with none of the session's
-                // config: that config allows https alone, and the fixture is a local path. A
-                // minute at most, so a case that fails before letting it go strands nothing.
-                File.WriteAllText (
-                    wrapper,
-                    String.concat "\n"
-                        [ "#!/bin/sh"
-                          "case \" $* \" in"
-                          "  *\" clone \"*)"
-                          "    for dest; do :; done"
-                          "    i=0"
-                          sprintf "    while [ ! -e '%s' ] && [ $i -lt 600 ]; do '%s' 0.1; i=$((i+1)); done" release sleep
-                          sprintf "    exec /usr/bin/env -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_ALLOW_PROTOCOL '%s' clone -q --template= '%s' \"$dest\"" realGit fixture
-                          "    ;;"
-                          "esac"
-                          sprintf "exec '%s' \"$@\"" realGit
-                          "" ])
-                File.SetUnixFileMode (wrapper, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute)
-
-                let listener = new HttpListener ()
-                listener.Prefixes.Add (api + "/")
-                listener.Start ()
-                Async.Start (
-                    async {
-                        while listener.IsListening do
-                            match! Async.Catch (listener.GetContextAsync () |> Async.AwaitTask) with
-                            | Choice1Of2 ctx ->
-                                let status, body =
-                                    match ctx.Request.Url.AbsolutePath with
-                                    | "/repos/octo/fixture" -> 200, """{"full_name":"octo/fixture","default_branch":"main","private":false}"""
-                                    | "/repos/octo/fixture/branches" -> 200, """[{"name":"main"}]"""
-                                    | _ -> 404, """{"message":"Not Found"}"""
-                                let bytes = Text.Encoding.UTF8.GetBytes body
-                                ctx.Response.StatusCode <- status
-                                ctx.Response.ContentType <- "application/json"
-                                ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
-                                ctx.Response.Close ()
-                            | Choice2Of2 _ -> ()
-                    })
-                try
-                    do! waitVisible "the launch card's search" page "[data-repo-picker-search]"
-                    // The card searches on a submit, not per keystroke (`LaunchSubmitted`).
-                    do! awaitU (page.FillAsync ("[data-repo-picker-search]", "octo/fixture"))
-                    do! awaitU (page.PressAsync ("[data-repo-picker-search]", "Enter"))
-                    do! waitVisible "the fixture on the launch card" page "[data-repo-candidate='octo/fixture']"
-                    do! awaitU (page.ClickAsync "[data-repo-candidate='octo/fixture']")
-                    do! awaitU (page.ClickAsync "[data-repo-picker-start]")
-                    // The clone cannot have finished: the case has not let it go.
-                    do! waitTextIn
-                            "the added repo, still cloning, in the transcript"
-                            page
-                            (sprintf "[data-act-note][data-act-status='%s']" Yession.App.Dom.Text.running)
-                            "added repo"
-                    File.WriteAllText (release, "")
-                    do! waitTextIn "the clone's outcome on the same item" page "[data-act-note]" "on branch main"
-                    let! items = Read.texts page "[data-act-note]"
-                    let added = items |> List.filter (fun t -> t.Contains "added repo") |> List.length
-                    Expect.equal added 1 "the clone fills the item the add drew, rather than drawing another"
-                finally
-                    File.WriteAllText (release, "")
-                    listener.Stop ()
+                while api.Listener.IsListening do
+                    match! Async.Catch (api.Listener.GetContextAsync () |> Async.AwaitTask) with
+                    | Choice1Of2 ctx ->
+                        let status, body =
+                            match ctx.Request.Url.AbsolutePath with
+                            | "/repos/octo/fixture" -> 200, """{"full_name":"octo/fixture","default_branch":"main","private":false}"""
+                            | "/repos/octo/fixture/branches" -> 200, """[{"name":"main"}]"""
+                            | _ -> 404, """{"message":"Not Found"}"""
+                        let bytes = Text.Encoding.UTF8.GetBytes body
+                        ctx.Response.StatusCode <- status
+                        ctx.Response.ContentType <- "application/json"
+                        ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
+                        ctx.Response.Close ()
+                    | Choice2Of2 _ -> ()
             })
+        try
+            do! runPeers [ "YESSION_BIN_GIT", wrapper; "YESSION_GITHUB_API_URL", api.Origin ] name 1 <| fun _ pages ->
+                let page = pages.Head
+                async {
+                    // From PATH, not /bin or /usr/bin: a Nix devshell has neither git nor sleep there.
+                    let onPath name =
+                        Environment.GetEnvironmentVariable("PATH").Split Path.PathSeparator
+                        |> Array.map (fun d -> Path.Combine (d, name))
+                        |> Array.find File.Exists
+                    let realGit = onPath "git"
+                    let sleep = onPath "sleep"
+                    let git (args: string list) =
+                        let psi = ProcessStartInfo realGit
+                        args |> List.iter psi.ArgumentList.Add
+                        psi.WorkingDirectory <- fixture
+                        use p = Process.Start psi
+                        p.WaitForExit ()
+                        if p.ExitCode <> 0 then failwithf "git %s exited %d" (String.Join (" ", args)) p.ExitCode
+                    if Directory.Exists dir then Directory.Delete (dir, true)
+                    Directory.CreateDirectory fixture |> ignore
+                    File.WriteAllText (Path.Combine (fixture, "README"), "fixture\n")
+                    git [ "init"; "-q"; "-b"; "main" ]
+                    git [ "add"; "README" ]
+                    git [ "-c"; "user.name=fixture"; "-c"; "user.email=fixture@example.invalid"; "commit"; "-q"; "-m"; "fixture" ]
+                    // Every verb but the clone is the real git. The clone waits for the case, then
+                    // clones the fixture into the place it was asked to, with none of the session's
+                    // config: that config allows https alone, and the fixture is a local path. A
+                    // minute at most, so a case that fails before letting it go strands nothing.
+                    File.WriteAllText (
+                        wrapper,
+                        String.concat "\n"
+                            [ "#!/bin/sh"
+                              "case \" $* \" in"
+                              "  *\" clone \"*)"
+                              "    for dest; do :; done"
+                              "    i=0"
+                              sprintf "    while [ ! -e '%s' ] && [ $i -lt 600 ]; do '%s' 0.1; i=$((i+1)); done" release sleep
+                              sprintf "    exec /usr/bin/env -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_ALLOW_PROTOCOL '%s' clone -q --template= '%s' \"$dest\"" realGit fixture
+                              "    ;;"
+                              "esac"
+                              sprintf "exec '%s' \"$@\"" realGit
+                              "" ])
+                    File.SetUnixFileMode (wrapper, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute)
+
+                    try
+                        do! waitVisible "the launch card's search" page "[data-repo-picker-search]"
+                        // The card searches on a submit, not per keystroke (`LaunchSubmitted`).
+                        do! awaitU (page.FillAsync ("[data-repo-picker-search]", "octo/fixture"))
+                        do! awaitU (page.PressAsync ("[data-repo-picker-search]", "Enter"))
+                        do! waitVisible "the fixture on the launch card" page "[data-repo-candidate='octo/fixture']"
+                        do! awaitU (page.ClickAsync "[data-repo-candidate='octo/fixture']")
+                        do! awaitU (page.ClickAsync "[data-repo-picker-start]")
+                        // The clone cannot have finished: the case has not let it go.
+                        do! waitTextIn
+                                "the added repo, still cloning, in the transcript"
+                                page
+                                (sprintf "[data-act-note][data-act-status='%s']" Yession.App.Dom.Text.running)
+                                "added repo"
+                        File.WriteAllText (release, "")
+                        do! waitTextIn "the clone's outcome on the same item" page "[data-act-note]" "on branch main"
+                        let! items = Read.texts page "[data-act-note]"
+                        let added = items |> List.filter (fun t -> t.Contains "added repo") |> List.length
+                        Expect.equal added 1 "the clone fills the item the add drew, rather than drawing another"
+                    finally
+                        File.WriteAllText (release, "")
+                }
+        finally
+            api.Stop ()
+        })
 
         // A reload brings a person back to what they had (P0-4): the same terminals in the
         // strip, the one on top, and a column with width. A preview is NOT brought back: it
@@ -7691,10 +7713,6 @@ let editorTests =
 
 // --- A path-mounted session in a real browser --------------------------------------------
 
-/// The session's own loopback port, learned from the readiness line. The PUBLIC address is
-/// `/s/<id>` on the proxy and does not contain it — which is the whole point of the shape
-/// under test, and why nothing here may pin it.
-let mutable private mountSessionPort = 0
 let private MOUNT_SESSION = "mounted"
 let private mountDataDir = "tests/browser/.data-mounted"
 
@@ -7702,15 +7720,16 @@ let private mountDataDir = "tests/browser/.data-mounted"
 /// the session's loopback port with the PATH UNCHANGED, so the session sees — and strips —
 /// its own `/s/<id>` prefix. That is exactly the contract Plan 10 states, and the reason
 /// this test can exist without depending on any proxy's rewriting behaviour.
-/// `sessionPort` is a THUNK, read per request rather than captured: a session that is
+/// `upstreamPort` is a THUNK, asked per request rather than captured: a session that is
 /// killed and relaunched keeps its public path and gets a new loopback port, and the whole
 /// point of path-mounting is that the address does not move when that happens. A proxy that
 /// captured the port would forward to a dead one, which is the operator's reconciler bug in
-/// miniature.
+/// miniature. Asynchronous, because the Manager's door is asked before the Manager has said
+/// where it listens.
 /// `stalls` names the requests this front door accepts and never answers — a session whose
 /// upstream took the connection and went quiet, which is a shape a proxy produces and a
 /// killed host does not (that one answers 502 at once). Held until the listener stops.
-let private startStallingMountProxy (sessionPort: unit -> int) (stalls: string -> bool) : Serving =
+let private startStallingMountProxy (upstreamPort: unit -> Async<int>) (stalls: string -> bool) : Serving =
     let served = listenOnLoopback ()
     let listener = served.Listener
     // No auto-redirect: a `Location` must reach the browser untouched, which is the
@@ -7733,7 +7752,8 @@ let private startStallingMountProxy (sessionPort: unit -> int) (stalls: string -
                 Async.Start (
                     async {
                         try
-                            let target = sprintf "http://127.0.0.1:%d%s" (sessionPort ()) ctx.Request.RawUrl
+                            let! port = upstreamPort ()
+                            let target = sprintf "http://127.0.0.1:%d%s" port ctx.Request.RawUrl
                             use request = new HttpRequestMessage (HttpMethod ctx.Request.HttpMethod, target)
                             if ctx.Request.HasEntityBody then
                                 use buffer = new MemoryStream ()
@@ -7765,19 +7785,33 @@ let private startStallingMountProxy (sessionPort: unit -> int) (stalls: string -
     Async.Start (loop ())
     served
 
-let mutable private mountedHost : Process = null
+/// What one mounted deployment's processes have said about themselves, kept with the
+/// deployment rather than in the module: a restart replaces all three.
+type private MountedProcesses () =
+    /// The product entry, once it is started.
+    member val Host : Process = null with get, set
+    /// The Manager's own loopback port, off the line it prints the moment it listens
+    /// (`hearingManagerPort`). Replaced on a restart: a Manager that comes back comes back on a
+    /// port the OS chose again, behind an origin that has not moved.
+    member val ManagerPort = TaskCompletionSource<int> (TaskCreationOptions.RunContinuationsAsynchronously) with get, set
+    /// The session's own loopback port, learned from the readiness line. The PUBLIC address is
+    /// `/s/<id>` on the proxy and does not contain it — which is the whole point of the shape
+    /// under test, and why nothing here may pin it.
+    member val SessionPort = 0 with get, set
 
 /// The product entry, told it is fronted: the Manager at `managerOrigin` (which is also the
 /// OIDC issuer a session fetches discovery against, so it must resolve HERE), and sessions
 /// mounted under a path at `publicOrigin`, the proxy standing in front of it.
 ///
 /// Both addresses are the deployment's, never this host's to choose — which is why they
-/// arrive as arguments and why a restart keeps them (`Mounted.Restart`).
-let private startMountedHost (publicOrigin: string) (managerOrigin: string) : unit =
+/// arrive as arguments and why a restart keeps them (`Mounted.Restart`). Its own port is
+/// `0`: `managerOrigin` is a door already bound in front of it, which forwards to the port the
+/// Manager says it got.
+let private startMountedHost (processes: MountedProcesses) (publicOrigin: string) (managerOrigin: string) : unit =
     let psi =
         productStartInfo
             [ "--auth"; "localhost"
-              "--port"; string (Uri(managerOrigin).Port)
+              "--port"; "0"
               "--default-session"; MOUNT_SESSION
               "--data-dir"; mountDataDir ]
             // The two ADDRESSES stay variables: a session inherits them and parses them the
@@ -7787,55 +7821,71 @@ let private startMountedHost (publicOrigin: string) (managerOrigin: string) : un
     psi.RedirectStandardOutput <- true
     let p = new Process (StartInfo = psi)
     let ready = TaskCompletionSource<bool> ()
+    let managerPort = TaskCompletionSource<int> (TaskCreationOptions.RunContinuationsAsynchronously)
+    processes.ManagerPort <- managerPort
+    let heard =
+        hearingManagerPort managerPort (fun line ->
+            if line.Contains "launched at" then
+                // The Manager reports the session's LOOPBACK address here, which is what the
+                // proxy must forward to; the browser never sees it.
+                match urlIn line |> Option.map Uri with
+                | Some uri ->
+                    processes.SessionPort <- uri.Port
+                    true
+                | None -> false
+            else false)
     p.OutputDataReceived.Add (fun e ->
-        if e.Data <> null && e.Data.Contains "launched at" then
-            // The Manager reports the session's LOOPBACK address here, which is what the
-            // proxy must forward to; the browser never sees it.
-            match urlIn e.Data |> Option.map Uri with
-            | Some uri ->
-                mountSessionPort <- uri.Port
-                ready.TrySetResult true |> ignore
-            | None -> ())
+        if e.Data <> null && heard e.Data then ready.TrySetResult true |> ignore)
     p.Start () |> ignore
     p.BeginOutputReadLine ()
-    mountedHost <- p
+    processes.Host <- p
     if not (ready.Task.Wait 30000) then failwith "mounted host never reported readiness"
-    if mountSessionPort = 0 then failwith "the readiness line carried no session port"
+    if processes.SessionPort = 0 then failwith "the readiness line carried no session port"
 
 /// The mounted deployment a case runs against: a proxy on a public origin of its own, the
-/// product entry behind it, and the session's public address — which is all a case ever sees
-/// of any of it.
+/// Manager's door on another, the product entry behind both, and the session's public address
+/// — which is all a case ever sees of any of it.
 ///
-/// The Manager's origin is taken once and KEPT across a restart. A restart here is the session
+/// Both origins are taken once and KEPT across a restart. A restart here is the session
 /// moving to a new loopback port behind an address that does not move, which is the whole point
 /// of path-mounting; a Manager that moved with it would be testing something else.
 type private Mounted =
     { Proxy : Serving
-      /// The Manager's own origin — the OIDC issuer, and the page a session is opened from.
-      ManagerOrigin : string
+      /// The Manager's door: what the deployment declares as the Manager's origin, forwarding
+      /// to wherever the Manager behind it listens.
+      ManagerDoor : Serving
+      Processes : MountedProcesses
       /// The session's PUBLIC address, `/s/<id>` on the proxy. The browser knows no other.
       PublicUrl : string }
+    /// The Manager's own origin — the OIDC issuer, and the page a session is opened from.
+    member this.ManagerOrigin : string = this.ManagerDoor.Origin
     /// Boot the host again on the same two addresses, after a case has killed it.
-    member this.Restart () : unit = startMountedHost this.Proxy.Origin this.ManagerOrigin
+    member this.Restart () : unit = startMountedHost this.Processes this.Proxy.Origin this.ManagerOrigin
+    /// Kill the host, and return once it has gone.
+    member this.Kill () : unit =
+        this.Processes.Host.Kill true
+        this.Processes.Host.WaitForExit ()
     member this.Stop () : unit =
         this.Proxy.Stop ()
-        try if mountedHost <> null then mountedHost.Kill true with _ -> ()
+        this.ManagerDoor.Stop ()
+        try if this.Processes.Host <> null then this.Processes.Host.Kill true with _ -> ()
 
 /// A mounted deployment in a clean data dir, with `stalls` naming the requests its proxy
 /// accepts and never answers.
 ///
-/// The proxy comes up FIRST, because the host is told where the deployment answers and a
-/// listener that is already bound is an address nothing can take in between.
+/// The proxy and the Manager's door come up FIRST, because the host is told where the
+/// deployment answers and a listener that is already bound is an address nothing can take in
+/// between. (The Manager's origin used to be a port taken at `:0`, released, and handed to the
+/// Manager to bind; whatever took it first crashed the Manager on EADDRINUSE.)
 let private startMounted (stalls: string -> bool) : Mounted =
     if Directory.Exists mountDataDir then Directory.Delete (mountDataDir, true)
-    let proxy = startStallingMountProxy (fun () -> mountSessionPort) stalls
-    // The one host here that cannot be told `--port 0`: its own origin is what it hands a
-    // session as the issuer, so it has to be known one line before it boots. Hence a port taken
-    // at `:0` and released, rather than a number somebody chose.
-    let managerOrigin = sprintf "http://127.0.0.1:%d" (freeLoopbackPort ())
-    startMountedHost proxy.Origin managerOrigin
+    let processes = MountedProcesses ()
+    let proxy = startStallingMountProxy (fun () -> async.Return processes.SessionPort) stalls
+    let managerDoor = startStallingMountProxy (fun () -> Async.AwaitTask processes.ManagerPort.Task) (fun _ -> false)
+    startMountedHost processes proxy.Origin managerDoor.Origin
     { Proxy = proxy
-      ManagerOrigin = managerOrigin
+      ManagerDoor = managerDoor
+      Processes = processes
       PublicUrl = proxy.At (sprintf "/s/%s/" MOUNT_SESSION) }
 
 // --- Reopening a session that is gone (Plan 20, Plan 22) ---------------------------------
@@ -7921,8 +7971,7 @@ let private offlineReopen (name: string) (make: IPage -> Async<unit>) (check: IP
                     // reaped session behind an operator's front door — and it means the shell
                     // request comes back 502 rather than failing outright, which the worker has
                     // to treat as the failure it is.
-                    mountedHost.Kill true
-                    mountedHost.WaitForExit ()
+                    mounted.Kill ()
 
                     let! _ = await (page.ReloadAsync ())
 
@@ -7938,9 +7987,8 @@ let private offlineReopen (name: string) (make: IPage -> Async<unit>) (check: IP
                 mounted.Stop ()
         }
 
-// One case at a time (`BrowserRunner`): every case boots its deployment in `mountDataDir` and
-// keeps its host in `mountedHost` and `mountSessionPort`, so two at once would boot into one
-// directory and kill, or forward to, each other's host.
+// One case at a time (`BrowserRunner`): every case boots its deployment in `mountDataDir`, so
+// two at once would boot into one directory.
 let mountedTests =
     testSequenced <| testList "Path-mounted session (browser)" [
         testCaseAsync "a session served under a path boots, signs in, and connects over WebRTC" <|
@@ -8021,8 +8069,7 @@ let mountedTests =
                             Wait.until what (fun () -> Read.texts page ".ProseMirror") (List.contains "persisted across the wipe")
                         do! hasDraft "the draft in an editor"
 
-                        mountedHost.Kill true
-                        mountedHost.WaitForExit ()
+                        mounted.Kill ()
                         if Directory.Exists mountDataDir then Directory.Delete (mountDataDir, true)
                         mounted.Restart ()
 
@@ -8379,18 +8426,20 @@ let private registryBackoff () : Async<unit> = Async.Sleep 100
 /// says it runs, as behind a real reconciler. Where each session actually listens is read off
 /// the Manager's registry stream, the same subscription an operator's proxy holds open,
 /// because a fixture that was TOLD the port would not be standing where the lag is.
-let private startFrontDoorWith (managerPort: int) (admits: string -> int -> bool) (miss: DoorMiss) : Serving =
+let private startFrontDoorWith (managerPort: Task<int>) (admits: string -> int -> bool) (miss: DoorMiss) : Serving =
     let served = listenOnLoopback ()
     let listener = served.Listener
     let client = new HttpClient (new HttpClientHandler (AllowAutoRedirect = false, UseCookies = false))
     let ports = System.Collections.Concurrent.ConcurrentDictionary<string, int> ()
     let asked = System.Collections.Concurrent.ConcurrentDictionary<string, int> ()
-    // The registry, read the way a reconciler reads it. Retried because the door has to be up
-    // BEFORE the Manager — the Manager's public origin is this port, and its first session
-    // fetches OIDC discovery against it while booting.
+    // The registry, read the way a reconciler reads it, once the Manager has said where it
+    // listens: the door has to be up BEFORE the Manager — the Manager's public origin is this
+    // port, and its first session fetches OIDC discovery against it while booting. Retried,
+    // because a reconciler reconnects.
     let rec watching () =
         async {
             try
+                let! managerPort = Async.AwaitTask managerPort
                 use registry = new HttpClient (Timeout = Timeout.InfiniteTimeSpan)
                 let! stream =
                     registry.GetStreamAsync (sprintf "http://127.0.0.1:%d/sessions/stream" managerPort)
@@ -8427,11 +8476,13 @@ let private startFrontDoorWith (managerPort: int) (admits: string -> int -> bool
         let asks = asked.AddOrUpdate (id, 1, fun _ n -> n + 1)
         admits id asks && ports.ContainsKey id
     // Where one request goes, decided once: `Some port` is forwarded there, `None` is a miss.
-    let upstream (raw: string) : int option =
+    // The Manager's port is awaited rather than read: a request can arrive (the default
+    // session's discovery fetch) before the Manager's line saying where it is has been read.
+    let upstream (raw: string) : Async<int> option =
         match sessionIn (raw.Split('?').[0]) with
-        | None -> Some managerPort
-        | Some id when routes id -> Some ports.[id]
-        | Some _ when miss = DoorMiss.ToManager -> Some managerPort
+        | None -> Some (Async.AwaitTask managerPort)
+        | Some id when routes id -> Some (async.Return ports.[id])
+        | Some _ when miss = DoorMiss.ToManager -> Some (Async.AwaitTask managerPort)
         | Some _ -> None
     let copyHeader (reply: HttpResponseMessage) (ctx: HttpListenerContext) (name: string) =
         let values =
@@ -8463,6 +8514,7 @@ let private startFrontDoorWith (managerPort: int) (admits: string -> int -> bool
                                     let bytes = Text.Encoding.UTF8.GetBytes "not found"
                                     ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
                                 | Some port ->
+                                    let! port = port
                                     // The path goes through UNCHANGED: a session strips its own
                                     // `/s/<id>` mount, and the Manager is what
                                     // this origin's root is.
@@ -8505,7 +8557,7 @@ let private startFrontDoorWith (managerPort: int) (admits: string -> int -> bool
 /// Counted in REQUESTS, not milliseconds, so no sleep anywhere decides whether this passes —
 /// and sticky once it catches up, like a real reconciler: a mapping that has appeared does not
 /// go away again while the session runs.
-let private startFrontDoor (managerPort: int) (lag: int) : Serving =
+let private startFrontDoor (managerPort: Task<int>) (lag: int) : Serving =
     startFrontDoorWith managerPort (fun _ asks -> asks > lag) DoorMiss.Answers404
 
 let mutable private frontedHost : Process = null
@@ -8514,24 +8566,23 @@ let mutable private frontedHost : Process = null
 /// Manager at its root (which is also the OIDC issuer, so it must resolve there) and sessions
 /// under `/s/{id}` on the same origin.
 ///
-/// Both addresses arrive as arguments because neither is this host's to choose, and its own
-/// is the one a Manager behind a proxy cannot be told `0` for: it launches its default session
-/// while booting, that session fetches discovery through the door, and the door has to know
-/// where to forward that before the Manager has said anything at all. (It was tried the other
-/// way, and the session exited on a 502 from a door forwarding to port 0.)
-let private startFrontedHost (publicOrigin: string) (managerPort: int) : unit =
+/// The public origin arrives as an argument because it is not this host's to choose. Its own
+/// port is `0`, and `managerPort` is where it says which it got (`hearingManagerPort`): it
+/// launches its default session while booting, that session fetches discovery through the
+/// door, and the door forwards that to the port the Manager stated the moment it listened.
+let private startFrontedHost (publicOrigin: string) (managerPort: TaskCompletionSource<int>) : unit =
     // The management UI's line, not the session's: this case drives the Manager, and that line
     // is the last thing a completed boot prints.
     let host =
         deployProduct
             "fronted host"
             [ "--auth"; "localhost"
-              "--port"; string managerPort
+              "--port"; "0"
               "--default-session"; FRONT_SESSION
               "--data-dir"; frontDataDir ]
             [ "YESSION_MANAGER_URL", publicOrigin
               "YESSION_SESSION_URL", publicOrigin + "/s/{id}" ]
-            (fun line -> line.Contains "management UI at")
+            (hearingManagerPort managerPort (fun line -> line.Contains "management UI at"))
     frontedHost <- host.Process
 
 // One case at a time (`BrowserRunner`): a case boots in `frontDataDir` and keeps its host in
@@ -8541,14 +8592,12 @@ let frontDoorTests =
         testCaseAsync "creating a session lands in that session, never on the front door's miss" <|
             async {
                 if Directory.Exists frontDataDir then Directory.Delete (frontDataDir, true)
-                // The door comes up first: the Manager's public origin IS this port, and its
-                // default session fetches OIDC discovery against it while booting.
                 // The door first, and on a port of its own: the Manager's public origin IS
                 // this port, and its default session fetches OIDC discovery against it while
-                // booting. The Manager's own port is taken at `:0` and released, because the
-                // door is told where to forward before the Manager exists to be asked.
-                let frontManagerPort = freeLoopbackPort ()
-                let door = startFrontDoor frontManagerPort 2
+                // booting. The Manager's own port is the OS's choice, and the door forwards to
+                // it once the Manager has said which.
+                let frontManagerPort = TaskCompletionSource<int> (TaskCreationOptions.RunContinuationsAsynchronously)
+                let door = startFrontDoor frontManagerPort.Task 2
                 try
                     do! withContexts (fun contexts -> async {
                         startFrontedHost door.Origin frontManagerPort
@@ -8615,20 +8664,20 @@ let private keptDataDir = "tests/browser/.data-kept"
 let private withKeptDeployment (miss: DoorMiss) (body: Serving -> (bool -> unit) -> Async<unit>) : Async<unit> =
     async {
         if Directory.Exists keptDataDir then Directory.Delete (keptDataDir, true)
-        let managerPort = freeLoopbackPort ()
+        let managerPort = TaskCompletionSource<int> (TaskCreationOptions.RunContinuationsAsynchronously)
         let held = ref false
-        let door = startFrontDoorWith managerPort (fun _ _ -> not held.Value) miss
+        let door = startFrontDoorWith managerPort.Task (fun _ _ -> not held.Value) miss
         try
             let manager =
                 deployProduct
                     "the Manager"
                     [ "--auth"; "localhost"
-                      "--port"; string managerPort
+                      "--port"; "0"
                       "--default-session"; KEPT_SESSION
                       "--data-dir"; keptDataDir ]
                     [ "YESSION_MANAGER_URL", door.Origin
                       "YESSION_SESSION_URL", door.Origin + "/s/{id}" ]
-                    (fun line -> line.Contains "management UI at")
+                    (hearingManagerPort managerPort (fun line -> line.Contains "management UI at"))
             try
                 // Routed once the door has read the session's port off the registry. Asked with
                 // a bound, because a door that stalls its misses never answers one.
@@ -8843,9 +8892,9 @@ type private Fronted =
 /// Everything here is what the README says to run, with the README's own template.
 ///
 /// Both doors are unix sockets, as the README says to run them: the proxy's, which only the
-/// ingress opens, and the Manager's, which only the proxy and the map open. The ingress's
-/// port is taken at `:0` before anything starts, because the Manager is handed it as its
-/// public origin.
+/// ingress opens, and the Manager's, which only the proxy and the map open. The ingress is
+/// bound at `:0`, and held, before anything starts, because the Manager is handed its origin as
+/// its public one.
 let private deployFronted () : Fronted =
     if Directory.Exists frontedDataDir then Directory.Delete (frontedDataDir, true)
     Directory.CreateDirectory frontedMapDir |> ignore

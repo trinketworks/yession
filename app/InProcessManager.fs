@@ -36,7 +36,8 @@ type InProcessManager =
 [<RequireQualifiedAccess>]
 module InProcessManager =
 
-    /// Create a Manager. Ports are allocated from `basePort` upward; `runAgent`
+    /// Create a Manager. Each session it launches binds a port the OS chooses, and its
+    /// registration names the port it got (`ManagedSession.Port`); `runAgent`
     /// is passed through to each launched Process. When `makeSandbox` is given, each
     /// launched Process owns a lazily-created WorkSandbox over the sandbox seam (the
     /// environment lifecycle of Steps 12–13); the sandbox is created by the SESSION, not
@@ -47,9 +48,7 @@ module InProcessManager =
         (makeSandbox: (SessionId -> CreateSandbox) option)
         (makeLog: (SessionId -> Yession.Session.EventLog<SessionEvent>) option)
         (makeDocStore: (SessionId -> DocStore.DocStore) option)
-        (basePort: int)
         : InProcessManager =
-        let mutable nextPort = basePort
         let mutable nextProcessNumber = 0
         let mutable registry : Map<string, ManagedSession> = Map.empty
 
@@ -59,10 +58,6 @@ module InProcessManager =
                 if Map.containsKey key registry then
                     return failwithf "session %s is already launched" key
                 else
-                    // basePort 0 = an OS-assigned free port per session (the default);
-                    // a fixed basePort allocates sequentially for deterministic tests.
-                    let port = if basePort = 0 then 0 else nextPort
-                    if basePort <> 0 then nextPort <- nextPort + 1
                     let processId = sprintf "session-process-%d" nextProcessNumber
                     nextProcessNumber <- nextProcessNumber + 1
                     // Launch. The host's listening resolution is the Process's registration
@@ -142,7 +137,7 @@ module InProcessManager =
                         // The in-process Manager path has no control RPC, so no notification
                         // channel — the reverse leg exists only across the OS-process boundary.
                         // No mount: an in-process session is served at its own origin root.
-                        Host.startFull Clock.system (fun () -> runAgent) (fun _ -> None) makeSandboxes None baseLog docStore None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None request.SessionId None "" None false port
+                        Host.startFull Clock.system (fun () -> runAgent) (fun _ -> None) makeSandboxes None baseLog docStore None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None request.SessionId None "" None false 0
                     let bootstrapUri = sprintf "http://127.0.0.1:%d/" host.Port
                     let managed =
                         { SessionId = request.SessionId
@@ -173,10 +168,9 @@ module InProcessManager =
         (runAgent: RunAgent option)
         (makeSandbox: (SessionId -> CreateSandbox) option)
         (makeLog: (SessionId -> Yession.Session.EventLog<SessionEvent>) option)
-        (basePort: int)
         : InProcessManager =
-        createFull runAgent makeSandbox makeLog None basePort
+        createFull runAgent makeSandbox makeLog None
 
     /// `createWith` without durable storage — the deterministic in-memory default.
-    let create (runAgent: RunAgent option) (makeSandbox: (SessionId -> CreateSandbox) option) (basePort: int) : InProcessManager =
-        createWith runAgent makeSandbox None basePort
+    let create (runAgent: RunAgent option) (makeSandbox: (SessionId -> CreateSandbox) option) : InProcessManager =
+        createWith runAgent makeSandbox None

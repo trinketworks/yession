@@ -89,21 +89,19 @@ let private launchTests =
     testList "Manager launch" [
         testCaseAsync "launching a session registers a Session and returns its bootstrap URI" <|
             async {
-                // A base the OS picked, not a number this file chose. It stays a KNOWN
-                // number, because what this case pins is that the launch result names the
-                // address the Manager was told to allocate from.
-                let! basePort = freePort ()
-                let m = InProcessManager.create None None basePort
+                let m = InProcessManager.create None None
                 manager <- Some m
                 let request : SessionLaunchRequest =
                     { SessionLaunchRequest.SessionId = SessionId.create "managed-1" |> expect }
                 let! result = m.StartSession request
                 Expect.equal result.SessionId request.SessionId "the launched session"
                 Expect.isTrue (result.ProcessId.Length > 0) "a process id is assigned"
-                Expect.equal result.LocalBootstrapUri (sprintf "http://127.0.0.1:%d/" basePort) "local bootstrap URI"
                 match m.TryFind request.SessionId with
                 | Some managed ->
                     Expect.equal managed.ProcessId result.ProcessId "the registration matches the launch result"
+                    // The address the session really bound, which the OS chose: the launch
+                    // result names where it IS, not where somebody meant it to be.
+                    Expect.equal result.LocalBootstrapUri (sprintf "http://127.0.0.1:%d/" managed.Host.Port) "local bootstrap URI"
                 | None -> failwith "the launched Process must be registered with the Manager"
             }
 
@@ -1803,7 +1801,7 @@ let private lazyLifecycleTests =
                             onChunk (AgentResponseChunk.Text "just an answer")
                             return AgentCompleted ("just an answer", None)
                         }
-                let m = InProcessManager.create (Some conversational) (Some (fun _ -> scriptedSandbox recorder echoSandboxScript)) 0
+                let m = InProcessManager.create (Some conversational) (Some (fun _ -> scriptedSandbox recorder echoSandboxScript))
                 let! _ =
                     m.StartSession
                         { SessionLaunchRequest.SessionId = SessionId.create "lazy-1" |> expect }
@@ -1842,7 +1840,7 @@ let private lazyLifecycleTests =
                                 return AgentCompleted ("environment is up", None)
                             | other -> return AgentFailed (sprintf "%A" other, None)
                         }
-                let m = InProcessManager.create (Some taskAgent) (Some (fun _ -> scriptedSandbox recorder echoSandboxScript)) 0
+                let m = InProcessManager.create (Some taskAgent) (Some (fun _ -> scriptedSandbox recorder echoSandboxScript))
                 let! _ =
                     m.StartSession
                         { SessionLaunchRequest.SessionId = SessionId.create "lazy-2" |> expect }
@@ -2175,7 +2173,7 @@ let private commandTests =
                         }
                 // `0`: an OS-assigned port per session, which is the Manager's own default
                 // and all this suite needs — it reaches the session through `BootstrapUri`.
-                let m = InProcessManager.create (Some devAgent) (Some hostSandboxFor) 0
+                let m = InProcessManager.create (Some devAgent) (Some hostSandboxFor)
                 let! _ =
                     m.StartSession
                         { SessionLaunchRequest.SessionId = SessionId.create "cmd-e2e-session" |> expect }
@@ -2293,7 +2291,7 @@ let private acceptanceE2eTests =
                             onChunk (AgentResponseChunk.Text "done")
                             return AgentCompleted ("done", None)
                         }
-                let m = InProcessManager.create (Some devAgent) (Some hostSandboxFor) 0
+                let m = InProcessManager.create (Some devAgent) (Some hostSandboxFor)
                 let! _ =
                     m.StartSession
                         { SessionLaunchRequest.SessionId = SessionId.create "catchup-session" |> expect }
@@ -2414,7 +2412,7 @@ let private persistenceTests =
                 let makeLog (id: SessionId) = EventStore.openLog path id (fun () -> DateTimeOffset.UtcNow)
 
                 // First life: a client drafts and sends a message.
-                let m1 = InProcessManager.createWith None None (Some makeLog) 0
+                let m1 = InProcessManager.createWith None None (Some makeLog)
                 let! _ = m1.StartSession { SessionLaunchRequest.SessionId = sessionId }
                 let managed1 = (m1.Registered ()) |> List.head
                 let! a = connectClient (managed1.BootstrapUri + "signal") (managed1.Host.MintPeerToken ()) "ada" "Ada"
@@ -2436,7 +2434,7 @@ let private persistenceTests =
                 // Second life: a fresh Manager + Process over the same file.
                 // Its own OS-assigned port, as the first life had: the second life is a
                 // fresh Manager over the same FILE, and nothing here is about where it listens.
-                let m2 = InProcessManager.createWith None None (Some makeLog) 0
+                let m2 = InProcessManager.createWith None None (Some makeLog)
                 let! _ = m2.StartSession { SessionLaunchRequest.SessionId = sessionId }
                 let managed2 = (m2.Registered ()) |> List.head
                 let! after = managed2.Host.Log.Read None Int32.MaxValue
