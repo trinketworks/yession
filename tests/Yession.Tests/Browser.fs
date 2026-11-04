@@ -3885,12 +3885,17 @@ let editorTests =
                 Expect.equal (String.concat "; " faults) "" "every tab focus lands on is shown clear of the strip's edges"
             }
 
-        // Which item is selected is said by INK (the pivot, P2-2's successor): full ink for
-        // the one, the faintest admitted ink for the rest. This replaced a case about the
-        // strip's underline, which the pivot does not draw; the promise is the same one —
-        // the selection is visible, and drawn inside the pivot rather than clipped by it.
-        // Read where the colours settle: an item's colour TRANSITIONS, so the frame the
-        // selection landed in shows the colour it started from.
+        // The selected item is visible (the pivot, P2-2's successor), and drawn inside the
+        // pivot rather than clipped by it. This replaced a case about the strip's underline,
+        // which the pivot does not draw; the promise is the same one. HOW it is told apart is
+        // a design: today by ground (`Style.pivotItemOn`), with the ink following. So the
+        // fault is only an item that wears both the selected one's ink AND its ground — a
+        // redesign that marks the selection by either one alone stays green. The ground is
+        // read as each item paints it, its own `background-color`, transparent included:
+        // every item paints its own, so its ancestors' ground is the same behind each and
+        // tells nothing apart.
+        // Read where the colours settle: an item's colours TRANSITION, so the frame the
+        // selection landed in shows the colours it started from.
         //
         // Opened from the KEYBOARD, so no pointer is in the page. An item under the hand takes
         // full ink too (`Style.pivotItem`), and a click leaves the pointer where the toggle
@@ -3911,6 +3916,8 @@ let editorTests =
                 let! scroll = Probe.scroll page strip
                 let! onColour = Probe.computed page on "color"
                 let! offColour = Probe.computed page off "color"
+                let! onGround = Probe.computed page on "background-color"
+                let! offGround = Probe.computed page off "background-color"
                 let faults =
                     [ match measured with
                       | [ Some s; Some t ] when t.Top < s.Top - 0.5 || t.Bottom > s.Bottom + 0.5 -> "the selected item is cut off vertically"
@@ -3920,7 +3927,8 @@ let editorTests =
                       | Some scroll when scroll.Height <> scroll.ClientHeight ->
                           sprintf "the pivot overflows %gpx vertically" (scroll.Height - scroll.ClientHeight)
                       | _ -> ()
-                      if onColour = offColour then "the selected item is the same colour as the others" ]
+                      if onColour = offColour && onGround = offGround then
+                          sprintf "the selected item wears the same ink (%A) and ground (%A) as the others" onColour onGround ]
                 Expect.equal (String.concat "; " faults) "" "the selected item is drawn whole and unlike the others"
             }
 
