@@ -731,7 +731,18 @@ module Style =
     /// row's disclosure is `recordChevronPress`, in its own column at the row's trailing edge —
     /// so this is attention's colour alone, not a control: `aria-hidden` at the call site, same
     /// as the dot it wraps.
-    let recordMarkSeatWrap = "relative -ml-3 w-11 h-11 pl-3 flex items-center"
+    ///
+    /// `translate-y-0.5` (2px) nudges the whole seat/track/rider assembly down from where
+    /// `items-center` would otherwise put it. `items-center` centres on the 44px box, which
+    /// is the geometric middle of the name's 24px line — correct for the mono, all-caps id a
+    /// session starts with, but a name is usually lower-case prose, and lower-case ink sits
+    /// LOW in its line (ascenders reach the cap line; nothing but a rare descender goes past
+    /// the baseline). Measured live against Noto Sans 15px/300: the x-height centre of an
+    /// ordinary letter sits ~2px below the line's geometric middle, which is what the mark
+    /// should look level with, not the box a reader never sees. The same 2px carries the mark
+    /// to the row it rides to when unfolded (`recordMarkRider`'s own translate stacks on top
+    /// of this one, on the parent, so the ride's `--spacing-mark-slide` math is untouched).
+    let recordMarkSeatWrap = "relative -ml-3 w-11 h-11 pl-3 flex items-center translate-y-0.5"
 
     /// The row's disclosure: a thumb's whole 44px, in its own column at the row's TRAILING edge
     /// (`ManagerUi.Col.chevron`) — the table's own right rail at every width, where a disclosure
