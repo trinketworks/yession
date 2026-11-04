@@ -569,33 +569,70 @@ let hostAddressHere (hostname: string) (backend: SandboxBackend) : string option
     hostAddressFrom hostname (platform ()) backend
 
 /// Where a listener meant for this session's sandboxes binds at start, of this host's
-/// `interfaceAddresses`: what `hostAddressFrom` sends each backend to, as addresses. Loopback,
-/// which the host backend and a container on a daemon in a VM reach this host by; srt's.
-/// Never every interface: a listener there also answers the host's other networks, and on a
-/// native daemon every container of every session, which no sandbox needs. A native daemon's
-/// session network gateway is opened later, when its first container starts.
+/// `interfaceAddresses`: what `hostAddressFrom` sends each backend to, as addresses, in
+/// groups that share a port (`Interop.Doors`). Loopback, which the host backend and a
+/// container on a daemon in a VM reach this host by; srt's. Never every interface: a
+/// listener there also answers the host's other networks, and on a native daemon every
+/// container of every session, which no sandbox needs. A native daemon's session network
+/// gateway is opened later, when its first container starts.
 ///
-/// srt on Linux dials `127.0.0.2`. On macOS it dials this host's NAME, which the resolver
-/// answers with one of its interface addresses, and which one is the resolver's: so every
-/// interface address `hostRouteFrom` allows is a door there, except loopback (the first
-/// door already) and IPv6 link-local, which binds only with a zone and is never answered.
-let hostDoorsFrom (platform: Node.Base.Platform) (interfaceAddresses: string list) : string list =
+/// srt on Linux dials `127.0.0.2`, a door with a port of its own. On macOS it dials this
+/// host's NAME, which the resolver answers with one of its interface addresses, and which one
+/// is the resolver's: so every interface address `hostRouteFrom` allows is a door there, all
+/// on the one port the name's URL carries. Loopback is in that group, as the name can answer
+/// it, and IPv6 link-local is not, as it binds only with a zone and is never answered.
+let hostDoorsFrom (platform: Node.Base.Platform) (interfaceAddresses: string list) : string list list =
     if platform = Node.Base.Platform.Darwin then
-        "127.0.0.1"
-        :: (interfaceAddresses
-            |> List.filter (fun a -> not (a.StartsWith "127.") && a <> "::1" && not (a.ToLowerInvariant().StartsWith "fe80:")))
-    else [ "127.0.0.1"; "127.0.0.2" ]
+        [ "127.0.0.1"
+          :: (interfaceAddresses
+              |> List.filter (fun a -> not (a.StartsWith "127.") && a <> "::1" && not (a.ToLowerInvariant().StartsWith "fe80:"))) ]
+    else [ [ "127.0.0.1" ]; [ "127.0.0.2" ] ]
 
 /// `hostDoorsFrom` on this host.
-let hostDoorsHere () : string list = hostDoorsFrom (platform ()) (NetworkInterfaces.addresses ())
+let hostDoorsHere () : string list list = hostDoorsFrom (platform ()) (NetworkInterfaces.addresses ())
+
+/// The door, of `hostDoorsFrom`'s, whose port a sandbox on this backend is told: the one its
+/// name (`hostAddressFrom`) arrives at, or one in the same group. srt on Linux: `127.0.0.2`.
+/// Every other: loopback. srt on macOS arrives somewhere in loopback's group. A container on
+/// a daemon in a VM arrives at loopback, which the daemon forwards. A container on a native
+/// daemon arrives at its network's gateway, which is opened on the first door's port, which
+/// is loopback's (`Interop.Doors`).
+let hostDoorAddressFrom (platform: Node.Base.Platform) (backend: SandboxBackend) : string =
+    match backend with
+    | SrtBackend when platform <> Node.Base.Platform.Darwin -> "127.0.0.2"
+    | SrtBackend
+    | DockerBackend
+    | HostBackend -> "127.0.0.1"
+
+/// How a sandbox reaches one listener on this host: the name it dials, and the port of the
+/// door that name arrives at. One value, so that a URL cannot pair a name with another
+/// door's port.
+type HostDoor = { Host : string; Port : int }
+
+/// The `HostDoor` of the listener whose doors answer `portAt`, for a sandbox on this backend:
+/// none when the backend has no route to this host (`hostAddressFrom`), or the listener has no
+/// door where it arrives.
+let hostDoorFrom
+    (hostname: string)
+    (platform: Node.Base.Platform)
+    (portAt: string -> int option)
+    (backend: SandboxBackend)
+    : HostDoor option =
+    match hostAddressFrom hostname platform backend, portAt (hostDoorAddressFrom platform backend) with
+    | Some host, Some port -> Some { Host = host; Port = port }
+    | _ -> None
+
+/// `hostDoorFrom` on the host this process runs on.
+let hostDoorHere (hostname: string) (portAt: string -> int option) (backend: SandboxBackend) : HostDoor option =
+    hostDoorFrom hostname (platform ()) portAt backend
 
 /// One allowlist entry for `address` at `port`, in the form srt reads: an IPv6 literal is
 /// bracketed, or its colons would be read as the port's.
 let private atPort (address: string) (port: int) : string =
     if address.Contains ":" then sprintf "[%s]:%d" address port else sprintf "%s:%d" address port
 
-/// What a sandbox's egress must allow for it to reach the listener at `port` on THIS host,
-/// named `host` (`hostAddressFrom`'s answer) — that listener, and nothing else on the box.
+/// What a sandbox's egress must allow for it to reach the listener at `door` on THIS host
+/// (`hostDoorFrom`) — that listener, and nothing else on the box.
 ///
 /// srt on macOS is the case this exists for. Its proxy resolves an allowed NAME before
 /// dialling and refuses any address assigned to one of this host's own interfaces, unless
@@ -603,7 +640,7 @@ let private atPort (address: string) (port: int) : string =
 /// guard, from 0.0.77). The name macOS gives is the box's own, so it resolves to exactly such
 /// an address — under Tailscale, the tailnet one — and the name alone was refused on every
 /// request: a confined `git push` answered 403 by srt's own proxy, "resolved to one of this
-/// host's addresses". So the name comes with each of `ownAddresses` at `port`, which is the
+/// host's addresses". So the name comes with each of `ownAddresses` at its port, which is the
 /// carve-out srt documents for this: reaching an address by name grants nothing its literal
 /// entry does not, and the literal entry is one port.
 ///
@@ -613,17 +650,16 @@ let hostRouteFrom
     (ownAddresses: string list)
     (platform: Node.Base.Platform)
     (backend: SandboxBackend)
-    (host: string)
-    (port: int)
+    (door: HostDoor)
     : string list =
     match backend with
     | SrtBackend when platform = Node.Base.Platform.Darwin ->
-        atPort host port :: (ownAddresses |> List.map (fun address -> atPort address port))
-    | _ -> [ host ]
+        atPort door.Host door.Port :: (ownAddresses |> List.map (fun address -> atPort address door.Port))
+    | _ -> [ door.Host ]
 
 /// `hostRouteFrom` on the host this process runs on.
-let hostRouteHere (ownAddresses: string list) (backend: SandboxBackend) (host: string) (port: int) : string list =
-    hostRouteFrom ownAddresses (platform ()) backend host port
+let hostRouteHere (ownAddresses: string list) (backend: SandboxBackend) (door: HostDoor) : string list =
+    hostRouteFrom ownAddresses (platform ()) backend door
 
 /// What one set of granted leaves comes to, each channel beside the others because they
 /// are one fact read by different consumers: the host family closes path SETS over the

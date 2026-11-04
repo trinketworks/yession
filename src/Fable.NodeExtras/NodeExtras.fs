@@ -1207,6 +1207,10 @@ module StreamError =
     let describe (error: StreamError) : string =
         if isNull (box error) || System.String.IsNullOrEmpty error.message then Thrown.describe (box error) else error.message
 
+    /// The errno the error carries (`EADDRINUSE`), read as `Errors.errno` reads one off a
+    /// throw: an `error` event carries the same `Error` a call would have thrown.
+    let errno (error: StreamError) : string option = Errors.errno (unbox<exn> (box error))
+
     [<Emit("new Error($0)")>]
     let private withMessage (message: string) : StreamError = jsNative
 

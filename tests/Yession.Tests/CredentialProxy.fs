@@ -211,7 +211,7 @@ type private Reply = { Status : int; Text : string }
 /// The connection a client dials, and the `proxy-authorization` line its `CONNECT` carries —
 /// the capability its proxy URL held, or none.
 let private dial (proxy: Proxy) (capability: string option) : Duplex * string =
-    connectTcp (proxy.Port, "127.0.0.1"),
+    connectTcp (proxy.PortAt "127.0.0.1" |> Option.get, "127.0.0.1"),
     capability
     |> Option.map (fun held ->
         sprintf "Proxy-Authorization: Basic %s\r\n" (Convert.ToBase64String (Text.Encoding.UTF8.GetBytes ("yession:" + held))))
@@ -296,7 +296,7 @@ let private withProxyTo (egress: Egress) (upstream: Upstream) (body: Proxy -> As
         let dir =
             let made = TestFiles.tempDir "yession-credproxy-"
             Fs.canonical made |> Option.defaultValue made
-        let! proxy = CredentialProxy.start [ "127.0.0.1" ] [ route; other ] egress (fun _ -> upstream.Origin) (dir + "/trust.pem") ignore
+        let! proxy = CredentialProxy.start [ [ "127.0.0.1" ] ] [ route; other ] egress (fun _ -> upstream.Origin) (dir + "/trust.pem") ignore
         try
             do! body proxy
         finally
@@ -463,12 +463,12 @@ let private portsTests =
                 withProxy upstream (fun proxy ->
                     async {
                         let values, provision =
-                            provide proxy DockerBackend (Some "host.docker.internal") admitted [ ProxyValue.Https; ProxyValue.CaFile ]
+                            provide proxy DockerBackend (Sandboxes.hostDoorFrom "box" Node.Base.Platform.Linux proxy.PortAt DockerBackend) admitted [ ProxyValue.Https; ProxyValue.CaFile ]
                             |> expect
                         let capability = proxy.Admit DockerBackend admitted |> expect
                         Expect.equal
                             (Map.tryFind ProxyValue.Https values)
-                            (Some (sprintf "http://yession:%s@host.docker.internal:%d" capability proxy.Port))
+                            (Some (sprintf "http://yession:%s@host.docker.internal:%d" capability (proxy.PortAt "127.0.0.1" |> Option.get)))
                             "its own URL, with the capability that admits it"
                         Expect.equal (Map.tryFind ProxyValue.CaFile values) (Some "/run/yession/proxy/bundle.pem") "the bundle, where it is mounted"
                         Expect.equal
@@ -483,7 +483,7 @@ let private portsTests =
             do!
                 withProxy upstream (fun proxy ->
                     async {
-                        let values, provision = provide proxy HostBackend (Some "127.0.0.1") admitted [ ProxyValue.CaDir ] |> expect
+                        let values, provision = provide proxy HostBackend (Some { Host = "127.0.0.1"; Port = 1 }) admitted [ ProxyValue.CaDir ] |> expect
                         Expect.equal (Map.tryFind ProxyValue.CaDir values) (Some proxy.AuthorityDir) "the directory itself"
                         Expect.isEmpty provision.Binds "nothing to mount"
                         Expect.isTrue
@@ -500,7 +500,7 @@ let private portsTests =
                 withProxy upstream (fun proxy ->
                     async {
                         for asked in [ ProxyValue.Https; ProxyValue.CaFile; ProxyValue.CaDir ] do
-                            match provide proxy SrtBackend (Some "127.0.0.2") admitted [ asked ] with
+                            match provide proxy SrtBackend (Some { Host = "127.0.0.2"; Port = 1 }) admitted [ asked ] with
                             | Ok _ -> failwithf "an srt sandbox was given %A" asked
                             | Error reason -> Expect.stringContains reason "container" (sprintf "%A refused, saying where it is had" asked)
                     })

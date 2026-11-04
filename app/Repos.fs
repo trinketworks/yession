@@ -312,16 +312,16 @@ module GitRoute =
     /// harness's `file://` fixtures, whose verbs never ask a remote over HTTP.
     let none : GitRoute = { Config = []; Lend = fun _ -> [], ignore }
 
-    /// The route through `gateway`, at `host` as the git sandbox reaches this process
-    /// (`Sandboxes.hostAddressHere`). One cap for the session's own git, and a borrower per
+    /// The route through `gateway`, at `door` as the git sandbox reaches it
+    /// (`Sandboxes.hostDoorHere`). One cap for the session's own git, and a borrower per
     /// verb: two verbs can run at once, and neither is a terminal.
-    let through (gateway: GitGateway.Gateway) (host: string) : GitRoute =
-        { Config = GitGateway.gitConfig host gateway.Port (gateway.Grant GitGateway.Routed.SessionGit)
+    let through (gateway: GitGateway.Gateway) (door: Sandboxes.HostDoor) : GitRoute =
+        { Config = GitGateway.gitConfig door (gateway.Grant GitGateway.Routed.SessionGit)
           Lend =
             fun lender ->
                 let borrower = GitGateway.Borrower.Verb (Guid.NewGuid ())
                 let secret = gateway.Lend GitGateway.Routed.SessionGit borrower lender
-                let key, value = GitGateway.loanConfig host gateway.Port secret
+                let key, value = GitGateway.loanConfig door secret
                 [ key, value ], (fun () -> gateway.Retire borrower) }
 
 type ReposConfig =

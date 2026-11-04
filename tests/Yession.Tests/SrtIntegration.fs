@@ -567,7 +567,7 @@ let siblings =
             let url = sprintf "http://%s:%d/" host (serverPort server)
             let workspace = TestFiles.tempDir "yession-srt-"
             let! wider =
-                startSandbox (withStandIns (policyIn workspace (Sandboxes.hostRouteHere (Interop.ownAddresses ()) SrtBackend host (serverPort server))))
+                startSandbox (withStandIns (policyIn workspace (Sandboxes.hostRouteHere (Interop.ownAddresses ()) SrtBackend { Host = host; Port = serverPort server })))
             let! narrower = startSandbox (withStandIns (policyIn workspace []))
             // Node's `fetch` takes the proxy srt names only when told to.
             let fetch (sandbox: Sandbox) =

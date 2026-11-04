@@ -401,9 +401,10 @@ let private trustBundle (authority: Authority) : string =
 let direct (host: string) : string = "https://" + host
 
 type Proxy =
-    { /// The TCP port it listens on, at every address it answers on — the door for a sandbox
-      /// with direct egress, which a client passes only with a capability from `Admit`.
-      Port : int
+    { /// The TCP port the door at an address listens on (`Interop.Doors`) — the door for a
+      /// sandbox with direct egress, which a client passes only with a capability from `Admit`.
+      /// Ask it with `Sandboxes.hostDoorFrom`.
+      PortAt : string -> int option
       /// Answer at one more address: where a session's containers reach this host on its
       /// Docker network (`DockerSandbox.Network.Reached`).
       Open : string -> Async<Result<unit, string>>
@@ -455,7 +456,7 @@ let presentedCapability (proxyAuthorization: string) : string option =
 /// `report` is where a fault goes that no client can be told about any more — once an
 /// answer's head is out there is nothing left to say it on.
 let start
-    (addresses: string list)
+    (addresses: string list list)
     (routes: CredentialRoute list)
     (egress: Egress)
     (upstream: string -> string)
@@ -683,7 +684,7 @@ let start
     async {
         let! doors = openDoors "the credential proxy" serve addresses
         return
-            { Port = doors.Port
+            { PortAt = doors.PortAt
               Open = doors.Open
               Admit =
                 fun backend sandbox ->
@@ -752,15 +753,15 @@ let lend (proxy: Proxy) (route: CredentialRoute) (variables: string list) (termi
 /// container's filesystem is its image's and the session's data directory means nothing there.
 let private inContainer = "/run/yession/proxy"
 
-/// What the proxy provides a sandbox on `backend` that asked for `asked`, reaching this host as
-/// `hostAddress` — each value as THIS sandbox sees it, and what it needs to use them. Refused,
-/// saying why, for an srt sandbox: it is not given the api route (`forwardApi`), so nothing
-/// should ask on its behalf, and one that did is told so rather than handed paths to a proxy
-/// it has no way to.
+/// What the proxy provides a sandbox on `backend` that asked for `asked`, reaching the proxy at
+/// `door` (`Sandboxes.hostDoorFrom`) — each value as THIS sandbox sees it, and what it needs
+/// to use them. Refused, saying why, for an srt sandbox: it is not given the api route
+/// (`forwardApi`), so nothing should ask on its behalf, and one that did is told so rather
+/// than handed paths to a proxy it has no way to.
 let provide
     (proxy: Proxy)
     (backend: SandboxBackend)
-    (hostAddress: string option)
+    (door: Sandboxes.HostDoor option)
     (sandbox: SandboxRef)
     (asked: ProxyValue list)
     : Result<Map<ProxyValue, string> * WorkSandboxes.Provision, string> =
@@ -777,13 +778,13 @@ let provide
         | ProxyValue.CaFile -> Ok (seen proxy.TrustFile (inContainer + "/bundle.pem"))
         | ProxyValue.CaDir -> Ok (seen proxy.AuthorityDir (inContainer + "/authority"))
         | ProxyValue.Https ->
-            match hostAddress with
+            match door with
             | None ->
                 Error (sprintf "sandbox '%s' has no way to reach this host. No proxy URL can work from it." (SandboxRef.render sandbox))
-            | Some host ->
+            | Some door ->
                 proxy.Admit backend sandbox
                 |> Result.map (fun capability ->
-                    sprintf "http://yession:%s@%s:%d" capability host proxy.Port, WorkSandboxes.Provision.empty)
+                    sprintf "http://yession:%s@%s:%d" capability door.Host door.Port, WorkSandboxes.Provision.empty)
     match backend with
     | SrtBackend ->
         Error (
@@ -804,12 +805,12 @@ let provide
             (Ok (Map.empty, WorkSandboxes.Provision.empty))
 
 /// The session's proxy, as a sandbox registry asks it: `provide` for each sandbox's backend and
-/// the name that sandbox reaches this host by, and a sandbox forgotten through the TCP door
-/// when it leaves.
+/// the door that sandbox reaches the proxy at, of the proxy's ports (`doorOf`), and a sandbox
+/// forgotten through the TCP door when it leaves.
 let provider
     (proxy: Proxy)
     (backendOf: SandboxRef -> SandboxBackend)
-    (hostAddressOf: SandboxRef -> string option)
+    (doorOf: (string -> int option) -> SandboxRef -> Sandboxes.HostDoor option)
     : WorkSandboxes.ProxyProvider =
-    { Provide = fun sandbox asked -> provide proxy (backendOf sandbox) (hostAddressOf sandbox) sandbox asked
+    { Provide = fun sandbox asked -> provide proxy (backendOf sandbox) (doorOf proxy.PortAt sandbox) sandbox asked
       Release = proxy.Dismiss }
