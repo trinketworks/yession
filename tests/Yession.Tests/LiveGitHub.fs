@@ -75,12 +75,27 @@ let tests =
         // What a watch leans on to poll cheaply: GitHub answers a look asked with the ETags
         // of the last one with 304, which it does not count against the rate limit. A stub
         // answers 304 because it was written to; this is GitHub saying it still does.
-        testCaseAsync "a second look at an unmoved pull request comes back unchanged" <|
+        //
+        // A settled pull request is not a still resource. GitHub's reply embeds its head and
+        // base repositories whole, `pushed_at` included, so a push to ANY branch of this
+        // repository gives #903 a new body and a new ETag, and GitHub rightly answers 200.
+        // A busy repository pushes often enough to land between two looks a second apart
+        // (master release run 40773652729). So what this asserts is the half that does not
+        // depend on that: a look never answers with a body under the very ETags it asked
+        // with. GitHub ignoring `if-none-match` answers exactly that way, and a resource
+        // that moved never does.
+        testCaseAsync "a second look at an unmoved pull request is never read again under its own ETags" <|
             async {
                 match! fetch token settled PrEtags.none None with
                 | PrChanged (snapshot, etags) ->
-                    let! again = fetch token settled etags (Some snapshot)
-                    Expect.equal again PrUnchanged "nothing moved, so nothing is said"
+                    match! fetch token settled etags (Some snapshot) with
+                    | PrUnchanged -> ()
+                    | PrChanged (_, again) ->
+                        Expect.notEqual
+                            again
+                            etags
+                            "GitHub answered a body under the ETags it was asked with, so it no longer answers if-none-match with 304"
+                    | PrFetchFailed failure -> failwithf "the second look did not read: %A" failure
                 | other -> failwithf "the first look did not read: %A" other
             }
     ]
