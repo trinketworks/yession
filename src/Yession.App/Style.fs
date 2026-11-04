@@ -3847,38 +3847,26 @@ module Style =
     /// phone without the band moving to make room for it.
     let queueVerb = btnIconBareTouch
 
-    /// Extra clearance before Delete, on top of the gap the row already spends between
-    /// Move-up and Move-down. Reorder and delete used to sit in one evenly-spaced row of
-    /// three — a destructive control 4px from a frequent one, with nothing between them but
-    /// the icon each wears. This is not the hit area (that is `hitTouch`, which every verb
-    /// here now wears) — it grows the DISTANCE a thumb has to travel wrong to reach the one
-    /// that destroys.
+    /// Extra clearance before Delete, held over from the list row this pair used to ride
+    /// (reorder and delete there sat in one evenly-spaced row of three — a destructive
+    /// control 4px from a frequent one, with nothing between them but the icon each wears).
+    /// Now Delete rides the composer's own action row (`draftCommit`) beside Done; `ml-2`
+    /// still widens the gap PAST `draftCommit`'s own `gap-1`, because the one that destroys
+    /// should cost a thumb more distance than the one beside it.
     let private queueDeleteGap = "ml-2"
     /// Delete, and delete ARMED — a second press from dropping the message, which it says by
     /// wearing the err fill at rest, because a touch has no hover to hold a warning up.
     let queueVerbDelete = cls [ btnIconBareDanger; hitTouch; queueDeleteGap ]
     let queueVerbDeleteArmed = cls [ btnIconBareDangerArmed; hitTouch; queueDeleteGap ]
 
-    /// The band's OWN surface while one entry is open for editing: `queueItem`'s own height
-    /// and gutter, spent on Delete and Done instead of the list — the same row, a different
-    /// moment, because a reader should feel the band hold its ground rather than a second box
-    /// appearing beside it.
-    ///
-    /// `justify-end`, not `justify-between`: the two controls are one action group (finish
-    /// editing), not two unrelated things pinned to the row's opposite edges. `gap-2` is the
-    /// whole of the distance between them — close enough to read as a pair, same as a
-    /// dialog's footer. The far-apart spacing this replaced was reasoning for a *scrolling
-    /// list* of rows, which this single static bar never was.
-    let queueEditBar = "flex items-center justify-end gap-2 min-h-10 py-2 px-4 wide:px-rail bg-surface"
-
     /// Done: the way out of editing a queued message, back to the list and the local peer's
-    /// own composer — and the one verb of THIS surface (docs/visual-design.md, "One verb per
-    /// surface"). A tick, not a word: the same bare-blue weight the composer's own Send
-    /// wears (`btnComposerSend`) — blue being what the doctrine spends on the one bare verb
-    /// that IS the surface's act — with `Icon.check` standing in for `Icon.send` because this
-    /// one finishes editing rather than sends. Sized and hit-grown like Delete beside it
-    /// (`queueVerbDelete`), so the pair reads as two icons of one size, not a bin beside a
-    /// pill.
+    /// own composer — riding the composer's own action row (`draftCommit`, `View.drafts`),
+    /// the same place and focus order as Send on the ordinary composer below. A tick, not a
+    /// word: the same bare-blue weight the composer's own Send wears (`btnComposerSend`) —
+    /// blue being what the doctrine spends on the one bare verb that IS the surface's act —
+    /// with `Icon.check` standing in for `Icon.send` because this one finishes editing rather
+    /// than sends. Sized and hit-grown like Delete beside it (`queueVerbDelete`), so the pair
+    /// reads as two icons of one size, not a bin beside a pill.
     let queueDone = cls [ btnIconBareBase; "cursor-pointer text-blue hover:text-blue-up-1 pressed:text-blue-up-1"; hitTouch ]
 
     // --- Agent surfaces: what the agent draws for people to answer (A2UI) ----------------------

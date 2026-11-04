@@ -1511,27 +1511,15 @@ module View =
             |> List.filter (fun (id, surface) -> Set.contains id model.FoldedSurfaces && Map.containsKey "root" surface.Components)
             |> List.map (fst >> foldedSurface dispatch model)
         match ClientModel.editingQueue model with
-        | Some id ->
-            // The band's OWN surface, while this entry sits in the composer instead of the
-            // list (`View.drafts`): Delete and Done where the list was, because there is
-            // nothing left here to reorder against an entry that is not drawn, and the
-            // per-row delete this replaced is gone with it (`Style.queueEditBar`).
-            //
-            // The second press of a two-press delete: armed by the first (below), and taken
-            // back on its own after `ClientModel.armedMs` if nobody follows through.
-            let armed = model.QueueDeleteArmed = Some id
-            let deleteFace = if armed then Style.queueVerbDeleteArmed else Style.queueVerbDelete
-            let deleteLabel = if armed then "Confirm delete" else "Delete"
-            let onDelete = if armed then DeleteQueuedMsg id else ArmQueueDeleteMsg (Some id)
-            // The surfaces put away keep their lines above the bar: editing a message puts
-            // nothing else away.
-            let above = if List.isEmpty folded then Lit.nothing else html $"""<section class="{Style.queue}">{folded}</section>"""
-            html $"""
-                {above}
-                <section class="{Style.queueEditBar}" data-message-queue>
-                  <button type="button" class="{deleteFace}" aria-label="{deleteLabel}" data-queue-delete="{QueueId.value id}" data-queue-delete-armed="{if armed then "true" else "false"}" @click={Ev(fun _ -> dispatch onDelete)}>{Icon.bin}</button>
-                  <button type="button" class="{Style.queueDone}" aria-label="Done" data-queue-done @click={Ev(fun _ -> dispatch CloseQueueEditMsg)}>{Icon.check}</button>
-                </section>"""
+        | Some _ ->
+            // This band draws the LIST; while one entry is pulled out of it into the composer
+            // (`View.drafts`), there is nothing here to reorder against an entry that is not
+            // drawn, so the band draws nothing of its own. Delete and Done now live where
+            // Send lives — the composer's own action row — not in a second surface of this
+            // band's own. A folded surface is not the thing being edited, so it keeps its
+            // line here regardless.
+            if List.isEmpty folded then Lit.nothing
+            else html $"""<section class="{Style.queue}">{folded}</section>"""
         | None ->
             // Only entries the wait has cleared (`ClientModel.QueueShown`) — most sends drain
             // before it fires, so the band that used to open and shut on every ordinary send now
@@ -1708,10 +1696,18 @@ module View =
             // The composer's OWN surface while a queued message is open for editing: the SAME
             // body the band's one-line summary named (`BodyKey.queued id`), editable here
             // instead of there — nothing moved but which host is bound to it. No Send: the
-            // message is already queued, so there is nothing here to commit, and Done (the
-            // band's own surface, `View.queue`) is the way out rather than a second send.
-            // Collapsed drafts and the "new message" link are both about composing something
-            // NEW, which this is not, so neither draws while this is open.
+            // message is already queued, so there is nothing here to commit. Delete and Done
+            // ride the composer's own action row, where Send normally stands — same screen
+            // position, same place in focus order, as the ordinary composer below. Collapsed
+            // drafts and the "new message" link are both about composing something NEW, which
+            // this is not, so neither draws while this is open.
+            //
+            // The second press of a two-press delete: armed by the first (below), and taken
+            // back on its own after `ClientModel.armedMs` if nobody follows through.
+            let armed = model.QueueDeleteArmed = Some id
+            let deleteFace = if armed then Style.queueVerbDeleteArmed else Style.queueVerbDelete
+            let deleteLabel = if armed then "Confirm delete" else "Delete"
+            let onDelete = if armed then DeleteQueuedMsg id else ArmQueueDeleteMsg (Some id)
             html $"""
                 {composerTray dispatch model}
                 <section class="{Style.composer}" data-draft-editor data-queue-editor="{QueueId.value id}">
@@ -1720,6 +1716,13 @@ module View =
                   <article class="{Style.draftBox}">
                     <div class="{Style.draftBody}">
                       <div class="{Style.draftInput}" data-rich-body="{BodyKey.queued id}" data-rich-readonly="false" data-queue-input="{QueueId.value id}"></div>
+                    </div>
+                    <div class="{Style.draftActionsRow}">
+                      <div class="{Style.draftLead}"></div>
+                      <div class="{Style.draftCommit}">
+                        <button type="button" class="{deleteFace}" aria-label="{deleteLabel}" data-queue-delete="{QueueId.value id}" data-queue-delete-armed="{if armed then "true" else "false"}" @click={Ev(fun _ -> dispatch onDelete)}>{Icon.bin}</button>
+                        <button type="button" class="{Style.queueDone}" aria-label="Done" data-queue-done @click={Ev(fun _ -> dispatch CloseQueueEditMsg)}>{Icon.check}</button>
+                      </div>
                     </div>
                   </article>
                 </section>"""
