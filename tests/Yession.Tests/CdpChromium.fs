@@ -98,7 +98,9 @@ let findingTests =
 // A Chromium of each case's own, not the suite's: closing is what is under test, and the
 // suite's browser has to outlive every case. The camera closes its browser right after the
 // picture is written, and a profile removal begun while the killed browser was still going
-// raced it into `ENOTEMPTY` — a written picture that exited 1.
+// raced it into `ENOTEMPTY` — a written picture that exited 1. Later a helper that outlived the
+// browser (its network service, still starting) made the profile again after close had removed
+// it and answered `None`: about one master run in two hundred failed the second case below.
 
 /// A browser of this case's own, closed: what it was, and what closing answered.
 [<Waits>]

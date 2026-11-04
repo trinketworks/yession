@@ -39,17 +39,19 @@ module Chromium =
           /// The address `Cdp.connect` takes for the page it opened on.
           Page: string
           /// The profile directory it runs on, made for it and removed with it.
-          Profile: string }
-
-    /// How the profile is removed once the browser is gone: retried, because "gone" is the
-    /// browser's own process, and its helpers — renderer, GPU, network service, crash handler —
-    /// are not its process group's to take with it (it has none: a detached browser would
-    /// outlive a Ctrl-C to the terminal that started it). They end on their own when it does,
-    /// a few milliseconds later, and a helper still writing in that window puts an entry into a
-    /// directory the removal has just emptied: `ENOTEMPTY`, after the picture was taken. Ten
-    /// retries 50ms apart and growing is 2.75s, far past any helper's end.
-    let private removeProfile (profile: string) : unit =
-        Files.removeTreeRetrying 10 50 profile
+          Profile: string
+          /// Settles once the browser AND every helper it started have ended. The helpers —
+          /// zygotes, renderers, GPU, network and storage services, crash handlers — are not
+          /// the browser's process, and not its process group's to take with it (it has none:
+          /// a detached browser would outlive a Ctrl-C to the terminal that started it). A
+          /// killed browser's helpers end on their own, tens of milliseconds to a second
+          /// later, and until then they write into the profile: a network service still
+          /// starting up re-made the profile directory after it was removed. What they all
+          /// share is the browser's stderr, which each inherits, and the OS closes that pipe
+          /// only when the last process holding it has ended. So this is the child's `close`,
+          /// which Node emits after its exit AND that pipe's end — and also after a spawn that
+          /// failed, which has no helpers.
+          Gone: JS.Promise<unit> }
 
     /// Whether the browser's process is over — or never was, for a spawn that failed, which
     /// has no pid and may never report an exit at all.
@@ -60,18 +62,22 @@ module Chromium =
 
     /// Stop the browser at once and remove its profile, without waiting for it to end: for the
     /// `exit` listener `launch` hangs, which runs in a process that is already leaving and can
-    /// wait for nothing. The retries in `removeProfile` are all this one has.
+    /// wait for nothing, `Gone` included. Its removal is retried, because the browser and its
+    /// helpers are still writing into the profile as it goes (`ENOTEMPTY`): ten retries 50ms
+    /// apart and growing is 2.75s. That is a best effort, and only this path makes it.
     let private abandon (launched: Launched) : unit =
         // The child's own `kill`, not a signal to its pid: it does nothing to a child already
         // reaped, where a pid may since have been handed to somebody else's process.
         launched.Process.kill "SIGKILL" |> ignore
-        removeProfile launched.Profile
+        Files.removeTreeRetrying 10 50 launched.Profile
 
-    /// Stop the browser, wait until its process has ended, and remove its profile. SIGKILL
-    /// rather than a request to close: nothing in the profile is wanted afterwards, and a
-    /// browser asked politely goes on writing to it while it goes. Waiting for the exit first is
-    /// the point: a killed browser is not a dead one until the OS says so, and a removal begun
-    /// in between walks a directory it is still writing into.
+    /// Stop the browser, wait until it and every helper it started have ended (`Gone`), and
+    /// remove its profile. SIGKILL rather than a request to close: nothing in the profile is
+    /// wanted afterwards, and a browser asked politely goes on writing to it while it goes.
+    /// Waiting for `Gone` first is the point: a killed browser is not a dead one until the OS
+    /// says so, its helpers outlive it, and a removal begun while any of them runs either
+    /// walks a directory still being written into or is undone by a helper that writes into
+    /// it afterwards — a removal that answered `None` for a profile that was still there.
     ///
     /// Answers why the profile could not be removed, or `None` when it was. It does not throw
     /// for that: the profile is a temporary directory, and whatever the browser was started
@@ -82,11 +88,10 @@ module Chromium =
         promise {
             let child = launched.Process
             if not (ended child) then
-                let exited = Promise.create (fun resolve _ -> ChildProcessStreams.onExit child (fun _ -> resolve ()))
                 child.kill "SIGKILL" |> ignore
-                do! exited
+            do! launched.Gone
             try
-                removeProfile launched.Profile
+                Files.removeTree launched.Profile
                 return None
             with error ->
                 return Some (sprintf "Chromium's profile %s was not removed: %s" launched.Profile error.Message)
@@ -154,7 +159,10 @@ module Chromium =
                           Env = ChildEnv.Adding Map.empty
                           Streams = { Stdin = Stdio.Ignore; Stdout = Stdio.Ignore; Stderr = Stdio.Pipe }
                           Detached = false }
-                let launched = { Process = child; Page = ""; Profile = profile }
+                // `Gone` rests on the stderr pipe above, which every helper inherits: with stderr
+                // ignored, `close` would hear the browser's own exit and nothing after it.
+                let gone = Promise.create (fun resolve _ -> ChildProcessStreams.onClose child (fun _ -> resolve ()))
+                let launched = { Process = child; Page = ""; Profile = profile; Gone = gone }
                 // A process that is leaving has nobody left to tell that the profile would not
                 // go, and a throw here would change the code it leaves with.
                 Processes.onEnding "exit" (fun () -> try abandon launched with _ -> ())
