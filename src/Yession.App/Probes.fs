@@ -389,6 +389,17 @@ module Probes =
         /// from one that was stopped before it could: Chromium moves a smooth scroll a frame
         /// or more after it is asked for, and more on a busy machine.
         | SmoothScrollToTop
+        /// The composer grown 160px taller, so the conversation's box shrinks under its reader
+        /// as it does while the composer's line unfolds: at once with a parameter of 0, or with
+        /// 1 inside the next wheel turned or key pressed on the conversation — after it is asked
+        /// for and before the scroll it asks for can move. From then every write to the
+        /// conversation's scroll is noted (`ScrollWrites`). Empty once armed.
+        | ComposerGrows
+        /// Every write to the conversation's scroll since `ComposerGrows` grew the composer, each
+        /// with the value written, where the scroll stood and the page's own frames that wrote
+        /// it — any one of them ends a scroll the browser has in flight. Empty while there is
+        /// none, and until the composer has grown.
+        | ScrollWrites
         /// The chapter name field for `msg-filler-8`: 1 or 0 for whether it is empty, whether
         /// it has a placeholder to offer, and whether that placeholder is painted in any ink.
         | ChapterPlaceholder
@@ -458,6 +469,8 @@ module Probes =
             | Measure.Burst -> "burst"
             | Measure.LoneRecordInQuietFrame -> "lone-record-in-quiet-frame"
             | Measure.SmoothScrollToTop -> "smooth-scroll-to-top"
+            | Measure.ComposerGrows -> "composer-grows"
+            | Measure.ScrollWrites -> "scroll-writes"
             | Measure.ChapterPlaceholder -> "chapter-placeholder"
             | Measure.ItemActionsUnderThumb -> "item-actions-under-thumb"
             | Measure.AgentCaretOnLetters -> "agent-caret-on-letters"
@@ -492,6 +505,8 @@ module Probes =
               Measure.Burst
               Measure.LoneRecordInQuietFrame
               Measure.SmoothScrollToTop
+              Measure.ComposerGrows
+              Measure.ScrollWrites
               Measure.ChapterPlaceholder
               Measure.ItemActionsUnderThumb
               Measure.AgentCaretOnLetters

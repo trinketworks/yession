@@ -1467,6 +1467,14 @@ type ReaderMove =
     | Arrived
     /// The end moved and the reader did not: a render drew more, or less.
     | Measured of TailPlace
+    /// The reader has asked the surface to scroll UP — a wheel, a finger drawn down it, a key
+    /// aimed at it — and the scroll has not moved yet. A scroll started is a frame or more from
+    /// its first move, and a reader who has started one is leaving; `Scrolled` says where they
+    /// went once it has moved.
+    | Leaving
+    /// A finger that drew a surface down (`Leaving`) lifted with the scroll where it stood:
+    /// a tap that wandered, not a scroll, and the reader is where they were.
+    | Stayed of TailPlace
 
 /// How a reader's intent moves. Intent is the READER's: only something they did moves it —
 /// a scroll, a fold, a press, a jump (`ClientModel.update`). A render growing the surface
@@ -1484,16 +1492,26 @@ module TailReader =
     /// Arriving at the end follows it, by any route. Leaving is only ever UP: a scroll down
     /// that stops short is a reader on their way back, and keeps what they had. A fold, or a
     /// press held in place, leaves a reader following only if the end is still where they are.
+    ///
+    /// Asking to scroll up is leaving already, before the scroll moves: a follower is put back
+    /// at the end on every resize, and a write to the scroll ends the one the reader has just
+    /// started. Following resumes the way it always does — the reader's own scroll arriving at
+    /// the end, a jump back, a send. A reader already behind stays as far back as they were.
     let next (move: ReaderMove) (now: Behind option) : Behind option =
         match move, now with
         | ReaderMove.Arrived, _
         | ReaderMove.Scrolled (_, TailPlace.AtEnd), _
-        | ReaderMove.Opened TailPlace.AtEnd, _ -> None
+        | ReaderMove.Opened TailPlace.AtEnd, _
+        | ReaderMove.Stayed TailPlace.AtEnd, _ -> None
         | ReaderMove.Scrolled (true, place), _
         | ReaderMove.Opened place, _ -> Some (behind place)
         | ReaderMove.Scrolled (false, _), None
+        | ReaderMove.Stayed _, None
         | ReaderMove.Measured _, None -> None
+        | ReaderMove.Leaving, None -> Some Behind.Near
+        | ReaderMove.Leaving, Some already -> Some already
         | ReaderMove.Scrolled (false, place), Some _
+        | ReaderMove.Stayed place, Some _
         | ReaderMove.Measured place, Some _ -> Some (behind place)
 
 /// Which of its two faces the sidebar column shows.

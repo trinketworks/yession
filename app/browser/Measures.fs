@@ -415,6 +415,36 @@ let private smoothScrollToTop () : JS.Promise<float list> =
             Scrolling.smoothlyTo el 0.0
             [ from ])
 
+/// The writes to the conversation's scroll since the composer grew (`composerGrows`), or `None`
+/// before it has.
+let mutable private scrollWrites : ResizeArray<string> option = None
+
+let private composerGrows (onScrollAsked: bool) : string list =
+    match first Root.Document "#shell [data-conversation]", first Root.Document "#shell [data-composer-tray]" with
+    | Some conversation, Some tray ->
+        let grow () =
+            let writes = ResizeArray<string> ()
+            Scrolling.noteWrites conversation writes.Add
+            scrollWrites <- Some writes
+            setStyleProperty (tray :?> HTMLElement) "padding-bottom" "160px"
+        if onScrollAsked then
+            // Bubbling at the window: after the page's own listeners, the product's among them,
+            // have heard it, and before the browser's scroll in answer to it has moved.
+            let rec asked (event: Event) =
+                match EventTargets.asNode event.target with
+                | Some target when conversation.contains target ->
+                    Browser.Dom.window.removeEventListener ("wheel", asked)
+                    Browser.Dom.window.removeEventListener ("keydown", asked)
+                    grow ()
+                | Some _
+                | None -> ()
+            Browser.Dom.window.addEventListener ("wheel", asked)
+            Browser.Dom.window.addEventListener ("keydown", asked)
+        else grow ()
+        []
+    | None, _ -> [ "there is no conversation" ]
+    | Some _, None -> [ "there is no composer tray" ]
+
 let private chapterPlaceholder () : float list =
     match first Root.Document "#shell [data-chapter-name='msg-filler-8']" with
     | None -> []
@@ -731,6 +761,8 @@ let private implement (measure: Probes.Measure) : Implementation =
     | Probes.Measure.Burst -> Implementation.Reading (fun _ -> burst ())
     | Probes.Measure.LoneRecordInQuietFrame -> Implementation.Verdict (fun _ -> loneRecordInQuietFrame ())
     | Probes.Measure.SmoothScrollToTop -> Implementation.Reading (fun _ -> smoothScrollToTop ())
+    | Probes.Measure.ComposerGrows -> verdictNow (fun onScrollAsked -> composerGrows (onScrollAsked = 1))
+    | Probes.Measure.ScrollWrites -> verdictNow (fun _ -> scrollWrites |> Option.map List.ofSeq |> Option.defaultValue [])
     | Probes.Measure.ChapterPlaceholder -> readingNow (fun _ -> chapterPlaceholder ())
     | Probes.Measure.ItemActionsUnderThumb -> verdictNow (fun _ -> itemActionsUnderThumb ())
     | Probes.Measure.AgentCaretOnLetters -> verdictNow (fun _ -> agentCaretOnLetters ())

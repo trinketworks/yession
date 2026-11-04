@@ -5926,6 +5926,64 @@ let editorTests =
                     let! shown = newestShown page "screen:term-harness" "tail-mark-screen"
                     Expect.isTrue (shownFully shown) (sprintf "the newest line on the screen is wholly on screen: %A" shown)
                 }
+            // A reader at the end is put back there whenever the box resizes — that is what
+            // following is — and a scroll they have started but that has not moved yet left them
+            // standing at the end, so a resize in that frame put them back and the write ended
+            // the scroll before it began. As the page opens the composer's line unfolds and
+            // shrinks the conversation frame by frame, and a scroll started then was lost 16 of
+            // 20 times. Here the box shrinks inside the key's own press, after the scroll is asked
+            // for and before it can move, so the frame is hit every time rather than by luck.
+            editorCaseIn 1440 900 "a scroll up started at the end of the conversation is not taken away by its box resizing" <| fun page ->
+                async {
+                    do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
+                    do! toTheEnd page "chat"
+                    let! before = Probe.scroll page (tailSurface "chat")
+                    let before = before |> Option.defaultWith (fun () -> failwith "there is no chat surface to scroll")
+                    let! armed = Probe.verdictWith page Yession.App.Probes.Measure.ComposerGrows 1
+                    Expect.equal armed [] "the composer is ready to grow as the scroll is asked for"
+                    // A key rather than a wheel: Chromium animates a page scroll asked for from the
+                    // keyboard, a frame or more from its first move, while the wheel Playwright
+                    // turns lands its scroll before the page hears of it, and leaves no frame open.
+                    // Focus on the last message, as a reader who clicked it to read has it.
+                    do! awaitU (page.Locator("#shell [data-conversation] [data-message-id]").Last.FocusAsync ())
+                    do! awaitU (page.Keyboard.PressAsync "PageUp")
+                    // Until the scroll moves up, or something writes to it — a write ends a
+                    // scroll in flight, so there is no moving after it to wait for.
+                    let movedOrTaken () =
+                        async {
+                            let! scroll = Probe.scroll page (tailSurface "chat")
+                            let! takenBy = Probe.verdict page Yession.App.Probes.Measure.ScrollWrites
+                            return scroll, takenBy
+                        }
+                    let moved (scroll: Yession.App.Probes.Scroll option) =
+                        scroll |> Option.exists (fun s -> s.Top < before.Top - 100.0)
+                    do! Wait.until "the key's scroll to move up the conversation, or to be taken away"
+                            movedOrTaken (fun (scroll, takenBy) -> moved scroll || not (List.isEmpty takenBy))
+                    let! scroll, takenBy = movedOrTaken ()
+                    Expect.equal takenBy [] "nothing wrote to the conversation's scroll while the reader's scroll began"
+                    Expect.isTrue (moved scroll) (sprintf "the scroll went up the conversation from %.0f: %A" before.Top scroll)
+                    // Anti-vacuity: a box that did not shrink gave the end nothing to move.
+                    Expect.isTrue
+                        (scroll |> Option.exists (fun s -> s.ClientHeight < before.ClientHeight - 100.0))
+                        (sprintf "the conversation's box shrank under the scroll, from %.0f: %A" before.ClientHeight scroll)
+                }
+            // The rule that took the scroll away is still the rule for a reader who asked for
+            // none: at the end, they are kept there as the box shrinks and as a message lands.
+            editorCaseIn 1440 900 "a reader at the end of the conversation stays there as its box shrinks and a message lands" <| fun page ->
+                async {
+                    do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
+                    do! toTheEnd page "chat"
+                    let! grown = Probe.verdictWith page Yession.App.Probes.Measure.ComposerGrows 0
+                    Expect.equal grown [] "the composer grew"
+                    do! twoFrames page
+                    let! shrunk = Probe.scroll page (tailSurface "chat")
+                    Expect.isTrue
+                        (shrunk |> Option.exists (fun s -> s.Top + s.ClientHeight >= s.Height - 4.0))
+                        (sprintf "the reader is at the end of the shrunken box: %A" shrunk)
+                    do! messageLands page 200L "tail-mark-chat, said under a taller composer"
+                    let! shown = newestShown page "chat" "tail-mark-chat"
+                    Expect.isTrue (shownFully shown) (sprintf "the newest message is wholly on screen: %A" shown)
+                }
             // The other half: a reader who scrolled back to read is LEFT there. What arrives while
             // they read is what the way back is for, not a reason to take them away from the line
             // they were on.
