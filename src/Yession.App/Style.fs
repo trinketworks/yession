@@ -3794,12 +3794,6 @@ module Style =
     /// composer — a gap that said something was there. Nothing is there, so it takes no room:
     /// the composer's rail sits directly under whatever is above it.
     let queueEmpty = "shrink-0"
-    /// On the composer's own gutter (`draftInput` spends px-4), because the head belongs to
-    /// the dock it heads, not to the timeline above it.
-    let queueHead = "flex items-baseline gap-3 pb-2 px-4 wide:px-rail"
-    /// Green, AT REST: "still editable" is a fact about the whole queue, said once at its
-    /// head — the rows beneath no longer repeat it per entry.
-    let queueCount = caps + " text-green"
 
     /// A full-bleed band on the composer's gutter. The surface tone is what marks it (the
     /// timeline's ground is `bg`, the dock's bands are `surface`), and interaction lifts the

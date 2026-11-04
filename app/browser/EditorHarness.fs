@@ -1249,7 +1249,8 @@ let private surfaceModel : ClientModel =
 
 /// The same question in the state `?surface=<state>` names: `waiting`, with nothing chosen,
 /// so its button waits; `sending`, with the answer on its way, so its button holds; `answered`,
-/// with the answer on the record and the agent still to act on it.
+/// with the answer on the record and the agent still to act on it; `folded`, put away to its
+/// line above the composer.
 let private surfaceModelIn (state: string) : ClientModel =
     match state with
     | "waiting" ->
@@ -1269,7 +1270,8 @@ let private surfaceModelIn (state: string) : ClientModel =
               By = Principal.Peer surfaceModel.Peer.PeerId }
         { surfaceModel with
             SurfaceAnswers = SurfaceAnswers.ofEvents [ SessionEvent.SurfaceActionTaken answer ] }
-    | other -> failwithf "?surface=%s: give waiting, sending or answered" other
+    | "folded" -> { surfaceModel with FoldedSurfaces = Set.singleton "ask" }
+    | other -> failwithf "?surface=%s: give waiting, sending, answered or folded" other
 
 /// The model that the shell's page shows first. `/?replies=<n>` shows the `Replies`
 /// conversation with `n` items, so that a picture (`frames --harness replies`) shows the prose

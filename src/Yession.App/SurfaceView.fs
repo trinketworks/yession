@@ -353,9 +353,10 @@ module SurfaceView =
                 <p class="{Style.surfaceUnsupported}" data-surface-component="{c.Id}" data-surface-unsupported="{name}">{Dom.Text.surfaceUnsupported name}</p>"""
 
     /// One surface, from its `root` component, with the app's × hung in the gutter on its
-    /// first line: every surface can be taken down unanswered, whatever buttons the agent drew
-    /// (`DismissSurfaceMsg`). A surface whose root has not arrived yet is not drawn: there is
-    /// nothing to answer.
+    /// first line: every surface can be put away to its line above the composer, whatever
+    /// buttons the agent drew (`FoldSurfaceMsg`), and dismissed from there (`folded`). The ×
+    /// stays live while the surface stands still, because putting it away answers nothing. A
+    /// surface whose root has not arrived yet is not drawn: there is nothing to answer.
     ///
     /// `asked` is every command this client has in flight (`ClientModel.Asked`), from which the
     /// surface reads whether an answer or a dismissal of it is on its way (`sending`). `answered`
@@ -398,7 +399,6 @@ module SurfaceView =
                         drawComponent canvas inside above scope, Some (drawComponent canvas (Set.add last inside) row scope)
                     | _ -> draw canvas ancestors bodyId scope, None
                 | _ -> draw canvas ancestors bodyId scope, None
-            let leaving = state = Sending.Dismissal
             // The blue lead says "waiting on you". An answered surface waits on the agent, so
             // the lead goes, and a line under the actions says who answered and what it waits
             // on — where the card's actions row says `looking` while it waits on GitHub.
@@ -431,10 +431,9 @@ module SurfaceView =
                   {lead}
                   <div class="{Style.surfaceScroll}">
                     <div class="{Style.surfaceFrame}">
-                      <button type="button" class="{Style.surfaceWay}" data-surface-dismiss
-                              aria-label="{Dom.Text.surfaceDismissLabel}" title="{Dom.Text.surfaceDismissLabel}"
-                              aria-busy="{flag leaving}" aria-disabled="{flag still}"
-                              @click={Ev(fun _ -> if not still then dispatch (DismissSurfaceMsg surfaceId))}>{Icon.close}</button>
+                      <button type="button" class="{Style.surfaceWay}" data-surface-fold
+                              aria-label="{Dom.Text.surfaceFoldLabel}" title="{Dom.Text.surfaceFoldLabel}"
+                              @click={Ev(fun _ -> dispatch (FoldSurfaceMsg surfaceId))}>{Icon.close}</button>
                       {content}
                     </div>
                   </div>

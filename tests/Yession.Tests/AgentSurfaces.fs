@@ -190,18 +190,23 @@ let private viewTests =
             Expect.stringContains submit "aria-disabled=\"false\"" "held, not waiting"
             Expect.stringContains page Dom.Text.surfaceSending "it says the answer is on its way"
             Expect.stringContains (tagWith "data-surface-choice=\"dev\"" page) "aria-disabled=\"true\"" "a choice takes no press meanwhile"
-            Expect.stringContains (tagWith "data-surface-dismiss" page) "aria-disabled=\"true\"" "nor does the way out"
+            Expect.isFalse ((tagWith Dom.Hooks.surfaceFold page).Contains "aria-disabled") "putting it away answers nothing, so it still can be"
 
         testCase "a surface with nothing on its way holds nothing" <| fun () ->
             let page = render (withSurface (choiceSurface [ "choice", branches [ "main" ] ]))
             Expect.stringContains (tagWith "data-surface-component=\"submit\"" page) "aria-busy=\"false\"" "nothing held"
             Expect.stringContains (tagWith "data-surface-choice=\"dev\"" page) "aria-disabled=\"false\"" "choices take a press"
 
-        testCase "a dismissal on its way holds the way out" <| fun () ->
+        testCase "a dismissal on its way holds the put-away line's dismiss" <| fun () ->
             let model = withSurface (choiceSurface [ "choice", branches [ "main" ] ])
-            let page = render { model with Asked = Map.ofList [ Yession.Domain.RequestId.fresh (), Yession.Domain.Link.DismissSurface "ask" ] }
-            Expect.stringContains (tagWith "data-surface-dismiss" page) "aria-busy=\"true\"" "the × holds"
-            Expect.stringContains (tagWith "data-surface-component=\"submit\"" page) "aria-disabled=\"true\"" "and the answer waits"
+            let page =
+                render
+                    { model with
+                        FoldedSurfaces = Set.singleton "ask"
+                        Asked = Map.ofList [ Yession.Domain.RequestId.fresh (), Yession.Domain.Link.DismissSurface "ask" ] }
+            let dismiss = tagWith Dom.Hooks.surfaceDismiss page
+            Expect.stringContains dismiss "aria-busy=\"true\"" "the dismiss holds"
+            Expect.stringContains dismiss "aria-disabled=\"true\"" "and takes no second press"
 
         // An empty required field is not answered yet, which the button already says by
         // waiting; only an answer can be wrong.
@@ -573,9 +578,11 @@ let private dismissed : Yession.Domain.Surfaces.SurfaceDismissed =
 
 let private dismissTests =
     testList "Dismiss" [
-        testCase "every surface offers a dismiss, whatever buttons the agent drew" <| fun () ->
-            let page = render (withSurface (surfaceOf [ plain "root" (ComponentKind.Text (Literal "No buttons here", None)) ] []))
-            Expect.isTrue ((tagWith Dom.Hooks.surfaceDismiss page).StartsWith "<button") "a control of the app's own"
+        testCase "every surface can be put away and dismissed, whatever buttons the agent drew" <| fun () ->
+            let model = withSurface (surfaceOf [ plain "root" (ComponentKind.Text (Literal "No buttons here", None)) ] [])
+            Expect.isTrue ((tagWith Dom.Hooks.surfaceFold (render model)).StartsWith "<button") "a × of the app's own"
+            let folded = render (step (FoldSurfaceMsg "ask") model)
+            Expect.isTrue ((tagWith Dom.Hooks.surfaceDismiss folded).StartsWith "<button") "and a dismiss on its line"
 
         testCase "dismissing asks the session" <| fun () ->
             Expect.equal
@@ -701,7 +708,7 @@ let private answeredTests =
             Expect.stringContains (tagWith "data-surface-answered" surface) "role=\"status\"" "a status line says who"
             Expect.stringContains surface "waiting on the agent" "and what it waits on"
             Expect.stringContains (tagWith "data-surface-choice=\"dev\"" surface) "aria-disabled=\"true\"" "no second answer"
-            Expect.stringContains (tagWith "data-surface-dismiss" surface) "aria-disabled=\"true\"" "nor a dismissal"
+            Expect.isFalse ((tagWith Dom.Hooks.surfaceFold surface).Contains "aria-disabled") "but it can still be put away"
             Expect.isFalse (surface.Contains Style.surfaceLeadBar) "no longer waiting on the reader"
 
         testCase "an unanswered surface says nothing about an answer" <| fun () ->
@@ -737,8 +744,49 @@ let private stackTests =
             Expect.equal (ClientModel.asks model) [] "no question to stand"
     ]
 
+let private foldTests =
+    testList "Put away" [
+        // As a queued message waits: one line above the composer, for this reader alone.
+        testCase "the × puts a surface away to its line above the composer" <| fun () ->
+            let model = withSurface (choiceSurface []) |> step (FoldSurfaceMsg "ask")
+            Expect.equal (ClientModel.asks model) [] "no longer a card in the slot"
+            let page = render model
+            Expect.isFalse (page.Contains "data-surface=\"ask\"") "the card is gone"
+            let line = page.Substring (page.IndexOf "data-message-queue")
+            Expect.stringContains (tagWith "data-surface-folded=\"ask\"" line) "<article" "its line stands in the queue's band"
+            Expect.stringContains line "Which branches should I rebase?" "named by its question"
+            Expect.equal (ClientModel.update (FoldSurfaceMsg "ask") (withSurface (choiceSurface [])) |> snd) [] "nothing is sent: nobody else is told"
+
+        testCase "pressing its line opens it again, in front" <| fun () ->
+            let folded = ClientModel.init (peer "ada" "Ada") |> drawn "zeta" (choiceSurface []) |> drawn "alpha" (choiceSurface []) |> step (FoldSurfaceMsg "alpha")
+            let opened, effects = ClientModel.update (UnfoldSurfaceMsg "alpha") folded
+            Expect.equal (ClientModel.frontAsk opened) (Some (Ask.Surface "alpha")) "the card in front"
+            Expect.isTrue (List.contains (ClientEffect.Move DomMove.FocusAsk) effects) "and the keyboard goes to it"
+
+        testCase "dismissing from its line takes two presses" <| fun () ->
+            let folded = withSurface (choiceSurface []) |> step (FoldSurfaceMsg "ask")
+            let armed, first = ClientModel.update (ArmSurfaceDismissMsg (Some "ask")) folded
+            Expect.equal first [] "the first press sends nothing"
+            Expect.stringContains (tagWith Dom.Hooks.surfaceDismiss (render armed)) "data-surface-dismiss-armed=\"true\"" "it says the next press does it"
+            let after, second = ClientModel.update (DismissSurfaceMsg "ask") armed
+            Expect.equal second [ ClientEffect.DismissSurface "ask" ] "the second asks the session"
+            Expect.equal after.SurfaceDismissArmed None "and disarms"
+
+        testCase "a surface the agent took down is not still put away when its id comes back" <| fun () ->
+            let folded = withSurface (choiceSurface []) |> step (FoldSurfaceMsg "ask")
+            let gone = { folded with Synced = { folded.Synced with Surfaces = Map.empty } } |> step (EditSurfaceMsg ("nothing-here", "/choice", branches []))
+            Expect.equal gone.FoldedSurfaces Set.empty "forgotten with the surface"
+            let back = gone |> drawn "ask" (choiceSurface [])
+            Expect.equal (ClientModel.asks back) [ Ask.Surface "ask" ] "a card again"
+
+        testCase "the queue's band has no header" <| fun () ->
+            let page = render (withSurface (choiceSurface []) |> step (FoldSurfaceMsg "ask"))
+            Expect.isFalse (page.Contains "queued ·") "lines stack without a heading"
+    ]
+
 let tests =
     testList "Agent surfaces" [
+        foldTests
         syncTests
         modelTests
         viewTests

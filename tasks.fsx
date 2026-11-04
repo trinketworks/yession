@@ -3704,8 +3704,8 @@ let probe (args: string list) =
 ///   surface       the model that the browser cases use, with an agent's A2UI question in the
 ///                 dock, answered and ready to send.
 ///   surface=<s>   the same question in another state: `waiting` (nothing chosen yet),
-///                 `sending` (the answer on its way) or `answered` (on the record, waiting on
-///                 the agent).
+///                 `sending` (the answer on its way), `answered` (on the record, waiting on
+///                 the agent) or `folded` (put away to its line above the composer).
 let frames (args: string list) =
     let out = Path.Combine (repoRoot, "tools", "Yession.Frames", "out")
     let harnessPage, cameraArgs =
