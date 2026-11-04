@@ -915,52 +915,61 @@ let private shellProfileTests =
                 caused
                 "the cause round-trips, so the line still points at the repo added"
 
-        // The rule is a function of WHICH repos declare one and who set the profile last —
-        // never of the order the repos arrived in.
-        testCase "one declaring repo applies its directory, as itself" <| fun () ->
+        // Which file applies is a function of WHICH repos declare one — never of the order
+        // the repos arrived in.
+        testCase "one declaring repo's directory is the one declared" <| fun () ->
             Expect.equal
-                (ConfiguredProfile.decide [ one, RootPath.stored "repos/octo/one" ] None)
-                (ConfiguredProfile.Apply (one, RootPath.stored "repos/octo/one"))
-                "nothing set yet: the file's directory"
-            Expect.equal
-                (ConfiguredProfile.decide [ one, RootPath.stored "repos/octo/one" ] (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one/"))))
-                ConfiguredProfile.Leave
-                "already applied: nothing to do, however a directory is spelled"
-            Expect.equal
-                (ConfiguredProfile.decide [ one, RootPath.stored "repos/octo/one/src" ] (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one"))))
-                (ConfiguredProfile.Apply (one, RootPath.stored "repos/octo/one/src"))
-                "a file that moved its directory moves the profile"
+                (ConfiguredProfile.declared [ one, RootPath.stored "repos/octo/one" ])
+                (Some (RootPath.stored "repos/octo/one"))
+                "the file's directory"
 
-        testCase "a profile somebody set is theirs, whatever the files say" <| fun () ->
-            for actor in [ ActorRef.Agent; ActorRef.PeerRef (PeerId.create "ada" |> expect) ] do
-                for cwd in [ Some "elsewhere"; None ] do
-                    Expect.equal
-                        (ConfiguredProfile.decide [ one, RootPath.stored "repos/octo/one" ] (Some (setBy actor cwd)))
-                        ConfiguredProfile.Leave
-                        "a set or a clear by a person, or the agent for one, is not moved"
+        testCase "two declaring repos declare nothing" <| fun () ->
+            Expect.equal
+                (ConfiguredProfile.declared [ one, RootPath.stored "repos/octo/one"; two, RootPath.stored "repos/octo/two" ])
+                None
+                "neither file wins"
 
-        testCase "two declaring repos apply neither, and the one that had applied withdraws" <| fun () ->
-            let both = [ one, RootPath.stored "repos/octo/one"; two, RootPath.stored "repos/octo/two" ]
-            Expect.equal (ConfiguredProfile.decide both None) ConfiguredProfile.Leave "nothing set: nothing to set"
+        // In effect: a set wins, a declaration fills in where there is none.
+        testCase "a declared profile is where terminals start while nobody has set one" <| fun () ->
+            let proj = ShellProfileProjection.empty |> ShellProfileProjection.declare SandboxRef.defaultRef (Some (RootPath.stored "repos/octo/one"))
             Expect.equal
-                (ConfiguredProfile.decide both (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one"))))
-                (ConfiguredProfile.Withdraw one)
-                "the profile one's file set is cleared, as one's"
-            Expect.equal
-                (ConfiguredProfile.decide (List.rev both) (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one"))))
-                (ConfiguredProfile.Withdraw one)
-                "and in whichever order they are listed"
-            Expect.equal
-                (ConfiguredProfile.decide both (Some (setBy (ActorRef.Configured one) None)))
-                ConfiguredProfile.Leave
-                "already withdrawn: nothing to do"
+                (ShellProfileProjection.workingDirectory SandboxRef.defaultRef proj)
+                (Some (RootPath.stored "repos/octo/one"))
+                "the file's directory, with no event behind it"
 
-        testCase "a file that stops declaring withdraws what it set" <| fun () ->
+        testCase "a set profile wins over a declared one" <| fun () ->
+            let proj =
+                fold [ profileSet SandboxRef.defaultRef (Some "elsewhere") ]
+                |> ShellProfileProjection.declare SandboxRef.defaultRef (Some (RootPath.stored "repos/octo/one"))
             Expect.equal
-                (ConfiguredProfile.decide [] (Some (setBy (ActorRef.Configured one) (Some "repos/octo/one"))))
-                (ConfiguredProfile.Withdraw one)
-                "nobody declares one now"
-            Expect.equal (ConfiguredProfile.decide [] None) ConfiguredProfile.Leave "and nothing is nothing"
+                (ShellProfileProjection.workingDirectory SandboxRef.defaultRef proj)
+                (Some (RootPath.stored "elsewhere"))
+                "somebody's decision, not the file's"
+
+        testCase "clearing a set profile falls back to the declared one" <| fun () ->
+            let proj =
+                fold [ profileSet SandboxRef.defaultRef (Some "elsewhere"); profileSet SandboxRef.defaultRef None ]
+                |> ShellProfileProjection.declare SandboxRef.defaultRef (Some (RootPath.stored "repos/octo/one"))
+            Expect.equal
+                (ShellProfileProjection.workingDirectory SandboxRef.defaultRef proj)
+                (Some (RootPath.stored "repos/octo/one"))
+                "the file's directory again"
+
+        testCase "a set a repo's file wrote in an older build is not replayed" <| fun () ->
+            // The fold used to record `session.shell-profile` as a set authored by the file.
+            // The files are read again every fold now, so replaying one would put back the
+            // copy that could disagree with them.
+            let proj = fold [ ShellProfileSet (setBy (ActorRef.Configured one) (Some "repos/octo/one")) ]
+            Expect.equal (ShellProfileProjection.workingDirectory SandboxRef.defaultRef proj) None "the file's old copy is passed over"
+
+        testCase "a declared profile is listed with the set ones" <| fun () ->
+            let proj =
+                fold [ profileSet (sandboxNamed "test") (Some "/repos/two") ]
+                |> ShellProfileProjection.declare SandboxRef.defaultRef (Some (RootPath.stored "repos/octo/one"))
+            Expect.equal
+                (ShellProfileProjection.listed proj |> List.map (fun (sandbox, profile) -> SandboxRef.render sandbox, profile.WorkingDirectory))
+                [ "default", Some (RootPath.stored "repos/octo/one"); "test", Some (RootPath.stored "/repos/two") ]
+                "the query says where terminals start, wherever that came from"
 
         testCase "each of several declaring repos is told who else declares" <| fun () ->
             let three = RepoRef.create "octo/three" |> expect

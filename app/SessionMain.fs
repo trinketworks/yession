@@ -1555,6 +1555,7 @@ Async.StartImmediate (
                 (fun person -> ConnectionStatusList.present connectionStatus person)
                 (fun () -> workSandboxes)
                 host.RunGated
+                terminals.Declare
                 log
                 // What a checkout asks for, as the backend its sandboxes run on will actually
                 // grant it. That backend is `repoWorkBackend` — a repo's declarations

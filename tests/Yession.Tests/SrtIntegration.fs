@@ -697,7 +697,7 @@ let fileOperands =
             let policy = { policy with Env = policy.Env |> Map.add "OLDPWD" workspace }
             let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ())) policy "operands-cd-dash"
             let agent = Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))
-            let! set = host.Terminals.SetProfile agent None SandboxRef.defaultRef (Some "-")
+            let! set = host.Terminals.SetProfile agent SandboxRef.defaultRef (Some "-")
             do! host.Stop ()
             match set with
             | Ok directory -> failwithf "a directory that is not there was set as %s" directory
