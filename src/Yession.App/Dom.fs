@@ -623,13 +623,6 @@ module Dom =
         /// One row, carrying its terminal's id — and the control that shows that terminal,
         /// so a row is keyboard-operable by construction rather than by a handler on a div.
         let terminalListRow = "data-terminal-list-row"
-        /// A closed row's tab, put away (the closed tab's ×, `DismissTabMsg`) while it has one.
-        /// A row's recording is not its verb: rewind and replay are the terminal's own, on its
-        /// toolbar (`terminalWatch`), and a row opens its terminal.
-        ///
-        /// Every row verb is rendered ONLY where `Affordances` says it applies, so a
-        /// test asserting one is absent is asserting the fold, not a template's mood.
-        let terminalListDismiss = "data-terminal-list-dismiss"
         /// The list's one row for its closed terminals: the fold they are under, which
         /// `aria-expanded` says is open or not (`ClientModel.ClosedShown`).
         let listClosedFold = "data-list-closed-fold"
@@ -1037,7 +1030,6 @@ module Dom =
         /// still holds it above the fold.
         let stopped = "stopped"
         let reattach = "attach"
-        let putAway = "put away"
         /// The list's fold over its closed terminals, and its name for a screen reader. Said
         /// as "stopped", the word of the row's own `stop` that put them there.
         let closedHeading = "stopped"

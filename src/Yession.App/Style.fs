@@ -4817,7 +4817,7 @@ module Style =
         "min-w-0 flex items-center gap-1.5 font-ui font-light text-small text-ink-dim [&_[data-pane-mark]]:shrink-0"
     let terminalListSummary = "min-w-0 truncate"
 
-    /// A row's verb, as a WORD: `rewind`, `kill`, `replay`, `put away`. They were glyphs, and
+    /// A row's verb, as a WORD: `stop`, `attach`. They were glyphs, and
     /// the kill's was a square — which is what stop looks like, beside a command that now has
     /// a real Stop. A word cannot be read as anything else, and a verb that rides a listed row
     /// is bare, in the caps voice every bare verb speaks in, `ink-dim` at rest
