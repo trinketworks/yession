@@ -387,8 +387,14 @@ module Probes =
         /// from. It answers as the scroll begins, not when it ends. Where it ends is the case's
         /// to wait for, because nothing in the page can tell a scroll that has not moved yet
         /// from one that was stopped before it could: Chromium moves a smooth scroll a frame
-        /// or more after it is asked for, and more on a busy machine.
+        /// or more after it is asked for, and more on a busy machine. What stopped it is
+        /// `ScrollTakenAway`'s to say.
         | SmoothScrollToTop
+        /// Every write that has landed on the conversation's scroll since `SmoothScrollToTop`
+        /// sent it, each with the value written, where the scroll stood, and the page's own
+        /// frames that wrote it — any one of them ended the smooth scroll — and a line saying
+        /// so if the conversation was replaced under it. Empty while nothing has taken it.
+        | ScrollTakenAway
         /// The chapter name field for `msg-filler-8`: 1 or 0 for whether it is empty, whether
         /// it has a placeholder to offer, and whether that placeholder is painted in any ink.
         | ChapterPlaceholder
@@ -458,6 +464,7 @@ module Probes =
             | Measure.Burst -> "burst"
             | Measure.LoneRecordInQuietFrame -> "lone-record-in-quiet-frame"
             | Measure.SmoothScrollToTop -> "smooth-scroll-to-top"
+            | Measure.ScrollTakenAway -> "scroll-taken-away"
             | Measure.ChapterPlaceholder -> "chapter-placeholder"
             | Measure.ItemActionsUnderThumb -> "item-actions-under-thumb"
             | Measure.AgentCaretOnLetters -> "agent-caret-on-letters"
@@ -492,6 +499,7 @@ module Probes =
               Measure.Burst
               Measure.LoneRecordInQuietFrame
               Measure.SmoothScrollToTop
+              Measure.ScrollTakenAway
               Measure.ChapterPlaceholder
               Measure.ItemActionsUnderThumb
               Measure.AgentCaretOnLetters

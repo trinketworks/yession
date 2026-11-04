@@ -216,6 +216,27 @@ module Scrolling =
     [<Emit("(function (el) { el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }) })($0)")>]
     let scrollToBottomSmooth (element: Browser.Types.HTMLElement) : unit = jsNative
 
+    /// Every write to an element's scroll from now on, said to `note`: `scrollTop` set, or
+    /// `scrollTo`, `scroll` or `scrollBy` called, on THIS element, with the value, where the
+    /// scroll stood, and the three frames of the page's code under the write. A write to the
+    /// scroll ends a smooth scroll the browser has in flight, so this is the list of everything
+    /// that could have taken one away. On the element itself, not the prototype, so nothing else
+    /// on the page pays for it.
+    [<Emit("""(function (el, note) {
+      const top = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
+      const by = () => (new Error().stack || '').split('\n').slice(3, 6).map(s => s.trim()).join(' < ');
+      Object.defineProperty(el, 'scrollTop', {
+        configurable: true,
+        get() { return top.get.call(this); },
+        set(v) { note('scrollTop = ' + v + ' with the scroll at ' + top.get.call(this) + ', ' + by()); top.set.call(this, v); }
+      });
+      for (const name of ['scrollTo', 'scroll', 'scrollBy']) {
+        const own = Element.prototype[name];
+        el[name] = function (...args) { note(name + '(' + JSON.stringify(args) + ') with the scroll at ' + top.get.call(this) + ', ' + by()); return own.apply(this, args); };
+      }
+    })($0, $1)""")>]
+    let noteWrites (element: Browser.Types.Element) (note: string -> unit) : unit = jsNative
+
     /// `element.focus({ preventScroll: true })`: move focus without the browser's own
     /// scroll-into-view. Plain `focus()` drags the nearest scrollport to wherever the
     /// element sits — right for a control the reader needs to SEE, wrong for one that is
