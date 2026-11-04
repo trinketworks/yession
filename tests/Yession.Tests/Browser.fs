@@ -5403,197 +5403,202 @@ let editorTests =
                 Expect.isTrue landed "the message the ref answers is on the screen and holds the cursor"
                 return ()
             }
-        // The contents' promise, and the reason it is the phone's whole navigation: tapping a
-        // chapter takes you to it. `revealMessage` finds an element by id, scrolls it, flashes
-        // it and moves the cursor there — a hook that stopped matching would leave a list of
-        // buttons that quietly do nothing, which no rendered string can tell from one that
-        // works.
-        editorCaseIn 1440 900 "a chapter in the contents takes you to it" <| fun page ->
-            async {
-                do! waitVisible "a chapter in the contents" page "#shell [data-chapters] [data-chapter-entry]"
-                // Away from it first, so the jump has a real scroll to make.
-                match! Probe.scroll page "#shell [data-conversation]" with
-                | Some conversation ->
-                    let! _ = Probe.scrollTo page "#shell [data-conversation]" conversation.Height
-                    ()
-                | None -> failwith "there is no conversation to scroll"
-                do! awaitU (page.ClickAsync "#shell [data-chapter-entry='msg-harness']")
-                do! Wait.until "the message to flash as it is revealed"
-                        (fun () -> Read.attr page "#shell [data-conversation] [data-message-id='msg-harness']" "class")
-                        (Option.exists (fun classes -> classes.Split ' ' |> Array.contains "animate-reveal"))
-                let! focused = Read.focused page "#shell [data-conversation] [data-message-id='msg-harness']"
-                Expect.isTrue focused "the contents moves the cursor to the chapter, through the same reveal the ref uses"
-                return ()
-            }
-        // On a phone the contents live in a DRAWER over the conversation, so the jump has one
-        // more thing to get right than it does on a desktop: the sheet the tap came from has
-        // to stand aside, or the reader is taken to a message they cannot see. Nothing in the
-        // markup says whether a drawer is over the words — the message scrolls, flashes and
-        // takes the cursor either way.
-        //
-        // The drawer is opened by its chevron, because the drawer is the model's: a class set
-        // by hand is one the model never heard of, and closing it would then be nothing the
-        // jump had done. The case reads the cover BEFORE the tap as well as after, so an
-        // arrangement that stopped covering anything would fail here rather than pass by
-        // vacuity.
-        editorCaseIn 390 844 "a chapter reached from the phone's contents is not left behind the drawer" <| fun page ->
-            async {
-                do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
-                do! waitVisible "a chapter in the contents" page "#shell [data-chapters] [data-chapter-entry]"
-                let! reachable = Probe.hitAt page "#shell [data-conversation] [data-message-id='msg-harness']" 4.0
-                let covered = not reachable
-                Expect.isTrue covered "the drawer is over the conversation, which is what the phone's contents sit in"
+        for copy in 1 .. 25 do
+          let editorCaseIn (w: int) (h: int) (name: string) = editorCaseIn w h (sprintf "%s #copy-%d" name copy)
+          // The contents' promise, and the reason it is the phone's whole navigation: tapping a
+          // chapter takes you to it. `revealMessage` finds an element by id, scrolls it, flashes
+          // it and moves the cursor there — a hook that stopped matching would leave a list of
+          // buttons that quietly do nothing, which no rendered string can tell from one that
+          // works.
+          editorCaseIn 1440 900 "a chapter in the contents takes you to it" <| fun page ->
+              async {
+                  do! waitVisible "a chapter in the contents" page "#shell [data-chapters] [data-chapter-entry]"
+                  // Away from it first, so the jump has a real scroll to make.
+                  match! Probe.scroll page "#shell [data-conversation]" with
+                  | Some conversation ->
+                      let! _ = Probe.scrollTo page "#shell [data-conversation]" conversation.Height
+                      ()
+                  | None -> failwith "there is no conversation to scroll"
+                  do! awaitU (page.ClickAsync "#shell [data-chapter-entry='msg-harness']")
+                  do! Wait.until "the message to flash as it is revealed"
+                          (fun () -> Read.attr page "#shell [data-conversation] [data-message-id='msg-harness']" "class")
+                          (Option.exists (fun classes -> classes.Split ' ' |> Array.contains "animate-reveal"))
+                  let! focused = Read.focused page "#shell [data-conversation] [data-message-id='msg-harness']"
+                  Expect.isTrue focused "the contents moves the cursor to the chapter, through the same reveal the ref uses"
+                  return ()
+              }
+          // On a phone the contents live in a DRAWER over the conversation, so the jump has one
+          // more thing to get right than it does on a desktop: the sheet the tap came from has
+          // to stand aside, or the reader is taken to a message they cannot see. Nothing in the
+          // markup says whether a drawer is over the words — the message scrolls, flashes and
+          // takes the cursor either way.
+          //
+          // The drawer is opened by its chevron, because the drawer is the model's: a class set
+          // by hand is one the model never heard of, and closing it would then be nothing the
+          // jump had done. The case reads the cover BEFORE the tap as well as after, so an
+          // arrangement that stopped covering anything would fail here rather than pass by
+          // vacuity.
+          editorCaseIn 390 844 "a chapter reached from the phone's contents is not left behind the drawer" <| fun page ->
+              async {
+                  do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
+                  do! waitVisible "a chapter in the contents" page "#shell [data-chapters] [data-chapter-entry]"
+                  let! reachable = Probe.hitAt page "#shell [data-conversation] [data-message-id='msg-harness']" 4.0
+                  let covered = not reachable
+                  Expect.isTrue covered "the drawer is over the conversation, which is what the phone's contents sit in"
 
-                do! awaitU (page.ClickAsync "#shell [data-chapter-entry='msg-harness']")
-                do! Wait.until "the message to flash as it is revealed"
-                        (fun () -> Read.attr page "#shell [data-conversation] [data-message-id='msg-harness']" "class")
-                        (Option.exists (fun classes -> classes.Split ' ' |> Array.contains "animate-reveal"))
-                // Hit-tested at its own centre, which is the only way to ask whether something
-                // is over it: a drawer left open leaves the message's box exactly where it was,
-                // and every cheap visibility check answers yes.
-                do! Wait.until "the drawer to stand aside, so the chapter is on the screen"
-                        (fun () -> Probe.hitAt page "#shell [data-conversation] [data-message-id='msg-harness']" 4.0) id
-                return ()
-            }
-        // The contents' entries on a phone are touch targets, so each is one row at the 44px
-        // floor and the stack adds nothing between them: a gap on top of a full-height entry
-        // read as two chapters a hand apart. Measured rather than read from the markup, since
-        // a row's height is what its padding, its line and the stack's gap add up to.
-        editorCaseIn 390 844 "on a phone the contents' entries are single 44px rows with nothing between them" <| fun page ->
-            async {
-                do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
-                do! waitVisible "a chapter in the contents" page "#shell [data-chapters] [data-chapter-entry]"
-                let! entries = Probe.seen page "#shell [data-chapters] [data-chapter-entry]"
-                let boxes = entries |> List.map (fun e -> e.Box)
-                let heights = boxes |> List.map Yession.App.Probes.Box.height
-                let gaps = List.pairwise boxes |> List.map (fun (a, b) -> b.Top - a.Bottom)
-                let shape =
-                    [| float boxes.Length
-                       (if heights.IsEmpty then 0.0 else List.min heights)
-                       (if heights.IsEmpty then 0.0 else List.max heights)
-                       (if gaps.IsEmpty then 0.0 else List.max gaps) |]
-                Expect.isTrue (shape.[0] >= 2) "the harness has more than one chapter, so there is a gap to measure"
-                Expect.isTrue (shape.[1] >= 44.0) (sprintf "every entry is a thumb's 44px, the shortest is %.1f" shape.[1])
-                Expect.isTrue (shape.[2] < 50.0) (sprintf "and none is taller than one row, the tallest is %.1f" shape.[2])
-                Expect.isTrue (shape.[3] <= 1.0) (sprintf "with no gap between neighbours, the widest is %.1f" shape.[3])
-                return ()
-            }
-        // A page that lands with the client still behind is not a picture anybody asked for:
-        // a cold open reads the log from the oldest a page per round trip, pinned to its
-        // foot, and every page rendered was history scrolling past under the eye (116 on a
-        // session of 97 items). Only a browser can say whether the page RENDERED — the model
-        // folds every page either way, and the render is the app's own count — so this
-        // drives the harness's cold open, fifteen pages a round trip apart, well inside the
-        // window a render is held for, and asks how many times the app drew.
-        editorCaseIn 390 844 "pages that leave the client behind are folded but not drawn" <| fun page ->
-            async {
-                do! waitVisible "the shell's conversation" page "#shell [data-conversation]"
-                // 60 items of streamed replies is ~1,500 events: fifteen pages of a hundred,
-                // twenty-five milliseconds apart — three hundred and seventy-five of the five
-                // hundred a render is held for.
-                let! report = Harness.await3 page HarnessPage.benchOpenCold 60 100 25
-                use doc = System.Text.Json.JsonDocument.Parse report
-                let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
-                let items = doc.RootElement.GetProperty("items").GetInt32 ()
-                Expect.isTrue (items >= 60) "every page was folded: the whole conversation is on the page"
-                // The shell, the connection, and the catch-up's end — never one per page. A
-                // ceiling with room in it, because what it pins is the pages NOT drawing;
-                // one per page is fifteen more than this.
-                Expect.isTrue (renders <= 5) (sprintf "the pages in between were folded without a render each — %d renders for fifteen pages" renders)
-                return ()
-            }
-        // A scroll in progress survives the renders that land during it. A render puts each
-        // pinned surface's scroll back where the reader had it, and a write to `scrollTop`
-        // — even of the value it already holds — ends whatever scroll the browser has in
-        // flight. Records landing in a terminal the conversation does not draw are a render
-        // each and move nothing on it; under the unconditional write, a scroll started from
-        // the end stayed at the end for as long as they kept coming (`Render.fs`,
-        // `restoreSurfaceScroll`). Only a browser has a scroll in flight to take away, so
-        // only a browser can watch it survive. Smooth rather than flung: the same in-flight
-        // scroll, and one with a stated destination to check against.
-        editorCaseIn 390 844 "a scroll in progress is not taken away by the renders that land during it" <| fun page ->
-            async {
-                do! waitVisible "the shell's conversation" page "#shell [data-conversation]"
-                // Two hundred items, a record a frame for four hundred frames — the scroll has
-                // to reach the top well inside that, so every frame of it has a render in it.
-                do! Harness.run4 page HarnessPage.benchScrollBegin 200 400 16 true
-                let! stopped = Probe.reading page Yession.App.Probes.Measure.SmoothScrollToTop
-                let reached = match stopped with [ at ] -> at | _ -> failwith "there is no conversation to scroll"
-                let! report = Harness.ask page HarnessPage.benchScrollEnd
-                use doc = System.Text.Json.JsonDocument.Parse report
-                let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
-                let startedAt = doc.RootElement.GetProperty("scrolledFrom").GetDouble ()
-                Expect.equal reached 0.0 "the scroll reached the top it was sent to, through every render on the way"
-                // Anti-vacuity: a conversation that fit the screen had no scroll to lose, and
-                // a stream that never rendered had nothing to lose it to.
-                Expect.isTrue (startedAt > 0.0) "the conversation scrolls, so there was a scroll to take away"
-                Expect.isTrue (renders >= 10) (sprintf "records landed while the scroll ran — %d renders" renders)
-                return ()
-            }
-        // A conversation shorter than its column ends where the next message is typed. Top
-        // aligned, three messages on a 1440x900 screen ended 598px above the composer, with the
-        // empty space between the newest line and the field answering it. Only a laid-out
-        // page knows where the last item landed; the markup is identical either way.
-        //
-        // The shortest conversation the harness draws (the scroll scenario's, with no filler)
-        // on a tall desktop screen, which leaves it a few hundred pixels short of the column.
-        // That it fits is asserted, because a conversation that fills the column ends at its
-        // foot however it is aligned, and the case would pass for nothing.
-        editorCaseIn 1440 1200 "a short conversation ends by the composer, not at the top of the column" <| fun page ->
-            async {
-                do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-id]"
-                do! Harness.run4 page HarnessPage.benchScrollBegin 0 0 16 true
-                let! _ = Harness.ask page HarnessPage.benchScrollEnd
-                // Two frames before anything is measured: one for the render the empty
-                // scenario asks for, one for it to have landed — the same wait the states walk
-                // takes, for the same reason. Without it this reads the conversation the
-                // harness opened WITH, which is long enough to fill the column, so `fits`
-                // fails and says the layout chose wrongly when nothing had been laid out yet.
-                // It only ever lost that race when the suite was busy, which is the worst way
-                // for a case to be wrong: green alone, red beside the cases it ships with.
-                do! Probe.frames page 2
-                let conversation = "#shell [data-conversation]"
-                let! measured = boxesOf page [ conversation; conversation + " > :last-child" ]
-                let! padding = Probe.computed page conversation "padding-bottom"
-                let! scroll = Probe.scroll page conversation
-                let over, top =
-                    match scroll with
-                    | Some s -> s.Height - s.ClientHeight, s.Top
-                    | None -> failwith "the conversation's scroll box could not be read"
-                // One pixel over, and only one: the timeline always overflows by that much so
-                // iOS bounces it even when short (`Style.timeline`). Being scrolled to the end
-                // takes `scrollTop` to that pixel, which is why `gap` is measured in the
-                // column's content rather than on screen.
-                let gap =
-                    match measured, padding |> Option.filter (fun p -> p.EndsWith "px") with
-                    | [ c; last ], Some padding -> c.Bottom - float (padding.Substring (0, padding.Length - 2)) - top - last.Bottom
-                    | _ -> failwith "the conversation, its last item or its padding could not be read"
-                Expect.equal over 1.0 "the conversation is shorter than its column but for the pixel it bounces on, so where it ends is a choice"
-                Expect.isTrue (abs gap < 1.0) (sprintf "the last item ends %.0fpx above the column's foot" gap)
-                return ()
-            }
-        // The name on a rule is an INPUT at rest, which is a promise no markup test can
-        // settle: a field that renders but never takes a keystroke, or one whose value the
-        // next render puts back, reads in the DOM exactly like one that works. So this types
-        // into it and waits for what was typed to survive a render — which is the whole
-        // round trip, from the field through `EditChapterNameMsg` and the session's own text
-        // back to the value the view writes.
-        editorCaseIn 1440 900 "what you type on a chapter's rule is what the session calls it" <| fun page ->
-            async {
-                do! waitVisible "the chapter's name on its rule" page "#shell [data-chapter-name='msg-filler-8']"
-                do! awaitU (page.ClickAsync "#shell [data-chapter-name='msg-filler-8']")
-                // To the end of what the field holds, so this adds rather than replacing — an
-                // edit against the text the session holds is what the field is for, and
-                // appending is the edit most likely to expose a diff computed against the
-                // wrong side. (A chapter nobody has named holds nothing, so the first words
-                // typed here ARE its name.)
-                do! awaitU (page.Keyboard.PressAsync "End")
-                do! awaitU (page.Keyboard.TypeAsync " — settled")
-                do! Wait.until "what was typed to be what the rule says, after the render that followed it"
-                        (fun () -> Read.values page "#shell [data-chapter-name='msg-filler-8']")
-                        (List.tryHead >> Option.exists (fun v -> v.EndsWith " — settled"))
-                return ()
-            }
+                  do! awaitU (page.ClickAsync "#shell [data-chapter-entry='msg-harness']")
+                  do! Wait.until "the message to flash as it is revealed"
+                          (fun () -> Read.attr page "#shell [data-conversation] [data-message-id='msg-harness']" "class")
+                          (Option.exists (fun classes -> classes.Split ' ' |> Array.contains "animate-reveal"))
+                  // Hit-tested at its own centre, which is the only way to ask whether something
+                  // is over it: a drawer left open leaves the message's box exactly where it was,
+                  // and every cheap visibility check answers yes.
+                  do! Wait.until "the drawer to stand aside, so the chapter is on the screen"
+                          (fun () -> Probe.hitAt page "#shell [data-conversation] [data-message-id='msg-harness']" 4.0) id
+                  return ()
+              }
+          // The contents' entries on a phone are touch targets, so each is one row at the 44px
+          // floor and the stack adds nothing between them: a gap on top of a full-height entry
+          // read as two chapters a hand apart. Measured rather than read from the markup, since
+          // a row's height is what its padding, its line and the stack's gap add up to.
+          editorCaseIn 390 844 "on a phone the contents' entries are single 44px rows with nothing between them" <| fun page ->
+              async {
+                  do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
+                  do! waitVisible "a chapter in the contents" page "#shell [data-chapters] [data-chapter-entry]"
+                  let! entries = Probe.seen page "#shell [data-chapters] [data-chapter-entry]"
+                  let boxes = entries |> List.map (fun e -> e.Box)
+                  let heights = boxes |> List.map Yession.App.Probes.Box.height
+                  let gaps = List.pairwise boxes |> List.map (fun (a, b) -> b.Top - a.Bottom)
+                  let shape =
+                      [| float boxes.Length
+                         (if heights.IsEmpty then 0.0 else List.min heights)
+                         (if heights.IsEmpty then 0.0 else List.max heights)
+                         (if gaps.IsEmpty then 0.0 else List.max gaps) |]
+                  Expect.isTrue (shape.[0] >= 2) "the harness has more than one chapter, so there is a gap to measure"
+                  Expect.isTrue (shape.[1] >= 44.0) (sprintf "every entry is a thumb's 44px, the shortest is %.1f" shape.[1])
+                  Expect.isTrue (shape.[2] < 50.0) (sprintf "and none is taller than one row, the tallest is %.1f" shape.[2])
+                  Expect.isTrue (shape.[3] <= 1.0) (sprintf "with no gap between neighbours, the widest is %.1f" shape.[3])
+                  return ()
+              }
+          // A page that lands with the client still behind is not a picture anybody asked for:
+          // a cold open reads the log from the oldest a page per round trip, pinned to its
+          // foot, and every page rendered was history scrolling past under the eye (116 on a
+          // session of 97 items). Only a browser can say whether the page RENDERED — the model
+          // folds every page either way, and the render is the app's own count — so this
+          // drives the harness's cold open, fifteen pages a round trip apart, well inside the
+          // window a render is held for, and asks how many times the app drew.
+          editorCaseIn 390 844 "pages that leave the client behind are folded but not drawn" <| fun page ->
+              async {
+                  do! waitVisible "the shell's conversation" page "#shell [data-conversation]"
+                  // 60 items of streamed replies is ~1,500 events: fifteen pages of a hundred,
+                  // twenty-five milliseconds apart — three hundred and seventy-five of the five
+                  // hundred a render is held for.
+                  let! report = Harness.await3 page HarnessPage.benchOpenCold 60 100 25
+                  use doc = System.Text.Json.JsonDocument.Parse report
+                  let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
+                  let items = doc.RootElement.GetProperty("items").GetInt32 ()
+                  Expect.isTrue (items >= 60) "every page was folded: the whole conversation is on the page"
+                  // The shell, the connection, and the catch-up's end — never one per page. A
+                  // ceiling with room in it, because what it pins is the pages NOT drawing;
+                  // one per page is fifteen more than this.
+                  Expect.isTrue (renders <= 5) (sprintf "the pages in between were folded without a render each — %d renders for fifteen pages" renders)
+                  return ()
+              }
+          // A scroll in progress survives the renders that land during it. A render puts each
+          // pinned surface's scroll back where the reader had it, and a write to `scrollTop`
+          // — even of the value it already holds — ends whatever scroll the browser has in
+          // flight. Records landing in a terminal the conversation does not draw are a render
+          // each and move nothing on it; under the unconditional write, a scroll started from
+          // the end stayed at the end for as long as they kept coming (`Render.fs`,
+          // `restoreSurfaceScroll`). Only a browser has a scroll in flight to take away, so
+          // only a browser can watch it survive. Smooth rather than flung: the same in-flight
+          // scroll, and one with a stated destination to check against.
+          editorCaseIn 390 844 "a scroll in progress is not taken away by the renders that land during it" <| fun page ->
+              async {
+                  do! waitVisible "the shell's conversation" page "#shell [data-conversation]"
+                  // Two hundred items, a record a frame for four hundred frames — the scroll has
+                  // to reach the top well inside that, so every frame of it has a render in it.
+                  do! Harness.run4 page HarnessPage.benchScrollBegin 200 400 16 true
+                  let! _ = page.EvaluateAsync (System.IO.File.ReadAllText "tests/browser/scroll-trace.js") |> Async.AwaitTask
+                  let! stopped = Probe.reading page Yession.App.Probes.Measure.SmoothScrollToTop
+                  let! trace = page.EvaluateAsync<string> "JSON.stringify(window.__trace)" |> Async.AwaitTask
+                  if stopped <> [ 0.0 ] then printfn "SCROLL TRACE #%d %A: %s" copy stopped trace
+                  let reached = match stopped with [ at ] -> at | _ -> failwith "there is no conversation to scroll"
+                  let! report = Harness.ask page HarnessPage.benchScrollEnd
+                  use doc = System.Text.Json.JsonDocument.Parse report
+                  let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
+                  let startedAt = doc.RootElement.GetProperty("scrolledFrom").GetDouble ()
+                  Expect.equal reached 0.0 "the scroll reached the top it was sent to, through every render on the way"
+                  // Anti-vacuity: a conversation that fit the screen had no scroll to lose, and
+                  // a stream that never rendered had nothing to lose it to.
+                  Expect.isTrue (startedAt > 0.0) "the conversation scrolls, so there was a scroll to take away"
+                  Expect.isTrue (renders >= 10) (sprintf "records landed while the scroll ran — %d renders" renders)
+                  return ()
+              }
+          // A conversation shorter than its column ends where the next message is typed. Top
+          // aligned, three messages on a 1440x900 screen ended 598px above the composer, with the
+          // empty space between the newest line and the field answering it. Only a laid-out
+          // page knows where the last item landed; the markup is identical either way.
+          //
+          // The shortest conversation the harness draws (the scroll scenario's, with no filler)
+          // on a tall desktop screen, which leaves it a few hundred pixels short of the column.
+          // That it fits is asserted, because a conversation that fills the column ends at its
+          // foot however it is aligned, and the case would pass for nothing.
+          editorCaseIn 1440 1200 "a short conversation ends by the composer, not at the top of the column" <| fun page ->
+              async {
+                  do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-id]"
+                  do! Harness.run4 page HarnessPage.benchScrollBegin 0 0 16 true
+                  let! _ = Harness.ask page HarnessPage.benchScrollEnd
+                  // Two frames before anything is measured: one for the render the empty
+                  // scenario asks for, one for it to have landed — the same wait the states walk
+                  // takes, for the same reason. Without it this reads the conversation the
+                  // harness opened WITH, which is long enough to fill the column, so `fits`
+                  // fails and says the layout chose wrongly when nothing had been laid out yet.
+                  // It only ever lost that race when the suite was busy, which is the worst way
+                  // for a case to be wrong: green alone, red beside the cases it ships with.
+                  do! Probe.frames page 2
+                  let conversation = "#shell [data-conversation]"
+                  let! measured = boxesOf page [ conversation; conversation + " > :last-child" ]
+                  let! padding = Probe.computed page conversation "padding-bottom"
+                  let! scroll = Probe.scroll page conversation
+                  let over, top =
+                      match scroll with
+                      | Some s -> s.Height - s.ClientHeight, s.Top
+                      | None -> failwith "the conversation's scroll box could not be read"
+                  // One pixel over, and only one: the timeline always overflows by that much so
+                  // iOS bounces it even when short (`Style.timeline`). Being scrolled to the end
+                  // takes `scrollTop` to that pixel, which is why `gap` is measured in the
+                  // column's content rather than on screen.
+                  let gap =
+                      match measured, padding |> Option.filter (fun p -> p.EndsWith "px") with
+                      | [ c; last ], Some padding -> c.Bottom - float (padding.Substring (0, padding.Length - 2)) - top - last.Bottom
+                      | _ -> failwith "the conversation, its last item or its padding could not be read"
+                  Expect.equal over 1.0 "the conversation is shorter than its column but for the pixel it bounces on, so where it ends is a choice"
+                  Expect.isTrue (abs gap < 1.0) (sprintf "the last item ends %.0fpx above the column's foot" gap)
+                  return ()
+              }
+          // The name on a rule is an INPUT at rest, which is a promise no markup test can
+          // settle: a field that renders but never takes a keystroke, or one whose value the
+          // next render puts back, reads in the DOM exactly like one that works. So this types
+          // into it and waits for what was typed to survive a render — which is the whole
+          // round trip, from the field through `EditChapterNameMsg` and the session's own text
+          // back to the value the view writes.
+          editorCaseIn 1440 900 "what you type on a chapter's rule is what the session calls it" <| fun page ->
+              async {
+                  do! waitVisible "the chapter's name on its rule" page "#shell [data-chapter-name='msg-filler-8']"
+                  do! awaitU (page.ClickAsync "#shell [data-chapter-name='msg-filler-8']")
+                  // To the end of what the field holds, so this adds rather than replacing — an
+                  // edit against the text the session holds is what the field is for, and
+                  // appending is the edit most likely to expose a diff computed against the
+                  // wrong side. (A chapter nobody has named holds nothing, so the first words
+                  // typed here ARE its name.)
+                  do! awaitU (page.Keyboard.PressAsync "End")
+                  do! awaitU (page.Keyboard.TypeAsync " — settled")
+                  do! Wait.until "what was typed to be what the rule says, after the render that followed it"
+                          (fun () -> Read.values page "#shell [data-chapter-name='msg-filler-8']")
+                          (List.tryHead >> Option.exists (fun v -> v.EndsWith " — settled"))
+                  return ()
+              }
         // The divider of a chapter nobody has named shows no name — the opening message is
         // right under it — so the empty field is how it invites one. The invitation is a
         // promise only a painted page can settle: the placeholder is a pseudo-element whose
