@@ -348,47 +348,114 @@ let parseOrExit (spec: Yession.Domain.Cli.Spec) (currentVersion: string) : Yessi
         exit 0
     | Yession.Domain.Cli.Outcome.Refused complaint -> abort complaint
 
-// --- one listener, several addresses ---------------------------------------------------------
+// --- one server, several doors -------------------------------------------------------------
 
-/// A server answering on one port at several addresses, opened as the sandboxes that need
-/// them appear. What the git gateway and the credential proxy listen on: each sandbox backend
-/// reaches this host at its own address (`Sandboxes.hostAddressFrom`), and a listener on
-/// every interface would also answer the host's other networks, which no sandbox is on.
+/// A server answering at several addresses (doors), opened as the sandboxes that need them
+/// appear. What the git gateway and the credential proxy listen on: each sandbox backend
+/// reaches this host at its own address (`Sandboxes.hostDoorFrom`), and a listener on every
+/// interface would also answer the host's other networks, which no sandbox is on.
 ///
-/// One port for all of them, because a sandbox is told a URL with the port in it before it
-/// is known which address it will dial.
+/// Each door has its own port, and a sandbox is told the port of the door it dials
+/// (`PortAt`). The doors opened at start come in groups, and a group shares one port: srt on
+/// macOS dials this host by NAME, srt's proxy resolves that name to whichever interface
+/// address the resolver answers, and so every door it can arrive at must answer on the one
+/// port its URL names (`Sandboxes.hostDoorsFrom`). Each other door is a group of its own.
+///
+/// A group's port is allocated at start, by binding: `:0` at its first address, then that
+/// port at the rest. The OS checks a `:0` bind against the one address it is given, so the
+/// port can already be held at another address of the group. That bind fails with
+/// EADDRINUSE, and allocation closes what it bound and starts again from a fresh `:0`, a
+/// bounded number of times (`allocationAttempts`).
+///
+/// A door opened later (`Open`) binds the FIRST door's port, as all doors did before. That
+/// is the native Docker daemon's session network gateway, and its containers' URLs are
+/// written before the network, and so the door, exists: they are written with the first
+/// door's port, which is also the port a daemon in a VM forwards `host-gateway` to. So that
+/// door can still collide (EADDRINUSE), and its sandbox start fails saying so. Interfaces
+/// that appear after start are not doors.
 type Doors =
-    { Port : int
-      /// Answer at one more address too. Asked again for an address already open, it answers
-      /// what the first ask did.
+    { /// The port the door at `address` answers on, when there is one there.
+      PortAt : string -> int option
+      /// Answer at one more address too, on the first door's port. Asked again for an
+      /// address already open, it answers what the first ask did.
       Open : string -> Async<Result<unit, string>>
       Close : unit -> Async<unit> }
 
-/// Open `serve ()` on each of `first`, on one port the OS chooses for the first, then
-/// `Open` more. `serve` makes a fresh server for each address, with the same handlers.
-let openDoors (what: string) (serve: unit -> HttpServer) (first: string list) : Async<Doors> =
-    let listenOn (address: string) (port: int) : Async<Result<HttpServer, string>> =
+/// How many times a group's port is allocated before start gives up. Each attempt fails only
+/// when the port the OS chose at the group's first address is already held at another of
+/// its addresses, which is rare and independent between attempts. The bound is there for a
+/// host where every port is held at some door, where the loop would otherwise never end.
+let private allocationAttempts = 16
+
+/// `openDoors`, with the port allocation attempt `n` (from 0) asks for at a group's first
+/// address. `openDoors` always asks for `0`, which the OS answers. A test names a port it
+/// already holds at another door of the group, to make the collision certain.
+let openDoorsAsking
+    (askFirst: int -> int)
+    (what: string)
+    (serve: unit -> HttpServer)
+    (groups: string list list)
+    : Async<Doors> =
+    let listenOn (address: string) (port: int) : Async<Result<HttpServer, string * bool>> =
         Async.FromContinuations (fun (cont, _, _) ->
             let server = serve ()
             server.onceError (fun error ->
-                cont (Error (sprintf "%s cannot listen on %s:%d: %s" what address port (StreamError.describe error))))
+                let inUse = Errors.errno (unbox<exn> (box error)) = Some "EADDRINUSE"
+                cont (Error (sprintf "%s cannot listen on %s:%d: %s" what address port (StreamError.describe error), inUse)))
             server.listen (port, address, fun () -> cont (Ok server)) |> ignore)
+    let closeAll (servers: HttpServer list) : Async<unit> =
+        async {
+            for server in servers do
+                do! Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ()))
+        }
+    /// One port for every address of `group`: the servers bound, and the port.
+    let allocate (group: string list) : Async<HttpServer list * int> =
+        let giveUp (reason: string) =
+            failwithf
+                "%s found no port free at all of %s in %d attempts. The last: %s"
+                what
+                (String.concat ", " group)
+                allocationAttempts
+                reason
+        let rec attempt (n: int) =
+            async {
+                let first = List.head group
+                match! listenOn first (askFirst n) with
+                | Error (reason, inUse) ->
+                    if not inUse then return failwith reason
+                    elif n + 1 < allocationAttempts then return! attempt (n + 1)
+                    else return giveUp reason
+                | Ok server ->
+                    let port = serverPort server
+                    let mutable bound = [ server ]
+                    let mutable failed = None
+                    for address in List.tail group do
+                        if failed.IsNone then
+                            match! listenOn address port with
+                            | Ok server -> bound <- server :: bound
+                            | Error fault -> failed <- Some fault
+                    match failed with
+                    | None -> return bound, port
+                    | Some (reason, inUse) ->
+                        do! closeAll bound
+                        if not inUse then return failwith reason
+                        elif n + 1 < allocationAttempts then return! attempt (n + 1)
+                        else return giveUp reason
+            }
+        attempt 0
     let mutable servers : HttpServer list = []
+    let mutable ports : Map<string, int> = Map.empty
     let mutable opened : Map<string, JS.Promise<Result<unit, string>>> = Map.empty
     async {
-        let addresses = List.distinct first
-        let! port =
-            match addresses with
-            | [] -> async { return failwithf "%s has no address to listen on" what }
-            | head :: _ ->
-                async {
-                    match! listenOn head 0 with
-                    | Ok server ->
-                        servers <- [ server ]
-                        opened <- Map.add head (Async.StartAsPromise (async { return Ok () })) opened
-                        return serverPort server
-                    | Error reason -> return failwith reason
-                }
+        let groups = groups |> List.map List.distinct |> List.filter (not << List.isEmpty)
+        if List.isEmpty groups then failwithf "%s has no address to listen on" what
+        for group in groups do
+            let! bound, port = allocate group
+            servers <- bound @ servers
+            for address in group do
+                ports <- Map.add address port ports
+                opened <- Map.add address (Async.StartAsPromise (async { return Ok () })) opened
+        let firstPort = Map.find (List.head (List.head groups)) ports
         let openAt (address: string) : Async<Result<unit, string>> =
             match Map.tryFind address opened with
             | Some pending -> awaitPromise pending
@@ -396,28 +463,25 @@ let openDoors (what: string) (serve: unit -> HttpServer) (first: string list) : 
                 let pending =
                     Async.StartAsPromise (
                         async {
-                            match! listenOn address port with
+                            match! listenOn address firstPort with
                             | Ok server ->
                                 servers <- server :: servers
+                                ports <- Map.add address firstPort ports
                                 return Ok ()
-                            | Error reason ->
+                            | Error (reason, _) ->
                                 // Not kept: the next sandbox to need the address asks again.
                                 opened <- Map.remove address opened
                                 return Error reason
                         })
                 opened <- Map.add address pending opened
                 awaitPromise pending
-        for address in List.tail addresses do
-            match! openAt address with
-            | Ok () -> ()
-            | Error reason -> failwith reason
         return
-            { Port = port
+            { PortAt = fun address -> Map.tryFind address ports
               Open = openAt
-              Close =
-                fun () ->
-                    async {
-                        for server in servers do
-                            do! Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ()))
-                    } }
+              Close = fun () -> closeAll servers }
     }
+
+/// Open `serve ()` at each address of each of `groups`, one port per group, then `Open` more.
+/// `serve` makes a fresh server for each address, with the same handlers.
+let openDoors (what: string) (serve: unit -> HttpServer) (groups: string list list) : Async<Doors> =
+    openDoorsAsking (fun _ -> 0) what serve groups

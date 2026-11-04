@@ -563,10 +563,6 @@ let tests =
             // native daemon — and this is the one place a wrong answer shows: a git in a
             // container that cannot reach its own session's gateway.
             testCaseAsync "a container reaches the session's git gateway by the name the backend promises" (async {
-                let host =
-                    match Sandboxes.hostAddressHere (Interop.hostname ()) DockerBackend with
-                    | Some host -> host
-                    | None -> failwith "docker is a backend with a route to the host"
                 // github.com, played by a listener that answers anything with one line —
                 // seeing that line inside the container is the whole proof.
                 let upstream =
@@ -576,6 +572,10 @@ let tests =
                 do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
                 let! gateway = GitGateway.start (Sandboxes.hostDoorsHere ()) (sprintf "http://127.0.0.1:%d" (serverPort upstream)) ignore
                 try
+                    let door =
+                        match Sandboxes.hostDoorHere (Interop.hostname ()) gateway.PortAt DockerBackend with
+                        | Some door -> door
+                        | None -> failwith "docker is a backend with a route to the host"
                     let cap = gateway.Grant (GitGateway.Routed.Sandbox SandboxRef.defaultRef)
                     let secret =
                         gateway.Lend
@@ -588,7 +588,7 @@ let tests =
                     // The session's network, opening the gateway where its containers reach
                     // this host, as a session's does (`dockerNetwork` in SessionMain).
                     let! _, sandbox = startOrFailOn (DockerFixture.network gateway.Open) alpineSpec
-                    let url = sprintf "http://%s:%d/git/%s/github.com/octo/hello.git/info/refs?service=git-upload-pack" host gateway.Port cap
+                    let url = sprintf "http://%s:%d/git/%s/github.com/octo/hello.git/info/refs?service=git-upload-pack" door.Host door.Port cap
                     // The loan, as a block's git would carry it.
                     let! run, out, err =
                         runInSandbox sandbox "wget" [ "-qO-"; "-T"; "10"; "--header"; sprintf "X-Yession-Loan: %s" secret; url ] Map.empty None

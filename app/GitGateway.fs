@@ -32,7 +32,7 @@ module Yession.Host.GitGateway
 // The listener binds where a sandbox reaches this host, and nowhere else (`Interop.Doors`):
 // loopback for the host backend and for a container on a daemon in a VM (Colima, Docker
 // Desktop), whose `host.docker.internal` is the host loopback; srt's address on this
-// platform (`Sandboxes.hostDoors`); and, on a native Linux daemon, the session's Docker
+// platform (`Sandboxes.hostDoorsFrom`); and, on a native Linux daemon, the session's Docker
 // network's gateway, opened when its first container starts. The route is a 128-bit
 // capability minted per sandbox, so what is exposed at each is "this session's gateway, to
 // whoever holds a cap for it" — the same trust a sandbox already has.
@@ -140,10 +140,10 @@ let route (method: string) (path: string) (service: string option) : GitRequest 
     | _ -> None
 
 /// The git config a sandbox is given so that its git reaches github.com through the gateway
-/// at `host:port` under `cap`. One `insteadOf`, which is what makes it full git: every
+/// at `door` under `cap`. One `insteadOf`, which is what makes it full git: every
 /// transport operation rewrites its URL through this, and nothing else about git changes.
-let gitConfig (host: string) (port: int) (cap: string) : (string * string) list =
-    [ sprintf "url.http://%s:%d/%s/%s/%s/.insteadOf" host port prefix cap remoteHost, sprintf "https://%s/" remoteHost ]
+let gitConfig (door: Sandboxes.HostDoor) (cap: string) : (string * string) list =
+    [ sprintf "url.http://%s:%d/%s/%s/%s/.insteadOf" door.Host door.Port prefix cap remoteHost, sprintf "https://%s/" remoteHost ]
 
 /// The header a block's git carries its loan in. Dropped on the way up with the rest of what
 /// described this hop (`droppedUpstream`): it names a loan at THIS gateway and means nothing
@@ -154,8 +154,8 @@ let loanHeader = "x-yession-loan"
 /// every request — scoped to the gateway's origin (git matches `http.<url>.*` against the URL
 /// it connects to, which after the `insteadOf` above is this one), so it goes to no other
 /// host. One pair, which is what `__y_env` has a slot for.
-let loanConfig (host: string) (port: int) (secret: string) : string * string =
-    sprintf "http.http://%s:%d/.extraheader" host port, sprintf "X-Yession-Loan: %s" secret
+let loanConfig (door: Sandboxes.HostDoor) (secret: string) : string * string =
+    sprintf "http.http://%s:%d/.extraheader" door.Host door.Port, sprintf "X-Yession-Loan: %s" secret
 
 // --- the wire ------------------------------------------------------------------------------
 
@@ -323,8 +323,9 @@ type Borrower =
     | Verb of Guid
 
 type Gateway =
-    { /// The bound port, at every address it answers on.
-      Port : int
+    { /// The port the door at an address answers on (`Interop.Doors`): ask it with
+      /// `Sandboxes.hostDoorFrom`, which knows which door a sandbox's name arrives at.
+      PortAt : string -> int option
       /// Answer at one more address: where a session's containers reach this host on its
       /// Docker network (`DockerSandbox.Network.Reached`).
       Open : string -> Async<Result<unit, string>>
@@ -350,13 +351,13 @@ type private Loan =
       Borrower : Borrower
       Lender : Lender }
 
-/// Start the gateway at `addresses` (`Sandboxes.hostDoors`), on one port. `upstream` is the origin github.com's git endpoints live under — a
+/// Start the gateway at `doors` (`Sandboxes.hostDoorsFrom`), a port per group. `upstream` is the origin github.com's git endpoints live under — a
 /// parameter for the reason every provider endpoint here is: a suite needs somewhere to
 /// point it that is not the live provider. `report` is where a fault goes that git can no
 /// longer be told about: once the answer's headers are out there is no `ERR` channel left,
 /// and a fault swallowed there is a fault nobody hears — which for a push's audit record is
 /// a push that went out on somebody's credential with no line saying so.
-let start (addresses: string list) (upstream: string) (report: string -> unit) : Async<Gateway> =
+let start (doors: string list list) (upstream: string) (report: string -> unit) : Async<Gateway> =
     let mutable grants : Map<string, Routed> = Map.empty
     /// Live loans, by secret.
     let mutable live : Map<string, Loan> = Map.empty
@@ -461,9 +462,9 @@ let start (addresses: string list) (upstream: string) (report: string -> unit) :
                             })
 
     async {
-        let! doors = openDoors "the git gateway" (fun () -> createServer handler) addresses
+        let! doors = openDoors "the git gateway" (fun () -> createServer handler) doors
         return
-            { Port = doors.Port
+            { PortAt = doors.PortAt
               Open = doors.Open
               Grant =
                 fun routed ->

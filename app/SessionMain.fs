@@ -1020,9 +1020,9 @@ Async.StartImmediate (
         // backend that cannot host it fails the boot — the same fail-closed stance as the
         // WorkSandbox composition above. Its route to the gateway is the one a
         // work sandbox on its backend would get; a backend with none cannot host it.
-        let gitRouteHost =
-            match Sandboxes.hostAddressHere (Interop.hostname ()) gitBackend with
-            | Some host -> host
+        let gitRouteDoor =
+            match Sandboxes.hostDoorHere (Interop.hostname ()) gitGateway.PortAt gitBackend with
+            | Some door -> door
             | None -> failwithf "repos: a %s git sandbox has no route to this session's git gateway" (SandboxBackend.describe gitBackend)
         do
             match Repos.create
@@ -1039,9 +1039,9 @@ Async.StartImmediate (
                       ExtraReadPaths = []
                       Git = Repos.gitExecutable (Sandboxes.ambientEnv ())
                       AllowedDomains =
-                        Sandboxes.hostRouteHere (Interop.ownAddresses ()) gitBackend gitRouteHost gitGateway.Port
+                        Sandboxes.hostRouteHere (Interop.ownAddresses ()) gitBackend gitRouteDoor
                       AllowProtocol = "http"
-                      Route = Repos.GitRoute.through gitGateway gitRouteHost
+                      Route = Repos.GitRoute.through gitGateway gitRouteDoor
                       CloneUrl = RepoRef.cloneUrl
                       ResolveToken = resolveGitHubToken
                       Canonical =
@@ -1365,12 +1365,13 @@ Async.StartImmediate (
                         Repos.identityNames
                         |> List.map (fun name -> name, identity |> Option.bind (Map.tryFind name)) }
             }
-        // The route's host, as THIS sandbox's git reaches it — or none, for a backend with
-        // no way to the gateway, which is the one thing a start refuses over.
+        // Where THIS sandbox reaches a listener whose doors answer `portAt` — or none, for a
+        // backend with no way to it, which is the one thing a start refuses over.
         let sandboxBackend (sandbox: SandboxRef) : SandboxBackend =
             SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
-        let gatewayHostFor (sandbox: SandboxRef) : string option =
-            sandboxBackend sandbox |> Sandboxes.hostAddressHere (Interop.hostname ())
+        let doorFor (portAt: string -> int option) (sandbox: SandboxRef) : Sandboxes.HostDoor option =
+            sandboxBackend sandbox |> Sandboxes.hostDoorHere (Interop.hostname ()) portAt
+        let gatewayDoorFor (sandbox: SandboxRef) : Sandboxes.HostDoor option = doorFor gitGateway.PortAt sandbox
         // The listeners exist now, so the session's Docker network can tell them where its
         // containers reach this host (`dockerNetwork`).
         reachListeners.Value <-
@@ -1399,18 +1400,18 @@ Async.StartImmediate (
                             let git () =
                                 if not (List.contains ConnectionRoute.Git routes) then Ok WorkSandboxes.Provision.empty
                                 else
-                                    match gatewayHostFor sandbox with
+                                    match gatewayDoorFor sandbox with
                                     | None ->
                                         let backend = SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
                                         Error (
                                             sprintf
                                                 "github cannot be forwarded by git into a %s sandbox: its git would have no route to this session's gateway"
                                                 (SandboxBackend.describe backend))
-                                    | Some host ->
+                                    | Some door ->
                                         let cap = gitGateway.Grant (GitGateway.Routed.Sandbox sandbox)
                                         Ok
                                             { WorkSandboxes.Provision.empty with
-                                                GitConfig = GitGateway.gitConfig host gitGateway.Port cap
+                                                GitConfig = GitGateway.gitConfig door cap
                                                 // The route's host, for a backend whose egress
                                                 // would otherwise refuse it (srt) — at the
                                                 // gateway's port, by name and by address
@@ -1419,8 +1420,7 @@ Async.StartImmediate (
                                                     Sandboxes.hostRouteHere
                                                         (Interop.ownAddresses ())
                                                         (sandboxBackend sandbox)
-                                                        host
-                                                        gitGateway.Port }
+                                                        door }
                             match api with
                             | WorkSandboxes.CredentialForwarding.Unforwardable reason ->
                                 return WorkSandboxes.CredentialForwarding.Unforwardable reason
@@ -1465,9 +1465,9 @@ Async.StartImmediate (
                                         return BlockEnv.none
                                     else
                                         let! identity = identityFor owner
-                                        match gatewayHostFor sandbox with
+                                        match gatewayDoorFor sandbox with
                                         | None -> return identity
-                                        | Some host ->
+                                        | Some door ->
                                             let secret =
                                                 gitGateway.Lend
                                                     (GitGateway.Routed.Sandbox sandbox)
@@ -1493,7 +1493,7 @@ Async.StartImmediate (
                                                                               Actor = Authority.author authority })
                                                                 return ()
                                                             } }
-                                            return { identity with GitConfig = Some (GitGateway.loanConfig host gitGateway.Port secret) }
+                                            return { identity with GitConfig = Some (GitGateway.loanConfig door secret) }
                                 }
                             // By `api`: the API's stand-in, lent to the same act as the push,
                             // so a block's `gh` and its `git push` spend one person's
@@ -1516,7 +1516,7 @@ Async.StartImmediate (
                     fun terminal ->
                         gitGateway.Retire (GitGateway.Borrower.Terminal terminal)
                         credentialProxy.Retire terminal } ]
-        let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials (CredentialProxy.provider credentialProxy sandboxBackend gatewayHostFor))) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity agentReport telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage port
+        let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials (CredentialProxy.provider credentialProxy sandboxBackend doorFor))) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity agentReport telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
         // capabilities and the `work_sandboxes` query read is filled here — before the
         // readiness line, and therefore before any turn or any browser can ask.

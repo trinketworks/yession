@@ -470,8 +470,9 @@ let private addedOn (backend: SandboxBackend) (root: string) = addedRouted Repos
 let private fetchedThroughPlantedRewrite () : Async<(string * string option * string option) list> =
     async {
         let root = mkdtemp ()
-        let! gateway = GitGateway.start [ "127.0.0.1" ] "http://127.0.0.1:1" ignore
-        let! service, checkout = addedRouted (Repos.GitRoute.through gateway "127.0.0.1") HostBackend root
+        let! gateway = GitGateway.start [ [ "127.0.0.1" ] ] "http://127.0.0.1:1" ignore
+        let door : Sandboxes.HostDoor = { Host = "127.0.0.1"; Port = gateway.PortAt "127.0.0.1" |> Option.get }
+        let! service, checkout = addedRouted (Repos.GitRoute.through gateway door) HostBackend root
         let! listener = listen ()
         hostGit [ "config"; "remote.origin.url"; "https://github.com/octo/hello.git" ] checkout
         hostGit [ "config"; sprintf "url.http://127.0.0.1:%d/.insteadOf" listener.Port; "https://github.com/octo/" ] checkout
@@ -1617,7 +1618,7 @@ let private credentialHelperTests =
         // What the gateway appends later (`withGitConfig provision.GitConfig`) must not undo
         // it: appended entries follow the reset, and a reset is only undone by a helper.
         testCase "a forwarded credential's git config does not bring a helper back" <| fun () ->
-            let env = (policyOn SrtBackend).Env |> Sandboxes.withGitConfig (GitGateway.gitConfig "home" 65025 "cap")
+            let env = (policyOn SrtBackend).Env |> Sandboxes.withGitConfig (GitGateway.gitConfig { Host = "home"; Port = 65025 } "cap")
             Expect.isFalse (helperIsHandedUnder env) "still no helper"
     ]
 
