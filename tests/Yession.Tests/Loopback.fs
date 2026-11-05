@@ -78,6 +78,26 @@ let internal listenOnLoopback () : Serving =
 /// runs. `tasks.fsx` joins it to the root.
 let internal harnessRoot = "tests/browser"
 
+/// Answer one request a server of this suite took, with `respond`, and close it — and let no
+/// failure to answer it escape.
+///
+/// Every such server answers on a loop it started with `Async.Start`, which has nowhere to
+/// send a failure: one that escapes ends the test process, and with it every case running
+/// beside the one it belonged to. Answering fails for reasons that belong to the moment, not
+/// to any case: the page that asked has navigated away or closed, or the case that owned the
+/// server has finished and stopped it while a reply was on its way. A release run lost its
+/// whole browser tier that way, to a forwarder whose 502 met a response that was already
+/// gone. So a request that cannot be answered is said, with `what` and the request, and
+/// dropped; the server goes on to the next.
+let internal answer (what: string) (ctx: HttpListenerContext) (respond: Async<unit>) : Async<unit> =
+    let asked = sprintf "%s %s" ctx.Request.HttpMethod ctx.Request.RawUrl
+    async {
+        match! Async.Catch respond with
+        | Choice1Of2 () -> ()
+        | Choice2Of2 fault -> eprintfn "%s: %s was not answered: %s" what asked fault.Message
+        try ctx.Response.Close () with _ -> ()
+    }
+
 /// A tiny read-only static file server over `HttpListener` (the harness page + its bundle).
 /// Returns the server — the listener to stop, and the origin it came up on, which is the only
 /// place that origin is stated; requests are served on a background loop.
@@ -88,22 +108,26 @@ let internal serveStatic (root: string) : Serving =
         async {
             match! Async.Catch (listener.GetContextAsync () |> Async.AwaitTask) with
             | Choice1Of2 ctx ->
-                let rel = ctx.Request.Url.AbsolutePath.TrimStart '/'
-                let rel = if rel = "" then "editor-harness.html" else rel
-                let path = Path.Combine (root, rel)
-                if File.Exists path then
-                    let bytes = File.ReadAllBytes path
-                    ctx.Response.ContentType <-
-                        if path.EndsWith ".js" then "text/javascript"
-                        elif path.EndsWith ".html" then "text/html"
-                        // A stylesheet served as `application/octet-stream` is ignored by
-                        // the browser, silently — which makes every layout measured on this
-                        // page a fiction, and looks exactly like CSS that does not work.
-                        elif path.EndsWith ".css" then "text/css"
-                        else "application/octet-stream"
-                    ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
-                else ctx.Response.StatusCode <- 404
-                ctx.Response.Close ()
+                do!
+                    async {
+                        let rel = ctx.Request.Url.AbsolutePath.TrimStart '/'
+                        let rel = if rel = "" then "editor-harness.html" else rel
+                        let path = Path.Combine (root, rel)
+                        if File.Exists path then
+                            let bytes = File.ReadAllBytes path
+                            ctx.Response.ContentType <-
+                                if path.EndsWith ".js" then "text/javascript"
+                                elif path.EndsWith ".html" then "text/html"
+                                // A stylesheet served as `application/octet-stream` is ignored by
+                                // the browser, silently — which makes every layout measured on
+                                // this page a fiction, and looks exactly like CSS that does not
+                                // work.
+                                elif path.EndsWith ".css" then "text/css"
+                                else "application/octet-stream"
+                            ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
+                        else ctx.Response.StatusCode <- 404
+                    }
+                    |> answer "the harness page" ctx
                 return! loop ()
             | Choice2Of2 _ -> ()   // listener stopped
         }
