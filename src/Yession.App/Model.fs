@@ -2171,9 +2171,6 @@ type ClientModel =
       /// One reader's, like `AskFront`: putting a question aside is not answering it, and the
       /// others still have it in front of them.
       FoldedSurfaces : Set<string>
-      /// A put-away surface whose dismiss was pressed once: the next press takes it down for
-      /// everyone (`ArmSurfaceDismissMsg`), as a queued message's delete arms first.
-      SurfaceDismissArmed : string option
       /// The launch surface's state — choosing the session's first repo. View state, local
       /// to this client: choosing is one person's act on one screen, and what it produces
       /// reaches everyone through the log.
@@ -2519,8 +2516,6 @@ type ClientMsg =
     | FoldSurfaceMsg of surfaceId: string
     /// This reader opened a put-away surface again, and it comes to the front of the slot.
     | UnfoldSurfaceMsg of surfaceId: string
-    /// The first press of a put-away surface's two-press dismiss, or its arming taken back.
-    | ArmSurfaceDismissMsg of surfaceId: string option
     /// This client sent the session a command, under this request id. Dispatched by the one
     /// verb that sends commands (`Client.Connection.Ask`), BEFORE the command leaves, so no
     /// answer can arrive ahead of the record of what it answers.
@@ -3065,7 +3060,6 @@ module ClientModel =
           AskOrder = []
           SurfaceAnswers = SurfaceAnswers.empty
           FoldedSurfaces = Set.empty
-          SurfaceDismissArmed = None
           Launch = Launch.empty
           Repos = Repos.ReposProjection.empty
           Timeline = TimelineProjection.empty
@@ -5108,13 +5102,6 @@ module ClientModel =
                     After = armedMs
                     Fire = ArmQueueDeleteMsg None } ]
             | None -> []
-        let surfaceDismissArmed =
-            match model.SurfaceDismissArmed with
-            | Some surfaceId ->
-                [ { Key = [ "surface-dismiss-armed"; surfaceId ]
-                    After = armedMs
-                    Fire = ArmSurfaceDismissMsg None } ]
-            | None -> []
         // One wait per entry still in the doc and not yet shown, on the same clock as
         // `effort`'s `catchUpQuietMs` — the cause is the one it already names (a send one
         // round trip behind itself). An id already shown needs no more waiting for, and one
@@ -5139,7 +5126,7 @@ module ClientModel =
                           After = int Pending.deadlineMillis
                           Fire = PendingWaitedMsg (since + Pending.deadlineMillis) }
                 | Pending.Ready | Pending.Sending | Pending.Refused _ -> None)
-        effort @ waited @ dwell @ copied @ queueDeleteArmed @ surfaceDismissArmed @ queueShown @ pending @ quiet @ GitHubPoll.timer model.GitHub
+        effort @ waited @ dwell @ copied @ queueDeleteArmed @ queueShown @ pending @ quiet @ GitHubPoll.timer model.GitHub
 
     /// Fold a message into the model — the state half of `update`, its only caller.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
@@ -6165,15 +6152,13 @@ module ClientModel =
         | ReattachTerminalMsg _
         | InterruptTerminalMsg _
         | TrustRepoMsg _
-        | PressSurfaceMsg _ -> model
-        | DismissSurfaceMsg _ -> { model with SurfaceDismissArmed = None }
+        | PressSurfaceMsg _
+        | DismissSurfaceMsg _ -> model
         | FoldSurfaceMsg surfaceId -> { model with FoldedSurfaces = Set.add surfaceId model.FoldedSurfaces }
         | UnfoldSurfaceMsg surfaceId ->
             { model with
                 FoldedSurfaces = Set.remove surfaceId model.FoldedSurfaces
-                AskFront = Some (Ask.key (Ask.Surface surfaceId))
-                SurfaceDismissArmed = None }
-        | ArmSurfaceDismissMsg next -> { model with SurfaceDismissArmed = next }
+                AskFront = Some (Ask.key (Ask.Surface surfaceId)) }
         // The reader's own hand on a trust card, kept here because nobody else's screen has it.
         | ToggleTrustRouteMsg (repo, route) -> { model with TrustCards = TrustCards.toggle repo route model.TrustCards }
         | NotNowTrustMsg (repo, shown) -> { model with TrustCards = TrustCards.putOff repo shown model.TrustCards }

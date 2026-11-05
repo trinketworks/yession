@@ -763,14 +763,11 @@ let private foldTests =
             Expect.equal (ClientModel.frontAsk opened) (Some (Ask.Surface "alpha")) "the card in front"
             Expect.isTrue (List.contains (ClientEffect.Move DomMove.FocusAsk) effects) "and the keyboard goes to it"
 
-        testCase "dismissing from its line takes two presses" <| fun () ->
+        testCase "dismissing from its line takes one press" <| fun () ->
             let folded = withSurface (choiceSurface []) |> step (FoldSurfaceMsg "ask")
-            let armed, first = ClientModel.update (ArmSurfaceDismissMsg (Some "ask")) folded
-            Expect.equal first [] "the first press sends nothing"
-            Expect.stringContains (tagWith Dom.Hooks.surfaceDismiss (render armed)) "data-surface-dismiss-armed=\"true\"" "it says the next press does it"
-            let after, second = ClientModel.update (DismissSurfaceMsg "ask") armed
-            Expect.equal second [ ClientEffect.DismissSurface "ask" ] "the second asks the session"
-            Expect.equal after.SurfaceDismissArmed None "and disarms"
+            Expect.stringContains (tagWith Dom.Hooks.surfaceDismiss (render folded)) Dom.Text.surfaceDismissLabel "its bin says what it does"
+            let _, effects = ClientModel.update (DismissSurfaceMsg "ask") folded
+            Expect.equal effects [ ClientEffect.DismissSurface "ask" ] "the first press asks the session"
 
         testCase "a surface the agent took down is not still put away when its id comes back" <| fun () ->
             let folded = withSurface (choiceSurface []) |> step (FoldSurfaceMsg "ask")

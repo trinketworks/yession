@@ -88,7 +88,6 @@ let private representativeModel : ClientModel =
       AskOrder = []
       SurfaceAnswers = Map.empty
       FoldedSurfaces = Set.empty
-      SurfaceDismissArmed = None
       Launch = Launch.empty
       Repos = ReposProjection.empty
       // Connected, so the reconnect offer (Plan 11) is not showing — but the origin is
