@@ -1,57 +1,33 @@
-# Dependabot version updates, one entry per toolchain. Every update waits out a 7-day
-# cooldown: a release that is yanked or found broken in its first week never reaches a pull
-# request here.
-#
-# Every lockfile Dependabot moves is also what the Nix build reads, uv2nix style: NuGet
-# packages from each packages.lock.json's contentHash, npm from package-lock.json's integrity
-# (nix/packages.nix). Two pins it cannot keep in step on its own, `dependabot-fixup.yml` does:
-# devenv.lock's nixpkgs (Dependabot moves flake.lock alone) and the dotnet tools' outputHash.
+# Weekly version updates, each held back 7 days after release. The lockfiles Dependabot moves are
+# what nix/packages.nix builds from. dependabot-fixup.yml keeps devenv.lock's nixpkgs in step.
 version: 2
 updates:
-  # flake.lock: nixpkgs (github:NixOS/nixpkgs/nixos-unstable) and devenv.
   - package-ecosystem: nix
     directory: /
-    schedule:
-      interval: weekly
-    cooldown:
-      default-days: 7
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
 
-  # Directory.Packages.props, every packages.lock.json, and .config/dotnet-tools.json.
   - package-ecosystem: nuget
-    directories:
-      - /
-      - /examples/serial
-    schedule:
-      interval: weekly
-    cooldown:
-      default-days: 7
+    directories: [/, /examples/serial]
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
     groups:
-      nuget-minor:
-        update-types: [minor, patch]
+      nuget: { update-types: [minor, patch] }
+    # .config/dotnet-tools.json has no lockfile, so nugetTools keeps a hand hash: bump by hand.
+    ignore:
+      - dependency-name: fable
+      - dependency-name: fsharp-analyzers
 
   - package-ecosystem: npm
-    directories:
-      - /
-      - /examples/serial
-    schedule:
-      interval: weekly
-    cooldown:
-      default-days: 7
+    directories: [/, /examples/serial]
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
     groups:
-      npm-minor:
-        update-types: [minor, patch]
+      npm: { update-types: [minor, patch] }
 
-  # The workflows' actions, and the composite action they share. Pinned to a commit with the
-  # version in a comment (ReleaseGate's "every action a workflow runs is pinned to a commit");
-  # Dependabot moves both.
   - package-ecosystem: github-actions
-    directories:
-      - /
-      - /.github/actions/devenv-warm
-    schedule:
-      interval: weekly
-    cooldown:
-      default-days: 7
+    directories: [/, /.github/actions/devenv-warm]
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
     groups:
-      actions:
-        patterns: ["*"]
+      actions: { patterns: ["*"] }
