@@ -99,7 +99,10 @@ type ConnectionStatus =
     { Id : ConnectionId
       Kind : ConnectionKind
       Health : ConnectionHealth
-      UpdatedAt : DateTimeOffset }
+      UpdatedAt : DateTimeOffset
+      /// How the owner's offline grant reads from the session this status is sent to
+      /// (`OfflineGrant.here`). Always `Off` for a connection that is not a person's.
+      Offline : OfflineChoice }
 
 /// The status-stream frame: every connection the receiving launch may currently read.
 type ConnectionStatusList = { Connections : ConnectionStatus list }
@@ -110,6 +113,10 @@ module ConnectionStatusList =
     /// into a launch is one whose own connections it may read, and the frame lists exactly
     /// those. A peer is never verified into anything, and its records are not the Manager's
     /// to refuse, so a peer is always here.
+    ///
+    /// A person whose connection is bound here on their offline grant (`OfflineGrant`) is
+    /// present too, on purpose: the Manager reads their records to this launch on the same
+    /// grant, so what the session can do for them matches what the frame says.
     let present (statuses: Map<ConnectionId, ConnectionStatus>) (person: Principal) : bool =
         match person with
         | Principal.User user -> statuses |> Map.exists (fun id _ -> id.Scope = UserScope user)

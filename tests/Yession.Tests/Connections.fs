@@ -287,12 +287,33 @@ let private wireTests =
                     [ { Id = target (UserScope alice)
                         Kind = OAuthConnection
                         Health = ConnectionUsable
-                        UpdatedAt = DateTimeOffset.Parse "2026-07-28T10:00:00Z" }
+                        UpdatedAt = DateTimeOffset.Parse "2026-07-28T10:00:00Z"
+                        Offline = OfflineChoice.Off }
                       { Id = target (SessionScope sessionA)
                         Kind = StaticConnection
                         Health = SignInRequired "the refresh token has expired"
-                        UpdatedAt = DateTimeOffset.Parse "2026-07-28T11:00:00Z" } ] }
+                        UpdatedAt = DateTimeOffset.Parse "2026-07-28T11:00:00Z"
+                        Offline = OfflineChoice.Off } ] }
             Expect.equal (ControlWire.toString ControlWire.connectionStatusList list |> ControlWire.fromString ControlWire.connectionStatusList |> expect) list "identical"
+
+        testCase "a status says how its offline grant reads from the session, and round-trips" <| fun () ->
+            let status : ConnectionStatus =
+                { Id = target (UserScope alice)
+                  Kind = OAuthConnection
+                  Health = ConnectionUsable
+                  UpdatedAt = DateTimeOffset.Parse "2026-07-28T10:00:00Z"
+                  Offline = OfflineChoice.ThisSession }
+            Expect.equal (ControlWire.toString ControlWire.connectionStatus status |> ControlWire.fromString ControlWire.connectionStatus |> expect) status "identical"
+
+        // A Manager from before offline grants sends no such field.
+        testCase "a status frame without an offline field reads as off" <| fun () ->
+            let json = """{"id":{"scope":{"kind":"user","sub":"alice"},"name":"claude-code"},"kind":"oauth","updatedAt":"2026-07-28T10:00:00Z"}"""
+            let status = ControlWire.fromString ControlWire.connectionStatus json |> expect
+            Expect.equal status.Offline OfflineChoice.Off "off"
+
+        testCase "the offline request round-trips" <| fun () ->
+            let request : ControlWire.ConnectionOfflineRequest = { Target = target (UserScope alice); Choice = OfflineChoice.AllMySessions }
+            Expect.equal (ControlWire.toString ControlWire.connectionOfflineRequest request |> ControlWire.fromString ControlWire.connectionOfflineRequest |> expect) request "identical"
     ]
 
 open Yession.Host
@@ -325,7 +346,7 @@ let private observationTests =
 let private arrivalTests =
     let status (scope: SecretScope) (name: string) : ConnectionId * ConnectionStatus =
         let id : ConnectionId = { Scope = scope; Name = SecretName.create name |> expect }
-        let status : ConnectionStatus = { Id = id; Kind = OAuthConnection; Health = ConnectionUsable; UpdatedAt = now }
+        let status : ConnectionStatus = { Id = id; Kind = OAuthConnection; Health = ConnectionUsable; UpdatedAt = now; Offline = OfflineChoice.Off }
         id, status
     let frame (entries: (ConnectionId * ConnectionStatus) list) = Map.ofList entries
     let bob = UserId.create "bob" |> expect
@@ -553,6 +574,10 @@ let private githubTests =
 /// answer, and a policy in front of it would make a case that pins one refused request
 /// assert three. The retrying itself is pinned by the case that asks for it.
 let private noGrantRetries : Broker.GrantLeg = Broker.asking
+
+/// The status view of a session for which no offline grant reads as anything: what the broker
+/// cases ask when the offline grant is not what they are about.
+let private offlineOff (_: ConnectionId) (_: OfflineGrant option) : OfflineChoice = OfflineChoice.Off
 
 /// The shipped leg on a test clock: the real schedule spent in zero real time, under a
 /// deadline that never comes due — the two clocks are separate for exactly this reason.
@@ -823,6 +848,32 @@ let private brokerTests =
                 | other -> failwithf "unexpected envelope: %A" other
             }
 
+        testCaseAsync "a refreshed grant keeps its offline grant" <|
+            async {
+                let! endpoint = startTokenEndpoint ()
+                let! store = openEphemeral ()
+                let broker = Broker.create (fun () -> "http://m/cb") store.Connections ignore noGrantRetries
+                let t = target (UserScope alice)
+                let stale =
+                    BrokeredOAuth
+                        { AccessToken = "at-stale"
+                          RefreshToken = Some "rt-stale"
+                          ExpiresAt = Some (DateTimeOffset.UtcNow.AddSeconds 60.0)
+                          RefreshExpiresAt = None
+                          TokenUrl = endpoint.Url
+                          ClientId = "cid"
+                          Dialect = FormEncoded }
+                let! _ = store.Connections.Set t (BrokeredCredentialCodec.toString stale)
+                let! _ = store.Offline.Set t (Some OfflineGrant.AllMySessions)
+                endpoint.SetResponse """{"access_token":"at-fresh","expires_in":3600}"""
+                let! resolved = broker.Resolve t
+                expect resolved |> ignore
+                Expect.equal
+                    (store.Offline.All () |> List.tryPick (fun (id, grant) -> if id = t then Some grant else None))
+                    (Some (Some OfflineGrant.AllMySessions))
+                    "the grant outlives the refresh"
+            }
+
         testCaseAsync "a failed refresh is an error and keeps the old entry" <|
             async {
                 let! endpoint = startTokenEndpoint ()
@@ -851,7 +902,7 @@ let private brokerTests =
                 Expect.isFalse
                     (observed |> List.exists (function Broker.Rejected _ -> true | _ -> false))
                     "a provider that could not answer has not refused anything"
-                let! list = broker.StatusOf [ t ]
+                let! list = broker.StatusOf offlineOff [ t ]
                 Expect.equal
                     (list.Connections |> List.tryPick (fun c -> Some c.Health))
                     (Some ConnectionUsable)
@@ -936,7 +987,7 @@ let private brokerTests =
                 Expect.isTrue
                     (observed |> List.exists (function Broker.Rejected _ -> true | _ -> false))
                     "the grant is finished, and that is a different report from a failed refresh"
-                let! list = broker.StatusOf [ t ]
+                let! list = broker.StatusOf offlineOff [ t ]
                 match list.Connections |> List.tryPick (fun c -> Some c.Health) with
                 | Some (SignInRequired _) -> ()
                 | other -> failwithf "a revoked grant must read as needing a sign-in, not %A" other
@@ -1041,7 +1092,7 @@ let private brokerTests =
                 let! _ = broker.Put t "ghu_expired"
                 let healthOf () =
                     async {
-                        let! list = broker.StatusOf [ t ]
+                        let! list = broker.StatusOf offlineOff [ t ]
                         return list.Connections |> List.tryPick (fun c -> Some c.Health)
                     }
                 let! before = healthOf ()
@@ -1080,7 +1131,7 @@ let private brokerTests =
                 // Signing in again is the remedy the panel offers, so it had better work:
                 // a mark surviving the write would send someone straight back to it.
                 let! _ = broker.Put t "ghp_fresh"
-                let! list = broker.StatusOf [ t ]
+                let! list = broker.StatusOf offlineOff [ t ]
                 Expect.equal
                     (list.Connections |> List.tryPick (fun c -> Some c.Health))
                     (Some ConnectionUsable)
@@ -1106,7 +1157,7 @@ let private brokerTests =
                                   ClientId = "cid"
                                   Dialect = FormEncoded }))
                 let! _ = store.Connections.Set live (BrokeredCredentialCodec.toString (BrokeredStatic "ghp_ok"))
-                let! list = broker.StatusOf [ dead; live ]
+                let! list = broker.StatusOf offlineOff [ dead; live ]
                 let healthOf id =
                     list.Connections |> List.tryFind (fun c -> c.Id = id) |> Option.map (fun c -> c.Health)
                 Expect.equal
@@ -1161,7 +1212,7 @@ let private brokerTests =
 // --- [Ports]: the control routes + status stream --------------------------------------------
 
 let private caller sessionId users local : Control.ControlCaller =
-    { SessionId = sessionId; Users = users; Local = local }
+    { SessionId = sessionId; Users = users; Local = local; Members = users; Offline = Set.empty }
 
 /// Watch a launch's status stream, and wait for the frame a case is about by predicate.
 ///
@@ -1215,23 +1266,31 @@ let private watchingConnections (url: string) (secret: string) =
 
 /// A bare control server with the SAME pre-authorized connection handlers the Manager
 /// composes (ProcessManager.connectionsApiFor), plus the ProcessManager-style status
-/// broadcast: any broker change recomputes every caller's snapshot and pushes it.
+/// broadcast: any broker change recomputes every caller's snapshot and pushes it. Each
+/// caller's offline set is computed per request from the store's grants, as `resolveCaller`
+/// computes it, over the members the case gave it.
 let private startConnectionsServer (callers: (string * Control.ControlCaller) list) =
     async {
         let! store = openEphemeral ()
         let table = Map.ofList callers
+        let resolveCaller (secret: string) =
+            Map.tryFind secret table
+            |> Option.map (fun (c: Control.ControlCaller) ->
+                { c with Offline = ProcessManager.offlineGrantedTo store.Offline c.SessionId c.Members })
         let hub : NotificationHub.NotificationHub<ConnectionStatusList> = NotificationHub.create ()
         let apiRef : Control.ConnectionsApi option ref = ref None
         let broadcast () =
             match apiRef.Value with
             | Some api ->
                 table
-                |> Map.iter (fun secret c ->
-                    Async.StartImmediate (
-                        async {
-                            let! snapshot = api.Status c
-                            hub.NotifySecret secret snapshot
-                        }))
+                |> Map.iter (fun secret _ ->
+                    resolveCaller secret
+                    |> Option.iter (fun c ->
+                        Async.StartImmediate (
+                            async {
+                                let! snapshot = api.Status c
+                                hub.NotifySecret secret snapshot
+                            })))
             | None -> ()
         let broker =
             Broker.create
@@ -1239,13 +1298,13 @@ let private startConnectionsServer (callers: (string * Control.ControlCaller) li
                 store.Connections
                 (fun o -> if Broker.changesReadableStatus o then broadcast ())
                 noGrantRetries
-        let api = ProcessManager.connectionsApiFor (fun _ -> ()) store.Connections broker
+        let api = ProcessManager.connectionsApiFor (fun _ -> ()) store.Connections store.Offline broadcast broker
         apiRef.Value <- Some api
         let dummyRegister (_: string) (_: SessionId) (_: string) : Yession.Oidc.RegisterClientResponse =
             { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused" }
         let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (Control.tryHandle
-                        (fun secret -> Map.tryFind secret table)
+                        resolveCaller
                         (fun _ _ -> async { return Ok () })
                         (fun _ _ -> async { return Ok () })
                         (fun _ _ -> async { return Ok () })
@@ -1267,6 +1326,86 @@ let private startConnectionsServer (callers: (string * Control.ControlCaller) li
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
         return sprintf "http://127.0.0.1:%d" (serverPort listening)
     }
+
+/// Session A's first launch, where alice signed in, and its relaunch, where nobody has yet:
+/// the Manager keeps alice as a member of the session across the two.
+let private launchAndRelaunch =
+    [ "secret-a", caller sessionA (Set.singleton alice) false
+      "secret-a2",
+      ({ SessionId = sessionA; Users = Set.empty; Local = false; Members = Set.singleton alice; Offline = Set.empty }
+       : Control.ControlCaller) ]
+
+/// Alice's credential, connected from the first launch and granted offline from it as `choice`.
+let private grantedFromFirstLaunch (choice: OfflineChoice) =
+    async {
+        let! url = startConnectionsServer launchAndRelaunch
+        let first = ControlClient.connections (ControlEndpoint.Address url) "secret-a"
+        let! put = first.Put (target (UserScope alice)) "sk-ant-oat01-x"
+        expect put
+        let! granted = first.SetOffline (target (UserScope alice)) choice
+        expect granted
+        return url
+    }
+
+let private offlineRouteTests =
+    testList "offline grant control route" [
+        testCaseAsync "a person not signed in to the launch cannot grant their connection offline" <|
+            async {
+                let! url = startConnectionsServer launchAndRelaunch
+                let first = ControlClient.connections (ControlEndpoint.Address url) "secret-a"
+                let! _ = first.Put (target (UserScope alice)) "sk-ant-oat01-x"
+                let relaunch = ControlClient.connections (ControlEndpoint.Address url) "secret-a2"
+                let! refused = relaunch.SetOffline (target (UserScope alice)) OfflineChoice.AllMySessions
+                Expect.isError refused "only the signed-in owner decides"
+            }
+
+        testCaseAsync "a connection granted offline for this session resolves in its relaunch with nobody signed in" <|
+            async {
+                let! url = grantedFromFirstLaunch OfflineChoice.ThisSession
+                let relaunch = ControlClient.connections (ControlEndpoint.Address url) "secret-a2"
+                let! resolved = relaunch.Resolve (target (UserScope alice))
+                Expect.equal (expect resolved) (StaticConnection, "sk-ant-oat01-x") "bound on the grant"
+            }
+
+        testCaseAsync "a connection granted offline for all my sessions resolves in a relaunch of one of them" <|
+            async {
+                let! url = grantedFromFirstLaunch OfflineChoice.AllMySessions
+                let relaunch = ControlClient.connections (ControlEndpoint.Address url) "secret-a2"
+                let! resolved = relaunch.Resolve (target (UserScope alice))
+                Expect.equal (expect resolved) (StaticConnection, "sk-ant-oat01-x") "bound on the grant"
+            }
+
+        testCaseAsync "a connection whose offline grant is switched off no longer resolves in the relaunch" <|
+            async {
+                let! url = grantedFromFirstLaunch OfflineChoice.ThisSession
+                let first = ControlClient.connections (ControlEndpoint.Address url) "secret-a"
+                let! off = first.SetOffline (target (UserScope alice)) OfflineChoice.Off
+                expect off
+                let relaunch = ControlClient.connections (ControlEndpoint.Address url) "secret-a2"
+                let! resolved = relaunch.Resolve (target (UserScope alice))
+                Expect.isError resolved "withdrawn at once"
+            }
+
+        testCaseAsync "the relaunch's status frame lists a connection granted offline, read as this session" <|
+            async {
+                let! url = grantedFromFirstLaunch OfflineChoice.ThisSession
+                let _, expectFrame, cancel = watchingConnections url "secret-a2"
+                do!
+                    expectFrame "naming alice's credential as granted here" (fun f ->
+                        f.Connections
+                        |> List.exists (fun s -> s.Id = target (UserScope alice) && s.Offline = OfflineChoice.ThisSession))
+                cancel.Stop ()
+            }
+
+        testCaseAsync "a session's own connection cannot be granted offline" <|
+            async {
+                let! url = startConnectionsServer launchAndRelaunch
+                let first = ControlClient.connections (ControlEndpoint.Address url) "secret-a"
+                let! _ = first.Put (target (SessionScope sessionA)) "sk-ant-api03-k"
+                let! refused = first.SetOffline (target (SessionScope sessionA)) OfflineChoice.ThisSession
+                Expect.isError refused "nobody to stand in for"
+            }
+    ]
 
 let private routeTests =
     testList "connection control routes" [
@@ -1839,6 +1978,7 @@ let private recordingConnections () : RecordingConnections =
           PutGrant = fun request -> async { grants.Add request; return Ok () }
           Disconnect = fun target -> async { disconnects.Add target; return Ok true }
           Reject = fun target reason -> async { rejects.Add (target, reason); return Ok true }
+          SetOffline = fun _ _ -> async { return Error "not under test" }
           Resolve = fun _ -> async { return Error "not under test" } }
       Puts = puts
       Grants = grants
@@ -1849,7 +1989,7 @@ let private recordingConnections () : RecordingConnections =
 /// A stored connection as the status cache would hold it. The timestamp is not what any
 /// of these cases are about, so it is fixed rather than a parameter.
 let private stored (kind: ConnectionKind) (health: ConnectionHealth) (id: ConnectionId) : ConnectionStatus =
-    { Id = id; Kind = kind; Health = health; UpdatedAt = DateTimeOffset.Parse "2026-08-21T00:00:00Z" }
+    { Id = id; Kind = kind; Health = health; UpdatedAt = DateTimeOffset.Parse "2026-08-21T00:00:00Z"; Offline = OfflineChoice.Off }
 
 /// The routes over a given leg to github.com. Unguarded by default — these cases are about
 /// what the routes DO with an answer, and a policy in front of them would only add real
@@ -3097,7 +3237,7 @@ let private watchingAs
 /// What the session hears once alice's GitHub connection is in its frame.
 let private aliceConnected (at: DateTimeOffset) : Map<ConnectionId, ConnectionStatus> =
     let id = { ConnectionId.Scope = UserScope alice; ConnectionId.Name = GitHubConnection.secretName }
-    Map.ofList [ id, { Id = id; Kind = OAuthConnection; Health = ConnectionUsable; UpdatedAt = at } ]
+    Map.ofList [ id, { Id = id; Kind = OAuthConnection; Health = ConnectionUsable; UpdatedAt = at; Offline = OfflineChoice.Off } ]
 
 /// A watch of alice's on a pull request in `prRepo`, last known open with checks running.
 let private alicesWatch (number: int) (since: DateTimeOffset) : PrWatch =
@@ -4893,6 +5033,7 @@ let tests =
         prListingTests
         Tag.needs "Broker service" [ Tag.Ports ] (fun () -> brokerTests)
         Tag.needs "Connection control routes" [ Tag.Ports ] (fun () -> routeTests)
+        Tag.needs "Offline grant control route" [ Tag.Ports ] (fun () -> offlineRouteTests)
         Tag.needs "GitHub sign-in routes" [ Tag.Ports ] (fun () -> githubRouteTests)
         Tag.needs "Pull request endpoints" [ Tag.Ports ] (fun () -> prFetchTests)
         Tag.needs "What a look spends" [ Tag.Ports ] (fun () -> prBudgetTests)

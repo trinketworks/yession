@@ -3999,7 +3999,8 @@ let private chromeTests =
                   DisplayName = id
                   CreatedAt = DateTimeOffset (2026, 7, 15, 12, 0, 0, TimeSpan.Zero)
                   DataDir = "sessions/" + id
-                  ArchivedAt = if archived then Some (DateTimeOffset (2026, 8, 1, 9, 30, 0, TimeSpan.Zero)) else None }
+                  ArchivedAt = if archived then Some (DateTimeOffset (2026, 8, 1, 9, 30, 0, TimeSpan.Zero)) else None
+                  Members = Set.empty }
             let view (r: Yession.Manager.SessionRecord) : Yession.Host.ProcessManager.SessionView =
                 { Record = r; Status = Yession.Host.ProcessManager.NotRunning; Standings = [] }
             Yession.Host.ManagerUi.page

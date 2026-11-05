@@ -68,9 +68,89 @@ type SecretMetadata =
       CreatedAt : DateTimeOffset
       UpdatedAt : DateTimeOffset }
 
+/// A person's standing permission for the Manager to bind ONE of their connections into a
+/// session while they are not signed in to it — after a relaunch nobody is bound, and a
+/// poller that runs on their GitHub would otherwise go anonymous. Stored WITH the credential,
+/// so it lives exactly as long as the credential does: a disconnect drops it, and a refresh
+/// or a re-paste keeps it.
+///
+/// Meaningful on a `UserScope` connection only. A session-scoped credential is already its
+/// session's alone, and the deployment's is reachable wherever unattributed access is: there
+/// is nobody absent to stand in for.
+[<RequireQualifiedAccess>]
+type OfflineGrant =
+    /// Every session the owner has signed in to at least once (`SessionRecord.Members`). A
+    /// session they never joined is never one of "theirs".
+    | AllMySessions
+    /// These sessions, named one by one from inside each.
+    | Sessions of Set<SessionId>
+
+/// How a connection's offline grant reads from ONE session, and what a person in that session
+/// chooses it to be: off here, here, or everywhere they have been.
+[<RequireQualifiedAccess>]
+type OfflineChoice =
+    | Off
+    | ThisSession
+    | AllMySessions
+
+module OfflineGrant =
+
+    let private ownerOf (id: ConnectionId) : UserId option =
+        match id.Scope with
+        | UserScope user -> Some user
+        | SessionScope _ | LocalScope -> None
+
+    /// Does this grant cover the session? `members` are the users who have signed in to it at
+    /// least once. A grant on a connection that is not a person's covers nothing.
+    let covers (sessionId: SessionId) (members: Set<UserId>) (id: ConnectionId) (grant: OfflineGrant option) : bool =
+        match ownerOf id, grant with
+        | Some owner, Some OfflineGrant.AllMySessions -> Set.contains owner members
+        | Some _, Some (OfflineGrant.Sessions sessions) -> Set.contains sessionId sessions
+        | Some _, None
+        | None, _ -> false
+
+    /// The connections a launch of `sessionId` may resolve on an owner's standing grant rather
+    /// than on their sign-in. Computed by the Manager from what it stores — the session's
+    /// members and each connection's grant — and never from what a request says. A user who is
+    /// signed in needs nothing from here: their whole scope is readable already.
+    let grantedHere
+        (sessionId: SessionId)
+        (members: Set<UserId>)
+        (connections: (ConnectionId * OfflineGrant option) list)
+        : Set<ConnectionId> =
+        connections
+        |> List.filter (fun (id, grant) -> covers sessionId members id grant)
+        |> List.map fst
+        |> Set.ofList
+
+    /// How the grant reads from one session.
+    let here (sessionId: SessionId) (members: Set<UserId>) (id: ConnectionId) (grant: OfflineGrant option) : OfflineChoice =
+        match grant with
+        | Some OfflineGrant.AllMySessions when covers sessionId members id grant -> OfflineChoice.AllMySessions
+        | Some (OfflineGrant.Sessions _) when covers sessionId members id grant -> OfflineChoice.ThisSession
+        | _ -> OfflineChoice.Off
+
+    /// The grant after a person in `sessionId` chooses. "This session" ADDS the session to the
+    /// ones named so far, and narrows "all my sessions" to it; "off" takes this session out and
+    /// switches "all my sessions" off entirely, because a session cannot be left out of "all".
+    /// A grant that names no session is no grant.
+    let choose (sessionId: SessionId) (choice: OfflineChoice) (current: OfflineGrant option) : OfflineGrant option =
+        match choice, current with
+        | OfflineChoice.AllMySessions, _ -> Some OfflineGrant.AllMySessions
+        | OfflineChoice.ThisSession, Some (OfflineGrant.Sessions sessions) ->
+            Some (OfflineGrant.Sessions (Set.add sessionId sessions))
+        | OfflineChoice.ThisSession, (None | Some OfflineGrant.AllMySessions) ->
+            Some (OfflineGrant.Sessions (Set.singleton sessionId))
+        | OfflineChoice.Off, Some (OfflineGrant.Sessions sessions) ->
+            let rest = Set.remove sessionId sessions
+            if Set.isEmpty rest then None else Some (OfflineGrant.Sessions rest)
+        | OfflineChoice.Off, (None | Some OfflineGrant.AllMySessions) -> None
+
 /// A stored connection credential as the store lists it. No value field, as above.
 [<RequireQualifiedAccess>]
 type ConnectionMetadata =
     { Id : ConnectionId
       CreatedAt : DateTimeOffset
-      UpdatedAt : DateTimeOffset }
+      UpdatedAt : DateTimeOffset
+      /// The owner's standing grant to bind this connection where they are not signed in.
+      Offline : OfflineGrant option }

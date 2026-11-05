@@ -208,6 +208,7 @@ let private stubConnections : ControlClient.SessionConnections =
       PutGrant = refuse
       Disconnect = refuse
       Reject = fun _ _ -> refuse ()
+      SetOffline = fun _ _ -> refuse ()
       Resolve = refuse }
 
 /// The Claude panel over a stub catalogue. `panelFor` is what the read stream pushes, and

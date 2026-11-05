@@ -9273,7 +9273,8 @@ let private seedHostile () =
           DisplayName = HOSTILE_NAME
           CreatedAt = DateTimeOffset.UtcNow
           DataDir = sprintf "sessions/%s" HOSTILE_ID
-          ArchivedAt = None }
+          ArchivedAt = None
+          Members = Set.empty }
     let state =
         Yession.Manager.ManagerState.addSession record Yession.Manager.ManagerState.empty
         |> Result.defaultWith failwith

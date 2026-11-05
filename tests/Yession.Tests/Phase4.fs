@@ -38,7 +38,8 @@ let private record (id: string) (name: string) : SessionRecord =
       DisplayName = name
       CreatedAt = DateTimeOffset (2026, 7, 15, 12, 0, 0, TimeSpan.Zero)
       DataDir = sprintf "sessions/%s" id
-      ArchivedAt = None }
+      ArchivedAt = None
+      Members = Set.empty }
 
 /// The moment an operator archived something, where a test needs one to be a value rather
 /// than a fact about now.
@@ -286,6 +287,24 @@ let private archiveTests =
                 [ None ]
                 "a session nobody could have archived is active"
 
+        testCase "a session's members round-trip through the codec" <| fun () ->
+            let alice = UserId.create "alice" |> expect
+            let joined = ManagerState.addMember sessionA alice twoSessions |> Option.get
+            let decoded = ManagerCodec.toString joined |> ManagerCodec.fromString |> expect
+            Expect.equal decoded joined "decode∘encode is the identity, members and all"
+
+        // Within version 1, like `archivedAt`: nobody had been recorded signing in.
+        testCase "a state file written before membership loads every session with no members" <| fun () ->
+            let old =
+                """{"version":1,"sessions":[{"sessionId":"alpha","displayName":"Alpha work","createdAt":"2026-07-15T12:00:00.0000000+00:00","dataDir":"sessions/alpha"}]}"""
+            let decoded = ManagerCodec.fromString old |> expect
+            Expect.equal (decoded.Sessions |> List.map (fun r -> r.Members)) [ Set.empty ] "no members"
+
+        testCase "adding a user who is already a member changes nothing" <| fun () ->
+            let alice = UserId.create "alice" |> expect
+            let joined = ManagerState.addMember sessionA alice twoSessions |> Option.get
+            Expect.isNone (ManagerState.addMember sessionA alice joined) "no write for a repeat sign-in"
+
         // Without this, a downgrade decodes a newer file, drops every field it does not
         // recognise, and saves the loss back over the original.
         testCase "a state file from a newer schema version is refused, not read as this one" <| fun () ->
@@ -508,7 +527,7 @@ let private startControlServerOver
         let table =
             secrets
             |> List.map (fun (secret, sessionId) ->
-                let caller : Control.ControlCaller = { SessionId = sessionId; Users = Set.empty; Local = false }
+                let caller : Control.ControlCaller = { SessionId = sessionId; Users = Set.empty; Local = false; Members = Set.empty; Offline = Set.empty }
                 secret, caller)
             |> Map.ofList
         let hub = NotificationHub.create ()
@@ -604,7 +623,8 @@ let private uiRecord : SessionRecord =
       DisplayName = "UI <Render>"
       CreatedAt = DateTimeOffset (2026, 7, 15, 12, 0, 0, TimeSpan.Zero)
       DataDir = "sessions/ui-render"
-      ArchivedAt = None }
+      ArchivedAt = None
+      Members = Set.empty }
 
 /// One active session and one archived, for the filter cases: a table with one of each is
 /// what lets a chip's count and a chip's link be told apart from a chip that has nothing.
@@ -628,7 +648,8 @@ let private hostileRow (archived: bool) (status: ProcessManager.SessionStatus) =
         { Record =
             { uiRecord with
                 DisplayName = hostileName
-                ArchivedAt = (if archived then Some archivedAt else None) }
+                ArchivedAt = (if archived then Some archivedAt else None)
+                Members = Set.empty }
           Status = status
           Standings = [] }
 

@@ -21,7 +21,12 @@ type Subject =
       /// recorded by the Manager at issuance, never from request content, and gone
       /// when the launch is. False under every attributed strategy, which is what keeps
       /// `LocalScope` unreadable there.
-      Local : bool }
+      Local : bool
+      /// Connections the launch may RESOLVE although their owner is not signed in to it:
+      /// each one's owner granted it offline (`OfflineGrant.grantedHere`). Computed by the
+      /// Manager from the session's stored members and the stored grants, never from
+      /// request content. Reads only: nothing here lets a launch write for an absent owner.
+      Offline : Set<ConnectionId> }
 
 type SecretAction =
     /// Metadata only — names, scopes, timestamps. Never values.
@@ -110,6 +115,15 @@ module Policy =
         // signed into, and a session-scoped one from only that session.
         | ConnectionAccess (_, { ConnectionId.Scope = SessionScope owner }) ->
             ownSession owner
+        // An owner's offline grant stands in for their sign-in on the one read a session
+        // needs to work for them while they are away: resolving that connection's value.
+        // Connecting, replacing and disconnecting still need the owner signed in, because
+        // a person's credential is changed only by that person.
+        | ConnectionAccess (ResolveCredential, ({ ConnectionId.Scope = UserScope user } as id)) ->
+            match boundUser user with
+            | Permit -> Permit
+            | Deny _ when Set.contains id request.Subject.Offline -> Permit
+            | Deny reason -> Deny reason
         | ConnectionAccess (_, { ConnectionId.Scope = UserScope user }) ->
             boundUser user
         // The unattributed deployment's own credential. Deliberately CONNECTION-only:
@@ -123,6 +137,15 @@ module Policy =
         // granted unattributed access. The Manager sees the launch and who signed in to it,
         // never which of them is acting, so what a session does with a record for whom is
         // the session's own rule.
+        //
+        // A connection bound offline carries its owner's records for READING: a sandbox
+        // started on their GitHub needs their trust in the repository to be read, and that
+        // is a record. Writing one still needs them signed in.
+        | RecordAccess (ReadRecord, { RecordId.Owner = UserOwner user }) ->
+            match boundUser user with
+            | Permit -> Permit
+            | Deny _ when request.Subject.Offline |> Set.exists (fun id -> id.Scope = UserScope user) -> Permit
+            | Deny reason -> Deny reason
         | RecordAccess (_, { RecordId.Owner = UserOwner user }) ->
             boundUser user
         | RecordAccess (_, { RecordId.Owner = LocalOwner }) ->

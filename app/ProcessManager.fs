@@ -398,7 +398,7 @@ let secretsApiFor
     let authorize (caller: Control.ControlCaller) (action: SecretAction) (resource: Resource) =
         let access = SecretAccess (action, resource)
         let request =
-            { Subject = { Session = Some caller.SessionId; Users = caller.Users; Local = caller.Local }
+            { Subject = Control.ControlCaller.subject caller
               Access = access }
         match Policy.authorize request with
         | Permit -> Ok ()
@@ -461,7 +461,7 @@ let recordsApiFor (audit: SecretStore.Audit.Sink) (store: SecretStore.RecordStor
     let authorize (caller: Control.ControlCaller) (action: RecordAction) (target: RecordId) =
         let access = RecordAccess (action, target)
         let request =
-            { Subject = { Session = Some caller.SessionId; Users = caller.Users; Local = caller.Local }
+            { Subject = Control.ControlCaller.subject caller
               Access = access }
         match Policy.authorize request with
         | Permit -> Ok ()
@@ -506,12 +506,15 @@ let recordsApiFor (audit: SecretStore.Audit.Sink) (store: SecretStore.RecordStor
 let connectionsApiFor
     (audit: SecretStore.Audit.Sink)
     (store: SecretStore.Partition<ConnectionId, ConnectionMetadata>)
+    (offline: SecretStore.OfflineGrants)
+    // A grant changes what launches may read, so every launch's status frame is sent again.
+    (grantChanged: unit -> unit)
     (broker: Broker.BrokerService)
     : Control.ConnectionsApi =
     let authorize (caller: Control.ControlCaller) (action: ConnectionAction) (target: ConnectionId) =
         let access = ConnectionAccess (action, target)
         let request =
-            { Subject = { Session = Some caller.SessionId; Users = caller.Users; Local = caller.Local }
+            { Subject = Control.ControlCaller.subject caller
               Access = access }
         match Policy.authorize request with
         | Permit -> Ok ()
@@ -578,6 +581,44 @@ let connectionsApiFor
                     let! outcome = run (broker.Reject request.Target request.Reason)
                     return outcome |> Result.map (fun recorded -> { ControlWire.ConnectionRejectResponse.Recorded = recorded })
             }
+      // A person's own choice about their own credential, so it is permitted where changing the
+      // credential is: their sign-in to the calling launch. An offline grant never reaches
+      // here — it lets a launch use a connection, not decide about it.
+      SetOffline =
+        fun caller request ->
+            async {
+                match authorize caller ConnectCredential request.Target with
+                | Error e -> return Error e
+                | Ok () ->
+                    match request.Target.Scope with
+                    | SessionScope _
+                    | LocalScope ->
+                        return
+                            Error (
+                                Control.SecretsDenied
+                                    "only a connection signed in for a person can be used while they are away. This one belongs to a session or to the deployment."
+                            )
+                    | UserScope _ ->
+                        let current =
+                            offline.All ()
+                            |> List.tryPick (fun (id, grant) -> if id = request.Target then Some grant else None)
+                        match current with
+                        | None -> return Error (Control.SecretsFailed "no credential connected")
+                        | Some current ->
+                            let next = OfflineGrant.choose caller.SessionId request.Choice current
+                            match! offline.Set request.Target next with
+                            | Error e -> return Error (Control.SecretsFailed e)
+                            | Ok false -> return Error (Control.SecretsFailed "no credential connected")
+                            | Ok true ->
+                                let said =
+                                    match next with
+                                    | None -> "off"
+                                    | Some (OfflineGrant.Sessions _) -> "sessions"
+                                    | Some OfflineGrant.AllMySessions -> "all"
+                                audit (SecretStore.Audit.connectionOffline caller.SessionId request.Target said)
+                                grantChanged ()
+                                return Ok ()
+            }
       Resolve =
         fun caller request ->
             async {
@@ -600,9 +641,20 @@ let connectionsApiFor
             // This list is also what lets a session name `LocalScope` on every turn
             // without knowing the auth strategy: an attributed launch never sees one here,
             // so the session's candidate filter drops it before anything is resolved.
-            SecretStore.SecretResolution.scopesFor caller.SessionId caller.Users caller.Local
-            |> List.collect (fun scope -> store.List scope |> List.map (fun m -> m.Id))
-            |> broker.StatusOf }
+            //
+            // Plus each connection bound here on its owner's offline grant, by itself: the
+            // grant is for that connection, not for everything its owner holds.
+            let readable =
+                SecretStore.SecretResolution.scopesFor caller.SessionId caller.Users caller.Local
+                |> List.collect (fun scope -> store.List scope |> List.map (fun m -> m.Id))
+            let offlineOnly = caller.Offline |> Set.toList |> List.filter (fun id -> not (List.contains id readable))
+            broker.StatusOf (OfflineGrant.here caller.SessionId caller.Members) (readable @ offlineOnly) }
+
+/// The connections a launch of `sessionId` may resolve on their owners' offline grants: the
+/// stored grants read against the session's stored members. What `resolveCaller` puts on
+/// every verified caller; module-level so a bare control server computes it the same way.
+let offlineGrantedTo (grants: SecretStore.OfflineGrants) (sessionId: SessionId) (members: Set<UserId>) : Set<ConnectionId> =
+    OfflineGrant.grantedHere sessionId members (grants.All ())
 
 /// The page at the one PUBLIC broker route (Plan 08): where a provider's redirect lands. Not
 /// under /control — a browser arrives here, and the single-use `state` (minted only for a
@@ -1007,6 +1059,11 @@ let createWithUi
         // Guarded by the live secret: a token redeemed in the same instant a launch
         // dies must not resurrect its authority.
         if Map.containsKey controlSecret secretSessions then
+            // Durable: whoever signs in to a session once is one of its members for good, which
+            // is what an owner's "all my sessions" grant reads (`SessionRecord.Members`).
+            match ManagerState.addMember sessionId subject state with
+            | Some next -> commit next
+            | None -> ()
             let existing = Map.tryFind controlSecret launchUsers |> Option.defaultValue Set.empty
             launchUsers <- Map.add controlSecret (Set.add subject existing) launchUsers
             claims |> Option.iter (fun c -> userClaims <- Map.add subject c userClaims)
@@ -1026,12 +1083,25 @@ let createWithUi
 
     // What a control secret resolves to: WHICH launch is calling, with its verified
     // user bindings. The secrets/connections handlers apply their own policy.
+    //
+    // And with the connections it may resolve on their owners' offline grants, computed here
+    // from what the Manager stores (the session's members, each connection's grant) on every
+    // call, so a grant withdrawn or a member added counts from the next request.
     let resolveCaller (secret: string) : Control.ControlCaller option =
         Map.tryFind secret secretSessions
         |> Option.map (fun sessionId ->
+            let members =
+                ManagerState.tryFind sessionId state
+                |> Option.map (fun record -> record.Members)
+                |> Option.defaultValue Set.empty
             { Control.ControlCaller.SessionId = sessionId
               Users = Map.tryFind secret launchUsers |> Option.defaultValue Set.empty
-              Local = Set.contains secret launchLocal })
+              Local = Set.contains secret launchLocal
+              Members = members
+              Offline =
+                match secretStore with
+                | Some store -> offlineGrantedTo store.Offline sessionId members
+                | None -> Set.empty })
 
     // The connection broker (Plan 08): exists exactly when the secret store does, and
     // holds its connection partition alone, so it cannot read or write a generic secret. Standards-only; its one owned constant
@@ -1066,7 +1136,8 @@ let createWithUi
 
     let connectionsApi : Control.ConnectionsApi option =
         match secretStore, broker with
-        | Some store, Some b -> Some (connectionsApiFor audit store.Connections b)
+        | Some store, Some b ->
+            Some (connectionsApiFor audit store.Connections store.Offline (fun () -> broadcastConnections.Value ()) b)
         | _ -> None
 
     broadcastConnections.Value <-
@@ -1210,7 +1281,8 @@ let createWithUi
                   DisplayName = if displayName.Trim().Length > 0 then displayName.Trim () else sessionId
                   CreatedAt = clock ()
                   DataDir = sprintf "sessions/%s" (SessionId.value id)
-                  ArchivedAt = None }
+                  ArchivedAt = None
+                  Members = Set.empty }
             match ManagerState.addSession record state with
             | Error e -> Error e
             | Ok next ->

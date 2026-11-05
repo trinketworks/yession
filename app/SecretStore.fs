@@ -43,6 +43,17 @@ type Partition<'Id, 'Metadata> =
       /// values feed env injection (`SecretResolution`), connection values the broker.
       Resolve : 'Id -> Async<Result<string option, string>> }
 
+/// The connection credentials' offline grants (`OfflineGrant`): metadata stored beside each
+/// credential, read and set without opening its value. Apart from the connection partition,
+/// because the broker holds that partition and has no business with who may use a credential
+/// where; only the Manager's caller resolution and the control op that sets a grant hold this.
+[<RequireQualifiedAccess>]
+type OfflineGrants =
+    { /// Every stored connection's id and grant, across every scope.
+      All : unit -> (ConnectionId * OfflineGrant option) list
+      /// Replace one connection's grant, keeping its value. false = no such connection.
+      Set : ConnectionId -> OfflineGrant option -> Async<Result<bool, string>> }
+
 /// The third family (`RecordId`): values session code keeps for a person across their
 /// sessions, sealed here and never read. Read, and a write at the revision its caller read
 /// (`RecordWrite`). Nothing lists or removes one: a session reaches a record by the name its
@@ -78,6 +89,9 @@ type SecretStore =
       Secrets : Partition<SecretId, SecretMetadata>
       /// What the connection broker writes and resolves. Nothing else holds this partition.
       Connections : Partition<ConnectionId, ConnectionMetadata>
+      /// Where each connection may be used while its owner is away. Stored with the
+      /// connection partition's entries, so a disconnect drops a grant with its credential.
+      Offline : OfflineGrants
       /// What the records routes read and write. Nothing else holds this partition.
       Records : RecordStore
       /// Why the records file could not be opened, when it could not: then every records call
@@ -280,7 +294,10 @@ let openStore (files: StoreFiles option) (keyStore: KeyStore.KeyStore) : Async<R
                               CreatedAt = timestamp
                               UpdatedAt = timestamp
                               Iv = iv
-                              Ciphertext = ciphertext }
+                              Ciphertext = ciphertext
+                              // A fresh entry carries no grant. Over an existing one the
+                              // upsert keeps the grant already stored (`EntryList.upsert`).
+                              Offline = None }
                         return entry
                     }
                 let opened (aad: string) (entry: SecretEntry option) =
@@ -337,6 +354,19 @@ let openStore (files: StoreFiles option) (keyStore: KeyStore.KeyStore) : Async<R
                                 return Ok existed
                             }
                       Resolve = fun id -> opened (SecretsCipher.connectionAadFor id) (SecretsFile.tryFindConnection id file) }
+
+                let offline : OfflineGrants =
+                    { OfflineGrants.All = fun () -> SecretsFile.connectionGrants file
+                      OfflineGrants.Set =
+                        fun id grant ->
+                            async {
+                                match SecretsFile.setConnectionOffline id grant file with
+                                | None -> return Ok false
+                                | Some next ->
+                                    file <- next
+                                    save ()
+                                    return Ok true
+                            } }
 
                 // The records envelope: the file read above, a fresh one, or the reason it
                 // cannot be had. A refused file is never written: it may be a newer build's,
@@ -420,6 +450,7 @@ let openStore (files: StoreFiles option) (keyStore: KeyStore.KeyStore) : Async<R
                     Ok
                         { Secrets = secrets
                           Connections = connections
+                          Offline = offline
                           Records = records
                           RecordsRefused =
                             match recordsLoaded with
@@ -493,7 +524,7 @@ module SecretResolution =
                 // the launch and its local access cannot change this decision, so the
                 // resolver is not handed them.
                 let request =
-                    { Subject = { Session = Some sessionId; Users = Set.empty; Local = false }
+                    { Subject = { Session = Some sessionId; Users = Set.empty; Local = false; Offline = Set.empty }
                       Access = SecretAccess (InjectSecret, SecretResource id) }
                 let missed reason =
                     observe sessionId name (InjectMissed reason)
@@ -653,6 +684,13 @@ module Audit =
         make "yession.connection.rejected" Severity.warn
             (("yession.connection.reason", StringValue reason) :: connectionAttrs id)
             "connection credential refused by the provider"
+
+    /// An owner changed where their connection may be used while they are away. `grant` is
+    /// what it reads as afterwards ("off", "sessions", "all"), never which sessions.
+    let connectionOffline (sessionId: SessionId) (id: ConnectionId) (grant: string) : Record =
+        make "yession.connection.offline" Severity.info
+            ([ session sessionId; "yession.connection.offline", StringValue grant ] @ connectionAttrs id)
+            "connection offline grant changed"
 
     let inject (sessionId: SessionId) (name: SecretName) (source: string) : Record =
         make "yession.secret.inject" Severity.info

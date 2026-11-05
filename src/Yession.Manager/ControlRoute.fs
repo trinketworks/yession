@@ -39,6 +39,8 @@ type ControlRoute =
     | PutConnectionGrant
     | DisconnectConnection
     | RejectConnection
+    /// The owner's offline grant on one of their connections, as chosen from this session.
+    | SetConnectionOffline
     /// The one value-returning connections route.
     | ResolveConnection
     /// A record's value: what session code keeps for a person across sessions, opaque here.
@@ -73,6 +75,7 @@ module ControlRoute =
           ControlRoute.PutConnectionGrant
           ControlRoute.DisconnectConnection
           ControlRoute.RejectConnection
+          ControlRoute.SetConnectionOffline
           ControlRoute.ResolveConnection
           ControlRoute.ReadRecord
           ControlRoute.WriteRecord
@@ -102,6 +105,7 @@ module ControlRoute =
         | ControlRoute.PutConnectionGrant
         | ControlRoute.DisconnectConnection
         | ControlRoute.RejectConnection
+        | ControlRoute.SetConnectionOffline
         | ControlRoute.ResolveConnection
         | ControlRoute.ReadRecord
         | ControlRoute.WriteRecord -> "POST"
@@ -126,6 +130,7 @@ module ControlRoute =
         | ControlRoute.PutConnectionGrant -> "/control/connections/put-grant"
         | ControlRoute.DisconnectConnection -> "/control/connections/disconnect"
         | ControlRoute.RejectConnection -> "/control/connections/reject"
+        | ControlRoute.SetConnectionOffline -> "/control/connections/offline"
         | ControlRoute.ResolveConnection -> "/control/connections/resolve"
         | ControlRoute.ReadRecord -> "/control/records/read"
         | ControlRoute.WriteRecord -> "/control/records/write"
