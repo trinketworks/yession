@@ -1474,18 +1474,15 @@ module View =
     /// An agent's surface this reader put away (`FoldSurfaceMsg`), as one line in the queue's
     /// band: the agent's square and the question, pressed to open it again as the card in
     /// front (`UnfoldSurfaceMsg`), as a queued message's line opens it for editing. Its one
-    /// tool takes the surface down for everyone (`DismissSurfaceMsg`), armed by a first press
-    /// as a queued message's delete is, and still while an answer or a dismissal is on its way
-    /// or the agent has yet to act on one.
+    /// tool takes the surface down for everyone (`DismissSurfaceMsg`) at a single press: the
+    /// agent is told, and can show it again. It is still while an answer or a dismissal is on
+    /// its way or the agent has yet to act on one.
     let private foldedSurface (dispatch: ClientMsg -> unit) (model: ClientModel) (surfaceId: string) : TemplateResult =
         let title = A2ui.Project.title model.Synced.Surfaces surfaceId |> Option.defaultValue Dom.Text.surfaceUntitled
         let sending = SurfaceView.sending (model.Asked |> Map.toList |> List.map snd) surfaceId
         let still = sending <> SurfaceView.Sending.Nothing || Map.containsKey surfaceId model.SurfaceAnswers
-        let armed = model.SurfaceDismissArmed = Some surfaceId
-        let face = if armed then Style.queueVerbDeleteArmed else Style.queueVerbDelete
-        let label = if armed then Dom.Text.surfaceDismissConfirm else Dom.Text.surfaceDismissLabel
-        let press _ =
-            if not still then dispatch (if armed then DismissSurfaceMsg surfaceId else ArmSurfaceDismissMsg (Some surfaceId))
+        let label = Dom.Text.surfaceDismissLabel
+        let press _ = if not still then dispatch (DismissSurfaceMsg surfaceId)
         let flag on = if on then "true" else "false"
         html $"""
             <article class="{Style.queueItem}" data-surface-folded="{surfaceId}">
@@ -1495,8 +1492,8 @@ module View =
                 <span class="{Style.queueSummaryBody}">{title}</span>
               </button>
               <div class="{Style.queueTools}">
-                <button type="button" class="{face}" aria-label="{label}" title="{label}" data-surface-dismiss
-                        data-surface-dismiss-armed="{flag armed}" aria-busy="{flag (sending = SurfaceView.Sending.Dismissal)}"
+                <button type="button" class="{Style.queueVerbDelete}" aria-label="{label}" title="{label}" data-surface-dismiss
+                        aria-busy="{flag (sending = SurfaceView.Sending.Dismissal)}"
                         aria-disabled="{flag still}" @click={Ev press}>{Icon.bin}</button>
               </div>
             </article>"""

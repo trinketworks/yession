@@ -689,7 +689,6 @@ module Dom =
         let surfaceFoldLabel = "Put this away for now"
         let surfaceUnfoldLabel = "Open the agent's question"
         let surfaceDismissLabel = "Dismiss this without answering"
-        let surfaceDismissConfirm = "Confirm dismiss"
         /// Who asks, on a surface's line while another ask's card is in front.
         let surfaceAsker = "agent asks"
         /// What a surface's line says when the surface has no text to name it by.
