@@ -204,6 +204,10 @@ let all =
         // session's work sandbox did not start. Served from a page set in place, so it needs
         // a browser and no host.
         Tag.needs "Browser waits" [ Tag.Browser ] (fun () -> Browser.waitTests)
+        // The servers the browser cases stand beside the product, and what they do with a
+        // reply they cannot write. They live on the .NET CLR with the browser tier, which is
+        // what `Browser` pins; the case itself drives no page.
+        Tag.needs "Fixture servers (browser)" [ Tag.Browser ] (fun () -> Browser.fixtureServerTests)
         // Measuring, not asserting — and never part of `check` or `verify`, which is why it
         // needs a capability nothing else asks for. `tasks.fsx bench` is the only caller.
         Tag.needs "Client performance" [ Tag.Browser; Tag.Bench ] (fun () -> Bench.tests)

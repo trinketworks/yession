@@ -800,6 +800,30 @@ let private withSilentServer (body: Contexts -> Serving * Task<HttpListenerConte
         | Choice2Of2 e -> return raise e
     }
 
+/// The servers a browser case stands beside the product (`Loopback.answer`): a reply one of
+/// them cannot write is dropped, not raised, because each answers on a loop started with
+/// `Async.Start`, where a failure that escapes ends the test process and every case in it.
+let fixtureServerTests =
+    testList "Fixture servers (browser)" [
+        testCaseAsync "a request whose response is already gone is dropped, not raised" <|
+            async {
+                let served = listenOnLoopback ()
+                use client = new HttpClient ()
+                let asking = client.GetAsync (served.At "/gone")
+                let! ctx = served.Listener.GetContextAsync () |> Async.AwaitTask
+                // Gone before it is answered, as when the page that asked closed, or the case
+                // that owned the server stopped it, with a reply on its way. Writing to it now
+                // throws, as the forwarder's 502 did in the run that lost its browser tier.
+                ctx.Response.Abort ()
+                let! outcome = Async.Catch (answer "a case's server" ctx (async { ctx.Response.StatusCode <- 502 }))
+                served.Stop ()
+                let! _ = Async.Catch (Async.AwaitTask asking)
+                match outcome with
+                | Choice1Of2 () -> ()
+                | Choice2Of2 fault -> failwithf "answering a request whose response was gone raised: %s" fault.Message
+            }
+    ]
+
 let waitTests =
     testList "Browser waits" [
         testCaseAsync "a wait ends with the product's reason when the work sandbox failed to start" <|
@@ -1306,16 +1330,19 @@ let tests =
                 while api.Listener.IsListening do
                     match! Async.Catch (api.Listener.GetContextAsync () |> Async.AwaitTask) with
                     | Choice1Of2 ctx ->
-                        let status, body =
-                            match ctx.Request.Url.AbsolutePath with
-                            | "/repos/octo/fixture" -> 200, """{"full_name":"octo/fixture","default_branch":"main","private":false}"""
-                            | "/repos/octo/fixture/branches" -> 200, """[{"name":"main"}]"""
-                            | _ -> 404, """{"message":"Not Found"}"""
-                        let bytes = Text.Encoding.UTF8.GetBytes body
-                        ctx.Response.StatusCode <- status
-                        ctx.Response.ContentType <- "application/json"
-                        ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
-                        ctx.Response.Close ()
+                        do!
+                            async {
+                                let status, body =
+                                    match ctx.Request.Url.AbsolutePath with
+                                    | "/repos/octo/fixture" -> 200, """{"full_name":"octo/fixture","default_branch":"main","private":false}"""
+                                    | "/repos/octo/fixture/branches" -> 200, """[{"name":"main"}]"""
+                                    | _ -> 404, """{"message":"Not Found"}"""
+                                let bytes = Text.Encoding.UTF8.GetBytes body
+                                ctx.Response.StatusCode <- status
+                                ctx.Response.ContentType <- "application/json"
+                                ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
+                            }
+                            |> answer "the stand-in GitHub" ctx
                     | Choice2Of2 _ -> ()
             })
         try
@@ -7878,8 +7905,8 @@ let private startStallingMountProxy (upstreamPort: unit -> Async<int>) (stalls: 
                             let! bytes = reply.Content.ReadAsByteArrayAsync () |> Async.AwaitTask
                             ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
                         with _ -> ctx.Response.StatusCode <- 502
-                        ctx.Response.Close ()
-                    })
+                    }
+                    |> answer "the mounted proxy" ctx)
                 return! loop ()
             | Choice2Of2 _ -> ()   // listener stopped
         }
@@ -8643,8 +8670,8 @@ let private startFrontDoorWith (managerPort: Task<int>) (admits: string -> int -
                                     let! bytes = reply.Content.ReadAsByteArrayAsync () |> Async.AwaitTask
                                     ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
                             with _ -> ctx.Response.StatusCode <- 502
-                            ctx.Response.Close ()
-                        })
+                        }
+                        |> answer "the front door" ctx)
                 return! loop ()
             | Choice2Of2 _ -> ()   // listener stopped
         }
@@ -9556,10 +9583,13 @@ let private elsewhere (html: string) : Serving =
         async {
             match! Async.Catch (served.Listener.GetContextAsync () |> Async.AwaitTask) with
             | Choice1Of2 ctx ->
-                let bytes = Text.Encoding.UTF8.GetBytes html
-                ctx.Response.ContentType <- "text/html"
-                ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
-                ctx.Response.Close ()
+                do!
+                    async {
+                        let bytes = Text.Encoding.UTF8.GetBytes html
+                        ctx.Response.ContentType <- "text/html"
+                        ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
+                    }
+                    |> answer "a second origin" ctx
                 return! loop ()
             | Choice2Of2 _ -> ()
         }
@@ -9825,6 +9855,7 @@ let openingTests =
 // forced — the `[Browser]` need fails on Node and reports the skip itself.
 let tests : Fable.Pyxpecto.Model.TestCase = testList "Browser E2E" []
 let waitTests : Fable.Pyxpecto.Model.TestCase = testList "Browser waits" []
+let fixtureServerTests : Fable.Pyxpecto.Model.TestCase = testList "Fixture servers (browser)" []
 let editorTests : Fable.Pyxpecto.Model.TestCase = testList "Editor rendering (browser)" []
 let mountedTests : Fable.Pyxpecto.Model.TestCase = testList "Path-mounted session (browser)" []
 let frontDoorTests : Fable.Pyxpecto.Model.TestCase = testList "Creating a session behind a front door (browser)" []
