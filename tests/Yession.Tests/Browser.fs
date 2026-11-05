@@ -6912,6 +6912,19 @@ let editorTests =
                 do! Wait.until "the chip to say the rewritten command" (fun () -> Read.text page chip) (Option.exists (fun t -> t.Contains "npm run lint -- --fix"))
             }
 
+        // A collaborator's caret can reach this page before the words it is in, because
+        // presence and the doc travel apart. Pushed then, it has nothing to resolve against and
+        // is drawn nowhere. The words then land as a doc update and nothing else: the codec
+        // does not bind a body, so no model changes and no render pushes the carets again.
+        editorCase "a collaborator's caret that arrives before its words is drawn once they land" <| fun page ->
+            async {
+                let grace = Yession.Domain.PeerId.create "grace" |> Result.defaultWith failwith
+                do! Harness.await1 page HarnessPage.caretBeforeWords "hello"
+                // Her draft's body, however the page shows it: in the composer, or collapsed.
+                let body = sprintf "#shell [data-rich-body='%s']" (Yession.Domain.Collab.BodyKey.draft grace)
+                do! waitPresent "Grace's caret in her draft" page (body + " .pm-caret")
+            }
+
         // A preview (P2-1): what a chip opens is laid over the terminal, never a tab beside it,
         // and its way back hands focus to the chip — the UI floor's rule about a DOM swap that
         // removes what had focus, asked of the one surface that removes itself on Escape. These

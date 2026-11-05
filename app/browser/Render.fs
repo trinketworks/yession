@@ -519,9 +519,10 @@ let create (deps: Deps) : Renderer =
     let mutable shownLines : Browser.Types.HTMLInputElement list = []
     let mutable shownTexts : Browser.Types.HTMLElement list = []
 
-    /// Push each shown command line's root value in. Only on a change (`setInputValue`,
-    /// `setTextContent`), so the call that finds nothing new, which is nearly every call,
-    /// writes nothing and leaves the caret where it is.
+    /// Push each shown command line's root value in, after every render and on every doc
+    /// update (below `pushPresences`). Only on a change (`setInputValue`, `setTextContent`),
+    /// so the call that finds nothing new, which is nearly every call, writes nothing and
+    /// leaves the caret where it is.
     ///
     /// The read-only mounts (`data-terminal-text`) are filled in the same pass rather than
     /// in one of their own, because they read the roots these lines write: two passes is two
@@ -534,12 +535,6 @@ let create (deps: Deps) : Renderer =
         for el in shownTexts do
             let key = el.getAttribute "data-terminal-text"
             if not (isNull (box key)) && key <> "" then setTextContent el (TerminalText.read texts key)
-
-    // On every doc update, not only after a render: a command line is a root the Ylmish
-    // codec does not bind (it holds only the slot's identity), so a collaborator's keystroke
-    // in one changes no model and draws no render. A line that waited for a render would show
-    // the command as it stood at whatever unrelated change came last.
-    DocSync.onAnyUpdate doc valueTerminalLines
 
     /// Bind every rendered terminal command line to its `Y.Text` root: push the CRDT's
     /// value in, send the input's edits back out as the MINIMUM edit that gets there
@@ -690,6 +685,19 @@ let create (deps: Deps) : Renderer =
                     if not (List.isEmpty cursors) || prev <> cursors then
                         lastPushed.[key] <- cursors
                         handle.PushPresences cursors)
+
+    // What the page draws from roots the Ylmish codec does not bind, kept up on every doc
+    // update and not only after a render. A body or a command line is such a root (the codec
+    // holds only a slot's identity), so a collaborator's keystroke in one changes no model and
+    // draws no render, and whatever waited for a render would show the root as it stood at
+    // whatever unrelated change came last:
+    // - a command line's value (`valueTerminalLines`);
+    // - a collaborator's caret in a body (`pushPresences`), which is resolved against the
+    //   body's content. A caret that arrives before the words it is in resolves only once they
+    //   land, and presence and the doc travel apart, so nothing orders the two.
+    DocSync.onAnyUpdate doc (fun () ->
+        valueTerminalLines ()
+        pushPresences ())
 
     /// Place collaborators' carets in the collaborative INPUTS by measurement (a native input
     /// has no per-character geometry): decode each such peer's relative anchor/head against the

@@ -1979,6 +1979,36 @@ do
         Y.applyUpdate (collaborator, Y.encodeStateAsUpdate shellDoc, box "harness")
         TerminalText.setTo (TextRegistry collaborator) key command
         Y.applyUpdate (shellDoc, Y.encodeStateAsUpdate collaborator, box "collaborator")))
+    PageGlobal.set HarnessPage.caretBeforeWords (fun words ->
+        async {
+            // Grace's draft, on the page before anything is in it. Hers rather than this page's
+            // own (this page is Ada), because this page publishes its own slot when words land
+            // in its own draft, and that render would push every caret again whatever the doc did.
+            let grace = PeerId.create "grace" |> expect
+            dispatch (EnsureDraftMsg (grace, QueueId.create "queue-grace" |> expect))
+            let collaborator = Y.Doc.Create ()
+            Y.applyUpdate (collaborator, Y.encodeStateAsUpdate shellDoc, box "harness")
+            let draft = (BodyRegistry collaborator).Fragment (BodyKey.draft grace)
+            Markdown.intoFragment words draft
+            // Where y-prosemirror says a caret is: an index into the paragraph's text.
+            let line =
+                Y.XmlFragment.tryOf (box (draft.get 0.))
+                |> Option.bind (fun paragraph -> Y.Text.tryOf (box (paragraph.get 0.)))
+                |> Option.defaultWith (fun () -> failwith "the words did not make one paragraph of text")
+            let at = ProseMirror.relPosFromTypeIndex line words.Length |> ProseMirror.encodeRel
+            dispatch (
+                RemotePresenceMsg
+                    { Who = ActorRef.PeerRef grace
+                      DisplayName = "Grace"
+                      Focus = Some { Field = DraftBody grace; Pos = { Anchor = at; Head = at } }
+                      Viewing = None })
+            // The caret is pushed at the frame after the render it arrived in, when there is
+            // nothing here yet to resolve it against.
+            do! nextFrame () |> Async.AwaitPromise
+            do! nextFrame () |> Async.AwaitPromise
+            Y.applyUpdate (shellDoc, Y.encodeStateAsUpdate collaborator, box "collaborator")
+        }
+        |> Async.StartAsPromise)
     PageGlobal.set HarnessPage.take (fun id ->
         match TerminalId.create id with
         | Ok terminal -> takeRef terminal
