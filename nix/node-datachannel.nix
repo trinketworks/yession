@@ -10,11 +10,11 @@
 { lib, stdenv, fetchurl, cmake, pkg-config, openssl, libdatachannel, plog, nodejs_24 }:
 
 let
-  version = "0.32.3";
+  version = "0.33.6";
 
   src = fetchurl {
     url = "https://registry.npmjs.org/node-datachannel/-/node-datachannel-${version}.tgz";
-    hash = "sha256-cYRh1TDWequhY4EvJ3OGcQBTNijrwJ8mGJ5/pAo7SkQ=";
+    hash = "sha256-VZMN2PEZdDUKNt/ilW08dctRAIiSpVmqDmZ7xK+bPCM=";
   };
 
   # Header-only; node-datachannel's C++ includes <napi.h> from here.
