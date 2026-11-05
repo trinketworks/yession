@@ -56,7 +56,11 @@ module Harness =
           /// Resolve the first time the model satisfies the predicate, or FAIL after
           /// `waitForTimeoutMs`, or FAIL at once when the runner's `refusal` says the model
           /// has reached a state no wait will survive. Never waits for ever.
-          WaitFor : ('model -> bool) -> Async<unit> }
+          WaitFor : ('model -> bool) -> Async<unit>
+          /// Ask every pending wait again, against the model as it is. A predicate that reads
+          /// more than the model (a body read straight from the doc) changes without the
+          /// program reaching a new model, so whatever moves that state calls this.
+          Recheck : unit -> unit }
 
     /// A `refusal` for a model with no state that ends a wait early: every wait runs to its
     /// predicate or its deadline.
@@ -83,9 +87,7 @@ module Harness =
         // A waiter is settled exactly once, by the model, the clock or the refusal — whichever
         // comes first — so each carries how to be resumed and how to be failed.
         let mutable waiters : (('model -> bool) * (unit -> unit) * (string -> unit)) list = []
-        let setState m d =
-            model <- m
-            dispatch <- d
+        let settle m =
             let fire, rest = waiters |> List.partition (fun (predicate, _, _) -> predicate m)
             // What is left, once the model has had its say, is a set of waits for something
             // the model has said will not come.
@@ -100,6 +102,10 @@ module Harness =
             // lets the loop drain first, so awaited WaitFor + Dispatch compose safely.
             fire |> List.iter (fun (_, resume, _) -> Fable.NodeExtras.Microtasks.queue resume)
             refused |> List.iter Fable.NodeExtras.Microtasks.queue
+        let setState m d =
+            model <- m
+            dispatch <- d
+            settle m
         Program.withSetState setState program |> Program.run
         { Model = fun () -> model
           Dispatch = fun msg -> dispatch msg
@@ -145,7 +151,8 @@ module Harness =
                                                     sprintf
                                                         "WaitFor timed out after %dms: the model never satisfied the predicate"
                                                         timeoutMs)))
-                                    timeoutMs) }
+                                    timeoutMs)
+          Recheck = fun () -> settle model }
 
     let run (program: Program<unit, 'model, 'msg, unit>) : Runner<'model, 'msg> =
         runWith neverRefuses waitForTimeoutMs program
@@ -252,6 +259,10 @@ let connectClientWith (options: Client.ConnectOptions) (signalUrl: string) (toke
         // The composer's publication rule, wired exactly as the browser wires it: the client's
         // draft slot appears when its body has content and goes when the body empties.
         DraftSlot.follow doc registry local.PeerId (user >> runner.Dispatch) |> ignore
+        // A wait on a body reads the doc, and an edit to a body alone reaches no new model:
+        // Ylmish signals only a transaction that changes a root its codec binds, and a body's
+        // fragment is not one. So every doc update asks the waits again.
+        DocSync.onAnyUpdate doc runner.Recheck
         let hello = { PeerId = local.PeerId; DisplayName = name; Token = token }
         let connection = Client.connect options doc registry texts hello (user >> runner.Dispatch) channel
         wired.Value <- Some connection
