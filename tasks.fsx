@@ -3067,12 +3067,12 @@ let private findingsIn (report: string) : Finding list option =
 /// `column` is 1-based, as SARIF numbers it, so a line of `n` characters has columns 1 to `n`.
 let private isPhantomMismatch (column: int) (lineText: string) : bool = column > lineText.Length
 
-/// Where a finding's file is on disk. The CLI spells a report path relative to the PARENT of
-/// `--code-root`, so it begins with the repository directory's own name (`yession/analyzers/...`).
-/// The fixture check in `analyzers` fails if that stops being true, because `sourceLine` would
-/// otherwise go quiet without saying so.
+/// Where a finding's file is on disk. The CLI spells a report path relative to `--code-root`
+/// (`analyzers/...`; before FSharp.Analyzers.SDK 0.41 it began with the repository directory's
+/// own name). The fixture check in `analyzers` fails if that stops being true, because
+/// `sourceLine` would otherwise go quiet without saying so.
 let private findingPath (finding: Finding) : string =
-    Path.Combine (Path.GetDirectoryName repoRoot, finding.File)
+    Path.Combine (repoRoot, finding.File)
 
 /// The text of the line a finding is anchored on, or nothing when it cannot be read: a report
 /// path that is not in this tree, or a line number the file does not reach. Either way the
@@ -3163,7 +3163,7 @@ let private analyze (projects: string list) : Verdict * string =
 /// `EnvWriteFixture` and `EnvReaderFixture` each have an `Access.fs` and an `Elsewhere.fs`, with
 /// cases for different rules on different lines.
 let private inFixture (fixture: string) (finding: Finding) : bool =
-    finding.File.Replace('\\', '/').Contains ($"/analyzers/fixtures/%s{fixture}/")
+    finding.File.Replace('\\', '/').StartsWith ($"analyzers/fixtures/%s{fixture}/")
 
 /// The lines ONE rule reported on in one fixture, whatever else it said. Enough to compare
 /// against that fixture's markers and nothing more: pinning the message text would make every
@@ -3334,7 +3334,7 @@ let private analyzers () =
             for f in own |> List.filter (fun f -> f.Rule = unjudged) do
                 if Option.isNone (sourceLine f) then
                     failwithf
-                        "lint: the YES000 hint cannot read %s:%d, so it could never fire. The CLI spells report paths relative to the parent of --code-root; if that changed, change `sourceLine` in tasks.fsx"
+                        "lint: the YES000 hint cannot read %s:%d, so it could never fire. The CLI spells report paths relative to --code-root; if that changed, change `findingPath` in tasks.fsx"
                         f.File
                         f.Line
 
