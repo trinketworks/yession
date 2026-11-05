@@ -11,9 +11,9 @@ open Fable.Core
 
 [<AllowNullLiteral>]
 type Entry =
-    /// Throws when no credential is stored under (service, name), and on backend
+    /// None when no credential is stored under (service, name). Throws on backend
     /// errors (no Secret Service daemon, locked keychain) — callers wrap in Result.
-    abstract getPassword : unit -> string
+    abstract getPassword : unit -> string option
     abstract setPassword : password: string -> unit
     abstract deletePassword : unit -> bool
 
