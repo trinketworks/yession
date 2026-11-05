@@ -4,9 +4,9 @@
     "net10.0": {
       "Thoth.Json": {
         "type": "Direct",
-        "requested": "[10.5.1, )",
-        "resolved": "10.5.1",
-        "contentHash": "HMh+zRyOhz7ASGNLgcSQFsrZWv4mcMZfqIsya0aQ2ixFWZpav9RRvYR5C9tL33qmRDX4n+73Bpo6brSfUQ4nQA==",
+        "requested": "[10.5.2, )",
+        "resolved": "10.5.2",
+        "contentHash": "1MUYt+j4UjvaBMFpguaAjVPBXhmjx12BjXmnyZU4BNr3geuFHsi+ptWrkzXUHcWaU82lMCr0jsy02BXKTrf7iQ==",
         "dependencies": {
           "FSharp.Core": "10.1.203",
           "Fable.Core": "5.0.0"
@@ -38,7 +38,7 @@
       },
       "Fable.Core": {
         "type": "CentralTransitive",
-        "requested": "[5.2.0, )",
+        "requested": "[5.6.1, )",
         "resolved": "5.0.0",
         "contentHash": "pJOXJjfhjvNa1cgtF+klgR3DxQI7x9D/fFzZbjUBZLBJyYIioPsTFsKUnIOqNdCq1Oby9lINUSwnL4TqspMQOA==",
         "dependencies": {

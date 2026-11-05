@@ -112,7 +112,7 @@ module Codec =
           Decode =
             Decode.string
             |> Decode.andThen (fun s ->
-                match DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind) with
+                match DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture) with
                 | true, v -> Decode.succeed v
                 | false, _ -> Decode.fail (sprintf "Invalid ISO-8601 timestamp: %s" s)) }
 

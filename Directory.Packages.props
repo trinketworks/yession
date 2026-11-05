@@ -14,17 +14,17 @@
     <!-- Yjs bindings used at the sync boundary (same release train as Ylmish). -->
     <PackageVersion Include="Fable.Yjs" Version="1.0.0-beta0233" />
     <!-- The Elmish loop Ylmish binds to (version Ylmish is built against). -->
-    <PackageVersion Include="Fable.Elmish" Version="4.2.0" />
+    <PackageVersion Include="Fable.Elmish" Version="5.0.2" />
     <!-- Incremental values driving Ylmish's encode direction (version Ylmish is built against). -->
-    <PackageVersion Include="FSharp.Data.Adaptive" Version="1.2.26" />
+    <PackageVersion Include="FSharp.Data.Adaptive" Version="1.2.27" />
     <!-- Fable interop core (Node host + browser client). 5.2 adds `Compiler.isDotnet` &c.,
          the compile-time runtime discriminator the unified test harness uses. -->
-    <PackageVersion Include="Fable.Core" Version="5.2.0" />
+    <PackageVersion Include="Fable.Core" Version="5.6.1" />
     <!-- The DOM, typed. Already arrived transitively through Fable.Lit and was already being
          used that way; named here because the client now leans on it directly — a dependency
          you rely on and do not declare is one a transitive bump can take away. -->
-    <PackageVersion Include="Fable.Browser.Dom" Version="2.16.0" />
-    <PackageVersion Include="Fable.Browser.WebStorage" Version="1.2.0" />
+    <PackageVersion Include="Fable.Browser.Dom" Version="2.20.0" />
+    <PackageVersion Include="Fable.Browser.WebStorage" Version="1.3.0" />
     <!-- The peer connection and its data channel, typed. The client's whole non-trickle
          handshake used to be forty lines of JavaScript because there was nothing to write it
          against; this is the maintained binding for the same API. -->
@@ -44,32 +44,32 @@
     <!-- The service-worker registration, typed: what the worker's own bindings in
          Fable.BrowserExtras reuse for `self.registration`. The version Fable.Browser.Navigator
          already brought in, named because a project now references it directly. -->
-    <PackageVersion Include="Fable.Browser.Worker" Version="1.3.0" />
+    <PackageVersion Include="Fable.Browser.Worker" Version="1.4.0" />
     <!-- Typed fetch() binding: the app's one place that talks to the host's network API
          (the /me probe) does it through this, not a hand-rolled Emit string. -->
     <PackageVersion Include="Fable.Fetch" Version="2.7.0" />
-    <PackageVersion Include="Fable.Promise" Version="3.1.0" />
+    <PackageVersion Include="Fable.Promise" Version="3.3.0" />
     <!-- Fable.Lit: the `html` DSL for the client shell (client-side render) and the
          management UI (our own SSR wrapper renders the same templates to a string). -->
-    <PackageVersion Include="Fable.Lit" Version="1.4.2" />
+    <PackageVersion Include="Fable.Lit" Version="2.0.0" />
     <!-- Maintained Node core-module bindings (type-only; no npm dependency). -->
     <PackageVersion Include="Fable.Node" Version="1.6.0" />
     <!-- Single test framework: Expecto-style tests compiled by Fable and run on Node. -->
     <PackageVersion Include="Fable.Pyxpecto" Version="2.0.0" />
     <!-- JSON wire-format codec for the domain (isomorphic: Fable + .NET). The Fable
          build uses Thoth.Json; the .NET build uses the Thoth.Json.Net backend. -->
-    <PackageVersion Include="Thoth.Json" Version="10.5.1" />
+    <PackageVersion Include="Thoth.Json" Version="10.5.2" />
     <PackageVersion Include="Thoth.Json.Net" Version="12.0.0" />
     <!-- Real-browser E2E driver (CLR-only; the test project's .NET run uses it). -->
-    <PackageVersion Include="Microsoft.Playwright" Version="1.61.0" />
+    <PackageVersion Include="Microsoft.Playwright" Version="1.64.1" />
     <!-- The F# analyzer SDK: the typed-tree API `analyzers/Yession.Analyzers` reads, and
          the `fsharp-analyzers` CLI that loads it (same version, see .config/dotnet-tools.json
          — the loader refuses an analyzer built against a different SDK). -->
-    <PackageVersion Include="FSharp.Analyzers.SDK" Version="0.37.2" />
+    <PackageVersion Include="FSharp.Analyzers.SDK" Version="0.41.0" />
     <!-- Test stack (versions taken from the dotnet xunit template for net10.0). -->
-    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="coverlet.collector" Version="10.1.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageVersion Include="xunit" Version="2.9.3" />
-    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
   </ItemGroup>
 </Project>

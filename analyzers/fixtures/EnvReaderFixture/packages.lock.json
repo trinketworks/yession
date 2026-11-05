@@ -4,9 +4,9 @@
     "net10.0": {
       "Fable.Core": {
         "type": "Direct",
-        "requested": "[5.2.0, )",
-        "resolved": "5.2.0",
-        "contentHash": "3+HVoyYMjPGeKJEhMzRti0coDS6AkLVOWXmGwSvqokeTuwdZLyiKMoNgQrE6ZeJ0cSy9qHBB4VBpw5RAfb6zmQ==",
+        "requested": "[5.6.1, )",
+        "resolved": "5.6.1",
+        "contentHash": "c/lKM8ptY8havLmPWU4OuZcweTcwFnhqYHdWUXqDL0B9KURABQMpzfCjCsc+bJhJFTSw58ABT4o1UDODLSPBAA==",
         "dependencies": {
           "FSharp.Core": "4.7.2"
         }
@@ -47,7 +47,7 @@
       "fable.nodeextras": {
         "type": "Project",
         "dependencies": {
-          "Fable.Core": "[5.2.0, )",
+          "Fable.Core": "[5.6.1, )",
           "Fable.Fetch": "[2.7.0, )",
           "Fable.Node": "[1.6.0, )"
         }
@@ -77,7 +77,7 @@
       },
       "Fable.Promise": {
         "type": "CentralTransitive",
-        "requested": "[3.1.0, )",
+        "requested": "[3.3.0, )",
         "resolved": "2.2.2",
         "contentHash": "yHFSo7GCY0l/Wjskh/HESuFoGzXIoRM22UlrARA5ewnX736Y1wM27kcqCWeGcIzaEsgJnZcDkp093M0gQyMcWA==",
         "dependencies": {
