@@ -218,7 +218,7 @@ module ProseMirror =
 
     let private tableSchema : Schema = appendTableNodes schemaClass schema
 
-    /// `markdown-it`'s `exports` map points both Node and esbuild at the same `index.mjs`,
+    /// `markdown-it`'s `exports` map points both Node and esbuild at the same `dist/markdown-it.mjs`,
     /// which has a real `export default` — unlike `@xterm/headless` (`Fable.Xterm`), where the
     /// two platforms resolve different files and `ImportDefault` only works because one of them
     /// is a CJS interop default. No such caveat here.
