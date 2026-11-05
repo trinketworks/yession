@@ -1255,13 +1255,11 @@ let package (version: string) =
 /// extracted into a directory of its own, `npm ci --omit=dev` there, and `npm i -g` of that
 /// directory into a scratch global prefix. Answers the install directory and the global `bin`.
 ///
-/// A clean install reaches two hosts this repository does not own: the registry, and the
-/// release assets a native addon's install script fetches its prebuilt binary from. The
-/// second has nothing behind it — node-datachannel answers a failed `prebuild-install` by
-/// building from source, and that fallback crashes on its own (`prebuild WARN This package
-/// does not support N-API version undefined`) — so a few minutes of rate limiting at GitHub
-/// arrive here as "the published package does not install". That took master red on two
-/// releases seven minutes apart, on a tarball that installed cleanly either side of them.
+/// A clean install reaches a host this repository does not own: the registry. Every native
+/// addon now comes from it too — node-datachannel ships its prebuilt binary as a per-platform
+/// optional package (`@node-datachannel/linux-x64-gnu`, …), not from GitHub release assets an
+/// install script fetched — but the registry still has bad minutes, and they arrive here as
+/// "the published package does not install".
 ///
 /// So the FETCH (`npm ci`) is retried, which is what a person installing the package does, and
 /// each attempt gets a fresh directory so a half-populated tree is never what the next one reads.
@@ -1362,9 +1360,14 @@ let installSmoke (tgz: string) =
            |> Array.exists (fun d -> File.Exists (Path.Combine (d, "claude")))
     if not claudePulled then failwith "install-smoke: native claude binary was not pulled by npm"
 
-    let ndcRelease = Path.Combine (dir, "node_modules/node-datachannel/build/Release")
-    if not (Directory.Exists ndcRelease && (Directory.GetFiles (ndcRelease, "*.node")).Length > 0) then
-        failwith "install-smoke: node-datachannel addon was not built"
+    // node-datachannel's addon is an optional dep keyed by platform too (since 0.33): assert
+    // one `@node-datachannel/<platform>` package resolved with its `.node`, the same way.
+    let ndcScope = Path.Combine (dir, "node_modules/@node-datachannel")
+    let ndcPulled =
+        Directory.Exists ndcScope
+        && Directory.GetDirectories ndcScope
+           |> Array.exists (fun d -> (Directory.GetFiles (d, "*.node")).Length > 0)
+    if not ndcPulled then failwith "install-smoke: node-datachannel's native addon was not pulled by npm"
 
     // Over what npm ACTUALLY linked into the global bin, so a manifest that offers a command npm
     // did not install is a failure here rather than a missing command on somebody's PATH.
@@ -2388,8 +2391,8 @@ module private LinuxTarget =
     /// target, and report their paths. One remote script rather than a dozen round-trips — glue
     /// that must run where `dotnet` cannot, which is the sanctioned exception to "no scripts".
     /// `node_modules` is keyed on the lockfile, so a dependency change rebuilds it and nothing
-    /// else does; the native addon is fetched best-effort so Native suites run when a prebuild
-    /// exists and self-skip when it does not.
+    /// else does; node-datachannel's addon arrives as its per-platform optional package, so Native
+    /// suites run where one exists and self-skip where it does not.
     let provision target (repoPath: string) (lockHash: string) : string * string =
         let prelude =
             String.concat "\n"
@@ -2412,7 +2415,6 @@ module private LinuxTarget =
                   "  rm -rf \"$nm\"; mkdir -p \"$nm\""
                   sprintf "  cp %s/package.json %s/package-lock.json \"$nm/\"" (shquote repoPath) (shquote repoPath)
                   "  ( cd \"$nm\" && npm ci --ignore-scripts --no-audit --no-fund )"
-                  "  ( cd \"$nm\" && npm rebuild node-datachannel >/dev/null 2>&1 || true )"
                   "fi" ]
         if ssh target build <> 0 then
             failwithf "vm-check: could not provision the toolchain on %s (see output above)" (describe target)
