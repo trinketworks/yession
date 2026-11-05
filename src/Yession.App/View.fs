@@ -797,6 +797,35 @@ module View =
             <summary class="{Style.detailSummary}">{Dom.Text.details}</summary>
             <span class="{Style.detailBody}">{reason}</span>"""
 
+    /// The offline choice as its `<select>` spells it, both ways.
+    let private offlineValue (choice: OfflineChoice) : string =
+        match choice with
+        | OfflineChoice.Off -> "off"
+        | OfflineChoice.ThisSession -> "session"
+        | OfflineChoice.AllMySessions -> "all"
+
+    let private offlineOfValue (value: string) : OfflineChoice option =
+        [ OfflineChoice.Off; OfflineChoice.ThisSession; OfflineChoice.AllMySessions ]
+        |> List.tryFind (fun choice -> offlineValue choice = value)
+
+    /// Is the offline choice offered on this row? Only on a person's OWN connected
+    /// credential: a session's credential is already usable with nobody signed in, and the
+    /// deployment's is nobody's to grant.
+    let private offersOffline (scopeChoice: string) (owner: SharedOwner option) : bool =
+        scopeChoice = "mine" && owner = Some OwnedByUser
+
+    /// The choice's options and the sentence under it, shared by both panels. Each panel
+    /// writes its own `<select>` around them, because the hook a test reads differs by
+    /// provider and an attribute's name cannot be a hole (YES020).
+    let private offlineOptions (current: OfflineChoice) : TemplateResult =
+        html $"""
+            <option value="{offlineValue OfflineChoice.Off}" ?selected={current = OfflineChoice.Off}>Off</option>
+            <option value="{offlineValue OfflineChoice.ThisSession}" ?selected={current = OfflineChoice.ThisSession}>This session</option>
+            <option value="{offlineValue OfflineChoice.AllMySessions}" ?selected={current = OfflineChoice.AllMySessions}>All my sessions</option>"""
+
+    let private offlineHelp : TemplateResult =
+        html $"""<span class="{Style.small}">Allow offline access so the agent can keep working while you're away. For example, it can react to pull request checks and fix them.</span>"""
+
     /// The Claude connection panel (Plan 08), living in the settings drawer: status per
     /// sign-in scope, the OAuth flow (approve on claude.ai → paste the shown code), and
     /// the paste-a-token fallback.
@@ -809,9 +838,23 @@ module View =
                     | None -> Lit.nothing
                     | Some reason ->
                         html $"""<details class="{Style.detailNote}" data-claude-signin-required="{scopeChoice}" data-detail="credential">{credentialReason reason}</details>"""
+                let offline =
+                    if offersOffline scopeChoice (claude.Status |> Option.map (fun panel -> panel.Owner)) then
+                        html $"""
+                            <label class="{Style.label}" for="claude-offline">while you're away</label>
+                            <div class="{Style.fieldSelectWrap}">
+                              <select id="claude-offline" class="{Style.fieldSelect}" data-claude-offline aria-label="Claude while you're away"
+                                      @change={EvVal(fun v -> offlineOfValue v |> Option.iter (fun choice -> dispatch (ClaudePressedMsg (ClaudePress.Offline choice))))}>
+                                {offlineOptions credential.Offline}
+                              </select>
+                              <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
+                            </div>
+                            {offlineHelp}"""
+                    else Lit.nothing
                 html $"""
                     <div class="{Style.sideRow}" data-claude-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.cls [ Style.btnIconBareDanger; "self-center" ]}" aria-label="Disconnect" data-claude-disconnect="{scopeChoice}" @click={Ev(fun _ -> dispatch (ClaudePressedMsg (ClaudePress.Disconnect scopeChoice)))}>{Icon.close}</button></div>
-                    {why}"""
+                    {why}
+                    {offline}"""
             | None -> html $""""""
         let controls =
             // A command of ours in flight outranks the flow: the controls that would send a
@@ -898,9 +941,23 @@ module View =
                     | None -> Lit.nothing
                     | Some reason ->
                         html $"""<details class="{Style.detailNote}" data-github-signin-required="{scopeChoice}" data-detail="credential">{credentialReason reason}</details>"""
+                let offline =
+                    if offersOffline scopeChoice (github.Status |> Option.map (fun panel -> panel.Owner)) then
+                        html $"""
+                            <label class="{Style.label}" for="github-offline">while you're away</label>
+                            <div class="{Style.fieldSelectWrap}">
+                              <select id="github-offline" class="{Style.fieldSelect}" data-github-offline aria-label="GitHub while you're away"
+                                      @change={EvVal(fun v -> offlineOfValue v |> Option.iter (fun choice -> dispatch (GitHubPressedMsg (GitHubPress.Offline choice))))}>
+                                {offlineOptions credential.Offline}
+                              </select>
+                              <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
+                            </div>
+                            {offlineHelp}"""
+                    else Lit.nothing
                 html $"""
                     <div class="{Style.sideRow}" data-github-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.cls [ Style.btnIconBareDanger; "self-center" ]}" aria-label="Disconnect GitHub" data-github-disconnect="{scopeChoice}" @click={Ev(fun _ -> dispatch (GitHubPressedMsg (GitHubPress.Disconnect scopeChoice)))}>{Icon.close}</button></div>
-                    {why}"""
+                    {why}
+                    {offline}"""
             | None -> html $""""""
         let controls =
             // As Claude's, for its reason.

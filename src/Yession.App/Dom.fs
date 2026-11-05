@@ -234,6 +234,11 @@ module Dom =
         /// so a test reads the fault off the same scope it sees the credential on.
         let claudeSignInRequired = "data-claude-signin-required"
         let githubSignInRequired = "data-github-signin-required"
+        /// The choice of where a person's own connection may be used while they are away,
+        /// on that connection's row. Offered only on a connected row of a person's own
+        /// ("mine") credential: a session's credential is usable with nobody signed in.
+        let claudeOffline = "data-claude-offline"
+        let githubOffline = "data-github-offline"
         /// The device code a person has to type into github.com, and the control that puts
         /// it on the clipboard. The code's hook is also the KEY its copy is remembered
         /// under (`ClientModel.Copied`): one name for the box, whichever half is asking.

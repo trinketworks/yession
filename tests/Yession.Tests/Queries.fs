@@ -528,14 +528,14 @@ let private anyone : CookieIdentity =
 /// and should not: it answers which of two scopes, never which person.
 let private panelFor (who: string) : ClaudePanel =
     { SessionCredential = None
-      MineCredential = Some { Kind = StaticConnection; SignInRequired = Some who }
+      MineCredential = Some { Kind = StaticConnection; SignInRequired = Some who; Offline = OfflineChoice.Off }
       Owner = OwnedByUser
       AgentAvailable = true
       Models = ModelsUnknown }
 
 let private githubFor (who: string) : GitHubPanel =
     { SessionCredential = None
-      MineCredential = Some { Kind = StaticConnection; SignInRequired = Some who }
+      MineCredential = Some { Kind = StaticConnection; SignInRequired = Some who; Offline = OfflineChoice.Off }
       Owner = OwnedByUser }
 
 let private toldAbout (panel: ClaudePanel) : string option =

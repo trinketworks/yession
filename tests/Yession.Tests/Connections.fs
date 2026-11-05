@@ -1964,13 +1964,16 @@ type private RecordingConnections =
       Grants : ResizeArray<ControlWire.ConnectionPutGrantRequest>
       Disconnects : ResizeArray<ConnectionId>
       /// Credentials a verb reported the provider as having refused.
-      Rejects : ResizeArray<ConnectionId * string> }
+      Rejects : ResizeArray<ConnectionId * string>
+      /// Offline choices handed to the Manager, and for which connection.
+      Offlines : ResizeArray<ConnectionId * OfflineChoice> }
 
 let private recordingConnections () : RecordingConnections =
     let puts = ResizeArray<ConnectionId * string> ()
     let grants = ResizeArray<ControlWire.ConnectionPutGrantRequest> ()
     let disconnects = ResizeArray<ConnectionId> ()
     let rejects = ResizeArray<ConnectionId * string> ()
+    let offlines = ResizeArray<ConnectionId * OfflineChoice> ()
     { Client =
         { Begin = fun _ -> async { return Error "not under test" }
           Complete = fun _ _ -> async { return Error "not under test" }
@@ -1978,12 +1981,13 @@ let private recordingConnections () : RecordingConnections =
           PutGrant = fun request -> async { grants.Add request; return Ok () }
           Disconnect = fun target -> async { disconnects.Add target; return Ok true }
           Reject = fun target reason -> async { rejects.Add (target, reason); return Ok true }
-          SetOffline = fun _ _ -> async { return Error "not under test" }
+          SetOffline = fun target choice -> async { offlines.Add (target, choice); return Ok () }
           Resolve = fun _ -> async { return Error "not under test" } }
       Puts = puts
       Grants = grants
       Disconnects = disconnects
-      Rejects = rejects }
+      Rejects = rejects
+      Offlines = offlines }
 
 /// A bare server carrying only the /github handler, mounted at the origin root.
 /// A stored connection as the status cache would hold it. The timestamp is not what any
@@ -2012,6 +2016,20 @@ let private startGitHubRoutesOver
 
 let private startGitHubRoutes (connections: ControlClient.SessionConnections) =
     startGitHubRoutesOver GitHubConnection.posting connections
+
+/// The /claude routes alone, mounted at the origin root, as the GitHub ones above.
+let private startClaudeRoutes (connections: ControlClient.SessionConnections) =
+    async {
+        let route = ClaudeConnection.routes sessionA (stubAuth ()) connections ""
+        let handler (req: IncomingMessage) (res: ServerResponse) =
+            if not (route req res) then
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
+                res.``end`` "not found"
+        let server = createServer handler
+        let! listening =
+            Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
+        return sprintf "http://127.0.0.1:%d" (serverPort listening)
+    }
 
 /// One browser's identity, as the panel builders take it. The panels are per-IDENTITY —
 /// "mine" is a different credential for different people — so a case about scoping asks
@@ -2279,6 +2297,38 @@ let private githubRouteTests =
                         Expect.equal gone.Status 200 "disconnected"
                         Expect.equal (List.ofSeq recorder.Disconnects) [ githubTarget (SessionScope sessionA) ] "the scope the human chose"
                     })
+            }
+
+        // The choice is only ever about the caller's OWN connection. A body cannot point it
+        // at this session's credential, or at anybody else's.
+        testCaseAsync "an offline choice is set on the caller's own connection, whatever scope the body names" <|
+            async {
+                let recorder = recordingConnections ()
+                let! url = startGitHubRoutes recorder.Client
+                let! _ = postJsonWithCookie (url + "/github/offline") "who=alice" """{"scope":"session","offline":"all"}"""
+                Expect.equal
+                    (List.ofSeq recorder.Offlines)
+                    [ githubTarget (UserScope alice), OfflineChoice.AllMySessions ]
+                    "alice's own GitHub, with the choice she made"
+            }
+
+        testCaseAsync "a claude offline choice is set on the caller's own connection, whatever scope the body names" <|
+            async {
+                let recorder = recordingConnections ()
+                let! url = startClaudeRoutes recorder.Client
+                let! _ = postJsonWithCookie (url + "/claude/offline") "who=alice" """{"scope":"session","offline":"session"}"""
+                Expect.equal
+                    (List.ofSeq recorder.Offlines)
+                    [ ({ Scope = UserScope alice; Name = claudeName } : ConnectionId), OfflineChoice.ThisSession ]
+                    "alice's own Claude, with the choice she made"
+            }
+
+        testCaseAsync "an offline write that names no choice changes nothing" <|
+            async {
+                let recorder = recordingConnections ()
+                let! url = startGitHubRoutes recorder.Client
+                let! _ = postJsonWithCookie (url + "/github/offline") "who=alice" """{"scope":"mine"}"""
+                Expect.isEmpty (List.ofSeq recorder.Offlines) "nothing asked of the Manager"
             }
 
         testCase "a panel reports both scopes, and reports them per caller" <| fun () ->
@@ -4411,7 +4461,7 @@ open Yession.App
 // the point of the expectation being DATA and the rule being a parameter: the wait a browser
 // case can only observe by racing it is settled here, in the cheap tier, by stating it.
 
-let private connected : CredentialRow = { Kind = StaticConnection; SignInRequired = None }
+let private connected : CredentialRow = { Kind = StaticConnection; SignInRequired = None; Offline = OfflineChoice.Off }
 
 let private claudeStatus session mine : ClaudePanel =
     { SessionCredential = session
@@ -4512,20 +4562,20 @@ let private panelWireTests =
         testCase "a claude panel is written as the browser reads it" <| fun () ->
             let panel : ClaudePanel =
                 { SessionCredential = None
-                  MineCredential = Some { Kind = OAuthConnection; SignInRequired = Some "expired" }
+                  MineCredential = Some { Kind = OAuthConnection; SignInRequired = Some "expired"; Offline = OfflineChoice.Off }
                   Owner = OwnedByUser
                   AgentAvailable = true
                   Models = ModelsLoaded offered }
             Expect.equal
                 (Codec.toString Reads.claudePanel panel)
-                ("""{"session":null,"mine":{"kind":"oauth","signInRequired":"expired"},"owner":"user","""
+                ("""{"session":null,"mine":{"kind":"oauth","signInRequired":"expired","offline":"off"},"owner":"user","""
                  + """"agent":true,"models":{"models":[{"id":"example-large","name":"Example Large"}]},"""
                  + """"modelsUnavailable":null}""")
                 "the shape both sides read"
 
         testCase "a claude panel round-trips" <| fun () ->
             let panel : ClaudePanel =
-                { SessionCredential = Some { Kind = StaticConnection; SignInRequired = None }
+                { SessionCredential = Some { Kind = StaticConnection; SignInRequired = None; Offline = OfflineChoice.Off }
                   MineCredential = None
                   Owner = OwnedByDeployment
                   AgentAvailable = false
@@ -4538,12 +4588,34 @@ let private panelWireTests =
         testCase "a github panel round-trips" <| fun () ->
             let panel : GitHubPanel =
                 { SessionCredential = None
-                  MineCredential = Some { Kind = StaticConnection; SignInRequired = None }
+                  MineCredential = Some { Kind = StaticConnection; SignInRequired = None; Offline = OfflineChoice.Off }
                   Owner = OwnedByDeployment }
             Expect.equal
                 (Codec.toString Reads.githubPanel panel |> Codec.fromString Reads.githubPanel |> expect)
                 panel
                 "identical"
+
+        // The grant as this session reads it, on the row that shows and changes it.
+        testCase "a row's offline choice round-trips" <| fun () ->
+            let panel : GitHubPanel =
+                { SessionCredential = None
+                  MineCredential = Some { Kind = OAuthConnection; SignInRequired = None; Offline = OfflineChoice.AllMySessions }
+                  Owner = OwnedByUser }
+            Expect.equal
+                (Codec.toString Reads.githubPanel panel |> Codec.fromString Reads.githubPanel |> expect)
+                panel
+                "identical, grant included"
+
+        // A session older than the grant says nothing about it, and a row must not claim
+        // access the Manager does not give.
+        testCase "a row that names no offline choice reads as off" <| fun () ->
+            let panel =
+                Codec.fromString Reads.githubPanel """{"session":null,"mine":{"kind":"oauth","signInRequired":null},"owner":"user"}"""
+                |> expect
+            Expect.equal
+                (panel.MineCredential |> Option.map (fun row -> row.Offline))
+                (Some OfflineChoice.Off)
+                "off"
 
         testCase "a reply that mentions no models is a picker that has not been told" <| fun () ->
             let panel =
@@ -4559,7 +4631,7 @@ let private panelWireTests =
                 |> expect
             Expect.equal
                 panel.MineCredential
-                (Some { Kind = StaticConnection; SignInRequired = None })
+                (Some { Kind = StaticConnection; SignInRequired = None; Offline = OfflineChoice.Off })
                 "the row survives a catalogue it could not read"
             Expect.isTrue
                 (match panel.Models with ModelsUnavailable _ -> true | _ -> false)
@@ -4581,7 +4653,7 @@ let private panelWireTests =
                 |> expect
             Expect.equal
                 panel.MineCredential
-                (Some { Kind = StaticConnection; SignInRequired = None })
+                (Some { Kind = StaticConnection; SignInRequired = None; Offline = OfflineChoice.Off })
                 "the row survives a catalogue it could not read"
             Expect.isTrue
                 (match panel.Models with ModelsUnavailable _ -> true | _ -> false)
@@ -4701,7 +4773,7 @@ let private claudePressTests =
                 effects
                 [ ClientEffect.Claude
                     { Action = ClaudeAction.Token
-                      Request = { Scope = "session"; Code = None; Token = Some "sk-ant-oat01-x" }
+                      Request = { Scope = "session"; Code = None; Token = Some "sk-ant-oat01-x"; Offline = None }
                       Expect = Some { Scope = "session"; Connected = true } } ]
                 "one write, for the credential slot that was chosen"
 
@@ -4717,6 +4789,18 @@ let private claudePressTests =
                 | other -> failwithf "expected one claude write, got %A" other
             let answered = model |> Support.step (ClaudeAnsweredMsg (call, Ok (Some "https://claude.ai/authorize"), 5_000L))
             Expect.equal answered.Claude.Flow (ClaudeAwaitingCode ("https://claude.ai/authorize", "mine")) "the flow carries the scope it began with"
+
+        // Nothing to wait for: the Manager re-sends the statuses and the row reads the
+        // grant off the next panel.
+        testCase "choosing offline access asks the session to set it on the caller's own connection" <| fun () ->
+            let _, effects = ClientModel.init peer |> press (ClaudePress.Offline OfflineChoice.ThisSession)
+            Expect.equal
+                effects
+                [ ClientEffect.Claude
+                    { Action = ClaudeAction.Offline
+                      Request = { ClaudeRequest.scoped "mine" with Offline = Some OfflineChoice.ThisSession }
+                      Expect = None } ]
+                "one write, carrying the choice"
 
         testCase "an accepted write waits for the status from the moment it answered" <| fun () ->
             let call : ClaudeCall =

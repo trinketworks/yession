@@ -38,6 +38,9 @@ type ClaudeAction =
     | Complete
     | Token
     | Disconnect
+    /// Where the caller's own connection may be used while they are away. Always about
+    /// "mine": a session's own credential is usable with nobody signed in already.
+    | Offline
 
 /// The GitHub connection panel's write actions (Plan 14). Same shape as `ClaudeAction`
 /// with one difference of flow: GitHub signs in by DEVICE CODE (the panel shows a code,
@@ -49,6 +52,8 @@ type GitHubAction =
     | Poll
     | Token
     | Disconnect
+    /// As `ClaudeAction.Offline`.
+    | Offline
 
 /// What a Claude panel write says, and the one place it is written.
 ///
@@ -68,13 +73,18 @@ type ClaudeRequest =
       /// else does.
       Code : string option
       /// A pasted token or key: `Token` carries one and nothing else does.
-      Token : string option }
+      Token : string option
+      /// The offline choice: `Offline` carries one and nothing else does. The scope is not
+      /// read for it — the session always applies it to the caller's own connection.
+      Offline : Access.OfflineChoice option }
 
 /// What a GitHub panel write says: the same contract with no pasted code, because the
 /// device flow never shows the browser one — `Poll` asks the session to go and look.
 type GitHubRequest =
     { Scope : string
-      Token : string option }
+      Token : string option
+      /// As `ClaudeRequest.Offline`.
+      Offline : Access.OfflineChoice option }
 
 /// What the two bodies above share, in one place because they are one contract seen from
 /// two panels: a scope a body may leave unsaid, and a field a body may leave out.
@@ -94,6 +104,13 @@ module private ConnectionBody =
     let optionalField (name: string) (value: string option) =
         value |> Option.map (fun text -> name, Encode.string text) |> Option.toList
 
+    /// The offline choice, omitted when absent for the same reason.
+    let offlineField (value: Access.OfflineChoice option) =
+        value |> Option.map (fun choice -> "offline", Yession.App.Codecs.Reads.offlineChoice.Encode choice) |> Option.toList
+
+    let offlineOf (get: Decode.IGetters) =
+        get.Optional.Field "offline" Yession.App.Codecs.Reads.offlineChoice.Decode
+
 module ClaudeRequest =
 
     open ConnectionBody
@@ -105,17 +122,19 @@ module ClaudeRequest =
                 Encode.object
                     [ yield "scope", Encode.string request.Scope
                       yield! optionalField "code" request.Code
-                      yield! optionalField "token" request.Token ]
+                      yield! optionalField "token" request.Token
+                      yield! offlineField request.Offline ]
           Decode =
             Decode.object (fun get ->
                 { Scope = get.Optional.Field "scope" Decode.string |> Option.defaultValue defaultScope
                   Code = get.Optional.Field "code" Decode.string
-                  Token = get.Optional.Field "token" Decode.string }) }
+                  Token = get.Optional.Field "token" Decode.string
+                  Offline = offlineOf get }) }
 
     /// A write that carries nothing but the scope it is about — `Begin`, `Disconnect`, and
     /// the GET of the status route, which asks about a scope without writing anything.
     let scoped (scope: string) : ClaudeRequest =
-        { Scope = scope; Code = None; Token = None }
+        { Scope = scope; Code = None; Token = None; Offline = None }
 
 module GitHubRequest =
 
@@ -126,15 +145,17 @@ module GitHubRequest =
             fun (request: GitHubRequest) ->
                 Encode.object
                     [ yield "scope", Encode.string request.Scope
-                      yield! optionalField "token" request.Token ]
+                      yield! optionalField "token" request.Token
+                      yield! offlineField request.Offline ]
           Decode =
             Decode.object (fun get ->
                 { Scope = get.Optional.Field "scope" Decode.string |> Option.defaultValue defaultScope
-                  Token = get.Optional.Field "token" Decode.string }) }
+                  Token = get.Optional.Field "token" Decode.string
+                  Offline = offlineOf get }) }
 
     /// A write that carries nothing but the scope: every GitHub action but `Token`.
     let scoped (scope: string) : GitHubRequest =
-        { Scope = scope; Token = None }
+        { Scope = scope; Token = None; Offline = None }
 
 /// A route rendered as an address relative to the session's mount — and nothing else, which
 /// is the point of it being a type rather than the string it wraps. The string was correct in
@@ -330,6 +351,7 @@ module SessionRoute =
         | ClaudeAction.Complete -> "complete"
         | ClaudeAction.Token -> "token"
         | ClaudeAction.Disconnect -> "disconnect"
+        | ClaudeAction.Offline -> "offline"
 
     let private githubSegment (action: GitHubAction) =
         match action with
@@ -337,6 +359,7 @@ module SessionRoute =
         | GitHubAction.Poll -> "poll"
         | GitHubAction.Token -> "token"
         | GitHubAction.Disconnect -> "disconnect"
+        | GitHubAction.Offline -> "offline"
 
     /// A route as an address relative to whatever the session is mounted at. Never begins
     /// with `/` — that is the whole point (see the type's remarks) — and comes back as a
@@ -470,10 +493,12 @@ module SessionRoute =
         | "POST", [ "claude"; "complete" ] -> Some (Claude ClaudeAction.Complete)
         | "POST", [ "claude"; "token" ] -> Some (Claude ClaudeAction.Token)
         | "POST", [ "claude"; "disconnect" ] -> Some (Claude ClaudeAction.Disconnect)
+        | "POST", [ "claude"; "offline" ] -> Some (Claude ClaudeAction.Offline)
         | "POST", [ "github"; "begin" ] -> Some (GitHub GitHubAction.Begin)
         | "POST", [ "github"; "poll" ] -> Some (GitHub GitHubAction.Poll)
         | "POST", [ "github"; "token" ] -> Some (GitHub GitHubAction.Token)
         | "POST", [ "github"; "disconnect" ] -> Some (GitHub GitHubAction.Disconnect)
+        | "POST", [ "github"; "offline" ] -> Some (GitHub GitHubAction.Offline)
         | "GET", [ "github"; "repos" ] -> Some GitHubRepos
         | "GET", [ "github"; "repos"; owner; repo; "branches" ] when owner <> "" && repo <> "" ->
             Some (GitHubBranches (owner, repo))

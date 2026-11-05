@@ -205,6 +205,25 @@ module Reads =
         { Encode = (fun models -> Encode.object [ "models", Encode.list (models |> List.map agentModel.Encode) ])
           Decode = Decode.field "models" (Decode.list agentModel.Decode) }
 
+    /// `"off"` | `"session"` | `"all"`: how a person's offline grant reads from this
+    /// session, on a panel row, and what a person here chooses it to be in a panel write
+    /// (`ClaudeRequest`, `GitHubRequest`). The same words the Manager's control wire uses
+    /// for the same choice.
+    let offlineChoice : Codec<Access.OfflineChoice> =
+        { Encode =
+            fun choice ->
+                match choice with
+                | Access.OfflineChoice.Off -> Encode.string "off"
+                | Access.OfflineChoice.ThisSession -> Encode.string "session"
+                | Access.OfflineChoice.AllMySessions -> Encode.string "all"
+          Decode =
+            Decode.string
+            |> Decode.andThen (function
+                | "off" -> Decode.succeed Access.OfflineChoice.Off
+                | "session" -> Decode.succeed Access.OfflineChoice.ThisSession
+                | "all" -> Decode.succeed Access.OfflineChoice.AllMySessions
+                | other -> Decode.fail (sprintf "unknown offline choice '%s'" other)) }
+
     /// One connection as a panel row reads it. The kind crosses as the word a person is
     /// shown, which is `ConnectionKind`'s to say — here and on the screen alike.
     let private credentialRow : Codec<Access.CredentialRow> =
@@ -212,7 +231,8 @@ module Reads =
             fun (row: Access.CredentialRow) ->
                 Encode.object
                     [ "kind", Encode.string (Access.ConnectionKind.label row.Kind)
-                      "signInRequired", Encode.option Encode.string row.SignInRequired ]
+                      "signInRequired", Encode.option Encode.string row.SignInRequired
+                      "offline", offlineChoice.Encode row.Offline ]
           Decode =
             Decode.object (fun get ->
                 // REQUIRED, and the distinction is the rule's: a row with no `kind` at all is
@@ -221,7 +241,13 @@ module Reads =
                 // two the same thing and called it static.
                 { Access.CredentialRow.Kind =
                     get.Required.Field "kind" Decode.string |> Access.ConnectionKind.ofLabel
-                  Access.CredentialRow.SignInRequired = get.Optional.Field "signInRequired" Decode.string }) }
+                  Access.CredentialRow.SignInRequired = get.Optional.Field "signInRequired" Decode.string
+                  // Absent, or a word this build does not know, reads as off: a session older
+                  // than the grant never sets one, and a control that claimed a grant nobody
+                  // can see would promise access the Manager does not give.
+                  Access.CredentialRow.Offline =
+                    get.Optional.Field "offline" (Decode.oneOf [ offlineChoice.Decode; Decode.succeed Access.OfflineChoice.Off ])
+                    |> Option.defaultValue Access.OfflineChoice.Off }) }
 
     /// Who the shared scope belongs to, as the wire spells it. The words are the ones this
     /// surface has always used; what changed is that a reader must now answer for both.
