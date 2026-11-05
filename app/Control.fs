@@ -34,6 +34,8 @@ module Yession.Host.Control
 //   PutConnectionGrant   { target, accessToken, … } -> "ok" (refreshable)
 //   DisconnectConnection { target }             -> { disconnected }
 //   RejectConnection     { target, reason }     -> { recorded }
+//   SetConnectionOffline { target, choice }     -> "ok" (the owner's offline grant, as
+//        chosen from this session: "off" | "session" | "all"; a person's connections only)
 //   ResolveConnection    { target }             -> { kind, value }
 //        (the ONE value-returning route (Plan 08): an agent turn needs the token
 //         in-process; policy gates it to targets whose scope the caller is bound to)
@@ -74,7 +76,23 @@ type ControlCaller =
       /// Was any login into this launch UNATTRIBUTED — the strategy naming a subject with
       /// no user behind it (`--auth localhost`)? What makes `LocalScope` readable, and
       /// false under every attributed strategy.
-      Local : bool }
+      Local : bool
+      /// Everyone who has signed in to this SESSION at least once, in any launch: the
+      /// Manager's durable `SessionRecord.Members`. What "all my sessions" means.
+      Members : Set<UserId>
+      /// Connections this launch may resolve on their owner's offline grant, though the owner
+      /// is not signed in to it (`OfflineGrant.grantedHere` over the stored grants and
+      /// `Members`). Computed per call, so a grant withdrawn is withdrawn at once.
+      Offline : Set<ConnectionId> }
+
+module ControlCaller =
+
+    /// The policy's subject for this caller: the ONE place a verified caller becomes one.
+    let subject (caller: ControlCaller) : Subject =
+        { Session = Some caller.SessionId
+          Users = caller.Users
+          Local = caller.Local
+          Offline = caller.Offline }
 
 /// A secrets-route failure: a policy Deny (403, with the policy's reason) or a store
 /// failure (500). Distinct so the route arms stay thin and policy-free — only the
@@ -107,6 +125,9 @@ type ConnectionsApi =
       Disconnect : ControlCaller -> ControlWire.ConnectionDisconnectRequest -> Async<Result<ControlWire.ConnectionDisconnectResponse, SecretsError>>
       Reject : ControlCaller -> ControlWire.ConnectionRejectRequest -> Async<Result<ControlWire.ConnectionRejectResponse, SecretsError>>
       Resolve : ControlCaller -> ControlWire.ConnectionResolveRequest -> Async<Result<ControlWire.ConnectionResolveResponse, SecretsError>>
+      /// Change where the owner's connection may be used while they are away, as chosen
+      /// from the caller's session.
+      SetOffline : ControlCaller -> ControlWire.ConnectionOfflineRequest -> Async<Result<unit, SecretsError>>
       Status : ControlCaller -> Async<ConnectionStatusList> }
 
 /// The Manager's records handlers, pre-composed with authorization (`RecordAction` × the
@@ -351,6 +372,14 @@ let tryHandle
                             async {
                                 let! outcome = api.Reject caller request
                                 respondWith (ControlWire.toString ControlWire.connectionRejectResponse) outcome
+                            })))
+            | Some ControlRoute.SetConnectionOffline ->
+                withConnections (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.connectionOfflineRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.SetOffline caller request
+                                respondWith (fun () -> "\"ok\"") outcome
                             })))
             | Some ControlRoute.ResolveConnection ->
                 withConnections (fun api ->

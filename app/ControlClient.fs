@@ -262,6 +262,10 @@ type SessionConnections =
       /// expiry to read, so nothing Manager-side can work this out. Answers whether it was
       /// news, so a verb that retries does not report the same fault three times.
       Reject : ConnectionId -> string -> Async<Result<bool, string>>
+      /// Choose, from this session, where the signed-in owner's connection may be used while
+      /// they are away. Refused unless the owner is signed in here, and for any connection
+      /// that is not a person's.
+      SetOffline : ConnectionId -> OfflineChoice -> Async<Result<unit, string>>
       Resolve : ConnectionId -> Async<Result<ConnectionKind * string, string>> }
 
 let connections (endpoint: ControlEndpoint) (secret: string) : SessionConnections =
@@ -297,6 +301,11 @@ let connections (endpoint: ControlEndpoint) (secret: string) : SessionConnection
             post ControlRoute.RejectConnection
                 (ControlWire.toString ControlWire.connectionRejectRequest { Target = target; Reason = reason })
                 (ControlWire.fromString ControlWire.connectionRejectResponse >> Result.map (fun r -> r.Recorded))
+      SetOffline =
+        fun target choice ->
+            post ControlRoute.SetConnectionOffline
+                (ControlWire.toString ControlWire.connectionOfflineRequest { Target = target; Choice = choice })
+                (fun _ -> Ok ())
       Resolve =
         fun target ->
             post ControlRoute.ResolveConnection

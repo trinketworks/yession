@@ -28,14 +28,14 @@ let private name = SecretName.create "deploy-token" |> expect
 let private peer1 = PeerId.create "browser-1" |> expect
 
 /// A launch of session A that alice (and only alice) has signed in to.
-let private callerA : Subject = { Session = Some sessionA; Users = Set.singleton alice; Local = false }
+let private callerA : Subject = { Session = Some sessionA; Users = Set.singleton alice; Local = false; Offline = Set.empty }
 /// A launch of session A with no completed login.
-let private callerANoUsers : Subject = { Session = Some sessionA; Users = Set.empty; Local = false }
+let private callerANoUsers : Subject = { Session = Some sessionA; Users = Set.empty; Local = false; Offline = Set.empty }
 /// A launch of session A whose login was UNATTRIBUTED — `--auth localhost`. It has a
 /// subject (every launch does) but nobody was named behind it.
-let private callerALocal : Subject = { Session = Some sessionA; Users = Set.singleton alice; Local = true }
+let private callerALocal : Subject = { Session = Some sessionA; Users = Set.singleton alice; Local = true; Offline = Set.empty }
 /// A subject with no session at all (the future UI shape).
-let private noSession : Subject = { Session = None; Users = Set.singleton alice; Local = false }
+let private noSession : Subject = { Session = None; Users = Set.singleton alice; Local = false; Offline = Set.empty }
 
 let private request subject action resource : Request =
     { Subject = subject; Access = SecretAccess (action, resource) }
@@ -200,6 +200,105 @@ let private recordPolicyTests =
             Expect.isError (RecordName.create (String.replicate (RecordName.maxLength + 1) "a")) "too long"
     ]
 
+// --- Offline grants: where an absent owner's connection may still be used -----------------
+
+let private aliceGitHub : ConnectionId = { Scope = UserScope alice; Name = name }
+let private aliceOther : ConnectionId = { Scope = UserScope alice; Name = SecretName.create "claude-code" |> expect }
+
+/// A launch of session A after a relaunch: nobody signed in, and alice's one connection
+/// bound on her offline grant.
+let private callerAOffline : Subject =
+    { Session = Some sessionA; Users = Set.empty; Local = false; Offline = Set.singleton aliceGitHub }
+
+let private offlineChooseTests =
+    testList "offline grant choice" [
+        testCase "choosing all my sessions grants all, whatever was before" <| fun () ->
+            let before = Some (OfflineGrant.Sessions (Set.singleton sessionB))
+            Expect.equal (OfflineGrant.choose sessionA OfflineChoice.AllMySessions before) (Some OfflineGrant.AllMySessions) "all"
+
+        testCase "choosing this session with no grant names this session" <| fun () ->
+            Expect.equal (OfflineGrant.choose sessionA OfflineChoice.ThisSession None) (Some (OfflineGrant.Sessions (Set.singleton sessionA))) "this one"
+
+        testCase "choosing this session adds it to the sessions already named" <| fun () ->
+            let before = Some (OfflineGrant.Sessions (Set.singleton sessionB))
+            Expect.equal
+                (OfflineGrant.choose sessionA OfflineChoice.ThisSession before)
+                (Some (OfflineGrant.Sessions (Set.ofList [ sessionA; sessionB ])))
+                "both"
+
+        testCase "choosing this session narrows all my sessions to it" <| fun () ->
+            Expect.equal
+                (OfflineGrant.choose sessionA OfflineChoice.ThisSession (Some OfflineGrant.AllMySessions))
+                (Some (OfflineGrant.Sessions (Set.singleton sessionA)))
+                "narrowed"
+
+        testCase "choosing off takes this session out and keeps the others" <| fun () ->
+            let before = Some (OfflineGrant.Sessions (Set.ofList [ sessionA; sessionB ]))
+            Expect.equal (OfflineGrant.choose sessionA OfflineChoice.Off before) (Some (OfflineGrant.Sessions (Set.singleton sessionB))) "the other stays"
+
+        testCase "choosing off in the last named session leaves no grant" <| fun () ->
+            Expect.equal (OfflineGrant.choose sessionA OfflineChoice.Off (Some (OfflineGrant.Sessions (Set.singleton sessionA)))) None "none"
+
+        testCase "choosing off under all my sessions leaves no grant" <| fun () ->
+            Expect.equal (OfflineGrant.choose sessionA OfflineChoice.Off (Some OfflineGrant.AllMySessions)) None "none"
+    ]
+
+let private offlineGrantedTests =
+    testList "offline grants granted here" [
+        testCase "all my sessions binds the connection where its owner is a member" <| fun () ->
+            let granted = OfflineGrant.grantedHere sessionA (Set.singleton alice) [ aliceGitHub, Some OfflineGrant.AllMySessions ]
+            Expect.equal granted (Set.singleton aliceGitHub) "bound"
+
+        testCase "all my sessions does not bind where its owner never signed in" <| fun () ->
+            let granted = OfflineGrant.grantedHere sessionA (Set.singleton bob) [ aliceGitHub, Some OfflineGrant.AllMySessions ]
+            Expect.isEmpty granted "a session alice never joined is not hers"
+
+        testCase "a grant naming this session binds the connection here" <| fun () ->
+            let granted = OfflineGrant.grantedHere sessionA Set.empty [ aliceGitHub, Some (OfflineGrant.Sessions (Set.singleton sessionA)) ]
+            Expect.equal granted (Set.singleton aliceGitHub) "bound"
+
+        testCase "a grant naming another session does not bind the connection here" <| fun () ->
+            let granted = OfflineGrant.grantedHere sessionA (Set.singleton alice) [ aliceGitHub, Some (OfflineGrant.Sessions (Set.singleton sessionB)) ]
+            Expect.isEmpty granted "not this session"
+
+        testCase "a connection without a grant is never bound offline" <| fun () ->
+            Expect.isEmpty (OfflineGrant.grantedHere sessionA (Set.singleton alice) [ aliceGitHub, None ]) "no grant"
+
+        testCase "a grant on a connection that is not a person's binds nothing" <| fun () ->
+            let local : ConnectionId = { Scope = LocalScope; Name = name }
+            Expect.isEmpty (OfflineGrant.grantedHere sessionA Set.empty [ local, Some OfflineGrant.AllMySessions ]) "nobody to stand in for"
+
+        testCase "a grant naming this session reads as this session from it" <| fun () ->
+            Expect.equal
+                (OfflineGrant.here sessionA Set.empty aliceGitHub (Some (OfflineGrant.Sessions (Set.singleton sessionA))))
+                OfflineChoice.ThisSession
+                "this session"
+    ]
+
+let private offlinePolicyTests =
+    testList "offline policy rows" [
+        testCase "a connection granted offline resolves where its owner is not signed in" <| fun () ->
+            permits "resolve" (onConnection callerAOffline ResolveCredential (UserScope alice))
+
+        testCase "another connection of the same owner does not resolve offline" <| fun () ->
+            denies "resolve" { Subject = callerAOffline; Access = ConnectionAccess (ResolveCredential, aliceOther) }
+
+        testCase "a connection granted offline cannot be replaced without its owner" <| fun () ->
+            denies "connect" (onConnection callerAOffline ConnectCredential (UserScope alice))
+
+        testCase "a connection granted offline cannot be disconnected without its owner" <| fun () ->
+            denies "disconnect" (onConnection callerAOffline DisconnectCredential (UserScope alice))
+
+        testCase "the owner of a connection granted offline has their records read" <| fun () ->
+            permits "read" (onRecord callerAOffline ReadRecord (UserOwner alice))
+
+        testCase "the owner of a connection granted offline has no records written" <| fun () ->
+            denies "write" (onRecord callerAOffline WriteRecord (UserOwner alice))
+
+        testCase "a connection granted offline reads no one else's records" <| fun () ->
+            denies "read" (onRecord callerAOffline ReadRecord (UserOwner bob))
+    ]
+
 // --- Step 2: the envelope + wire codecs -------------------------------------------------
 
 open Yession.Manager
@@ -210,7 +309,8 @@ let private entry scope entryName iv ct : SecretEntry =
       CreatedAt = DateTimeOffset.Parse "2026-07-24T10:00:00Z"
       UpdatedAt = DateTimeOffset.Parse "2026-07-24T11:00:00Z"
       Iv = iv
-      Ciphertext = ct }
+      Ciphertext = ct
+      Offline = None }
 
 let private envelopeTests =
     testList "SecretsFile envelope" [
@@ -222,6 +322,34 @@ let private envelopeTests =
                 |> SecretsFile.upsertConnection (entry (UserScope alice) name "aXYz" "Y3Qz")
             let round = SecretsCodec.toString file |> SecretsCodec.fromString |> expect
             Expect.equal round file "identical after round-trip"
+
+        testCase "a connection's offline grant round-trips through the codec" <| fun () ->
+            let file =
+                SecretsFile.empty "k"
+                |> SecretsFile.upsertConnection { entry (UserScope alice) name "iv1" "ct1" with Offline = Some OfflineGrant.AllMySessions }
+                |> SecretsFile.upsertConnection
+                    { entry (UserScope bob) name "iv2" "ct2" with
+                        Offline = Some (OfflineGrant.Sessions (Set.ofList [ sessionA; sessionB ])) }
+            let round = SecretsCodec.toString file |> SecretsCodec.fromString |> expect
+            Expect.equal round file "identical after round-trip"
+
+        testCase "a connection stored without an offline field reads as no grant" <| fun () ->
+            let json = """{"version":2,"kekId":"k","entries":[],"connections":[{"scope":{"kind":"user","sub":"alice"},"name":"deploy-token","createdAt":"2026-07-24T10:00:00Z","updatedAt":"2026-07-24T10:00:00Z","iv":"a","ciphertext":"b"}]}"""
+            let file = SecretsCodec.fromString json |> expect
+            Expect.equal (file.Connections |> List.map (fun e -> e.Offline)) [ None ] "no grant"
+
+        testCase "an offline grant this build cannot read is no grant, and the credential still opens" <| fun () ->
+            let json = """{"version":2,"kekId":"k","entries":[],"connections":[{"scope":{"kind":"user","sub":"alice"},"name":"deploy-token","createdAt":"2026-07-24T10:00:00Z","updatedAt":"2026-07-24T10:00:00Z","iv":"a","ciphertext":"b","offline":{"kind":"weekdays"}}]}"""
+            let file = SecretsCodec.fromString json |> expect
+            Expect.equal (file.Connections |> List.map (fun e -> e.Offline)) [ None ] "read as off"
+
+        testCase "replacing a connection's value keeps its offline grant" <| fun () ->
+            let granted = { entry (UserScope alice) name "iv1" "ct1" with Offline = Some OfflineGrant.AllMySessions }
+            let file =
+                SecretsFile.empty "k"
+                |> SecretsFile.upsertConnection granted
+                |> SecretsFile.upsertConnection (entry (UserScope alice) name "iv2" "ct2")
+            Expect.equal (file.Connections |> List.map (fun e -> e.Offline)) [ Some OfflineGrant.AllMySessions ] "grant survives"
 
         testCase "unknown scope kind fails the decode" <| fun () ->
             let json = """{"version":1,"kekId":"k","entries":[{"scope":{"kind":"planet","sessionId":"x"},"name":"n","createdAt":"2026-07-24T10:00:00Z","updatedAt":"2026-07-24T10:00:00Z","iv":"a","ciphertext":"b"}]}"""
@@ -852,7 +980,7 @@ let private familyTests =
                 let api = ProcessManager.secretsApiFor ignore (resolveIn store) store.Secrets
                 let! set =
                     api.Set
-                        { SessionId = sessionA; Users = Set.empty; Local = false }
+                        { SessionId = sessionA; Users = Set.empty; Local = false; Members = Set.empty; Offline = Set.empty }
                         { Scope = SessionScope sessionA; Name = githubName; Value = "agent-written" }
                 Expect.isOk set "the session's own generic secret is written"
                 let! resolved = broker.Resolve (githubAt (SessionScope sessionA))
@@ -974,7 +1102,7 @@ let private startControlServer (callers: (string * Control.ControlCaller) list) 
     startControlServerWith callers api None onUnauthorized
 
 let private caller sessionId users : Control.ControlCaller =
-    { SessionId = sessionId; Users = users; Local = false }
+    { SessionId = sessionId; Users = users; Local = false; Members = users; Offline = Set.empty }
 
 /// The pre-authorized handlers over a store, with the SAME resolver the Manager composes
 /// for `resolve`.
@@ -1454,6 +1582,9 @@ let tests =
         constructorTests
         policyTests
         connectionPolicyTests
+        offlineChooseTests
+        offlineGrantedTests
+        offlinePolicyTests
         envelopeTests
         wireTests
         cipherTests

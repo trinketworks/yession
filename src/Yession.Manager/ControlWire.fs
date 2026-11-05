@@ -315,6 +315,10 @@ module ControlWire =
     /// so a verb retried three times does not report three fresh faults.
     type ConnectionRejectResponse = { Recorded : bool }
 
+    /// A person changing, from inside a session, where one of their connections may be used
+    /// while they are away (`OfflineGrant.choose` with this session).
+    type ConnectionOfflineRequest = { Target : ConnectionId; Choice : OfflineChoice }
+
     /// A connection target, as `{scope, name}`: the shape a `SecretId` had on this wire
     /// before the store split its families, kept so neither end has to move together.
     let private connectionId : Codec<ConnectionId> =
@@ -341,6 +345,23 @@ module ControlWire =
                 | "static" -> Decode.succeed StaticConnection
                 | other -> Decode.fail (sprintf "Unknown connection kind: %s" other)) }
 
+    /// `"off"` | `"session"` | `"all"`: how a grant reads from one session, and what a
+    /// person there chooses it to be.
+    let offlineChoice : Codec<OfflineChoice> =
+        { Encode =
+            fun choice ->
+                match choice with
+                | OfflineChoice.Off -> Encode.string "off"
+                | OfflineChoice.ThisSession -> Encode.string "session"
+                | OfflineChoice.AllMySessions -> Encode.string "all"
+          Decode =
+            Decode.string
+            |> Decode.andThen (function
+                | "off" -> Decode.succeed OfflineChoice.Off
+                | "session" -> Decode.succeed OfflineChoice.ThisSession
+                | "all" -> Decode.succeed OfflineChoice.AllMySessions
+                | other -> Decode.fail (sprintf "Unknown offline choice: %s" other)) }
+
     /// Health rides as an OPTIONAL `signInRequired` reason rather than a tagged union:
     /// present means `SignInRequired`, absent means usable. A frame minted before this
     /// field existed therefore decodes as healthy, which is what it meant — the same
@@ -355,7 +376,8 @@ module ControlWire =
                         (match s.Health with
                          | ConnectionUsable -> Encode.nil
                          | SignInRequired reason -> Encode.string reason)
-                      "updatedAt", Codec.timestamp.Encode s.UpdatedAt ]
+                      "updatedAt", Codec.timestamp.Encode s.UpdatedAt
+                      "offline", offlineChoice.Encode s.Offline ]
           Decode =
             Decode.object (fun get ->
                 { ConnectionStatus.Id = get.Required.Field "id" connectionId.Decode
@@ -364,7 +386,13 @@ module ControlWire =
                     get.Optional.Field "signInRequired" Decode.string
                     |> Option.map SignInRequired
                     |> Option.defaultValue ConnectionUsable
-                  ConnectionStatus.UpdatedAt = get.Required.Field "updatedAt" Codec.timestamp.Decode }) }
+                  ConnectionStatus.UpdatedAt = get.Required.Field "updatedAt" Codec.timestamp.Decode
+                  // Optional, like `signInRequired`: a Manager from before offline grants
+                  // sends no such field, and every connection it lists is bound by sign-in.
+                  // A word this build does not know reads as off too, which claims less.
+                  ConnectionStatus.Offline =
+                    get.Optional.Field "offline" (Decode.oneOf [ offlineChoice.Decode; Decode.succeed OfflineChoice.Off ])
+                    |> Option.defaultValue OfflineChoice.Off }) }
 
     /// The `/control/connections` SSE frame: every connection the receiving launch may
     /// currently read. Metadata only — the type cannot carry a value.
@@ -489,6 +517,15 @@ module ControlWire =
           Decode =
             Decode.object (fun get ->
                 { ConnectionRejectResponse.Recorded = get.Required.Field "recorded" Decode.bool }) }
+
+    let connectionOfflineRequest : Codec<ConnectionOfflineRequest> =
+        { Encode =
+            fun (r: ConnectionOfflineRequest) ->
+                Encode.object [ "target", connectionId.Encode r.Target; "choice", offlineChoice.Encode r.Choice ]
+          Decode =
+            Decode.object (fun get ->
+                { ConnectionOfflineRequest.Target = get.Required.Field "target" connectionId.Decode
+                  ConnectionOfflineRequest.Choice = get.Required.Field "choice" offlineChoice.Decode }) }
 
     let connectionResolveResponse : Codec<ConnectionResolveResponse> =
         { Encode =

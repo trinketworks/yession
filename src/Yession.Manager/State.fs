@@ -29,7 +29,12 @@ type SessionRecord =
       /// control channel carries it. `DateTimeOffset option` rather than a flag because
       /// "when" is the question a later ordering will ask, and a bool cannot be widened
       /// into it without a schema break.
-      ArchivedAt : DateTimeOffset option }
+      ArchivedAt : DateTimeOffset option
+      /// Everyone who has signed in to this session at least once, in any launch. Never
+      /// shrinks: it records who has been here, not who is here now (that is the launch's
+      /// bindings, which die with it). What an owner's "all my sessions" offline grant reads
+      /// (`OfflineGrant.AllMySessions`), so it has to outlive a relaunch.
+      Members : Set<UserId> }
 
 module SessionRecord =
 
@@ -108,6 +113,20 @@ module ManagerState =
                     Sessions =
                         state.Sessions
                         |> List.map (fun s -> if s.SessionId = sessionId then { s with ArchivedAt = None } else s) }
+
+    /// Record that `user` signed in to the session. `None` when that changes nothing — the
+    /// session is not registered, or the user is already a member — so a caller writes only
+    /// on a real change.
+    let addMember (sessionId: SessionId) (user: UserId) (state: ManagerState) : ManagerState option =
+        match tryFind sessionId state with
+        | Some record when not (Set.contains user record.Members) ->
+            Some
+                { state with
+                    Sessions =
+                        state.Sessions
+                        |> List.map (fun s ->
+                            if s.SessionId = sessionId then { s with Members = Set.add user s.Members } else s) }
+        | _ -> None
 
     /// Rename a session's display name (the session's self-assigned title, reported over the
     /// control channel). A no-op if the session is not registered; the registry key
@@ -301,7 +320,10 @@ module ManagerCodec =
                      // meaning on both sides of this change.
                      @ (match s.ArchivedAt with
                         | Some at -> [ "archivedAt", Codec.timestamp.Encode at ]
-                        | None -> []))
+                        | None -> [])
+                     // Written only when someone has signed in, like `archivedAt`.
+                     @ (if Set.isEmpty s.Members then []
+                        else [ "members", s.Members |> Set.toList |> List.map Codec.userId.Encode |> Encode.list ]))
           Decode =
             Decode.object (fun get ->
                 { SessionRecord.SessionId = get.Required.Field "sessionId" Codec.sessionId.Decode
@@ -312,7 +334,15 @@ module ManagerCodec =
                   // written before archiving existed has no such field, and every session
                   // in it IS active. That is a true reading, not a migration — which is why
                   // `currentVersion` does not move for it.
-                  SessionRecord.ArchivedAt = get.Optional.Field "archivedAt" Codec.timestamp.Decode }) }
+                  SessionRecord.ArchivedAt = get.Optional.Field "archivedAt" Codec.timestamp.Decode
+                  // OPTIONAL for the same reason, within version 1: a file written before
+                  // membership was recorded has no such field. Nobody is a member of those
+                  // sessions until they sign in again, which costs an owner's "all my
+                  // sessions" grant nothing it ever covered.
+                  SessionRecord.Members =
+                    get.Optional.Field "members" (Decode.list Codec.userId.Decode)
+                    |> Option.map Set.ofList
+                    |> Option.defaultValue Set.empty }) }
 
     /// The one schema this build knows how to read. A version's decoder produces the
     /// CURRENT `ManagerState`, so when a break eventually happens the old version's decoder

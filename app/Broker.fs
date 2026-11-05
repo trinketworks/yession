@@ -205,8 +205,10 @@ type BrokerService =
       /// expiry, so "it stopped working" only ever arrives from whoever spent it.
       /// Answers whether this changed anything.
       Reject : ConnectionId -> string -> Async<Result<bool, string>>
-      /// Metadata for whichever of `targets` exist — never values.
-      StatusOf : ConnectionId list -> Async<ConnectionStatusList>
+      /// Metadata for whichever of `targets` exist — never values. `offlineHere` reads each
+      /// one's stored offline grant from the session the list is for (`OfflineGrant.here`):
+      /// the broker stores the grant with the credential and has no view of sessions.
+      StatusOf : (ConnectionId -> OfflineGrant option -> OfflineChoice) -> ConnectionId list -> Async<ConnectionStatusList>
       /// The credential's current value, refreshing a due OAuth grant first (standard
       /// refresh grant at the envelope's own token URL). The ONLY value-returning path.
       Resolve : ConnectionId -> Async<Result<ConnectionKind * string, string>> }
@@ -490,15 +492,15 @@ let create
             }
       Reject = fun target reason -> reject target reason
       StatusOf =
-        fun targets ->
+        fun offlineHere targets ->
             async {
                 let mutable statuses = []
                 for target in targets do
                     match! loadCredential target with
                     | Ok (Some credential) ->
+                        let metadata = store.List target.Scope |> List.tryFind (fun m -> m.Id = target)
                         let updatedAt =
-                            store.List target.Scope
-                            |> List.tryFind (fun m -> m.Id = target)
+                            metadata
                             |> Option.map (fun m -> m.UpdatedAt)
                             |> Option.defaultValue (now ())
                         statuses <-
@@ -519,7 +521,8 @@ let create
                                         BrokerFlow.beyondRefresh (now ()) credential
                                         |> Option.map SignInRequired
                                         |> Option.defaultValue ConnectionUsable
-                                  UpdatedAt = updatedAt } ]
+                                  UpdatedAt = updatedAt
+                                  Offline = offlineHere target (metadata |> Option.bind (fun m -> m.Offline)) } ]
                     | Ok None | Error _ -> ()
                 return { Connections = statuses }
             }
