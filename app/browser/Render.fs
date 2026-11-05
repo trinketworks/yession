@@ -673,6 +673,14 @@ let create (deps: Deps) : Renderer =
                         lastPushed.[key] <- cursors
                         handle.PushPresences cursors)
 
+    // A render is not the only thing that moves what a caret is anchored in. Ylmish signals
+    // a render only for a transaction that changes a root its codec binds, and an editor's
+    // own fragment is not one: a collaborator's typing in a body changes that body alone. A
+    // caret whose relative position names content that had not arrived when its presence
+    // did would then wait for some unrelated render to be placed. So every doc update asks
+    // for a push too; the frame still paces it, and an unchanged empty set is still skipped.
+    DocSync.onAnyUpdate doc pushPresences
+
     /// Place collaborators' carets in the collaborative INPUTS by measurement (a native input
     /// has no per-character geometry): decode each such peer's relative anchor/head against the
     /// doc, then size and offset its marker over the field it is in. A no-op when no remote
