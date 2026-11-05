@@ -974,13 +974,13 @@ let private e2eTests =
                 // Ada composes her own draft (keyed by her peer id); the rich body fragment
                 // syncs to Grace over the real WebRTC transport + the Process's State relay.
                 do! compose a ada "hello from ada"
-                do! b.Runner.WaitFor (fun _ -> draftBody b ada = Some "hello from ada")
+                do! waitForDraftBody b ada "hello from ada"
 
                 // Grace joins Ada's slot and rewrites the shared body; both replicas converge
                 // on it. (Character-level interleave merge is the fragment CRDT's cheap test.)
                 do! compose b ada "hello from grace"
-                do! a.Runner.WaitFor (fun _ -> draftBody a ada = Some "hello from grace")
-                do! b.Runner.WaitFor (fun _ -> draftBody b ada = Some "hello from grace")
+                do! waitForDraftBody a ada "hello from grace"
+                do! waitForDraftBody b ada "hello from grace"
 
                 do! a.Channel.Close ()
                 do! b.Channel.Close ()
@@ -993,7 +993,7 @@ let private e2eTests =
 
                 // Ada drafts "ship it" and both replicas converge on it.
                 do! compose a ada "ship it"
-                do! b.Runner.WaitFor (fun _ -> draftBody b ada = Some "ship it")
+                do! waitForDraftBody b ada "ship it"
 
                 // Send = enqueue: the draft becomes a queue entry (pure CRDT write); the
                 // idle Process drains it into the timeline, and the entry leaves the

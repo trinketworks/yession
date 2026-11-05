@@ -418,9 +418,6 @@ type Renderer =
       /// otherwise at the frame's end, as whichever model is latest by then (`setState`).
       /// A render is everything above, in order, synchronously.
       SetState : ClientModel -> unit
-      /// The terminal command lines re-bound and re-valued — on a doc update as well as a
-      /// render, because a command line is a root the Ylmish codec does not carry.
-      SyncTerminalInputs : unit -> unit
       /// The live screens, for the arrival of a snapshot from the session.
       Screens : Screens.Screens
       /// The listeners that belong with the render, bound once per page: renders keep the
@@ -515,21 +512,44 @@ let create (deps: Deps) : Renderer =
             mountedBodies.Remove stale |> ignore
             lastPushed.Remove stale |> ignore
 
-    /// Bind every rendered terminal command line to its `Y.Text` root: push the CRDT's
-    /// value in, send the input's edits back out as the MINIMUM edit that gets there
-    /// (`TerminalText.setTo` — anything coarser would clobber a collaborator rather than
-    /// merge with them), and report the caret as presence.
+    // The command lines and read-only command mounts the last render drew. Lit changes the
+    // page only in a render, so between two renders these ARE the lines on the page, and a
+    // doc update re-values them without searching the page again: a search on every update
+    // would be a walk of every item in the conversation on every keystroke in the composer.
+    let mutable shownLines : Browser.Types.HTMLInputElement list = []
+    let mutable shownTexts : Browser.Types.HTMLElement list = []
+
+    /// Push each shown command line's root value in. Only on a change (`setInputValue`,
+    /// `setTextContent`), so the call that finds nothing new, which is nearly every call,
+    /// writes nothing and leaves the caret where it is.
     ///
     /// The read-only mounts (`data-terminal-text`) are filled in the same pass rather than
     /// in one of their own, because they read the roots these lines write: two passes is two
     /// callers to keep in step, and the one that forgot would show a command nobody is
     /// typing any more.
-    ///
-    /// Called after every render AND on every doc update, because a terminal command
-    /// line is a root the Ylmish codec does not carry (it holds only the slot's
-    /// identity), so a remote keystroke in one does not necessarily reach the model.
+    let valueTerminalLines () =
+        for el in shownLines do
+            let key = el.getAttribute "data-terminal-input"
+            if not (isNull (box key)) && key <> "" then setInputValue el (TerminalText.read texts key)
+        for el in shownTexts do
+            let key = el.getAttribute "data-terminal-text"
+            if not (isNull (box key)) && key <> "" then setTextContent el (TerminalText.read texts key)
+
+    // On every doc update, not only after a render: a command line is a root the Ylmish
+    // codec does not bind (it holds only the slot's identity), so a collaborator's keystroke
+    // in one changes no model and draws no render. A line that waited for a render would show
+    // the command as it stood at whatever unrelated change came last.
+    DocSync.onAnyUpdate doc valueTerminalLines
+
+    /// Bind every rendered terminal command line to its `Y.Text` root: push the CRDT's
+    /// value in, send the input's edits back out as the MINIMUM edit that gets there
+    /// (`TerminalText.setTo` — anything coarser would clobber a collaborator rather than
+    /// merge with them), and report the caret as presence. After every render, because a
+    /// render is what adds and replaces lines; between renders a doc update re-values the
+    /// ones it drew (`valueTerminalLines`).
     let syncTerminalInputs () =
-        for el in terminalInputs () do
+        let lines = terminalInputs ()
+        for el in lines do
             // WHICH line an input is, and whether it may be written to, are read off the
             // element every time a handler runs — never captured when it was bound.
             //
@@ -581,11 +601,9 @@ let create (deps: Deps) : Renderer =
                 (fun () -> sendFocus None)
                 onEnter
                 onInterrupt
-            let key = el.getAttribute "data-terminal-input"
-            if not (isNull (box key)) && key <> "" then setInputValue el (TerminalText.read texts key)
-        for el in terminalTexts () do
-            let key = el.getAttribute "data-terminal-text"
-            if not (isNull (box key)) && key <> "" then setTextContent el (TerminalText.read texts key)
+        shownLines <- lines
+        shownTexts <- terminalTexts ()
+        valueTerminalLines ()
 
     let replays = PaneReplays.create dispatch
 
@@ -878,7 +896,6 @@ let create (deps: Deps) : Renderer =
                 |> Option.iter Arrival.play
 
     { SetState = setState
-      SyncTerminalInputs = syncTerminalInputs
       Screens = screens
       Attach =
         fun () ->

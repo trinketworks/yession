@@ -136,7 +136,7 @@
         "dependencies": {
           "Fable.BrowserExtras": "[1.0.0, )",
           "Fable.Core": "[5.2.0, )",
-          "Fable.Yjs": "[1.0.0-beta0233, )"
+          "Fable.Yjs": "[1.0.0-beta0236, )"
         }
       },
       "yession.app": {
@@ -148,12 +148,12 @@
           "Fable.Elmish": "[4.2.0, )",
           "Fable.Lit": "[1.4.2, )",
           "Fable.ProseMirror": "[1.0.0, )",
-          "Fable.Yjs": "[1.0.0-beta0233, )",
+          "Fable.Yjs": "[1.0.0-beta0236, )",
           "Thoth.Json": "[10.5.1, )",
           "Thoth.Json.Net": "[12.0.0, )",
           "Yession.Codecs": "[1.0.0, )",
           "Yession.Domain": "[1.0.0, )",
-          "Ylmish": "[1.0.0-beta0233, )"
+          "Ylmish": "[1.0.0-beta0236, )"
         }
       },
       "yession.codecs": {
@@ -246,9 +246,9 @@
       },
       "Fable.Yjs": {
         "type": "CentralTransitive",
-        "requested": "[1.0.0-beta0233, )",
-        "resolved": "1.0.0-beta0233",
-        "contentHash": "hfKj6LZex/wF4JXtx94ju/KT5fX2aY07NCbQ06SpBxOtMWUTx42v0RPpnPwO2InE40nzjG7NRVtDRhLHe21Www==",
+        "requested": "[1.0.0-beta0236, )",
+        "resolved": "1.0.0-beta0236",
+        "contentHash": "MlVDTZbSkCHvPv0MZnTNGJEZPgZ4NeSZXs9Zug8yfwT5eT+G/I93qJT94i8GKtnVvmAwGlTycpChgiWjPVFxfA==",
         "dependencies": {
           "FSharp.Core": "7.0.200",
           "Fable.Browser.Dom": "2.10.1",
@@ -266,14 +266,14 @@
       },
       "Ylmish": {
         "type": "CentralTransitive",
-        "requested": "[1.0.0-beta0233, )",
-        "resolved": "1.0.0-beta0233",
-        "contentHash": "NZVhDmvZX2T9WArzGQvBClKGyYdzncM8mMm4HTy/6V3TFrYfTs3lJb7RAEtCxq/hLHTXsI7M7TOLEZTNKY0ohQ==",
+        "requested": "[1.0.0-beta0236, )",
+        "resolved": "1.0.0-beta0236",
+        "contentHash": "Q1MUfdS9oA87q8cHPAFJtO/bYc0ePjDck1IPj43K9L+18AofFpcBG6uBwChLgJSVJUOCOmrxvCtZeAoNCDS0tQ==",
         "dependencies": {
           "FSharp.Core": "7.0.200",
           "FSharp.Data.Adaptive": "1.2.26",
           "Fable.Elmish": "4.2.0",
-          "Fable.Yjs": "1.0.0-beta0233"
+          "Fable.Yjs": "1.0.0-beta0236"
         }
       }
     }

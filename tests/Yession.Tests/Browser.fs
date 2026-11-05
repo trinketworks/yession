@@ -6898,6 +6898,20 @@ let editorTests =
                 return ()
             }
 
+        // The chip keeps saying what is queued while a collaborator rewrites it. Their edit
+        // reaches this page as a doc update and nothing else: the codec does not bind a command
+        // line, so no model changes and no render follows. A chip that is re-read only at a
+        // render goes on saying the old command until something unrelated draws the page. This
+        // page has no codec at all, so here nothing else ever draws it.
+        editorCase "a queued command's chip follows a collaborator rewriting the command" <| fun page ->
+            async {
+                let chip = "#shell [data-chat-pending]"
+                do! Wait.until "the chip to say npm run lint" (fun () -> Read.text page chip) (Option.exists (fun t -> t.Contains "npm run lint"))
+                let queued = Yession.Domain.QueueId.create "queue-harness" |> Result.defaultWith failwith
+                do! Harness.run2 page HarnessPage.lineEdited (Yession.Domain.Collab.BodyKey.terminalQueued queued) "npm run lint -- --fix"
+                do! Wait.until "the chip to say the rewritten command" (fun () -> Read.text page chip) (Option.exists (fun t -> t.Contains "npm run lint -- --fix"))
+            }
+
         // A preview (P2-1): what a chip opens is laid over the terminal, never a tab beside it,
         // and its way back hands focus to the chip — the UI floor's rule about a DOM swap that
         // removes what had focus, asked of the one surface that removes itself on Escape. These

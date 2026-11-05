@@ -56,6 +56,10 @@ module Harness =
           /// Resolve the first time the model satisfies the predicate, or FAIL after
           /// `waitForTimeoutMs`, or FAIL at once when the runner's `refusal` says the model
           /// has reached a state no wait will survive. Never waits for ever.
+          ///
+          /// The predicate is asked when the MODEL changes. A condition on a root the codec
+          /// does not bind (a draft body, a command line) changes no model when it comes true,
+          /// so wait for it with `waitForDoc`.
           WaitFor : ('model -> bool) -> Async<unit> }
 
     /// A `refusal` for a model with no state that ends a wait early: every wait runs to its
@@ -149,6 +153,43 @@ module Harness =
 
     let run (program: Program<unit, 'model, 'msg, unit>) : Runner<'model, 'msg> =
         runWith neverRefuses waitForTimeoutMs program
+
+    /// `WaitFor` for a condition on the doc rather than the model: resolve the first time
+    /// `holds` does, asked now and after every update `doc` takes, or FAIL after
+    /// `waitForTimeoutMs` naming `what`.
+    ///
+    /// For a root the codec does not bind (a draft body, a command line). A change there
+    /// changes no model, so a `WaitFor` on it is asked again only if some unrelated model
+    /// change happens to follow, and it times out when none does.
+    let waitForDoc (doc: Y.Doc) (what: string) (holds: unit -> bool) : Async<unit> =
+        Async.FromContinuations (fun (cont, econt, _) ->
+            if holds () then cont ()
+            else
+                // Settled exactly once, by the doc or the clock, as `WaitFor` is.
+                let settled = ref false
+                let timer = ref 0
+                let listener : Y.UpdateHandler option ref = ref None
+                let settle (k: unit -> unit) =
+                    if not settled.Value then
+                        settled.Value <- true
+                        JS.clearTimeout timer.Value
+                        listener.Value |> Option.iter (fun handler -> doc.offUpdate handler)
+                        k ()
+                let handler =
+                    Y.UpdateHandler (fun _ _ _ _ ->
+                        // Resumed on a microtask, as `WaitFor` resumes: this runs inside Yjs's
+                        // emit of the update, and a continuation that wrote the doc from here
+                        // would write inside it.
+                        if holds () then settle (fun () -> Fable.NodeExtras.Microtasks.queue cont))
+                listener.Value <- Some handler
+                doc.onUpdate handler
+                timer.Value <-
+                    JS.setTimeout
+                        (fun () ->
+                            settle (fun () ->
+                                econt (
+                                    exn (sprintf "waitForDoc timed out after %dms: %s never came true" waitForTimeoutMs what))))
+                        waitForTimeoutMs)
 
     /// Wait for every named condition at once, and on the deadline say WHICH did not hold.
     ///

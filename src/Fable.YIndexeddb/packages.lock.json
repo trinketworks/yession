@@ -13,9 +13,9 @@
       },
       "Fable.Yjs": {
         "type": "Direct",
-        "requested": "[1.0.0-beta0233, )",
-        "resolved": "1.0.0-beta0233",
-        "contentHash": "hfKj6LZex/wF4JXtx94ju/KT5fX2aY07NCbQ06SpBxOtMWUTx42v0RPpnPwO2InE40nzjG7NRVtDRhLHe21Www==",
+        "requested": "[1.0.0-beta0236, )",
+        "resolved": "1.0.0-beta0236",
+        "contentHash": "MlVDTZbSkCHvPv0MZnTNGJEZPgZ4NeSZXs9Zug8yfwT5eT+G/I93qJT94i8GKtnVvmAwGlTycpChgiWjPVFxfA==",
         "dependencies": {
           "FSharp.Core": "7.0.200",
           "Fable.Browser.Dom": "2.10.1",

@@ -1974,6 +1974,11 @@ do
             model <- { model with Synced = { model.Synced with Pending = Map.remove queued model.Synced.Pending } }
             render ()
         | Error _ -> ())
+    PageGlobal.set HarnessPage.lineEdited (System.Action<_, _> (fun key command ->
+        let collaborator = Y.Doc.Create ()
+        Y.applyUpdate (collaborator, Y.encodeStateAsUpdate shellDoc, box "harness")
+        TerminalText.setTo (TextRegistry collaborator) key command
+        Y.applyUpdate (shellDoc, Y.encodeStateAsUpdate collaborator, box "collaborator")))
     PageGlobal.set HarnessPage.take (fun id ->
         match TerminalId.create id with
         | Ok terminal -> takeRef terminal

@@ -135,7 +135,7 @@ let private launchTests =
                 let! b = connectClient signalUrl (managed.Host.MintPeerToken ()) "grace" "Grace"
 
                 do! compose a a.Hello.PeerId "managed hello"
-                do! b.Runner.WaitFor (fun _ -> draftBody b a.Hello.PeerId = Some "managed hello")
+                do! waitForDraftBody b a.Hello.PeerId "managed hello"
 
                 a.Connection.SendDraft a.Hello.PeerId
                 do! b.Runner.WaitFor (fun model ->

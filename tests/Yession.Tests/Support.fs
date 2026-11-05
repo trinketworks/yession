@@ -840,6 +840,13 @@ let clearComposer (client: Client) (peer: PeerId) : Async<unit> =
 let draftBody (client: Client) (peer: PeerId) : string option =
     Body.draft client.Registry peer
 
+/// Wait for a peer's draft body to read `markdown` on this client. A body is a root the codec
+/// does not bind, so its arrival changes no model and cannot wake a `WaitFor`: the client's
+/// doc wakes this one (`Harness.waitForDoc`).
+let waitForDraftBody (client: Client) (peer: PeerId) (markdown: string) : Async<unit> =
+    Harness.waitForDoc client.Doc (sprintf "%s's draft to read %A" (PeerId.value peer) markdown) (fun () ->
+        draftBody client peer = Some markdown)
+
 /// Read one queued entry's body as markdown, straight from the doc (the same read the
 /// drain uses). Replaces the old `queueBodyOf`.
 let queueBody (client: Client) (queueId: QueueId) : string =

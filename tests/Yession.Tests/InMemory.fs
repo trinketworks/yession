@@ -591,7 +591,7 @@ let tests =
                 // Bob edits ADA's draft — the co-edit the read-only mirror used to forbid — and
                 // the words converge on both replicas.
                 do! compose b ada "we should ask it to re-run the migration"
-                do! a.Runner.WaitFor (fun _ -> draftBody a ada = Some "we should ask it to re-run the migration")
+                do! waitForDraftBody a ada "we should ask it to re-run the migration"
 
                 // Bob sends Ada's draft. One message, attributed to Ada, and the slot clears
                 // everywhere: the send key came from the draft, not from Bob.

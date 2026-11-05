@@ -153,6 +153,11 @@ module HarnessPage =
     /// session behind its doc, so a refusal folded in as an event would otherwise leave the
     /// entry queued — a state no real client is ever in.
     let withdraw : PageGlobal<string -> unit> = PageGlobal.named "__withdraw"
+    /// A collaborator rewrites a command line (its `BodyKey`, then the new command): the edit
+    /// is made on a replica of the page's doc and applied here as the update that replica would
+    /// send. The page hears of it through the doc alone, with no message, no model change and so
+    /// no render, which is how a collaborator's keystroke in a command line arrives.
+    let lineEdited : PageGlobal<System.Action<string, string>> = PageGlobal.named "__lineEdited"
     /// Fold a page of events into the shell, as the server serves one — an envelope per line,
     /// in the wire's own encoding (`EventFetch.decodeLines`, the one decoder the real client
     /// reads pages with). How a fact that arrives from ELSEWHERE reaches this page: a terminal
