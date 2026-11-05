@@ -2601,7 +2601,22 @@ let private slopeFactor = 2.0
 /// axes now, and a slope that fell through to the duration threshold would be judged three
 /// times looser than the number it is. `scroll.renders` is renders per record landing during
 /// a fling: exactly one today, and a count has no jitter at all, so 2x is a real change.
-let private slopeMetrics = [ "caret.push.slope"; "transcript.read.slope"; "scroll.render.slope"; "scroll.renders" ]
+///
+/// The composer's are the same two kinds. `compose.type.slope` is a keystroke's cost at the
+/// largest conversation over the smallest. `compose.renders@<items>` is renders per keystroke,
+/// a count like `scroll.renders`, one per size of the sweep (`composeSizes` in Bench.fs),
+/// because renders merge where one outlasts the gap between keys and an average across the
+/// sizes would mix that in. A count that a fix takes to none leaves no baseline to judge
+/// against (`benchGuard` skips a baseline of 0), not a line that any render trips.
+let private slopeMetrics =
+    [ "caret.push.slope"
+      "transcript.read.slope"
+      "scroll.render.slope"
+      "scroll.renders"
+      "compose.type.slope"
+      "compose.renders@20"
+      "compose.renders@200"
+      "compose.renders@1000" ]
 /// Below this many recorded points there is no baseline worth the name. A guard with nothing to
 /// compare against must not invent something.
 let private minimumHistory = 3
@@ -2738,6 +2753,9 @@ let private benchSeries =
     let chars = [ 200; 2_000; 20_000 ], "chars"
     let records = [ 400; 1_500; 6_000 ], "records"
     let items = [ 20; 60; 200 ], "items"
+    // The composer's sweep reaches further out than the conversation's (`composeSizes` in
+    // Bench.fs), so a keystroke's cost is drawn against its own sizes.
+    let composed = [ 20; 200; 1_000 ], "items"
     [ "type", chars, "ms"
       "receive", chars, "ms"
       "caret.push", chars, "ms"
@@ -2754,7 +2772,8 @@ let private benchSeries =
       "cold.paints", items, "paints"
       "cold.jump", items, "px"
       "cold.blocked", items, "ms"
-      "cold.time", items, "ms" ]
+      "cold.time", items, "ms"
+      "compose.type", composed, "ms" ]
 /// One hue per document size, darkest = largest. Ordered, because the sizes are.
 let private sizeColours = [ "#7fd0f5"; "#1ba1e2"; "#0b5f88" ]
 
