@@ -47,17 +47,11 @@ let random () : KeyStore =
 /// persistence instead of failing or degrading.
 let keyring (service: string) (account: string) : KeyStore =
     // Every call constructs + calls inside try: the Entry ctor itself may throw on
-    // hosts with no credential store, and getPassword throws BOTH for "no entry" and
-    // for backend failure — the message is the only discriminator keyring-rs exposes.
+    // hosts with no credential store, and getPassword throws on backend failure. "No
+    // entry yet" is not a failure: getPassword answers it with null (None).
     let tryGet () : Result<string option, string> =
-        try
-            let entry = Fable.Keyring.Entry.entry service account
-            try Ok (Some (entry.getPassword ()))
-            with getError ->
-                let message = getError.Message
-                if message.Contains "No matching entry" || message.Contains "no matching entry" then Ok None
-                else Error message
-        with ctorError -> Error ctorError.Message
+        try Ok ((Fable.Keyring.Entry.entry service account).getPassword ())
+        with error -> Error error.Message
     { Name = sprintf "os-keyring (%s/%s)" service account
       Available =
         fun () ->
