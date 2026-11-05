@@ -1,0 +1,125 @@
+name: dependabot-fixup
+
+# Dependabot moves one lockfile at a time, and two pins here follow from a lockfile without
+# being one Dependabot knows:
+#
+#   * devenv.lock's nixpkgs. flake.lock and devenv.lock pin the same nixpkgs (LockSource's
+#     "pin the same nixpkgs" refuses a pull request where they differ), and Dependabot's nix
+#     ecosystem reads flake.lock alone. The node is copied across; nothing is re-resolved.
+#   * `nugetTools`' outputHash (nix/packages.nix). `.config/dotnet-tools.json` names a version
+#     per tool and no content hash, so the restore of it is a fixed-output derivation with a
+#     hash kept by hand. It is re-derived here by building it with a fake one.
+#
+# And `lock` re-runs on a NuGet bump, so every packages.lock.json matches what Dependabot
+# wrote into Directory.Packages.props whether or not Dependabot touched the lockfiles itself.
+#
+# The fix is a commit pushed to Dependabot's branch. A push made with the workflow's own
+# GITHUB_TOKEN starts no workflow run, so pr.yaml would never test the fixed commit; the push
+# uses DEPENDABOT_FIXUP_TOKEN instead, a fine-grained token with `contents: write` on this
+# repository. It must be a DEPENDABOT secret (Settings → Secrets → Dependabot): a pull request
+# Dependabot opened is handed those and no others. The run that push starts finds nothing to
+# fix and pushes nothing, so this does not loop.
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependabot-fixup-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  fixup:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # A cold dev shell (~15 min, pr.yaml's budget) and a `lock`, with room to spare.
+    timeout-minutes: 40
+    steps:
+      - name: Require the push token
+        env:
+          TOKEN: ${{ secrets.DEPENDABOT_FIXUP_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::DEPENDABOT_FIXUP_TOKEN is not set as a Dependabot secret; this workflow cannot push its fix (see the header of dependabot-fixup.yml)"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.DEPENDABOT_FIXUP_TOKEN }}
+          fetch-depth: 0
+      - name: What the pull request changed
+        id: changed
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          files="$(git diff --name-only "$BASE"...HEAD)"
+          printf '%s\n' "$files"
+          has() { grep -qE "$1" <<<"$files" && echo true || echo false; }
+          {
+            echo "flake=$(has '^flake\.lock$')"
+            echo "tools=$(has '^\.config/dotnet-tools\.json$')"
+            echo "nuget=$(has '(^|/)(Directory\.Packages\.props|[^/]+\.fsproj)$')"
+          } >> "$GITHUB_OUTPUT"
+      - name: Copy flake.lock's nixpkgs into devenv.lock
+        if: steps.changed.outputs.flake == 'true'
+        run: |
+          set -euo pipefail
+          node="$(jq -er '.nodes[.nodes.root.inputs.nixpkgs] | {locked, original}' flake.lock)"
+          jq --indent 2 --argjson node "$node" '.nodes.nixpkgs = $node' devenv.lock > devenv.lock.new
+          mv devenv.lock.new devenv.lock
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+        if: steps.changed.outputs.tools == 'true' || steps.changed.outputs.nuget == 'true'
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      # Read-only, as in pr.yaml: this runs a branch's code.
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        if: steps.changed.outputs.tools == 'true' || steps.changed.outputs.nuget == 'true'
+        continue-on-error: true
+        with:
+          name: yession
+          extraPullNames: devenv
+          skipPush: true
+      # The build prints the hash it got; `nix/worktree.nix` evaluates this checkout in place.
+      - name: Re-derive the dotnet tools' outputHash
+        if: steps.changed.outputs.tools == 'true'
+        run: |
+          set -euo pipefail
+          sed -i -E 's|(outputHash = )"sha256-[^"]*";|\1"sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";|' nix/packages.nix
+          log="$(mktemp)"
+          if nix build --no-link --file nix/worktree.nix nugetTools 2>"$log"; then
+            echo "::error::nugetTools built with a fake hash; it is not a fixed-output derivation any more"
+            exit 1
+          fi
+          got="$(sed -n -E 's/^ *got: *(sha256-[A-Za-z0-9+/=]+).*/\1/p' "$log" | tail -1)"
+          if [ -z "$got" ]; then cat "$log"; echo "::error::no hash in the build's output"; exit 1; fi
+          sed -i -E "s|(outputHash = )\"sha256-[^\"]*\";|\1\"$got\";|" nix/packages.nix
+          echo "nugetTools: $got"
+      - name: Install devenv
+        if: steps.changed.outputs.nuget == 'true'
+        run: |
+          set -euo pipefail
+          rev="$(jq -er '.nodes.nixpkgs.locked.rev' devenv.lock)"
+          nix profile install "github:NixOS/nixpkgs/$rev#devenv"
+      - name: Warm the devenv shell
+        if: steps.changed.outputs.nuget == 'true'
+        uses: ./.github/actions/devenv-warm
+      - name: Re-lock the NuGet packages
+        if: steps.changed.outputs.nuget == 'true'
+        run: devenv shell -- lock
+      - name: Push the fix
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "nothing to fix"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: re-pin what follows from Dependabot's lockfile"
+          git push
