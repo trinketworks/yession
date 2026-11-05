@@ -683,7 +683,7 @@ module Codec =
     let private timestamp : Decoder<System.DateTimeOffset> =
         Decode.string
         |> Decode.andThen (fun s ->
-            match System.DateTimeOffset.TryParse (s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind) with
+            match System.DateTimeOffset.TryParse (s, CultureInfo.InvariantCulture) with
             | true, t -> Decode.succeed t
             | false, _ -> Decode.fail (sprintf "an ISO 8601 date-time, not %s" s))
 
