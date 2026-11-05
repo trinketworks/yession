@@ -673,13 +673,17 @@ let create (deps: Deps) : Renderer =
                         lastPushed.[key] <- cursors
                         handle.PushPresences cursors)
 
-    // A render is not the only thing that moves what a caret is anchored in. Ylmish signals
-    // a render only for a transaction that changes a root its codec binds, and an editor's
-    // own fragment is not one: a collaborator's typing in a body changes that body alone. A
-    // caret whose relative position names content that had not arrived when its presence
-    // did would then wait for some unrelated render to be placed. So every doc update asks
-    // for a push too; the frame still paces it, and an unchanged empty set is still skipped.
-    DocSync.onAnyUpdate doc pushPresences
+    // What the doc holds outside the codec moves without a render. Ylmish signals a render
+    // only for a transaction that changes a root its codec binds, and neither an editor's own
+    // fragment nor a terminal's command line is one: a collaborator's keystroke in either
+    // changes that root alone. So every doc update refreshes the command lines from their
+    // roots, and asks for a presence push, since a caret whose relative position names content
+    // that had not arrived when its presence did would otherwise wait for some unrelated
+    // render to be placed. The frame still paces the push, and an unchanged empty set is
+    // still skipped.
+    DocSync.onAnyUpdate doc (fun () ->
+        syncTerminalInputs ()
+        pushPresences ())
 
     /// Place collaborators' carets in the collaborative INPUTS by measurement (a native input
     /// has no per-character geometry): decode each such peer's relative anchor/head against the
