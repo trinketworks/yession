@@ -118,9 +118,10 @@ in
   # apt nor root; on darwin it is the same app bundle Playwright would have downloaded, where
   # `--with-deps` was never anything but a no-op.
   #
-  # The versions do NOT match exactly. The locked nixpkgs has playwright-driver 1.64.1, whose
-  # browsers are chromium-1248. Microsoft.Playwright (Directory.Packages.props) is 1.61.0, and
-  # left alone it would look for its own revision. It never looks: Browser.fs and the Node
+  # The versions need not match. The locked nixpkgs has playwright-driver 1.64.1, whose
+  # browsers are chromium-1248. Microsoft.Playwright (Directory.Packages.props) is 1.64.1 too,
+  # but the two move apart between bumps, and left alone the NuGet one would look for its own
+  # revision. It never looks: Browser.fs and the Node
   # launcher (src/Fable.NodeExtras/Chromium.fs) find the executable by NAME under any
   # `chromium-*` directory and pass it as the launch path, and `check Browser` passes across
   # that gap. What the pin buys is that the browser comes from this lock and not from the host,

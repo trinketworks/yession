@@ -4,9 +4,9 @@
     "net10.0": {
       "Fable.Core": {
         "type": "Direct",
-        "requested": "[5.2.0, )",
-        "resolved": "5.2.0",
-        "contentHash": "3+HVoyYMjPGeKJEhMzRti0coDS6AkLVOWXmGwSvqokeTuwdZLyiKMoNgQrE6ZeJ0cSy9qHBB4VBpw5RAfb6zmQ==",
+        "requested": "[5.6.1, )",
+        "resolved": "5.6.1",
+        "contentHash": "c/lKM8ptY8havLmPWU4OuZcweTcwFnhqYHdWUXqDL0B9KURABQMpzfCjCsc+bJhJFTSw58ABT4o1UDODLSPBAA==",
         "dependencies": {
           "FSharp.Core": "4.7.2"
         }
@@ -19,7 +19,7 @@
       "yession.emitindomainfixture": {
         "type": "Project",
         "dependencies": {
-          "Fable.Core": "[5.2.0, )"
+          "Fable.Core": "[5.6.1, )"
         }
       }
     }
