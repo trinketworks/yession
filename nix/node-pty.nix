@@ -14,24 +14,11 @@
 # Simpler than node-datachannel in one respect: node-pty vendors no third-party C++ library,
 # so there is no FetchContent to patch out. It needs exactly one thing on top of its own
 # sources — node-addon-api's headers — and the Node headers to compile against.
-{ lib, stdenv, fetchurl, python3, nodejs_24 }:
+{ lib, stdenv, python3, nodejs_24
+# `version`, `src` and `nodeAddonApi` come from package-lock.json (nix/packages.nix,
+# `npmLocked`), so an npm bump moves this build with no version or hash kept here.
+, version, src, nodeAddonApi }:
 
-let
-  version = "1.1.0";
-
-  src = fetchurl {
-    url = "https://registry.npmjs.org/node-pty/-/node-pty-${version}.tgz";
-    hash = "sha256-x1F/GQg93LBfJ2kEaA6ysRprXsq3eLjk5WhabWRbP2A=";
-  };
-
-  # Header-only. `binding.gyp` resolves it by RUNNING
-  # `node -p "require('node-addon-api').targets"`, so it has to be a real resolvable package
-  # under node_modules rather than an include path we could pass in.
-  nodeAddonApi = fetchurl {
-    url = "https://registry.npmjs.org/node-addon-api/-/node-addon-api-7.1.1.tgz";
-    hash = "sha256-sQRV0VqXfAzRehyw62eeA9k5+O+NQwLrM+H3jazHH4I=";
-  };
-in
 stdenv.mkDerivation {
   pname = "node-pty";
   inherit version src;

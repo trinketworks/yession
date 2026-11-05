@@ -7,22 +7,11 @@
 # (header-only), then compile the addon against the nixpkgs Node headers. The result is the
 # whole node-datachannel package with `build/Release/node_datachannel.node` populated, ready
 # to drop into node_modules.
-{ lib, stdenv, fetchurl, cmake, pkg-config, openssl, libdatachannel, plog, nodejs_24 }:
+{ lib, stdenv, cmake, pkg-config, openssl, libdatachannel, plog, nodejs_24
+# `version`, `src` and `nodeAddonApi` come from package-lock.json (nix/packages.nix,
+# `npmLocked`), so an npm bump moves this build with no version or hash kept here.
+, version, src, nodeAddonApi }:
 
-let
-  version = "0.33.6";
-
-  src = fetchurl {
-    url = "https://registry.npmjs.org/node-datachannel/-/node-datachannel-${version}.tgz";
-    hash = "sha256-VZMN2PEZdDUKNt/ilW08dctRAIiSpVmqDmZ7xK+bPCM=";
-  };
-
-  # Header-only; node-datachannel's C++ includes <napi.h> from here.
-  nodeAddonApi = fetchurl {
-    url = "https://registry.npmjs.org/node-addon-api/-/node-addon-api-7.1.1.tgz";
-    hash = "sha256-sQRV0VqXfAzRehyw62eeA9k5+O+NQwLrM+H3jazHH4I=";
-  };
-in
 stdenv.mkDerivation {
   pname = "node-datachannel";
   inherit version src;

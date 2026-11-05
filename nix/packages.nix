@@ -16,10 +16,28 @@ let
     patches = (old.patches or [ ]) ++ [ ./libdatachannel-nice-teardown.patch ];
   });
 
-  # The native WebRTC addon, built from source (its npm prebuild is github-bound).
-  node-datachannel = pkgs.callPackage ./node-datachannel.nix { inherit libdatachannel; };
+  # A package's tarball as package-lock.json locks it: the lockfile's `integrity` is the
+  # fetch's hash, so the native addons below move with `npm install` and keep no hash here.
+  # node-addon-api is looked up the way node resolves it: nested under the addon first, then
+  # hoisted.
+  npmLock = (lib.importJSON ../package-lock.json).packages;
+  npmLocked = path:
+    let entry = npmLock.${path};
+    in pkgs.fetchurl { url = entry.resolved; hash = entry.integrity; };
+  npmAddon = name: {
+    inherit (npmLock."node_modules/${name}") version;
+    src = npmLocked "node_modules/${name}";
+    nodeAddonApi = npmLocked (
+      if npmLock ? "node_modules/${name}/node_modules/node-addon-api"
+      then "node_modules/${name}/node_modules/node-addon-api"
+      else "node_modules/node-addon-api");
+  };
 
-  node-pty = pkgs.callPackage ./node-pty.nix { };
+  # The native WebRTC addon, built from source (its npm prebuild is github-bound).
+  node-datachannel = pkgs.callPackage ./node-datachannel.nix
+    (npmAddon "node-datachannel" // { inherit libdatachannel; });
+
+  node-pty = pkgs.callPackage ./node-pty.nix (npmAddon "node-pty");
 
   # The node the installed bins run — on macOS, re-signed ad hoc rather than nixpkgs' own.
   # nixpkgs' node carries only the signature the linker wrote (`linker-signed`), and macOS will
