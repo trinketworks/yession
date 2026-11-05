@@ -15,13 +15,14 @@
 #
 # nixpkgs is the one flake.lock pins, read straight out of the lock rather than re-pinned here,
 # so this route and `nix build .#yession` are the same nixpkgs by construction. `narHash` is the
-# hash of the unpacked tree, which is exactly what `fetchTarball` wants — so this stays pure
+# hash of the unpacked tree, which is exactly what `fetchTarball` wants (and the github
+# archive of `rev` is the tree a `github:` input unpacks) — so this stays pure
 # (no `--impure`) and hits the store copy the flake route already fetched.
 let
   lock = builtins.fromJSON (builtins.readFile ../flake.lock);
   nixpkgs = lock.nodes.${lock.nodes.root.inputs.nixpkgs}.locked;
   pkgs = import (builtins.fetchTarball {
-    url = nixpkgs.url;
+    url = "https://github.com/${nixpkgs.owner}/${nixpkgs.repo}/archive/${nixpkgs.rev}.tar.gz";
     sha256 = nixpkgs.narHash;
   }) { };
 in

@@ -7,13 +7,14 @@
   # `devShells.default` is the devenv environment (for `nix develop`); it, and only it, uses the
   # `devenv` input. devenv.nix imports the same nix/packages.nix, so the two never diverge.
   #
-  # nixpkgs is a nixos.org channel tarball (not `github:NixOS/nixpkgs`) so it resolves under
-  # Claude Code's default-Trusted network policy.
+  # nixpkgs is the github `nixos-unstable` branch so Dependabot can move it (it tracks github
+  # inputs, not tarballs). A github-restricted Claude Code sandbox rebuilds the locked source
+  # from the nixos.org channel tarball of the same rev (.claude/setup.sh).
 
   description = "Yession — local-first runtime where humans and AI agents collaborate in a shared session.";
 
   inputs = {
-    nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     devenv.url = "github:cachix/devenv";
   };
 

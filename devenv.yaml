@@ -1,14 +1,15 @@
-# devenv inputs. nixpkgs is a nixos.org channel tarball (not a github: input) so it resolves
-# under Claude Code's default-Trusted network policy (*.nixos.org is allowlisted; arbitrary
-# github repos are not). On a laptop/CI the github `devenv` input below works natively; in a
-# github-restricted sandbox, a generated devenv.local.yaml repoints it at the devenv source
-# substituted from cache.nixos.org (see .claude/setup.sh / AGENTS.md).
+# devenv inputs. nixpkgs is the github `nixos-unstable` branch, the same input flake.nix
+# names, so Dependabot (which tracks github flake inputs, not tarballs) can move it. A
+# github-restricted sandbox cannot fetch it; .claude/setup.sh rebuilds the locked source from
+# the nixos.org channel tarball of the same rev instead, and the lock's narHash finds it.
+# On a laptop/CI the github `devenv` input below works natively; in a github-restricted
+# sandbox, a generated devenv.local.yaml repoints it at the devenv source substituted from
+# cache.nixos.org (see .claude/setup.sh / AGENTS.md).
 #
-# The URL below names a CHANNEL, which moves — what pins it is the committed devenv.lock,
-# which resolves it to an immutable releases.nixos.org tarball. `devenv update` moves that
-# pin deliberately; nothing else does.
+# The branch moves — what pins it is the committed devenv.lock. It names the same rev as
+# flake.lock's nixpkgs (tests/Yession.Tests/LockSource.fs holds them together).
 inputs:
   nixpkgs:
-    url: tarball+https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz
+    url: github:NixOS/nixpkgs/nixos-unstable
   devenv:
     url: github:cachix/devenv?dir=src/modules
