@@ -115,13 +115,13 @@ jobs:
       # devenv.lock already names an immutable nixpkgs for the dev shell, so the CLI is taken
       # from there rather than pinned a second time here — one pin, moved by `devenv update`
       # alone, and a CLI that can never disagree with the shell it evaluates about which
-      # nixpkgs they are. The url is captured before it is used, because a substitution read
+      # nixpkgs they are. The rev is captured before it is used, because a substitution read
       # inline has its exit status discarded (tasks.fsx's version policy tells that story).
       - name: Install devenv
         run: |
           set -euo pipefail
-          url="$(jq -er '.nodes.nixpkgs.locked.url' devenv.lock)"
-          nix profile install "tarball+$url#devenv"
+          rev="$(jq -er '.nodes.nixpkgs.locked.rev' devenv.lock)"
+          nix profile install "github:NixOS/nixpkgs/$rev#devenv"
       # Before anything depends on the shell, and retried: see the action for the failure it
       # absorbs and why one warm-up covers a whole job.
       - name: Warm the devenv shell

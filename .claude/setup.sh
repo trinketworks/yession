@@ -167,6 +167,63 @@ grep -q 'yession.cachix.org' "$HOME/.config/nix/nix.conf" 2>/dev/null || {
   echo 'extra-trusted-public-keys = yession.cachix.org-1:Dj6jHWpEaqcGyrEEC3/qy/D3UQN8sZW1RXUOCRJ41oI=' >> "$HOME/.config/nix/nix.conf"
 }
 
+# nixpkgs is a `github:NixOS/nixpkgs` input (flake.nix, devenv.yaml) so Dependabot can move it,
+# and the sandbox proxy refuses github. Every rev of the `nixos-unstable` branch is also a
+# nixos.org channel release, and that release's nixexprs.tar.xz is the same tree plus five
+# files the channel adds. Without them its NAR hash IS the lock's narHash (checked when this
+# was written), so the source is rebuilt here and added to the store under the path the lock
+# already names: nix finds a locked input that is present and never fetches it. A rev with no
+# release (one Dependabot did not take from the branch head) warns and is left to fail where it
+# is used, saying what it could not fetch.
+#
+# Rooted like the devenv source below, so a collection does not take what the lock points at.
+materialize_nixpkgs() {
+  nixpkgs_src=""
+  local lock="$1" node rev narhash expected short tok q r hit tmp got
+  node="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); n=d["nodes"][d["nodes"]["root"]["inputs"]["nixpkgs"]]["locked"]; print(n["type"], n.get("rev",""), n.get("narHash",""))' "$lock" 2>/dev/null)" || return 0
+  set -- $node
+  [ "${1:-}" = github ] || return 0
+  rev="$2" narhash="$3"
+  expected="$(nix-store --print-fixed-path --recursive sha256 "$narhash" source)"
+  if ! nix path-info "$expected" >/dev/null 2>&1; then
+    short="${rev:0:12}" tok="" hit=""
+    while :; do
+      q="list-type=2&prefix=nixos/unstable/&delimiter=/"
+      [ -n "$tok" ] && q="$q&continuation-token=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$tok")"
+      r="$(curl -fsS --max-time 60 "https://nix-releases.s3.amazonaws.com/?$q")" || break
+      hit="$(printf '%s' "$r" | grep -o "<Prefix>nixos/unstable/[^<]*\.$short/</Prefix>" | sed 's|<Prefix>||;s|/</Prefix>||' | head -1)"
+      [ -n "$hit" ] && break
+      tok="$(printf '%s' "$r" | sed -n 's|.*<NextContinuationToken>\([^<]*\)</NextContinuationToken>.*|\1|p')"
+      [ -n "$tok" ] || break
+    done
+    if [ -z "$hit" ]; then
+      echo "setup: no nixos-unstable channel release for nixpkgs $rev ($lock); a github-restricted sandbox cannot fetch it"
+      return 0
+    fi
+    tmp="$(mktemp -d)"
+    if ! { curl -fsSL --max-time 600 "https://releases.nixos.org/$hit/nixexprs.tar.xz" | tar -xJ -C "$tmp" \
+         && ( cd "$tmp"/* && rm -f .git-revision .version-suffix programs.sqlite svn-revision nixpkgs ) \
+         && got="$(nix store add --name source "$(echo "$tmp"/*)")"; }; then
+      rm -rf "$tmp"
+      echo "setup: could not rebuild nixpkgs $rev from $hit; left to fail where it is used"
+      return 0
+    fi
+    rm -rf "$tmp"
+    if [ "$got" != "$expected" ]; then
+      echo "setup: nixpkgs $rev from $hit hashed to $got, not the locked $expected; left to fail where it is used"
+      return 0
+    fi
+    echo "setup: rebuilt nixpkgs $rev ($lock) from $hit"
+  fi
+  mkdir -p "$repo/.devenv"
+  nix-store --realise "$expected" --add-root "$repo/.devenv/nixpkgs-$rev" --indirect >/dev/null
+  nixpkgs_src="$expected"
+}
+materialize_nixpkgs "$repo/flake.lock"
+# devenv's own Nix fetches a github input even when its locked path is present (the system Nix
+# the flake route uses does not), so the dev shell is pointed at the path in devenv.local.yaml.
+materialize_nixpkgs "$repo/devenv.lock"
+
 # devenv.local.yaml repoints the devenv input at devenv's OWN source substituted from
 # cache.nixos.org, because the sandbox proxy blocks the github:cachix/devenv fetch the
 # generated flake would otherwise make. Gitignored; laptop/CI use the committed devenv.yaml.
@@ -180,7 +237,10 @@ grep -q 'yession.cachix.org' "$HOME/.config/nix/nix.conf" 2>/dev/null || {
 mkdir -p "$repo/.devenv"
 pinned() { sed -n 's|.*url: path:\(/nix/store/[^?]*\).*|\1|p' "$repo/devenv.local.yaml" 2>/dev/null; }
 if src="$(nix build --out-link "$repo/.devenv/devenv-src" --print-out-paths "${nixpkgs}#devenv.src" 2>/dev/null)"; then
-  printf 'inputs:\n  devenv:\n    url: path:%s?dir=src/modules\n' "$src" > "$repo/devenv.local.yaml"
+  {
+    printf 'inputs:\n  devenv:\n    url: path:%s?dir=src/modules\n' "$src"
+    if [ -n "$nixpkgs_src" ]; then printf '  nixpkgs:\n    url: path:%s\n' "$nixpkgs_src"; fi
+  } > "$repo/devenv.local.yaml"
   echo "setup: wrote $repo/devenv.local.yaml (devenv input -> $src, rooted at .devenv/devenv-src)"
 elif prev="$(pinned)" && [ -n "$prev" ] && ! nix path-info "$prev" >/dev/null 2>&1; then
   # Nothing resolved AND what a previous session wrote is gone. A dead pin is worse than no
@@ -224,7 +284,13 @@ gitdir="$(cd "$repo" && cd "$(git rev-parse --git-common-dir)" && pwd)"
 mkdir -p "$gitdir/info"
 grep -qs '^devenv\.lock filter=devenv-lock$' "$gitdir/info/attributes" \
   || echo 'devenv.lock filter=devenv-lock' >> "$gitdir/info/attributes"
-git -C "$repo" config filter.devenv-lock.clean "python3 -c 'import json,sys; d=json.load(sys.stdin); d[\"nodes\"].pop(\"devenv\",None); d[\"nodes\"].get(\"root\",{}).get(\"inputs\",{}).pop(\"devenv\",None); json.dump(d,sys.stdout,indent=2); sys.stdout.write(chr(10))'"
+git -C "$repo" config filter.devenv-lock.clean "python3 -c 'import json,sys,os; d=json.load(sys.stdin); n=d[\"nodes\"]; n.pop(\"devenv\",None); n.get(\"root\",{}).get(\"inputs\",{}).pop(\"devenv\",None); f=json.load(open(\"flake.lock\")) if os.path.exists(\"flake.lock\") else None; s=f[\"nodes\"][f[\"nodes\"][\"root\"][\"inputs\"][\"nixpkgs\"]] if f else None; (s and n.get(\"nixpkgs\",{}).get(\"locked\",{}).get(\"type\")==\"path\") and n.__setitem__(\"nixpkgs\",{\"locked\":s[\"locked\"],\"original\":s[\"original\"]}); json.dump(d,sys.stdout,indent=2); sys.stdout.write(chr(10))'"
+# The same holds for nixpkgs in a sandbox: devenv.local.yaml points it at the store path
+# `materialize_nixpkgs` rebuilt (devenv's own Nix fetches a github input even when its locked
+# path is present), so devenv writes a `path:` node for it. The filter puts back flake.lock's
+# github node, which is the committed content: LockSource's "pin the same nixpkgs" holds the
+# two locks equal. A real `devenv update` writes a github node and is left alone.
+#
 # A clean filter that FAILS is IGNORED by default: git prints `error: external filter ...
 # failed` into the middle of its output and stages the unfiltered content anyway — the store
 # path, in the index, from a run that looked like it worked. That is the same bug arriving by

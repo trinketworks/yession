@@ -165,6 +165,7 @@ let all =
         // beside it — who may write the process env, and who may read a confinement switch —
         // are now `YES007` and `YES008`, read off the typed tree by `lint`.
         Tag.needs "Committed lock" [] (fun () -> LockSource.tests)
+        Tag.needs "Lock parity" [] (fun () -> LockSource.parity)
         // That the domain depends on nothing, read from the lockfile locked mode holds it to.
         Tag.needs "Domain references" [] (fun () -> DomainReferences.tests)
         // Where things live, read from the files git would commit: the root AGENTS.md within

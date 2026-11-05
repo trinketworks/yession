@@ -3,7 +3,7 @@ module Yession.Tests.LockSource
 // What the COMMITTED devenv.lock is allowed to say.
 //
 // One rule: it carries the `nixpkgs` node and nothing else. `devenv.yaml` names nixpkgs by a
-// CHANNEL, which moves, so the lock is what makes two jobs in one pull request build against
+// BRANCH, which moves, so the lock is what makes two jobs in one pull request build against
 // the same thing; devenv's own input is deliberately absent, because in a github-restricted
 // sandbox `devenv.local.yaml` replaces it with a /nix/store path from THAT container, which is
 // not a fact about this repository and is not valid anywhere else. `.gitignore` states both
@@ -70,10 +70,10 @@ let private read (json: string) : Lock =
 /// git's own stderr is silenced rather than inherited: in a checkout that cannot answer, the
 /// throw below is the answer, and a "fatal: not a git repository" printed into the run would
 /// read as a failure of the suite rather than the state it is testing for.
-let private gitShow () : string =
+let private gitShow (file: string) : string =
     execFileSync
         "git"
-        [ "show"; "HEAD:devenv.lock" ]
+        [ "show"; "HEAD:" + file ]
         { SyncOptions.none with
             Streams = Some { Stdin = Stdio.Ignore; Stdout = Stdio.Pipe; Stderr = Stdio.Ignore } }
 
@@ -84,12 +84,34 @@ let private gitShow () : string =
 /// This module is compiled to an ES module, where `require` is not defined — a `require` in
 /// an emit body throws, and the `catch` around it turns that into "the lock is missing"
 /// rather than "this check cannot run". It read as the former for one whole run.
-let private committedLock () : string option =
+let private committedFile (file: string) : string option =
     try
-        match gitShow () with
+        match gitShow file with
         | "" -> None
         | json -> Some json
     with _ -> None
+
+let private committedLock () = committedFile "devenv.lock"
+
+/// The nixpkgs a lock pins, by rev and content: the node its root's `nixpkgs` input names.
+/// flake.lock calls that node `nixpkgs_2` and devenv.lock calls it `nixpkgs`, so it is found
+/// through the root rather than by name.
+let private pinnedNixpkgs : Decoder<string * string> =
+    Decode.at [ "nodes"; "root"; "inputs"; "nixpkgs" ] Decode.string
+    |> Decode.andThen (fun node ->
+        Decode.at [ "nodes"; node; "locked" ]
+            (Decode.map2
+                (fun rev narHash -> rev, narHash)
+                (Decode.field "rev" Decode.string)
+                (Decode.field "narHash" Decode.string)))
+
+let private nixpkgsOf (file: string) : string * string =
+    match committedFile file with
+    | None -> failwithf "could not read HEAD:%s — this check needs a git checkout" file
+    | Some json ->
+        match Decode.fromString pinnedNixpkgs json with
+        | Ok pin -> pin
+        | Error reason -> failwithf "HEAD:%s names no nixpkgs this check can read: %s" file reason
 
 let tests =
     testList "the committed devenv.lock" [
@@ -126,4 +148,17 @@ let tests =
                     ((read json).RootInputs |> List.sort)
                     [ "nixpkgs" ]
                     "stripping the node without its root input would leave a lock that does not resolve"
+    ]
+
+// Two locks pin nixpkgs: flake.lock for `nix build .#yession`, devenv.lock for the dev shell
+// and every CI job. Dependabot moves flake.lock alone (it does not know devenv), and a bump
+// that left devenv.lock behind would ship a package built against a nixpkgs no check ran on.
+// This refuses a pull request where the two disagree.
+let parity =
+    testList "the committed flake.lock and devenv.lock" [
+        testCase "pin the same nixpkgs" <| fun () ->
+            Expect.equal
+                (nixpkgsOf "devenv.lock")
+                (nixpkgsOf "flake.lock")
+                "the dev shell CI checks must be the nixpkgs the flake's packages build against"
     ]
