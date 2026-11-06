@@ -1,5 +1,6 @@
 namespace Yession.App
 
+open System.Collections.Generic
 open Fable.Core
 open Lit
 open Fable.ProseMirror.ProseMirror
@@ -155,6 +156,39 @@ module RichText =
         let last = nodeChildCount node - 1
         children node |> List.mapi (fun i child -> block chip (if i = last then tail else Lit.nothing) child)
 
+    // Every body's parsed document, by its Markdown. A render draws every body on the page, and
+    // the parse was most of what drawing one cost, while a body's text rarely changes between
+    // renders: a sent message never does, and a reply being written changes only itself. So a
+    // body is parsed when its text is new, and the document is reused while the text stays the
+    // same.
+    //
+    // Sharing one document between renders is safe because a ProseMirror node is immutable and
+    // the walk above only reads it. The text is the whole key, because the text is the parse's
+    // whole input: `chip` and `tail` are applied by the walk, after it.
+    //
+    // Bounded by two generations rather than a recency list. A lookup that misses the current
+    // generation takes the document from the previous one before it parses, and a full current
+    // generation becomes the previous one. A page drawing fewer bodies than a generation holds
+    // parses each of them once, and what no render asks for any more (the texts a reply passed
+    // through while it was written, a session left behind) is gone within two fills.
+    let private parsedPerGeneration = 4096
+    let mutable private parsed = Dictionary<string, Node> ()
+    let mutable private parsedBefore = Dictionary<string, Node> ()
+
+    let private parse (md: string) : Node =
+        match parsed.TryGetValue md with
+        | true, doc -> doc
+        | false, _ ->
+            let doc =
+                match parsedBefore.TryGetValue md with
+                | true, doc -> doc
+                | false, _ -> tableMdParser.parse md
+            if parsed.Count >= parsedPerGeneration then
+                parsedBefore <- parsed
+                parsed <- Dictionary<string, Node> ()
+            parsed.[md] <- doc
+            doc
+
     /// Render a Markdown body as read-only formatted rich text. A parse failure (or an absent
     /// body) degrades to the raw text so a message can never silently vanish from the timeline.
     ///
@@ -165,9 +199,10 @@ module RichText =
     /// Parses with `tableMdParser`, not the composer's own `mdParser`: the timeline only reads
     /// Markdown, so it is the one surface that can carry GFM tables without teaching the
     /// composer how to edit one (`ProseMirror.tableMdParser`'s own comment has the reasoning).
+    /// A text already parsed is not parsed again (`parse`).
     let render (chip: ContentRef -> TemplateResult) (markdown: string) : TemplateResult =
         let md = if isNull (box markdown) then "" else markdown
-        let doc = tableMdParser.parse md
+        let doc = parse md
         if isNull (box doc) then html $"{md}" else html $"{blocks chip Lit.nothing doc}"
 
     /// The same, with `tail` standing at the end of the body's last line — where a caret goes,
@@ -176,7 +211,7 @@ module RichText =
     /// with nothing in it yet is the tail alone.
     let renderTrailed (chip: ContentRef -> TemplateResult) (tail: TemplateResult) (markdown: string) : TemplateResult =
         let md = if isNull (box markdown) then "" else markdown
-        let doc = tableMdParser.parse md
+        let doc = parse md
         if isNull (box doc) then html $"{md}{tail}"
         elif nodeChildCount doc = 0 then tail
         else html $"{blocks chip tail doc}"
