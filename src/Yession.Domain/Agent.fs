@@ -117,7 +117,12 @@ type AgentContextPack =
       /// Who is who here, folded from the same page as `Conversation` — so the transcript
       /// can call each person by the name everybody else sees them under, and a message
       /// that says "@swift-heron" names somebody the agent can find in it.
-      People         : Attribution.State }
+      People         : Attribution.State
+      /// The turn person's own connections, and whether each works while they are away
+      /// (`OwnConnection.ofStatuses`, over the status frame this session holds when the turn
+      /// starts). Only `TurnActor`'s: a turn runs on their credential, and nobody else's
+      /// grant is theirs to ask about.
+      OwnConnections : OwnConnection list }
 
 /// What a runner streams, in the order it arrives. `Text` is the model speaking. A
 /// `MessageBoundary` is the model having begun its next message — after a tool call, in

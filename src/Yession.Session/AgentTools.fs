@@ -51,6 +51,10 @@ module AgentTools =
         let StartWorkSandbox = "start_work_sandbox"
         [<Literal>]
         let ShareArtifact = "share_artifact"
+        /// Contributed by `app/GitHubPrs.fs`, and named here so the prompt's `away` section
+        /// and the tool cannot spell it two ways.
+        [<Literal>]
+        let WatchPr = "watch_pr"
 
     /// What a command's `description` is, said once. The `description` parameter of
     /// execute_command reads it, and the tool's own description and the system prompt point

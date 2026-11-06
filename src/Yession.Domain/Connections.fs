@@ -1,6 +1,7 @@
 namespace Yession.Domain.Access
 
 open Yession.Domain
+open Yession.Domain.Sandboxes
 open System
 
 /// Connection-credential vocabulary (Plan 08). A "connection" is an external-service
@@ -150,3 +151,38 @@ module ConnectionStatusList =
                 | UserScope user -> Some (CredentialFor.Person (Principal.User user))
                 | SessionScope _ | LocalScope -> Some CredentialFor.Deployment)
         |> List.distinct
+
+/// Which service a person's own connection is for, as the agent is told it. Only the two a
+/// person connects from a session's settings; the Manager cannot tell them apart (the header
+/// says why), so the session names the service from the storage name it chose.
+[<RequireQualifiedAccess>]
+type ConnectedService =
+    | GitHub
+    | Claude
+
+/// One of a person's own connections (`UserScope`), as the agent is told it: which service,
+/// and whether it works while its owner is away from this session. Work that outlives a turn
+/// (a watched pull request, checks still running) goes on only through a connection whose
+/// owner allowed it offline, so the agent has to know before it starts such work.
+type OwnConnection = { Service : ConnectedService; Offline : OfflineChoice }
+
+module OwnConnection =
+
+    /// A person's own connections in a status frame, by service. Never another person's,
+    /// and never a session's or the deployment's credential: those work with nobody signed
+    /// in already, so there is nothing to say about them being away. A peer owns none.
+    /// `serviceOf` names the service a storage name is for, and `None` for a name that is no
+    /// connection's (a generic secret).
+    let ofStatuses
+        (serviceOf: SecretName -> ConnectedService option)
+        (person: Principal)
+        (statuses: ConnectionStatus list)
+        : OwnConnection list =
+        match person with
+        | Principal.Peer _ -> []
+        | Principal.User user ->
+            statuses
+            |> List.filter (fun status -> status.Id.Scope = UserScope user)
+            |> List.choose (fun status ->
+                serviceOf status.Id.Name |> Option.map (fun service -> { Service = service; Offline = status.Offline }))
+            |> List.sortBy (fun connection -> connection.Service)

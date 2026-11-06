@@ -341,6 +341,54 @@ let private observationTests =
                 "and a provider refusing one certainly is"
     ]
 
+// --- Pure: a person's own connections, as the agent is told them -------------------------
+
+let private ownConnectionTests =
+    let status (scope: SecretScope) (name: string) (offline: OfflineChoice) : ConnectionStatus =
+        { Id = { Scope = scope; Name = SecretName.create name |> expect }
+          Kind = OAuthConnection
+          Health = ConnectionUsable
+          UpdatedAt = now
+          Offline = offline }
+    let serviceOf (name: SecretName) =
+        match SecretName.value name with
+        | "github" -> Some ConnectedService.GitHub
+        | "claude-code" -> Some ConnectedService.Claude
+        | _ -> None
+    let ownOf person statuses = OwnConnection.ofStatuses serviceOf person statuses
+
+    testList "a person's own connections in a status frame" [
+        testCase "a person's own connection is listed with how its offline grant reads here" <| fun () ->
+            Expect.equal
+                (ownOf (Principal.User alice) [ status (UserScope alice) "github" OfflineChoice.ThisSession ])
+                [ { Service = ConnectedService.GitHub; Offline = OfflineChoice.ThisSession } ]
+                "alice's github, allowed in this session"
+
+        // The turn runs on its person's credential, and nobody else's grant is theirs to ask
+        // about: another member being signed in is not a fact about the turn's person.
+        testCase "another member's connection is not listed" <| fun () ->
+            Expect.isEmpty
+                (ownOf (Principal.User alice) [ status (UserScope bob) "github" OfflineChoice.AllMySessions ])
+                "bob's github is not alice's"
+
+        // A session's own credential and the deployment's work with nobody signed in, so
+        // being away says nothing about them.
+        testCase "a credential that is not a person's is not listed" <| fun () ->
+            Expect.isEmpty
+                (ownOf (Principal.User alice) [ status (SessionScope sessionA) "github" OfflineChoice.Off; status LocalScope "claude-code" OfflineChoice.Off ])
+                "neither the session's nor the deployment's"
+
+        testCase "a generic secret in a person's scope is not a connection" <| fun () ->
+            Expect.isEmpty
+                (ownOf (Principal.User alice) [ status (UserScope alice) "npm-token" OfflineChoice.Off ])
+                "no service for that name"
+
+        testCase "a peer owns no connections" <| fun () ->
+            Expect.isEmpty
+                (ownOf (Principal.Peer peer1) [ status (UserScope alice) "github" OfflineChoice.Off ])
+                "a peer is nobody's scope"
+    ]
+
 // --- Pure: who a status frame says has arrived ----------------------------------------------
 
 let private arrivalTests =
@@ -5109,6 +5157,7 @@ let tests =
         wireTests
         observationTests
         arrivalTests
+        ownConnectionTests
         claudeTests
         githubTests
         prPollTests

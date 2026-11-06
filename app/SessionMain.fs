@@ -981,6 +981,18 @@ let private summarize (credential: CredentialFor) : Summarize option =
                     | None -> return Error "no credential to write with"
             })
 
+/// The service a person's own connection is for, from the storage name this session chose
+/// for it. `None` for a name no connection uses.
+let private serviceOf (name: SecretName) : ConnectedService option =
+    if name = GitHubConnection.secretName then Some ConnectedService.GitHub
+    elif name = ClaudeConnection.secretName then Some ConnectedService.Claude
+    else None
+
+/// A person's own connections in the status frame this session holds now, read when a turn
+/// starts for the person it runs for.
+let private ownConnectionsOf (person: Principal) : OwnConnection list =
+    OwnConnection.ofStatuses serviceOf person (connectionStatus |> Map.toList |> List.map snd)
+
 let private runAgent () : RunAgent option =
     match Interop.envOr "YESSION_SESSION_AGENT" "" with
     | "diagnostic" -> Some diagnosticAgent
@@ -1516,7 +1528,7 @@ Async.StartImmediate (
                     fun terminal ->
                         gitGateway.Retire (GitGateway.Borrower.Terminal terminal)
                         credentialProxy.Retire terminal } ]
-        let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials (CredentialProxy.provider credentialProxy sandboxBackend doorFor))) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity agentReport telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage port
+        let! host = Host.startFull clock runAgent summarize ownConnectionsOf (Some (makeSandboxes forwardableCredentials (CredentialProxy.provider credentialProxy sandboxBackend doorFor))) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity agentReport telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
         // capabilities and the `work_sandboxes` query read is filled here — before the
         // readiness line, and therefore before any turn or any browser can ask.
