@@ -114,6 +114,9 @@ module Scheduler =
         // Where attached files wait until their message is sent. The drain holds a message
         // until its files have arrived, and shares them as it sends it.
         (staging: StagedAttachments.Staging)
+        // A person's own connections, and whether each works while they are away: read
+        // when a turn starts, for the person it runs for, like the model below.
+        (ownConnectionsOf: Principal -> Yession.Domain.Access.OwnConnection list)
         (initialConsumed: Set<string>)
         : SessionScheduler =
 
@@ -226,7 +229,7 @@ module Scheduler =
                                         (Digest.window events)
                                 let repos =
                                     events |> List.fold ReposProjection.applyEvent ReposProjection.empty
-                                do! AgentTurn.run log agent (signalFor turn) capabilitiesFor emitUsage (fun () -> turn.TurnId) mintMessageId sessionId (SessionHistory.ofEnvelopes page.Events) projection.Items people terminals repos.Repos (selectedModel ()) trigger
+                                do! AgentTurn.run log agent (signalFor turn) capabilitiesFor emitUsage (fun () -> turn.TurnId) mintMessageId sessionId (SessionHistory.ofEnvelopes page.Events) projection.Items people terminals repos.Repos (selectedModel ()) ownConnectionsOf trigger
                                 // Release the slot and re-arm — unless an interrupt
                                 // already released it (and possibly started a successor).
                                 match running with
@@ -303,6 +306,7 @@ module Scheduler =
                                     terminals
                                     repos.Repos
                                     (selectedModel ())
+                                    ownConnectionsOf
                                     (AgentTurn.FromWake (reason, turnActor))
                             match running with
                             | Some current when current.Generation = turn.Generation ->

@@ -155,6 +155,10 @@ let startFull
     // fact about this log: the session's creator. That is known here and nowhere above here,
     // so a thunk that decided on its own could only have decided on somebody else's behalf.
     (summarize: CredentialFor -> Summarize option)
+    // A person's own connections, and whether each works while they are away
+    // (`OwnConnection.ofStatuses`), read when a turn starts for the person it runs for. A
+    // host with no Manager has no person's connections to report.
+    (ownConnectionsOf: Principal -> Yession.Domain.Access.OwnConnection list)
     (makeSandboxes: (EventLog<SessionEvent> -> Async<WorkSandboxes.WorkSandboxes>) option)
     // Secrets (Plan 06): the Manager-granted, session-scoped secrets surface
     // (write/list/delete — never read). None = turns see the `none` denials.
@@ -793,7 +797,7 @@ let startFull
               Listed = fun () -> stagingRef.Value.Listed ()
               Discard = fun upload -> stagingRef.Value.Discard upload }
         let scheduler =
-            Scheduler.create sessionId doc log runAgent capabilitiesFor emitUsage mintTurnId mintMessageId principalFor transcripts.ReadRange Yession.Domain.Chat.TurnPolicy.addressed staging initialConsumed
+            Scheduler.create sessionId doc log runAgent capabilitiesFor emitUsage mintTurnId mintMessageId principalFor transcripts.ReadRange Yession.Domain.Chat.TurnPolicy.addressed staging ownConnectionsOf initialConsumed
         let drain () = scheduler.Drain ()
         let sweepAttachments () = StagedAttachments.sweep doc staging (clock.Now ())
         // The attachment rules decide what goes; this beat is only how often they are asked.
@@ -1326,7 +1330,7 @@ let startWithEnvironment
     // No mount: these helpers serve an unfronted, origin-root session. No transcript store
     // either — terminals fall back to the in-memory one, which is the right default for a
     // host with no data directory.
-    startFull Clock.system (fun () -> runAgent) (fun _ -> None) makeSandboxes None baseLog None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false port
+    startFull Clock.system (fun () -> runAgent) (fun _ -> None) (fun _ -> []) makeSandboxes None baseLog None None None None None (fun _ _ -> ()) None McpClient.McpConnections.none None sessionId None "" None false port
 
 /// `startWithEnvironment` without an environment — Step 08-era topology.
 let startWith (runAgent: RunAgent option) (sessionId: SessionId) (port: int) : Async<SessionHost> =

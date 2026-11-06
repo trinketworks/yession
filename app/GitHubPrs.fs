@@ -1288,7 +1288,7 @@ let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string 
           repoNumber
           (fun (repo, number) -> ok (unmergePr capabilities repo number))
       tool
-          "watch_pr"
+          AgentTools.ToolName.WatchPr
           "Watch a pull request on GitHub. The session polls it. The timeline announces when it merges, closes or reopens, and when its checks pass or fail. The timeline also announces when auto merge is armed (armed) and when it enters the merge queue (queued). It also announces when the pull request is on neither while it is still open (stalled). Stalled means disarmed, or ejected from the queue without a merge. Nothing else reports a stall. The pull_requests query gives the current state of every watched pull request. This tool reads it with the credential of the person whose turn this is. A \"cannot see it\" on a pull request that exists means that their GitHub credential cannot reach that repo. If the pull request is already watched, the answer gives its state and nothing changes."
           repoNumber
           (fun (repo, number) -> ok (watchPr capabilities repo number))

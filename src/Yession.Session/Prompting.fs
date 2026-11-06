@@ -7,6 +7,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Chat
 open Yession.Domain.Repos
 open Yession.Domain.Tools
+open Yession.Domain.Access
 
 /// The agent's prompt, as rules a strategy is made of (`PromptStrategy`, in the Domain).
 ///
@@ -162,9 +163,23 @@ module Prompting =
 - Before you delete or overwrite something that you did not make, look at it.
 - Do not use a destructive action to get past an obstacle. Find the cause.""" }
 
+    /// Work that outlives the turn (a watched pull request, checks still running) goes on
+    /// after its person leaves only through a connection they allowed offline (decision
+    /// 2026-11-05, "A connection can be used while its owner is away"). Without one, the
+    /// poller went anonymous after a relaunch and every watch stalled, and nobody had been
+    /// asked. Only the person can allow it, so the agent has to find out before it starts
+    /// such work and ask them while they are here. Whether each connection works is a fact
+    /// of the turn (`connectionsText`, conditioned on `HasOwnConnections`); this is the policy
+    /// that reads it, so it is the same every turn. The sentence that asks is one sentence on
+    /// purpose: a tool that asks for offline access replaces it.
+    let away =
+        { Name = "away"
+          Text =
+            $"Work continues while a person is away only through the connections that they allow offline. The turn's context lists the connections of the person whose turn it is, and says if each one works while they are away. Read that list before you start work that continues after your turn, such as watching a pull request with {ToolName.WatchPr} or waiting for checks. If the connection that the work needs does not work while the person is away, ask them in the conversation to allow offline access for it in the settings of this session. Tell them why: without offline access, the work stops when they leave." }
+
     /// Every product section, in the order a strategy that takes them all reads them.
     let sections : Section list =
-        [ role; addressing; environments; files; skills; shell; scratch; background; communication; reporting; scope; care ]
+        [ role; addressing; environments; files; skills; shell; scratch; background; away; communication; reporting; scope; care ]
 
     /// Everything a strategy reads for one turn. Data only: the decisions are the rules'.
     [<RequireQualifiedAccess>]
@@ -179,7 +194,12 @@ module Prompting =
           /// What the operator of this host wrote for the agent, if anything.
           Guidance : string option
           /// Every tool this turn can call, from the registry the turn runs with.
-          Tools : ToolDescriptor list }
+          Tools : ToolDescriptor list
+          /// Whose turn this is: the person whose credentials it runs on.
+          TurnActor : Principal
+          /// The turn person's own connections, and whether each works while they are away.
+          /// Nobody else's.
+          OwnConnections : OwnConnection list }
 
     /// When a rule applies. Closed: a new condition is a case here and a line in `holds`.
     /// Only conditions some rule uses are here. Add one when a rule needs it.
@@ -200,6 +220,8 @@ module Prompting =
         | HasRepos
         /// The turn can call a tool another server declared (an MCP server's).
         | HasForeignTools
+        /// The person whose turn it is has connections of their own.
+        | HasOwnConnections
 
     /// Where in the system prompt a rule's text goes. `Stable` is before the cache boundary
     /// and the same for every turn on every host; `Dynamic` is after it, and may vary.
@@ -256,6 +278,7 @@ module Prompting =
         | Condition.HasSkills -> context.Repos |> List.exists (fun repo -> not (List.isEmpty repo.Skills))
         | Condition.HasRepos -> not (List.isEmpty context.Repos)
         | Condition.HasForeignTools -> context.Tools |> List.exists (fun tool -> tool.Foreign)
+        | Condition.HasOwnConnections -> not (List.isEmpty context.OwnConnections)
 
     // --- what the turn's message is made of ----------------------------------------------
 
@@ -392,6 +415,24 @@ module Prompting =
         |> List.map render
         |> String.concat "\n\n"
 
+    /// Whether each of the turn person's own connections works while they are away: the
+    /// facts the `away` section reads. Facts, not instructions: what to do about them is the
+    /// section's, which is the same every turn.
+    let private connectionsText (context: Context) =
+        let service (connection: OwnConnection) =
+            match connection.Service with
+            | ConnectedService.GitHub -> "GitHub"
+            | ConnectedService.Claude -> "Claude"
+        let offline (connection: OwnConnection) =
+            match connection.Offline with
+            | OfflineChoice.Off -> "does not work while they are away"
+            | OfflineChoice.ThisSession -> "works while they are away, in this session"
+            | OfflineChoice.AllMySessions -> "works while they are away, in all their sessions"
+        context.OwnConnections
+        |> List.map (fun connection -> sprintf "- %s: %s." (service connection) (offline connection))
+        |> String.concat "\n"
+        |> sprintf "Connections of %s:\n%s" (label context.People (Principal.toActor context.TurnActor))
+
     let private askText (context: Context) =
         match context.Occasion with
         | Occasion.Asked message ->
@@ -490,11 +531,12 @@ module Prompting =
         let terminals = Rule.Turn ("terminals", Condition.HasTerminalActivity, terminalActivity >> Some)
         let repoNotes = Rule.Turn ("repo-notes", Condition.HasRepoNotes, repoNotesText >> Some)
         let skillsMenu = Rule.Turn ("skills-menu", Condition.HasSkills, skillsText >> Some)
+        let connections = Rule.Turn ("connections", Condition.HasOwnConnections, connectionsText >> Some)
         let ask = Rule.Turn ("ask", Condition.Asked, askText)
         let wake = Rule.Turn ("wake", Condition.Woken, wakeText)
 
         let rules : Rule list =
-            (sections |> List.map section) @ [ operator; clock; conversation; terminals; repoNotes; skillsMenu; ask; wake ]
+            (sections |> List.map section) @ [ operator; clock; conversation; terminals; repoNotes; skillsMenu; connections; ask; wake ]
 
     /// Claude Code's prompt architecture over this product's rules. The product sections, and
     /// Claude Code's rule to look at a UI change (`looking`), are the prefix every turn on
@@ -514,6 +556,7 @@ module Prompting =
         let repos = Rule.Turn ("repos", Condition.HasRepos, reminding reposText)
         let repoNotes = Rule.Turn ("repo-notes", Condition.HasRepoNotes, reminding repoNotesText)
         let skillsMenu = Rule.Turn ("skills-menu", Condition.HasSkills, reminding skillsText)
+        let connections = Rule.Turn ("connections", Condition.HasOwnConnections, reminding connectionsText)
         let terminals = Rule.Turn ("terminals", Condition.HasTerminalActivity, reminding terminalActivity)
         let conversation = Rule.Turn ("conversation", Condition.Always, conversationText >> Some)
         let ask = Rule.Turn ("ask", Condition.Asked, askText)
@@ -521,7 +564,7 @@ module Prompting =
 
         let rules : Rule list =
             (sections |> List.map section)
-            @ [ looking; foreignTools; operator; clock; repos; repoNotes; skillsMenu; terminals; conversation; ask; wake ]
+            @ [ looking; foreignTools; operator; clock; repos; repoNotes; skillsMenu; connections; terminals; conversation; ask; wake ]
 
     /// Every strategy's rules. The one place a new strategy has to be named.
     let rulesOf (strategy: PromptStrategy) : Rule list =
@@ -578,7 +621,9 @@ module Prompting =
           History = pack.History
           Now = pack.Now
           Guidance = guidance
-          Tools = tools }
+          Tools = tools
+          TurnActor = pack.TurnActor
+          OwnConnections = pack.OwnConnections }
 
     /// What the runner calls: the turn's plan, from what it was handed, what this host's
     /// operator wrote (the guidance, and the strategy that plans the turn), and the registry

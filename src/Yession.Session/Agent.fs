@@ -5,6 +5,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Terminals
 open Yession.Domain.Chat
 open Yession.Domain.Repos
+open Yession.Domain.Access
 
 /// Orchestration of one agent turn (Step 08): builds the context pack from the
 /// projection-derived conversation, drives the injected `RunAgent` capability, and
@@ -85,6 +86,10 @@ module AgentTurn =
         // that read its conversation now and its model later could run the answer to one
         // question on the model somebody picked for the next.
         (model: ModelId option)
+        // The turn person's own connections, asked once for the turn's actor when the pack
+        // is built, so the pack names the connections of the person it runs for and no one
+        // else's.
+        (ownConnectionsOf: Principal -> OwnConnection list)
         (trigger: TurnTrigger)
         : Async<unit> =
         async {
@@ -150,7 +155,8 @@ module AgentTurn =
                       Model = model
                       Now = now
                       History = history
-                      People = people }
+                      People = people
+                      OwnConnections = ownConnectionsOf turnActor }
                 do! append (AgentContextBuilt { AgentTurnId = turnId; MessageCount = List.length conversation })
 
                 // Where one message ends and the next begins, decided from the stream alone.
