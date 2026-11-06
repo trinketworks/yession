@@ -6925,6 +6925,33 @@ let editorTests =
                 return ()
             }
 
+        // The chip keeps saying what is queued while a collaborator rewrites it. Their edit
+        // reaches this page as a doc update and nothing else: the codec does not bind a command
+        // line, so no model changes and no render follows. A chip that is re-read only at a
+        // render goes on saying the old command until something unrelated draws the page. This
+        // page has no codec at all, so here nothing else ever draws it.
+        editorCase "a queued command's chip follows a collaborator rewriting the command" <| fun page ->
+            async {
+                let chip = "#shell [data-chat-pending]"
+                do! Wait.until "the chip to say npm run lint" (fun () -> Read.text page chip) (Option.exists (fun t -> t.Contains "npm run lint"))
+                let queued = Yession.Domain.QueueId.create "queue-harness" |> Result.defaultWith failwith
+                do! Harness.run2 page HarnessPage.lineEdited (Yession.Domain.Collab.BodyKey.terminalQueued queued) "npm run lint -- --fix"
+                do! Wait.until "the chip to say the rewritten command" (fun () -> Read.text page chip) (Option.exists (fun t -> t.Contains "npm run lint -- --fix"))
+            }
+
+        // A collaborator's caret can reach this page before the words it is in, because
+        // presence and the doc travel apart. Pushed then, it has nothing to resolve against and
+        // is drawn nowhere. The words then land as a doc update and nothing else: the codec
+        // does not bind a body, so no model changes and no render pushes the carets again.
+        editorCase "a collaborator's caret that arrives before its words is drawn once they land" <| fun page ->
+            async {
+                let grace = Yession.Domain.PeerId.create "grace" |> Result.defaultWith failwith
+                do! Harness.await1 page HarnessPage.caretBeforeWords "hello"
+                // Her draft's body, however the page shows it: in the composer, or collapsed.
+                let body = sprintf "#shell [data-rich-body='%s']" (Yession.Domain.Collab.BodyKey.draft grace)
+                do! waitPresent "Grace's caret in her draft" page (body + " .pm-caret")
+            }
+
         // A preview (P2-1): what a chip opens is laid over the terminal, never a tab beside it,
         // and its way back hands focus to the chip — the UI floor's rule about a DOM swap that
         // removes what had focus, asked of the one surface that removes itself on Escape. These
