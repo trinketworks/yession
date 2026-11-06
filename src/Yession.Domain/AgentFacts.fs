@@ -78,6 +78,14 @@ and WakeReason =
     /// person asking for what follows from it — so the turn runs on their credential, as a
     /// turn their message started would.
     | SurfaceAnswered of surfaceId: string
+    /// The person the agent asked for offline access (`OfflineAccessAsked`) answered: their
+    /// connection now reads as allowed here, or they dismissed the card
+    /// (`OfflineAccessSettled`).
+    ///
+    /// Owned by that person, for `SurfaceAnswered`'s reason: they answered the agent's
+    /// question, and the turn that follows runs on their credential. What they chose arrives
+    /// as the timeline note, so the reason names only which connection.
+    | OfflineAccessSettled of Yession.Domain.Access.ConnectedService
     /// The agent's previous turn was cut off: the process running it ended — a crash, a
     /// deploy, the machine — and the next one found it in the log and failed it
     /// (`AgentTurnFailed.ProcessEnded`). Nothing the agent was in the middle of reported back
@@ -147,3 +155,13 @@ and ProcessEnded = { LastHeardAt : System.DateTimeOffset }
 and AgentTurnInterrupted =
     { AgentTurnId : AgentTurnId
       RequestedBy : PeerId }
+
+module WakeReason =
+
+    /// What a turn woken by an answer to `ask_offline_access` is told, in Simplified
+    /// Technical English like the tool answers. Here rather than in the prompt, beside the
+    /// case it explains, so the reason and its sentence change together.
+    let offlineAccessSettled (connection: Yession.Domain.Access.ConnectedService) : string =
+        sprintf
+            "You are running because a person answered your ask_offline_access for their %s. The conversation above says who answered and what they chose. If they allowed it, continue the work that needed it. If they dismissed it, the grant did not change. Do not ask again unless they ask you to."
+            (Yession.Domain.Access.ConnectedService.name connection)

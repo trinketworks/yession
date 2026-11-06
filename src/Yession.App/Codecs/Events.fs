@@ -118,6 +118,16 @@ module Events =
     /// Why a turn ran with nobody speaking (Plan 20, stage 2). A tagged object rather than a
     /// bare string, because the reasons are a vocabulary that grows — a roster change, a
     /// stream ending — and each may come to carry what it is about.
+    /// Which connection an offline ask is about, as the word the agent's tool takes.
+    let private offlineConnection : Codec<Yession.Domain.Access.ConnectedService> =
+        { Encode = fun c -> Encode.string (Yession.Domain.Access.ConnectedService.word c)
+          Decode =
+            Decode.string
+            |> Decode.andThen (fun word ->
+                match Yession.Domain.Access.ConnectedService.ofWord word with
+                | Some c -> Decode.succeed c
+                | None -> Decode.fail (sprintf "Unknown offline connection: %s" word)) }
+
     let private wakeReason : Codec<WakeReason> =
         { Encode =
             (fun r ->
@@ -130,7 +140,9 @@ module Events =
                 | PrChanged pr -> Encode.object [ "kind", Encode.string "prChanged"; "pr", Codec.prRef.Encode pr ]
                 | SurfaceAnswered surfaceId ->
                     Encode.object [ "kind", Encode.string "surfaceAnswered"; "surfaceId", Encode.string surfaceId ]
-                | CutOff turn -> Encode.object [ "kind", Encode.string "cutOff"; "agentTurnId", Codec.agentTurnId.Encode turn ])
+                | CutOff turn -> Encode.object [ "kind", Encode.string "cutOff"; "agentTurnId", Codec.agentTurnId.Encode turn ]
+                | WakeReason.OfflineAccessSettled connection ->
+                    Encode.object [ "kind", Encode.string "offlineAccessSettled"; "connection", offlineConnection.Encode connection ])
           Decode =
             Decode.field "kind" Decode.string
             |> Decode.andThen (function
@@ -140,6 +152,8 @@ module Events =
                 | "prChanged" -> Decode.field "pr" Codec.prRef.Decode |> Decode.map PrChanged
                 | "cutOff" -> Decode.field "agentTurnId" Codec.agentTurnId.Decode |> Decode.map CutOff
                 | "surfaceAnswered" -> Decode.field "surfaceId" Decode.string |> Decode.map SurfaceAnswered
+                | "offlineAccessSettled" ->
+                    Decode.field "connection" offlineConnection.Decode |> Decode.map WakeReason.OfflineAccessSettled
                 | other -> Decode.fail (sprintf "Unknown wake reason: %s" other)) }
 
     let private agentTurnStarted : Codec<AgentTurnStarted> =
@@ -1543,6 +1557,61 @@ module Events =
                   Yession.Domain.Surfaces.SurfaceDismissed.Title = get.Optional.Field "title" Decode.string
                   Yession.Domain.Surfaces.SurfaceDismissed.By = get.Required.Field "by" Codec.principal.Decode }) }
 
+    let private offlineAccessAsked : Codec<Yession.Domain.Away.OfflineAccessAsked> =
+        { Encode =
+            fun (a: Yession.Domain.Away.OfflineAccessAsked) ->
+                Encode.object
+                    [ "messageId", Codec.messageId.Encode a.MessageId
+                      "person", Codec.userId.Encode a.Person
+                      "connection", offlineConnection.Encode a.Connection
+                      "why", Encode.string a.Why ]
+          Decode =
+            Decode.object (fun get ->
+                { Yession.Domain.Away.OfflineAccessAsked.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
+                  Yession.Domain.Away.OfflineAccessAsked.Person = get.Required.Field "person" Codec.userId.Decode
+                  Yession.Domain.Away.OfflineAccessAsked.Connection = get.Required.Field "connection" offlineConnection.Decode
+                  Yession.Domain.Away.OfflineAccessAsked.Why = get.Required.Field "why" Decode.string }) }
+
+    /// An ask's end: `"allowed"` with the allowance (`"session"` or `"all"`, the words the
+    /// offline choice already uses on the wire), or `"dismissed"`.
+    let private offlineAccessOutcome : Codec<Yession.Domain.Away.OfflineAccessOutcome> =
+        { Encode =
+            fun outcome ->
+                match outcome with
+                | Yession.Domain.Away.OfflineAccessOutcome.Allowed Yession.Domain.Away.OfflineAllowance.ThisSession ->
+                    Encode.object [ "kind", Encode.string "allowed"; "allowance", Encode.string "session" ]
+                | Yession.Domain.Away.OfflineAccessOutcome.Allowed Yession.Domain.Away.OfflineAllowance.AllMySessions ->
+                    Encode.object [ "kind", Encode.string "allowed"; "allowance", Encode.string "all" ]
+                | Yession.Domain.Away.OfflineAccessOutcome.Dismissed -> Encode.object [ "kind", Encode.string "dismissed" ]
+          Decode =
+            Decode.field "kind" Decode.string
+            |> Decode.andThen (function
+                | "dismissed" -> Decode.succeed Yession.Domain.Away.OfflineAccessOutcome.Dismissed
+                | "allowed" ->
+                    Decode.field "allowance" Decode.string
+                    |> Decode.andThen (function
+                        | "session" ->
+                            Decode.succeed (Yession.Domain.Away.OfflineAccessOutcome.Allowed Yession.Domain.Away.OfflineAllowance.ThisSession)
+                        | "all" ->
+                            Decode.succeed (Yession.Domain.Away.OfflineAccessOutcome.Allowed Yession.Domain.Away.OfflineAllowance.AllMySessions)
+                        | other -> Decode.fail (sprintf "Unknown offline allowance: %s" other))
+                | other -> Decode.fail (sprintf "Unknown offline ask outcome: %s" other)) }
+
+    let private offlineAccessSettled : Codec<Yession.Domain.Away.OfflineAccessSettled> =
+        { Encode =
+            fun (s: Yession.Domain.Away.OfflineAccessSettled) ->
+                Encode.object
+                    [ "messageId", Codec.messageId.Encode s.MessageId
+                      "person", Codec.userId.Encode s.Person
+                      "connection", offlineConnection.Encode s.Connection
+                      "outcome", offlineAccessOutcome.Encode s.Outcome ]
+          Decode =
+            Decode.object (fun get ->
+                { Yession.Domain.Away.OfflineAccessSettled.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
+                  Yession.Domain.Away.OfflineAccessSettled.Person = get.Required.Field "person" Codec.userId.Decode
+                  Yession.Domain.Away.OfflineAccessSettled.Connection = get.Required.Field "connection" offlineConnection.Decode
+                  Yession.Domain.Away.OfflineAccessSettled.Outcome = get.Required.Field "outcome" offlineAccessOutcome.Decode }) }
+
     let private commandRefused : Codec<CommandRefused> =
         { Encode =
             fun (p: CommandRefused) ->
@@ -1796,6 +1865,10 @@ module Events =
                     Encode.object [ "type", Encode.string "surfaceActionTaken"; "payload", surfaceActionTaken.Encode p ]
                 | SessionEvent.SurfaceDismissed p ->
                     Encode.object [ "type", Encode.string "surfaceDismissed"; "payload", surfaceDismissed.Encode p ]
+                | SessionEvent.OfflineAccessAsked p ->
+                    Encode.object [ "type", Encode.string "offlineAccessAsked"; "payload", offlineAccessAsked.Encode p ]
+                | SessionEvent.OfflineAccessSettled p ->
+                    Encode.object [ "type", Encode.string "offlineAccessSettled"; "payload", offlineAccessSettled.Encode p ]
                 | SessionEvent.CommandRefused p ->
                     Encode.object [ "type", Encode.string "commandRefused"; "payload", commandRefused.Encode p ]
                 | SessionEvent.GatedCommandFailed p ->
@@ -1895,6 +1968,10 @@ module Events =
                     Decode.field "payload" surfaceActionTaken.Decode |> Decode.map SessionEvent.SurfaceActionTaken
                 | "surfaceDismissed" ->
                     Decode.field "payload" surfaceDismissed.Decode |> Decode.map SessionEvent.SurfaceDismissed
+                | "offlineAccessAsked" ->
+                    Decode.field "payload" offlineAccessAsked.Decode |> Decode.map SessionEvent.OfflineAccessAsked
+                | "offlineAccessSettled" ->
+                    Decode.field "payload" offlineAccessSettled.Decode |> Decode.map SessionEvent.OfflineAccessSettled
                 | "commandRefused" -> Decode.field "payload" commandRefused.Decode |> Decode.map SessionEvent.CommandRefused
                 | "gatedCommandFailed" -> Decode.field "payload" gatedCommandFailed.Decode |> Decode.map SessionEvent.GatedCommandFailed
                 | "toolUseStarted" -> Decode.field "payload" toolUseStarted.Decode |> Decode.map ToolUseStarted

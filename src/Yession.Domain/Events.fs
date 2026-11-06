@@ -162,6 +162,11 @@ type SessionEvent =
     | SurfaceActionTaken of Surfaces.SurfaceActionTaken
     // Somebody took a surface down without answering it. Owed a turn like an answer.
     | SurfaceDismissed of Surfaces.SurfaceDismissed
+    // The agent asked the person whose turn it was to let this session use their own
+    // connection while they are away, and how that ended: allowed (seen on the Manager's
+    // status stream) or dismissed by them. The settlement owes the agent a turn.
+    | OfflineAccessAsked of Away.OfflineAccessAsked
+    | OfflineAccessSettled of Away.OfflineAccessSettled
     // The approval gate's refusal (Plan 15, stage 3). Only the refusal: an approval is
     // recorded on the event of the command it released.
     | CommandRefused of CommandRefused

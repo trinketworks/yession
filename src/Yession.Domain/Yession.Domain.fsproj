@@ -46,6 +46,10 @@
     <Compile Include="ArtifactFacts.fs" />
     <!-- A button pressed on an agent's surface: the act, and the answer it carried. -->
     <Compile Include="SurfaceFacts.fs" />
+    <!-- The agent asking a person to let it use their own connection while they are away,
+         and how that ask ended. Before AgentFacts.fs, whose wake reason names it. -->
+    <Compile Include="ConnectedService.fs" />
+    <Compile Include="OfflineAccessFacts.fs" />
     <Compile Include="ChatFacts.fs" />
     <Compile Include="AgentFacts.fs" />
     <Compile Include="TerminalsFacts.fs" />
@@ -101,6 +105,8 @@
     <!-- The settings drawer's connection panels as they cross the wire: below Models.fs,
          which is where the picker's catalogue comes from. -->
     <Compile Include="ConnectionPanels.fs" />
+    <!-- The offline asks still open, folded by the session and by a client alike. -->
+    <Compile Include="OfflineAsks.fs" />
     <Compile Include="Summaries.fs" />
     <!-- Something a party DID, as the facts of it: one case per act event, and the prose
          readers that dispatch to each event's own words. Before Conversation.fs, whose

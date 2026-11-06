@@ -314,6 +314,12 @@ module Dom =
         let trustAnswer = "data-repo-trust-answer"
         let trustRoute = "data-repo-trust-route"
         let trustLater = "data-repo-trust-later"
+        /// The agent's ask to use this reader's connection while they are away, by connection
+        /// word (`github`, `claude`). Only the person asked has one.
+        let offlineAsk = "data-offline-ask"
+        let offlineRow = "data-offline-row"
+        let offlineAllow = "data-offline-allow"
+        let offlineDismiss = "data-offline-dismiss"
         /// How to read the values above it, where they are written in a vocabulary rather
         /// than in words. Carries how many entries it holds, because that is the promise
         /// worth counting: a consent prompt shows the entries ITS grants use, so a legend
@@ -946,6 +952,19 @@ module Dom =
         /// The way out's accessible name and tooltip. Says what the press does: nothing is
         /// decided, and only this reader stops being asked until the repo asks for more.
         let trustLater = "not now"
+        // The offline ask card: the trust card's anatomy, asking for a person's connection
+        // while they are away. The head reads as one line: "agent asks / to keep using your
+        // GitHub while you're away".
+        let offlineAsker (agent: string) : string = sprintf "%s asks" agent
+        let offlineTitle (connection: string) : string = sprintf "to keep using your %s while you're away" connection
+        let offlineRowSession = "This session"
+        let offlineRowSessionDetail = "only here"
+        let offlineRowAll = "All my sessions"
+        let offlineRowAllDetail = "every session you joined"
+        let offlineAllow = "Allow"
+        /// The way out's accessible name and tooltip: the grant stays as it is, and the agent
+        /// is told.
+        let offlineDismiss = "dismiss without allowing"
         /// What stands where history this device does not hold would be (Plan 20). Said only
         /// while nothing is coming to fill it — see `View.chat` — so it is a fact about this
         /// client's own store rather than a complaint about the network.
@@ -1244,6 +1263,7 @@ module Dom =
         let wokePrChanged = "pr-changed"
         let wokeCutOff = "cut-off"
         let wokeSurfaceAnswered = "surface-answered"
+        let wokeOfflineAccessSettled = "offline-access-settled"
         /// What a woken turn wears in the chat, in the slot its siblings — *streaming*,
         /// *interrupted* — already occupy. A word rather than a new glyph: this design says
         /// a message's state in one lowercase word, and a mark nobody can decode without a
@@ -1257,6 +1277,7 @@ module Dom =
         let turnWokePrChanged = "Started on its own: a watched pull request changed."
         let turnWokeCutOff = "Resuming the turn cut off when the session stopped."
         let turnWokeSurfaceAnswered = "Started because someone answered its surface."
+        let turnWokeOfflineAccessSettled = "Started because someone answered its ask to use their connection while they are away."
         /// Stands where the quoted message would be when the ref points past the loaded page —
         /// the reply is real, its cause simply is not on screen yet.
         let replyRefMissing = "earlier message"

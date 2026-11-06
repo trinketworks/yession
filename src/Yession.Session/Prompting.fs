@@ -170,12 +170,12 @@ module Prompting =
     /// asked. Only the person can allow it, so the agent has to find out before it starts
     /// such work and ask them while they are here. Whether each connection works is a fact
     /// of the turn (`connectionsText`, conditioned on `HasOwnConnections`); this is the policy
-    /// that reads it, so it is the same every turn. The sentence that asks is one sentence on
-    /// purpose: a tool that asks for offline access replaces it.
+    /// that reads it, so it is the same every turn. The asking is the tool's
+    /// (`ask_offline_access`): the person answers on a card, and the agent cannot grant it.
     let away =
         { Name = "away"
           Text =
-            $"Work continues while a person is away only through the connections that they allow offline. The turn's context lists the connections of the person whose turn it is, and says if each one works while they are away. Read that list before you start work that continues after your turn, such as watching a pull request with {ToolName.WatchPr} or waiting for checks. If the connection that the work needs does not work while the person is away, ask them in the conversation to allow offline access for it in the settings of this session. Tell them why: without offline access, the work stops when they leave." }
+            $"Work continues while a person is away only through the connections that they allow offline. The turn's context lists the connections of the person whose turn it is, and says if each one works while they are away. Read that list before you start work that continues after your turn, such as watching a pull request with {ToolName.WatchPr} or waiting for checks. If the connection that the work needs does not work while the person is away, ask them to allow it with {ToolName.AskOfflineAccess}. In its why, tell them why: without offline access, the work stops when they leave." }
 
     /// Every product section, in the order a strategy that takes them all reads them.
     let sections : Section list =
@@ -460,6 +460,7 @@ module Prompting =
                 (TerminalId.value terminal)
         | StreamEnded _ ->
             "You are running because the stream behind a terminal you were working in has ended. The terminal activity above is the last of that stream. Say what it means for what you were doing."
+        | WakeReason.OfflineAccessSettled connection -> WakeReason.offlineAccessSettled connection
         | CommandFinished ->
             "You are running because work you started in the background finished. The terminal activity above is that work. Continue with it. Say what it means for what you were doing."
 

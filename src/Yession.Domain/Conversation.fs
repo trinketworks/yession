@@ -654,6 +654,11 @@ module ConversationProjection =
         // the agent's next turn reads what was chosen in the same record a person scrolls.
         | SessionEvent.SurfaceActionTaken a -> proj |> noted a.MessageId (Principal.toActor a.By) (Act.SurfaceActionTaken a) envelope
         | SessionEvent.SurfaceDismissed d -> proj |> noted d.MessageId (Principal.toActor d.By) (Act.SurfaceDismissed d) envelope
+        // An ask for offline access and its end, for everybody: the agent's next turn reads
+        // the answer in the same record a person scrolls. The ask is the agent's act; the
+        // answer is the person's.
+        | SessionEvent.OfflineAccessAsked a -> proj |> noted a.MessageId ActorRef.Agent (Act.OfflineAccessAsked a) envelope
+        | SessionEvent.OfflineAccessSettled s -> proj |> noted s.MessageId (UserRef s.Person) (Act.OfflineAccessSettled s) envelope
         // A tab opened or closed is not something SAID. It is a thing that happened to one
         // column of one screen, and the chat is the record of the conversation — an item
         // reading "opened artifacts/chart.png" under the message that shared it would be the

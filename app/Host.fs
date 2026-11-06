@@ -551,6 +551,17 @@ let startFull
                         return Ok ()
             }
 
+        /// A person dismissed the agent's ask to use their connection while they are away. The
+        /// dismissal owes the agent a turn, as an answer to a surface does.
+        let dismissOfflineAsk (by: Principal) (connection: Yession.Domain.Access.ConnectedService) : Async<Result<unit, string>> =
+            async {
+                match! OfflineAccess.dismiss log mintMessageId by connection with
+                | Error reason -> return Error reason
+                | Ok () ->
+                    wakeScheduler ()
+                    return Ok ()
+            }
+
         // The gate for structured commands (Plan 15, stage 3b; Plan 23): every command
         // passes the classifier on its way to the dispatch table, and hands back the same
         // `QueueId` a terminal command does — which is what lets ONE `check_pending` serve
@@ -1095,6 +1106,7 @@ let startFull
                         launchRepo
                         pressSurface
                         dismissSurface
+                        dismissOfflineAsk
                         principalFor
                   OnPresence =
                     fun payload ->

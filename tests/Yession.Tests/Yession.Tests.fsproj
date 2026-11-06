@@ -82,6 +82,7 @@
     <Compile Include="OtlpStub.fs" />
     <Compile Include="Sync.fs" />
     <Compile Include="AgentSurfaces.fs" />
+    <Compile Include="OfflineAsks.fs" />
     <Compile Include="TerminalPattern.fs" />
     <Compile Include="Terminals.fs" />
     <!-- The other end of the same wire: what a keydown means to a pty, which the browser
