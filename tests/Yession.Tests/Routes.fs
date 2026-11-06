@@ -63,6 +63,7 @@ let private every =
       Claude ClaudeAction.Complete
       Claude ClaudeAction.Token
       Claude ClaudeAction.Disconnect
+      Claude ClaudeAction.Offline
       // The repo picker's two reads: the listing, and one repo's branches — a path that
       // shares its head with the listing's and is told apart by depth.
       GitHubRepos
@@ -360,21 +361,21 @@ let private claudeBodyTests =
                 "no key for a code or a token nobody pasted"
 
         testCase "says a pasted code beside the scope" <| fun () ->
-            let request : ClaudeRequest = { Scope = "mine"; Code = Some "abc123"; Token = None }
+            let request : ClaudeRequest = { Scope = "mine"; Code = Some "abc123"; Token = None; Offline = None }
             Expect.equal
                 (Codec.toString ClaudeRequest.codec request)
                 """{"scope":"mine","code":"abc123"}"""
                 "the code, under the name the session reads it by"
 
         testCase "says a pasted token beside the scope" <| fun () ->
-            let request : ClaudeRequest = { Scope = "mine"; Code = None; Token = Some "sk-ant-oat01-x" }
+            let request : ClaudeRequest = { Scope = "mine"; Code = None; Token = Some "sk-ant-oat01-x"; Offline = None }
             Expect.equal
                 (Codec.toString ClaudeRequest.codec request)
                 """{"scope":"mine","token":"sk-ant-oat01-x"}"""
                 "the token, under the name the session reads it by"
 
         testCase "is read back as the write that was sent" <| fun () ->
-            let request : ClaudeRequest = { Scope = "session"; Code = Some "abc123"; Token = None }
+            let request : ClaudeRequest = { Scope = "session"; Code = Some "abc123"; Token = None; Offline = None }
             Expect.equal
                 (Codec.fromString ClaudeRequest.codec (Codec.toString ClaudeRequest.codec request))
                 (Ok request)
@@ -399,18 +400,25 @@ let private githubBodyTests =
                 "no key for a token nobody pasted"
 
         testCase "says a pasted token beside the scope" <| fun () ->
-            let request : GitHubRequest = { Scope = "session"; Token = Some "ghp_abc" }
+            let request : GitHubRequest = { Scope = "session"; Token = Some "ghp_abc"; Offline = None }
             Expect.equal
                 (Codec.toString GitHubRequest.codec request)
                 """{"scope":"session","token":"ghp_abc"}"""
                 "the token, under the name the session reads it by"
 
         testCase "is read back as the write that was sent" <| fun () ->
-            let request : GitHubRequest = { Scope = "session"; Token = Some "ghp_abc" }
+            let request : GitHubRequest = { Scope = "session"; Token = Some "ghp_abc"; Offline = None }
             Expect.equal
                 (Codec.fromString GitHubRequest.codec (Codec.toString GitHubRequest.codec request))
                 (Ok request)
                 "the same write"
+
+        testCase "says an offline choice beside the scope" <| fun () ->
+            let request : GitHubRequest = { GitHubRequest.scoped "mine" with Offline = Some Access.OfflineChoice.ThisSession }
+            Expect.equal
+                (Codec.toString GitHubRequest.codec request)
+                """{"scope":"mine","offline":"session"}"""
+                "the choice, under the name the session reads it by"
 
         testCase "naming no scope means the signing actor's own" <| fun () ->
             Expect.equal

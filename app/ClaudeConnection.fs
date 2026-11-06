@@ -527,7 +527,13 @@ let routes
                     let owner = ownerOf identity
                     match routeOf () with
                     | Some (Claude action) ->
-                        match targetFor sessionId owner body.Scope with
+                        // The offline choice is only ever about the caller's OWN connection:
+                        // whatever scope the body names is not read for it.
+                        let scope =
+                            match action with
+                            | ClaudeAction.Offline -> "mine"
+                            | _ -> body.Scope
+                        match targetFor sessionId owner scope with
                         | Error e -> respondText res 400 e
                         | Ok target ->
                             let respondOutcome (outcome: Result<string, string>) =
@@ -557,6 +563,12 @@ let routes
                                         | Some (Error e) -> respondText res 400 e
                                         | Some (Ok token) ->
                                             let! outcome = connections.Put target token
+                                            respondOutcome (outcome |> Result.map (fun () -> Codec.toString WriteAccepted.codec WriteAccepted))
+                                    | ClaudeAction.Offline ->
+                                        match body.Offline with
+                                        | None -> respondText res 400 "missing offline choice"
+                                        | Some choice ->
+                                            let! outcome = connections.SetOffline target choice
                                             respondOutcome (outcome |> Result.map (fun () -> Codec.toString WriteAccepted.codec WriteAccepted))
                                     | ClaudeAction.Disconnect ->
                                         let! outcome = connections.Disconnect target

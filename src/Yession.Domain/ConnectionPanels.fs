@@ -25,7 +25,11 @@ open Yession.Domain.Agent
 /// that it works, which is a thing no side of this can honestly make about a static token.
 type CredentialRow =
     { Kind : ConnectionKind
-      SignInRequired : string option }
+      SignInRequired : string option
+      /// How the owner's offline grant reads from this session (`ConnectionStatus.Offline`),
+      /// so the row can show and change it. Always `Off` on a row that is not a person's own
+      /// connection: a session's credential is usable with nobody signed in already.
+      Offline : OfflineChoice }
 
 module CredentialRow =
 
@@ -39,7 +43,8 @@ module CredentialRow =
               SignInRequired =
                 match status.Health with
                 | ConnectionUsable -> None
-                | SignInRequired reason -> Some reason })
+                | SignInRequired reason -> Some reason
+              Offline = status.Offline })
 
 /// Who the shared sign-in scope belongs to where this session runs.
 ///

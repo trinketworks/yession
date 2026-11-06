@@ -802,7 +802,7 @@ let private uiChecklistTests =
 
         /// The representative client, with one connection needing a sign-in.
         let private' (provider: string) (reason: string) =
-            let needing = Some { Kind = StaticConnection; SignInRequired = Some reason }
+            let needing = Some { Kind = StaticConnection; SignInRequired = Some reason; Offline = OfflineChoice.Off }
             match provider with
             | "claude" ->
                 representativeModel
@@ -813,7 +813,7 @@ let private uiChecklistTests =
         // anything is wrong. Ordered, not a map's iteration: what the prompt names first
         // must not change between renders of an unchanged model.
         testCase "what needs signing in is derived once, in a settled order" <| fun () ->
-            let needing reason = Some { Kind = StaticConnection; SignInRequired = Some reason }
+            let needing reason = Some { Kind = StaticConnection; SignInRequired = Some reason; Offline = OfflineChoice.Off }
             let both =
                 representativeModel
                 |> withClaudePanel (fun panel -> { panel with MineCredential = needing "claude said no" })
@@ -839,11 +839,47 @@ let private uiChecklistTests =
             let healthy =
                 representativeModel
                 |> withGitHubPanel (fun panel ->
-                    { panel with MineCredential = Some { Kind = OAuthConnection; SignInRequired = None } })
+                    { panel with MineCredential = Some { Kind = OAuthConnection; SignInRequired = None; Offline = OfflineChoice.Off } })
             let html = Support.render healthy
             Expect.isTrue (html.Contains "data-github-connected=\"mine\"") "it is still shown as connected"
             Expect.isFalse (html.Contains Dom.Hooks.githubSignInRequired) "and nothing asks for a sign-in"
             Expect.isFalse (html.Contains Dom.Hooks.signInRequired) "so no prompt over the timeline either"
+
+        // --- where a person's own connection may be used while they are away ------------
+        // Offered only where there is a grant to give: a person's OWN connected credential.
+        // A session's credential is usable with nobody signed in already, and the
+        // deployment's is nobody's to grant.
+
+        /// The GitHub panel with these rows, under this owner.
+        let githubRows (owner: SharedOwner) (mine: CredentialRow option) (session: CredentialRow option) =
+            representativeModel
+            |> withGitHubPanel (fun panel -> { panel with Owner = owner; MineCredential = mine; SessionCredential = session })
+            |> Support.render
+
+        let connectedRow = Some { Kind = OAuthConnection; SignInRequired = None; Offline = OfflineChoice.Off }
+
+        testCase "offline access is offered on a person's own connected credential" <| fun () ->
+            let html = githubRows OwnedByUser connectedRow None
+            Expect.stringContains html Dom.Hooks.githubOffline "the choice is there to make"
+
+        testCase "offline access is offered on a person's own connected claude credential" <| fun () ->
+            let html =
+                representativeModel
+                |> withClaudePanel (fun panel -> { panel with Owner = OwnedByUser; MineCredential = connectedRow })
+                |> Support.render
+            Expect.stringContains html Dom.Hooks.claudeOffline "the choice is there to make"
+
+        testCase "offline access is not offered on a session's own credential" <| fun () ->
+            let html = githubRows OwnedByUser None connectedRow
+            Expect.isFalse (html.Contains Dom.Hooks.githubOffline) "a session's credential needs no grant"
+
+        testCase "offline access is not offered before anything is connected" <| fun () ->
+            let html = githubRows OwnedByUser None None
+            Expect.isFalse (html.Contains Dom.Hooks.githubOffline) "nothing to grant"
+
+        testCase "offline access is not offered on the deployment's shared credential" <| fun () ->
+            let html = githubRows OwnedByDeployment connectedRow None
+            Expect.isFalse (html.Contains Dom.Hooks.githubOffline) "nobody's to grant"
 
         // Connecting the scope the selector already names makes no sense while a credential
         // is sitting there: the only remedy for THAT scope is the disconnect already on its
@@ -853,7 +889,7 @@ let private uiChecklistTests =
             let connected =
                 representativeModel
                 |> withGitHubPanel (fun panel ->
-                    { panel with MineCredential = Some { Kind = OAuthConnection; SignInRequired = None } })
+                    { panel with MineCredential = Some { Kind = OAuthConnection; SignInRequired = None; Offline = OfflineChoice.Off } })
             let html = Support.render connected
             Expect.isFalse (html.Contains "data-github-scope") "the selector itself is gone (mine, the default, already has a credential)"
             Expect.isFalse (html.Contains "data-github-connect>") "and offers no second way to connect it"
@@ -865,7 +901,7 @@ let private uiChecklistTests =
             let connectedMine =
                 representativeModel
                 |> withGitHubPanel (fun panel ->
-                    { panel with MineCredential = Some { Kind = OAuthConnection; SignInRequired = None } })
+                    { panel with MineCredential = Some { Kind = OAuthConnection; SignInRequired = None; Offline = OfflineChoice.Off } })
             let choosingSession =
                 { connectedMine with GitHub = { connectedMine.GitHub with Scope = "session" } }
             let html = Support.render choosingSession
@@ -980,7 +1016,7 @@ let private uiChecklistTests =
             Expect.isTrue (shared.Contains "All sessions") "it is offered as what it is"
 
         testCase "a shared scope owned by one person is called theirs, on either panel" <| fun () ->
-            let connected = Some { Kind = StaticConnection; SignInRequired = None }
+            let connected = Some { Kind = StaticConnection; SignInRequired = None; Offline = OfflineChoice.Off }
             let mine =
                 representativeModel
                 |> withClaudePanel (fun panel -> { panel with Owner = OwnedByUser; MineCredential = connected })
@@ -995,7 +1031,7 @@ let private uiChecklistTests =
                 "both panels label the connected row from the owner they were told"
 
         testCase "two credentials needing a sign-in are still one prompt" <| fun () ->
-            let needing reason = Some { Kind = StaticConnection; SignInRequired = Some reason }
+            let needing reason = Some { Kind = StaticConnection; SignInRequired = Some reason; Offline = OfflineChoice.Off }
             let both =
                 representativeModel
                 |> withClaudePanel (fun panel -> { panel with MineCredential = needing "claude said no" })
@@ -2528,7 +2564,7 @@ let private uiChecklistTests =
         // the page reads one agent standing, and a credential that needs signing in again
         // fails the NEXT turn whatever this one is doing.
         testCase "a tab warns when the agent cannot run until somebody signs in again" <| fun () ->
-            let needing = Some { Kind = StaticConnection; SignInRequired = Some "token expired" }
+            let needing = Some { Kind = StaticConnection; SignInRequired = Some "token expired"; Offline = OfflineChoice.Off }
             let stuck =
                 { representativeModel with Agent = { representativeModel.Agent with ActiveTurn = None } }
                 |> withClaudePanel (fun panel -> { panel with MineCredential = needing; AgentAvailable = true })
@@ -3753,7 +3789,7 @@ let private chromeTests =
             |> withGitHubPanel (fun panel ->
                 { panel with
                     MineCredential =
-                        Some { Kind = StaticConnection; SignInRequired = Some "github rejected this credential" } })
+                        Some { Kind = StaticConnection; SignInRequired = Some "github rejected this credential"; Offline = OfflineChoice.Off } })
             |> Support.render
         let stalledShell =
             Support.render

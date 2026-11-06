@@ -530,13 +530,15 @@ type ClaudeCall =
       Request : ClaudeRequest
       Expect : ConnectionExpectation option }
 
-/// The Claude panel's four presses.
+/// The Claude panel's presses.
 [<RequireQualifiedAccess>]
 type ClaudePress =
     | Connect
     | Complete
     | SaveToken
     | Disconnect of scope: string
+    /// Where the person's own connection may be used while they are away.
+    | Offline of OfflineChoice
 
 /// What a Claude panel write came back with: refused with the session's reason, an
 /// authorize URL to open, or accepted with nothing to show yet.
@@ -626,12 +628,14 @@ type GitHubCall =
       Request : GitHubRequest
       Expect : ConnectionExpectation option }
 
-/// The GitHub panel's three presses.
+/// The GitHub panel's presses.
 [<RequireQualifiedAccess>]
 type GitHubPress =
     | Connect
     | SaveToken
     | Disconnect of scope: string
+    /// As `ClaudePress.Offline`.
+    | Offline of OfflineChoice
 
 /// What a GitHub panel write came back with: refused with the session's reason, a device
 /// flow begun (the code to show), or accepted with nothing to show yet.
@@ -2967,7 +2971,7 @@ module ClaudePress =
             | code ->
                 Ok
                     { Action = ClaudeAction.Complete
-                      Request = { Scope = scope; Code = Some code; Token = None }
+                      Request = { Scope = scope; Code = Some code; Token = None; Offline = None }
                       Expect = Some { Scope = scope; Connected = true } }
         | ClaudePress.SaveToken ->
             match claude.Token with
@@ -2975,13 +2979,20 @@ module ClaudePress =
             | token ->
                 Ok
                     { Action = ClaudeAction.Token
-                      Request = { Scope = claude.Scope; Code = None; Token = Some token }
+                      Request = { Scope = claude.Scope; Code = None; Token = Some token; Offline = None }
                       Expect = Some { Scope = claude.Scope; Connected = true } }
         | ClaudePress.Disconnect scope ->
             Ok
                 { Action = ClaudeAction.Disconnect
                   Request = ClaudeRequest.scoped scope
                   Expect = Some { Scope = scope; Connected = false } }
+        // Nothing to wait for: the Manager re-sends the statuses, and the row reads the
+        // grant off the next panel. The press only has a refusal to report.
+        | ClaudePress.Offline choice ->
+            Ok
+                { Action = ClaudeAction.Offline
+                  Request = { ClaudeRequest.scoped "mine" with Offline = Some choice }
+                  Expect = None }
 
 /// What each of the GitHub panel's presses asks the session for, or why it asks nothing.
 module GitHubPress =
@@ -2998,13 +3009,19 @@ module GitHubPress =
             | token ->
                 Ok
                     { Action = GitHubAction.Token
-                      Request = { Scope = github.Scope; Token = Some token }
+                      Request = { Scope = github.Scope; Token = Some token; Offline = None }
                       Expect = Some { Scope = github.Scope; Connected = true } }
         | GitHubPress.Disconnect scope ->
             Ok
                 { Action = GitHubAction.Disconnect
                   Request = GitHubRequest.scoped scope
                   Expect = Some { Scope = scope; Connected = false } }
+        // As Claude's.
+        | GitHubPress.Offline choice ->
+            Ok
+                { Action = GitHubAction.Offline
+                  Request = { GitHubRequest.scoped "mine" with Offline = Some choice }
+                  Expect = None }
 
 /// The device flow's poll, beside the state it reads.
 module GitHubPoll =
@@ -5645,6 +5662,8 @@ module ClientModel =
             match ClaudePress.call press model.Claude with
             // What was typed goes with the call: a code or a token sent is not one to send
             // again, and a field still holding it after the panel came back would be.
+            // An offline choice sends nothing typed, so it leaves the fields as they are.
+            | Ok { ClaudeCall.Action = ClaudeAction.Offline } -> { model with Claude = { model.Claude with Pending = Pending.Sending } }
             | Ok _ -> { model with Claude = { model.Claude with Pending = Pending.Sending; Code = ""; Token = "" } }
             | Error reason -> { model with Claude = { model.Claude with Pending = Pending.Refused reason } }
         | ClaudeAnsweredMsg (call, answer, at) ->
@@ -5685,6 +5704,7 @@ module ClientModel =
         | GitHubTokenTyped token -> { model with GitHub = { model.GitHub with Token = token } }
         | GitHubPressedMsg press ->
             match GitHubPress.call press model.GitHub with
+            | Ok { GitHubCall.Action = GitHubAction.Offline } -> { model with GitHub = { model.GitHub with Pending = Pending.Sending } }
             | Ok _ -> { model with GitHub = { model.GitHub with Pending = Pending.Sending; Token = "" } }
             | Error reason -> { model with GitHub = { model.GitHub with Pending = Pending.Refused reason } }
         | GitHubAnsweredMsg (call, answer, at) ->

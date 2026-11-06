@@ -1367,7 +1367,7 @@ let private launchOverModel : ClientModel =
 /// Claude's credential needing a sign-in — what `__signInLost` swaps in, and the `sign-in-lost`
 /// state.
 let private signInLostModel : ClientModel =
-    let needing : CredentialRow option = Some { Kind = OAuthConnection; SignInRequired = Some "the refresh token has expired" }
+    let needing : CredentialRow option = Some { Kind = OAuthConnection; SignInRequired = Some "the refresh token has expired"; Offline = OfflineChoice.Off }
     { shellModel with
         Claude =
             { shellModel.Claude with
@@ -1423,7 +1423,7 @@ let private shortModel : ClientModel =
 /// A Claude panel with a credential in it and the agent there to run turns.
 let private claudeConnected : ClaudePanel =
     { SessionCredential = None
-      MineCredential = Some ({ Kind = OAuthConnection; SignInRequired = None } : CredentialRow)
+      MineCredential = Some ({ Kind = OAuthConnection; SignInRequired = None; Offline = OfflineChoice.Off } : CredentialRow)
       Owner = OwnedByUser
       AgentAvailable = true
       Models = ModelsUnknown }

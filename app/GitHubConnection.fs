@@ -559,7 +559,13 @@ let routes
                     let owner = ownerOf identity
                     match routeOf () with
                     | Some (GitHub action) ->
-                        match targetFor sessionId owner body.Scope with
+                        // The offline choice is only ever about the caller's OWN connection:
+                        // whatever scope the body names is not read for it.
+                        let scope =
+                            match action with
+                            | GitHubAction.Offline -> "mine"
+                            | _ -> body.Scope
+                        match targetFor sessionId owner scope with
                         | Error e -> respondText res 400 e
                         | Ok target ->
                             Async.StartImmediate (
@@ -636,6 +642,13 @@ let routes
                                         | Some (Error e) -> respondText res 400 e
                                         | Some (Ok token) ->
                                             match! connections.Put target token with
+                                            | Ok () -> respondJson res 200 (Codec.toString WriteAccepted.codec WriteAccepted)
+                                            | Error e -> respondText res 400 e
+                                    | GitHubAction.Offline ->
+                                        match body.Offline with
+                                        | None -> respondText res 400 "missing offline choice"
+                                        | Some choice ->
+                                            match! connections.SetOffline target choice with
                                             | Ok () -> respondJson res 200 (Codec.toString WriteAccepted.codec WriteAccepted)
                                             | Error e -> respondText res 400 e
                                     | GitHubAction.Disconnect ->

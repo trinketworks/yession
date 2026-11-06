@@ -495,7 +495,7 @@ let private askTests =
         testCase "a GitHub credential arriving asks again for a listing that wanted one" <| fun () ->
             let panel (credential: CredentialRow option) : GitHubPanel =
                 { SessionCredential = None; MineCredential = credential; Owner = OwnedByUser }
-            let connected = GitHubStatusMsg (panel (Some { Kind = OAuthConnection; SignInRequired = None }))
+            let connected = GitHubStatusMsg (panel (Some { Kind = OAuthConnection; SignInRequired = None; Offline = OfflineChoice.Off }))
             let refused =
                 clientAt 1L fresh
                 |> Support.step (GitHubStatusMsg (panel None))
