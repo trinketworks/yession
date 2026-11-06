@@ -690,9 +690,10 @@ let private dressShell (className: string) : unit = shellHost.className <- class
 let private expect = function Ok v -> v | Error e -> failwith e
 
 /// What the shell model's conversation is filled with: a column of one-liners, or a person and
-/// an agent taking turns, the agent in paragraphs with a list and a fence. Every render parses
-/// every body's Markdown again (`RichText.render`), so what a render costs is the prose on the
-/// page — and a column of one-liners measured at a fifth of what a working session did.
+/// an agent taking turns, the agent in paragraphs with a list and a fence. Every render walks
+/// every body's parsed Markdown into templates again (`RichText.render`, which parses a text
+/// only the first time it sees it), so what a render costs is the prose on the page — and a
+/// column of one-liners measured at a fifth of what a working session did.
 type private Filler =
     | Lines
     | Replies
