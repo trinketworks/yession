@@ -90,6 +90,7 @@ let all =
         Tag.needs "Session" [] (fun () -> Session.tests)
         Tag.needs "Sync" [] (fun () -> Sync.tests)
         Tag.needs "Agent surfaces" [] (fun () -> AgentSurfaces.tests)
+        Tag.needs "Offline asks" [] (fun () -> OfflineAsks.tests)
         Tag.needs "TerminalPattern" [] (fun () -> TerminalPattern.tests)
         Tag.needs "Terminals" [] (fun () -> Terminals.tests)
         Tag.needs "Keystrokes" [] (fun () -> Keystrokes.tests)

@@ -152,13 +152,8 @@ module ConnectionStatusList =
                 | SessionScope _ | LocalScope -> Some CredentialFor.Deployment)
         |> List.distinct
 
-/// Which service a person's own connection is for, as the agent is told it. Only the two a
-/// person connects from a session's settings; the Manager cannot tell them apart (the header
-/// says why), so the session names the service from the storage name it chose.
-[<RequireQualifiedAccess>]
-type ConnectedService =
-    | GitHub
-    | Claude
+// `ConnectedService`, which service a person's own connection is for, is declared in
+// `ConnectedService.fs`: before the events, because an offline ask names it.
 
 /// One of a person's own connections (`UserScope`), as the agent is told it: which service,
 /// and whether it works while its owner is away from this session. Work that outlives a turn

@@ -102,6 +102,12 @@ type SessionCommand =
     /// buttons the agent drew. ACCEPTED means it is gone for everybody and the dismissal is on
     /// the record (`SurfaceDismissed`), which owes the agent a turn.
     | DismissSurface of surfaceId: string
+    /// Dismiss the agent's open ask to use this person's connection while they are away
+    /// (`OfflineAccessAsked`), without granting it. Only the person asked can: the command
+    /// names the connection, and the person is whoever sent it. ACCEPTED means the dismissal
+    /// is on the record (`OfflineAccessSettled`), which owes the agent a turn. Granting is not
+    /// a session command: it is the settings' own offline route, which only the owner reaches.
+    | DismissOfflineAsk of connection: Yession.Domain.Access.ConnectedService
 
 type SessionCommandResult =
     | CommandAccepted

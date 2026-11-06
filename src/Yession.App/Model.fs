@@ -696,6 +696,9 @@ type Ask =
     | Trust of RepoRef * shown: ConnectionRoute list
     /// A surface the agent drew (`show_surface`), by its id.
     | Surface of surfaceId: string
+    /// The agent asks this reader to let the session use their own connection while they
+    /// are away (`OfflineAsks.addressedTo`). Only the person asked has this card.
+    | Offline of Yession.Domain.Away.OfflineAccessAsked
 
 module Ask =
 
@@ -706,6 +709,7 @@ module Ask =
         | Ask.Launch -> "launch"
         | Ask.Trust (repo, _) -> "trust:" + RepoRef.value repo
         | Ask.Surface surfaceId -> "surface:" + surfaceId
+        | Ask.Offline asked -> "offline:" + Yession.Domain.Access.ConnectedService.word asked.Connection
 
 /// One copy to the clipboard, as its confirmation shows it: the box it came out of, and which
 /// copy this is. The count is what makes a second copy of the same box a new moment, so its
@@ -771,7 +775,8 @@ module Refusal =
         | TrustRepo _
         | AddRepo _
         | PressSurfaceButton _
-        | DismissSurface _ -> false
+        | DismissSurface _
+        | DismissOfflineAsk _ -> false
 
     /// Where `refusal` is drawn: in the pane while the pane is open and the refusal is one
     /// of its verbs' — that is where the press was — and in the conversation otherwise,
@@ -2166,6 +2171,13 @@ type ClientModel =
       /// they live in three places — the launch's state, the log, the synced doc — and only
       /// the client sees all three arrive.
       AskOrder      : string list
+      /// The agent's open asks to use somebody's connection while they are away, folded from
+      /// the log as the session folds them (`OfflineAsks`). Every reader folds them; only the
+      /// person asked is shown the card (`waitingAsks`).
+      OfflineAsks : Yession.Domain.Away.OfflineAsks.Open
+      /// The row this reader holds on each offline ask card, by connection word. View state:
+      /// holding sends nothing. Absent is `ThisSession`, the narrower grant.
+      OfflineHeld : Map<string, Yession.Domain.Away.OfflineAllowance>
       /// The agent's surfaces somebody has answered, while the agent has not yet finished the
       /// turn the answer owes it (`SurfaceAnswers`). Folded from the log, so every reader sees
       /// one surface stand still under one name.
@@ -2843,6 +2855,11 @@ type ClientMsg =
     | NotNowTrustMsg of RepoRef * shown: ConnectionRoute list
     /// Bring a waiting ask to the front of the slot (`Ask.key`): its line above the card.
     | BringAskForwardMsg of key: string
+    /// Hold a row of an offline ask card. Sends nothing.
+    | HoldOfflineMsg of Yession.Domain.Access.ConnectedService * Yession.Domain.Away.OfflineAllowance
+    /// Dismiss the agent's offline ask without allowing it. A request of the session
+    /// (`DismissOfflineAsk`), which records it under this reader and wakes the agent.
+    | DismissOfflineAskMsg of Yession.Domain.Access.ConnectedService
 
 /// What a message asks of the world outside the model, as a value `ClientModel.update` returns
 /// beside the next model.
@@ -2866,6 +2883,7 @@ type ClientEffect =
     | TrustRepo of RepoRef * shown: ConnectionRoute list * ticked: ConnectionRoute list
     | PressSurface of surfaceId: string * componentId: string * scope: string
     | DismissSurface of surfaceId: string
+    | DismissOfflineAsk of Yession.Domain.Access.ConnectedService
     | Launch of LaunchEffect
     | Claude of ClaudeCall
     | GitHub of GitHubCall
@@ -3076,6 +3094,8 @@ module ClientModel =
           AskFront = None
           AskOrder = []
           SurfaceAnswers = SurfaceAnswers.empty
+          OfflineAsks = Yession.Domain.Away.OfflineAsks.empty
+          OfflineHeld = Map.empty
           FoldedSurfaces = Set.empty
           Launch = Launch.empty
           Repos = Repos.ReposProjection.empty
@@ -3210,6 +3230,37 @@ module ClientModel =
     let launchOffered (model: ClientModel) : bool =
         Launch.offered (launchBegun model) model.Synced.LaunchDismissed model.Launch
 
+    /// The agent's offline asks this reader has to answer: the open ones addressed to them,
+    /// except one whose connection already reads as allowed here. That covers an Allow from
+    /// the card before the session's settlement arrives, and a grant set from the settings.
+    let offlineAsks (model: ClientModel) : Yession.Domain.Away.OfflineAccessAsked list =
+        let allowedHere (connection: Yession.Domain.Access.ConnectedService) =
+            let mine =
+                match connection with
+                | Yession.Domain.Access.ConnectedService.GitHub ->
+                    model.GitHub.Status |> Option.bind (fun panel -> panel.MineCredential)
+                | Yession.Domain.Access.ConnectedService.Claude ->
+                    model.Claude.Status |> Option.bind (fun panel -> panel.MineCredential)
+            mine |> Option.exists (fun row -> row.Offline <> OfflineChoice.Off)
+        Yession.Domain.Away.OfflineAsks.addressedTo
+            (Attribution.actorFor model.Attribution.PeerUsers model.Peer.PeerId)
+            model.OfflineAsks
+        |> List.filter (fun asked -> not (allowedHere asked.Connection))
+
+    /// The row an offline ask card holds: `ThisSession` until the reader holds the other.
+    let offlineHeld (connection: Yession.Domain.Access.ConnectedService) (model: ClientModel) : Yession.Domain.Away.OfflineAllowance =
+        Map.tryFind (Yession.Domain.Access.ConnectedService.word connection) model.OfflineHeld
+        |> Option.defaultValue Yession.Domain.Away.OfflineAllowance.ThisSession
+
+    /// What the card's Allow presses: the settings' own offline press, with the held row. One
+    /// route sets a grant, whichever surface it is set from, and it reaches only the owner's
+    /// own connection.
+    let allowOffline (connection: Yession.Domain.Access.ConnectedService) (model: ClientModel) : ClientMsg =
+        let choice = Yession.Domain.Away.OfflineAsks.grantOf (offlineHeld connection model)
+        match connection with
+        | Yession.Domain.Access.ConnectedService.GitHub -> GitHubPressedMsg (GitHubPress.Offline choice)
+        | Yession.Domain.Access.ConnectedService.Claude -> ClaudePressedMsg (ClaudePress.Offline choice)
+
     /// Every question waiting on this reader, in the order they would have arrived: the launch
     /// is the session's first question, repos waiting to be trusted follow in the order they
     /// asked (`Waits.trustAsks`), then the agent's surfaces.
@@ -3225,7 +3276,7 @@ module ClientModel =
             |> Map.toList
             |> List.filter (fun (id, surface) -> Map.containsKey "root" surface.Components && not (Set.contains id model.FoldedSurfaces))
             |> List.map (fst >> Ask.Surface)
-        launch @ trust @ surfaces
+        launch @ trust @ surfaces @ (offlineAsks model |> List.map Ask.Offline)
 
     /// Keeps `AskOrder` the order this client saw asks arrive: one that has gone leaves it, and
     /// one that is new joins the end. Run after every message (`fold`), so whichever message
@@ -5486,6 +5537,7 @@ module ClientModel =
                 Launch = launch
                 Repos = freshEvents |> List.fold (fun proj e -> Repos.ReposProjection.applyEvent proj e.Event) model.Repos
                 Waits = Waits.apply model.Waits (freshEvents |> List.map (fun e -> e.Event))
+                OfflineAsks = Yession.Domain.Away.OfflineAsks.apply model.OfflineAsks (freshEvents |> List.map (fun e -> e.Event))
                 Timeline = timeline
                 Agent = agent
                 SurfaceAnswers =
@@ -6173,7 +6225,10 @@ module ClientModel =
         | InterruptTerminalMsg _
         | TrustRepoMsg _
         | PressSurfaceMsg _
-        | DismissSurfaceMsg _ -> model
+        | DismissSurfaceMsg _
+        | DismissOfflineAskMsg _ -> model
+        | HoldOfflineMsg (connection, allowance) ->
+            { model with OfflineHeld = Map.add (Yession.Domain.Access.ConnectedService.word connection) allowance model.OfflineHeld }
         | FoldSurfaceMsg surfaceId -> { model with FoldedSurfaces = Set.add surfaceId model.FoldedSurfaces }
         | UnfoldSurfaceMsg surfaceId ->
             { model with
@@ -6438,6 +6493,7 @@ module ClientModel =
             | TrustRepoMsg (repo, shown, ticked) -> [ ClientEffect.TrustRepo (repo, shown, ticked) ]
             | PressSurfaceMsg (surfaceId, componentId, scope) -> [ ClientEffect.PressSurface (surfaceId, componentId, scope) ]
             | DismissSurfaceMsg surfaceId -> [ ClientEffect.DismissSurface surfaceId ]
+            | DismissOfflineAskMsg connection -> [ ClientEffect.DismissOfflineAsk connection ]
             | LaunchMsg launchMsg -> Launch.update launchMsg model.Launch |> snd |> List.map ClientEffect.Launch
             | ClaudePressedMsg press -> ClaudePress.call press model.Claude |> Result.toList |> List.map ClientEffect.Claude
             | GitHubPressedMsg press -> GitHubPress.call press model.GitHub |> Result.toList |> List.map ClientEffect.GitHub

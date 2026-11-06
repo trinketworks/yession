@@ -652,6 +652,24 @@ let mutable private terminalCommands : TerminalCommands.TerminalCommands = Termi
 /// something ever does.
 let mutable private openedLog : EventLog<SessionEvent> option = None
 
+let private freshMessageId () : MessageId =
+    match MessageId.create (string (System.Guid.NewGuid ())) with
+    | Ok id -> id
+    | Error e -> failwithf "message id invariant violated: %s" e
+
+/// Settle the offline asks the statuses now allow (`OfflineAccess.settle`), then wake the
+/// agent for them. Asked wherever the statuses move, and once at boot for an ask a previous
+/// process left open while the person allowed it.
+let private settleOfflineAsks (wake: unit -> unit) : unit =
+    match openedLog with
+    | Some log ->
+        Async.StartImmediate (
+            async {
+                let! settled = OfflineAccess.settle log connectionStatus freshMessageId
+                if settled then wake ()
+            })
+    | None -> ()
+
 // The MCP servers this session was given (Plan 17). Composed HERE rather than by the Host,
 // unlike the other reverse legs, because what arrives on that leg has two consumers: a
 // turn's registry, which the Host builds, and the `mcp_servers` query, which is this
@@ -920,7 +938,19 @@ let private dispatching (inner: (string * string) option -> RunAgent) : RunAgent
                     Queries =
                       { capabilities.Queries with
                           Declared = queryRegistry.Definitions
-                          Read = queryRegistry.Read } }
+                          Read = queryRegistry.Read }
+                    // Bound to this turn's person, over what this session has heard: the
+                    // agent asks whoever's turn it is, and cannot name anybody else.
+                    Tools =
+                      { capabilities.Tools with
+                          Contributed =
+                            capabilities.Tools.Contributed
+                            @ [ OfflineAccess.tool
+                                    sessionId
+                                    (fun () -> connectionStatus)
+                                    (fun () -> openedLog)
+                                    freshMessageId
+                                    context.TurnActor ] } }
             // A dispatch-level failure says nothing of its own: the reason is carried by
             // `AgentFailed`, and the conversation projection gives it an item where the turn
             // stopped. This used to stream the reason as a delta first, back when a turn that
@@ -981,17 +1011,10 @@ let private summarize (credential: CredentialFor) : Summarize option =
                     | None -> return Error "no credential to write with"
             })
 
-/// The service a person's own connection is for, from the storage name this session chose
-/// for it. `None` for a name no connection uses.
-let private serviceOf (name: SecretName) : ConnectedService option =
-    if name = GitHubConnection.secretName then Some ConnectedService.GitHub
-    elif name = ClaudeConnection.secretName then Some ConnectedService.Claude
-    else None
-
 /// A person's own connections in the status frame this session holds now, read when a turn
 /// starts for the person it runs for.
 let private ownConnectionsOf (person: Principal) : OwnConnection list =
-    OwnConnection.ofStatuses serviceOf person (connectionStatus |> Map.toList |> List.map snd)
+    OwnConnection.ofStatuses OfflineAccess.serviceOf person (connectionStatus |> Map.toList |> List.map snd)
 
 let private runAgent () : RunAgent option =
     match Interop.envOr "YESSION_SESSION_AGENT" "" with
@@ -1245,7 +1268,10 @@ Async.StartImmediate (
                     // And every open drawer is told, which is the whole of what the panels
                     // used to be probed for.
                     panelsChanged.Value ()
-                    wakeAgent.Value ())
+                    wakeAgent.Value ()
+                    // An ask for offline access settles when the person's connection now
+                    // reads as allowed here, from the card or from the settings alike.
+                    settleOfflineAsks (fun () -> wakeAgent.Value ()))
             |> ignore
         | None -> ()
         // The connection panels as a read model, pushed on the read stream. Both builders
@@ -1536,6 +1562,7 @@ Async.StartImmediate (
         terminals <- host.Terminals
         files <- host.Files
         wakeAgent.Value <- host.Wake
+        settleOfflineAsks host.Wake
         // Composed here rather than in the Host, because the artifacts directory is this
         // module's fact (`artifactsDir`, beside `reposDir`) and the Host is given a sandbox
         // registry rather than the layout under it. Everything else it needs is the Host's,

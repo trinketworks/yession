@@ -44,6 +44,9 @@ module SessionCommands =
         (pressSurface: Principal -> string -> string -> string -> Async<Result<unit, string>>)
         // A surface taken down unanswered. `Ok` means it is gone and the dismissal is on the record.
         (dismissSurface: Principal -> string -> Async<Result<unit, string>>)
+        // The agent's ask for offline access dismissed by the person it asked. `Ok` means the
+        // dismissal is on the record.
+        (dismissOfflineAsk: Principal -> Yession.Domain.Access.ConnectedService -> Async<Result<unit, string>>)
         // Who a peer is. A `Principal`, because every peer is one, and the two acts above
         // are a PERSON's — trust in a repo, a repo brought in on their credential — which the
         // type then says outright rather than a check inside each.
@@ -140,6 +143,11 @@ module SessionCommands =
                 | Error reason -> return CommandRejected reason
             | DismissSurface surfaceId ->
                 match! dismissSurface (principalFor peerId) surfaceId with
+                | Ok () -> return CommandAccepted
+                | Error reason -> return CommandRejected reason
+            // The person's own act, so attributed to them; nobody else can answer their ask.
+            | DismissOfflineAsk connection ->
+                match! dismissOfflineAsk (principalFor peerId) connection with
                 | Ok () -> return CommandAccepted
                 | Error reason -> return CommandRejected reason
         }

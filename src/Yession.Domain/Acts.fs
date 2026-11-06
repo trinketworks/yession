@@ -55,6 +55,8 @@ type Act =
     | ArtifactShared of ArtifactShared
     | SurfaceActionTaken of Surfaces.SurfaceActionTaken
     | SurfaceDismissed of Surfaces.SurfaceDismissed
+    | OfflineAccessAsked of Away.OfflineAccessAsked
+    | OfflineAccessSettled of Away.OfflineAccessSettled
     | CommandRefused of CommandRefused
     | GatedCommandFailed of GatedCommandFailed
     | CredentialSpent of GitCredentialSpent
@@ -106,6 +108,8 @@ module Act =
         | Act.ArtifactShared a -> ArtifactShared.phrase a
         | Act.SurfaceActionTaken a -> Surfaces.SurfaceActionTaken.phrase a
         | Act.SurfaceDismissed d -> Surfaces.SurfaceDismissed.phrase d
+        | Act.OfflineAccessAsked a -> Away.OfflineAccessAsked.phrase a
+        | Act.OfflineAccessSettled s -> Away.OfflineAccessSettled.phrase s
         | Act.CommandRefused c -> CommandRefused.phrase c
         | Act.GatedCommandFailed c -> GatedCommandFailed.phrase c
         | Act.CredentialSpent g -> GitCredentialSpent.deed g
@@ -152,6 +156,8 @@ module Act =
         | Act.ArtifactShared _
         | Act.SurfaceActionTaken _
         | Act.SurfaceDismissed _
+        | Act.OfflineAccessAsked _
+        | Act.OfflineAccessSettled _
         | Act.CommandRefused _
         | Act.GatedCommandFailed _
         | Act.McpServerAvailable _
@@ -208,6 +214,8 @@ module Act =
         | Act.ArtifactShared a -> ArtifactShared.particulars a
         | Act.SurfaceActionTaken a -> Surfaces.SurfaceActionTaken.particulars a
         | Act.SurfaceDismissed d -> Surfaces.SurfaceDismissed.particulars d
+        | Act.OfflineAccessAsked a -> Away.OfflineAccessAsked.particulars a
+        | Act.OfflineAccessSettled _ -> []
         | Act.ShellProfileSet p -> ShellProfileSet.particulars p
         | Act.RepoRemoved _
         | Act.RepoBranchSwitched _
@@ -275,6 +283,9 @@ module Act =
         | Act.ArtifactShared a -> ArtifactShared.verb a, "artifact", "artifacts"
         | Act.SurfaceActionTaken _ -> "answered", "surface", "surfaces"
         | Act.SurfaceDismissed _ -> "dismissed", "surface", "surfaces"
+        | Act.OfflineAccessAsked _ -> "asked for", "offline access", "offline access"
+        | Act.OfflineAccessSettled s when s.Outcome = Away.OfflineAccessOutcome.Dismissed -> "dismissed", "offline ask", "offline asks"
+        | Act.OfflineAccessSettled _ -> "allowed", "offline access", "offline access"
         | Act.CommandRefused _ -> "refused", "command", "commands"
         | Act.GatedCommandFailed _ -> "failed", "command", "commands"
         | Act.CredentialSpent _ -> "spent", "credential", "credentials"

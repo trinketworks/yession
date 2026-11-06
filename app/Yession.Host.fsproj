@@ -113,6 +113,8 @@
     <!-- The provider-neutral `/models` route. After ClaudeConnection.fs only by
          convention — it references nothing in it, which is the property worth keeping. -->
     <Compile Include="GitHubConnection.fs" />
+    <!-- ask_offline_access: the agent asks, the person answers from their own client. -->
+    <Compile Include="OfflineAccess.fs" />
     <Compile Include="GitHubRepos.fs" />
     <Compile Include="Spawn.fs" />
     <Compile Include="ProcessManager.fs" />

@@ -55,6 +55,10 @@ module AgentTools =
         /// and the tool cannot spell it two ways.
         [<Literal>]
         let WatchPr = "watch_pr"
+        /// Contributed by `app/OfflineAccess.fs`, and named here so the prompt's `away` section
+        /// and the tool cannot spell it two ways.
+        [<Literal>]
+        let AskOfflineAccess = "ask_offline_access"
 
     /// What a command's `description` is, said once. The `description` parameter of
     /// execute_command reads it, and the tool's own description and the system prompt point

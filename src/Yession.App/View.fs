@@ -2667,11 +2667,83 @@ module View =
               {askInside pane answer}
             </section>"""
 
+    /// The agent asking this reader to let the session use their own connection while they
+    /// are away (`OfflineAccessAsked`), as the trust card's anatomy: who asks and the question
+    /// in the head, the agent's reason, two rows to hold, one button, and the way out.
+    ///
+    /// Only the person asked has it (`ClientModel.offlineAsks`): the grant is theirs, and
+    /// everybody else reads the ask on the timeline. Allow is the settings' own press
+    /// (`GitHubPress.Offline`, `ClaudePress.Offline`) with the held row, so this card sets a
+    /// grant exactly as the settings do and through the one route the owner reaches. The card
+    /// goes when the connection reads as allowed here, whichever of the two set it. The × is
+    /// a dismissal for the session: the agent is told, and the card does not come back unless
+    /// it asks again.
+    let private offlineCard (dispatch: ClientMsg -> unit) (asked: Yession.Domain.Away.OfflineAccessAsked) (model: ClientModel) : TemplateResult =
+        let word = Yession.Domain.Access.ConnectedService.word asked.Connection
+        let held = ClientModel.offlineHeld asked.Connection model
+        let titleId = "offline-ask-title-" + word
+        let row (allowance: Yession.Domain.Away.OfflineAllowance) =
+            let on = held = allowance
+            let value, label, detail =
+                match allowance with
+                | Yession.Domain.Away.OfflineAllowance.ThisSession ->
+                    "session", Dom.Text.offlineRowSession, Dom.Text.offlineRowSessionDetail
+                | Yession.Domain.Away.OfflineAllowance.AllMySessions ->
+                    "all", Dom.Text.offlineRowAll, Dom.Text.offlineRowAllDetail
+            html $"""
+                <li class="{if on then Style.askRowHeld else Style.askRow}">
+                  <button type="button" class="{Style.askRowButton}" role="radio"
+                          aria-checked="{if on then "true" else "false"}"
+                          data-offline-row="{value}"
+                          @click={Ev(fun _ -> dispatch (HoldOfflineMsg (asked.Connection, allowance)))}>
+                    <span class="{Style.askRowLine}">
+                      <span class="{Style.askRowMark}" aria-hidden="true">{if on then Icon.check else Lit.nothing}</span>
+                      <span class="{Style.askRowWords}">{label}</span>
+                      <span class="{Style.askRowDescription}">{detail}</span>
+                    </span>
+                  </button>
+                </li>"""
+        let way =
+            html $"""
+                <button type="button" class="{Style.askWay}" data-offline-dismiss="{word}"
+                        aria-label="{Dom.Text.offlineDismiss}" title="{Dom.Text.offlineDismiss}"
+                        @click={Ev(fun _ -> dispatch (DismissOfflineAskMsg asked.Connection))}>{Icon.close}</button>"""
+        let subject =
+            html $"""<span class="{Style.askSubject}">{Dom.Text.offlineAsker (Entity.actorName model ActorRef.Agent)}</span>"""
+        let why = askNote (html $"""<p class="{Style.small}">{asked.Why}</p>""")
+        let pane =
+            html $"""
+                <div class="{Style.askTrack}">
+                  <div class="{Style.askPaneHere}">
+                    {askHead way subject titleId (Dom.Text.offlineTitle (Yession.Domain.Access.ConnectedService.name asked.Connection))}
+                    <div class="{Style.askScroll}">
+                      {why}
+                      <ul class="{Style.cls [ Style.askRows; Style.askRowsAfterNote ]}" role="radiogroup" aria-labelledby="{titleId}">
+                        {row Yession.Domain.Away.OfflineAllowance.ThisSession}
+                        {row Yession.Domain.Away.OfflineAllowance.AllMySessions}
+                      </ul>
+                    </div>
+                  </div>
+                </div>"""
+        let allow _ = dispatch (ClientModel.allowOffline asked.Connection model)
+        let answer =
+            html $"""
+                <button type="button" class="{Style.askStart}" data-offline-allow="{word}" @click={Ev allow}>
+                  <span class="{Style.whenReady}">{Dom.Text.offlineAllow}</span>
+                </button>"""
+        html $"""
+            <section class="{Style.ask}" data-offline-ask="{word}" aria-labelledby="{titleId}">
+              {askInside pane answer}
+            </section>"""
+
     /// Who asks, and what, as an ask's line says it while another's card is in front.
     let private askLineWords (model: ClientModel) (ask: Ask) : string * string =
         match ask with
         | Ask.Launch -> Dom.Text.repoPickerAsker, Dom.Text.repoPickerTitle
         | Ask.Trust (repo, _) -> RepoRef.value repo, Dom.Text.trustTitle
+        | Ask.Offline asked ->
+            Dom.Text.offlineAsker (Entity.actorName model ActorRef.Agent),
+            Dom.Text.offlineTitle (Yession.Domain.Access.ConnectedService.name asked.Connection)
         | Ask.Surface surfaceId ->
             Dom.Text.surfaceAsker,
             A2ui.Project.title model.Synced.Surfaces surfaceId |> Option.defaultValue Dom.Text.surfaceUntitled
@@ -2704,6 +2776,7 @@ module View =
                 match front with
                 | Ask.Launch -> askCard actions dispatch model
                 | Ask.Trust (repo, shown) -> trustCard dispatch repo shown model
+                | Ask.Offline asked -> offlineCard dispatch asked model
                 | Ask.Surface surfaceId ->
                     match Map.tryFind surfaceId model.Synced.Surfaces with
                     | Some surface ->
@@ -3219,6 +3292,8 @@ module View =
                         | PrChanged _ -> Dom.Text.wokePrChanged, Dom.Text.turnWokePrChanged
                         | CutOff _ -> Dom.Text.wokeCutOff, Dom.Text.turnWokeCutOff
                         | SurfaceAnswered _ -> Dom.Text.wokeSurfaceAnswered, Dom.Text.turnWokeSurfaceAnswered
+                        | WakeReason.OfflineAccessSettled _ ->
+                            Dom.Text.wokeOfflineAccessSettled, Dom.Text.turnWokeOfflineAccessSettled
                     html $"""<span class="{Style.statusFaint}" data-message-woke="{token}" title="{title}">{Dom.Text.turnWoke}</span>"""
             // A message still arriving says so with the CARET at the end of its body, and with
             // nothing else. `streaming` used to be a word on this line as well — one line

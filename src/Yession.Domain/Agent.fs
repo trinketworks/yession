@@ -1206,7 +1206,8 @@ module AgentWake =
     let private rank =
         function
         | CutOff _ -> 0
-        | SurfaceAnswered _ -> 1
+        | SurfaceAnswered _
+        | WakeReason.OfflineAccessSettled _ -> 1
         | IntegrationLost _ -> 2
         | StreamEnded _ -> 3
         | CommandFinished -> 4
@@ -1366,6 +1367,13 @@ module AgentWake =
                 // Dismissing is a reply too: the agent learns its question will not be answered.
                 | SessionEvent.SurfaceDismissed d ->
                     background, lastAgent, pendingCommands, better (SurfaceAnswered d.SurfaceId, d.By) owed
+                // The person asked for offline access answered: allowed or dismissed. Owed as
+                // them, as an answer to a surface is (`OfflineAccessSettled`).
+                | SessionEvent.OfflineAccessSettled settled ->
+                    background,
+                    lastAgent,
+                    pendingCommands,
+                    better (WakeReason.OfflineAccessSettled settled.Connection, Principal.User settled.Person) owed
                 // Unwatching clears what that pull request owed. A person who has just said
                 // they no longer care must not get a turn about it a moment later.
                 | SessionEvent.PrUnwatched p ->

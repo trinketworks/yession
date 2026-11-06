@@ -2404,6 +2404,11 @@ let private promptTests =
             testCase "the shared prefix tells the agent to check connections before work that outlives the turn" <| fun () ->
                 Expect.stringContains (Prompting.plan strategy (askedContext None)).Stable Prompting.away.Text "the away policy is in the stable part"
 
+            // Only the person can allow it, so the agent asks them through the tool that puts
+            // the card in front of them, by the name the tool is registered under.
+            testCase "the away policy asks through the offline access tool" <| fun () ->
+                Expect.stringContains Prompting.away.Text Yession.Host.OfflineAccess.Name "names ask_offline_access"
+
             testCase "a turn person with no connections of their own gets no connections note" <| fun () ->
                 let plan = Prompting.plan strategy (askedContext None)
                 Expect.isFalse (plan.Included |> List.contains "connections") "nothing to say"

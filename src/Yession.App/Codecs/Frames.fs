@@ -146,7 +146,11 @@ module Frames =
                           "componentId", Encode.string componentId
                           "scope", Encode.string scope ]
                 | DismissSurface surfaceId ->
-                    Encode.object [ "kind", Encode.string "dismissSurface"; "surfaceId", Encode.string surfaceId ])
+                    Encode.object [ "kind", Encode.string "dismissSurface"; "surfaceId", Encode.string surfaceId ]
+                | DismissOfflineAsk connection ->
+                    Encode.object
+                        [ "kind", Encode.string "dismissOfflineAsk"
+                          "connection", Encode.string (Yession.Domain.Access.ConnectedService.word connection) ])
           Decode =
             Decode.field "kind" Decode.string
             |> Decode.andThen (function
@@ -183,6 +187,12 @@ module Frames =
                         (Decode.field "componentId" Decode.string)
                         (Decode.field "scope" Decode.string)
                 | "dismissSurface" -> Decode.field "surfaceId" Decode.string |> Decode.map DismissSurface
+                | "dismissOfflineAsk" ->
+                    Decode.field "connection" Decode.string
+                    |> Decode.andThen (fun word ->
+                        match Yession.Domain.Access.ConnectedService.ofWord word with
+                        | Some connection -> Decode.succeed (DismissOfflineAsk connection)
+                        | None -> Decode.fail (sprintf "Unknown offline connection: %s" word))
                 | other -> Decode.fail (sprintf "Unknown session command: %s" other)) }
 
     let private sessionCommandResult : Codec<SessionCommandResult> =
