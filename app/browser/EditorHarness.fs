@@ -1808,6 +1808,28 @@ do
                   SendTerminalDraft = fun _ _ -> ()
                   ReportFocus = Render.focusReporter (fun () -> caretHeld ()) (fun focus -> dispatchRef (CaretMovedMsg focus)) } }
     let mutable model = { openingModel with Column = { openingModel.Column with Wide = PaneShell.onDesktop () } }
+    // The model's synced half, written into this page's doc by the app's own binding: the
+    // options `Client.makeProgram` hands `withYlmish`, so the same codec. This page keeps its
+    // model in a mutable rather than an Elmish program, and nothing else writes it back. The
+    // publication rules below read their slots off the doc, so without this one would find its
+    // slot unpublished on every keystroke and publish it again: a render per key, made by this
+    // page and not by the app. Decoding hands the model back unchanged, because the page's
+    // model is the mutable above and this program only carries it to the doc.
+    //
+    // Written only when the synced half is a different value (`render`), so a render of
+    // anything else costs what it did and the other scenarios' numbers stay where they were.
+    let mutable writeSynced : ClientModel -> unit = ignore
+    let mutable writtenSynced = model.Synced
+    Elmish.Program.mkProgram (fun () -> model, Elmish.Cmd.none) (fun (next: ClientModel) _ -> next, Elmish.Cmd.none) (fun _ _ -> ())
+    |> Ylmish.Program.withYlmish
+        { Doc = shellDoc
+          Create = fun (m: ClientModel) -> SyncedStateSync.create m.Synced
+          Update = fun a m -> SyncedStateSync.update a m.Synced
+          Encode = SyncedStateSync.encode
+          Decode = Ylmish.Codec.Decode.ask
+          OnError = Ylmish.Program.OnError.log }
+    |> Elmish.Program.withSetState (fun _ dispatch -> writeSynced <- fun next -> dispatch (Ylmish.Program.Message.User next))
+    |> Elmish.Program.run
     /// What `HarnessPage.closed` reads, kept here for `typed`'s reason: the count is this
     /// instrument's output, not the place it keeps it.
     let mutable closed : string array = [||]
@@ -1895,7 +1917,11 @@ do
         // a model that came after the frame's render is drawn at the frame's end, untimed here.
         if Render.renders () <> rendersBefore then
             renderTimes |> Option.iter (fun times -> times.Add (now () - started))
-    and render () = renderer.SetState model
+    and render () =
+        if not (obj.ReferenceEquals (model.Synced, writtenSynced)) then
+            writtenSynced <- model.Synced
+            writeSynced model
+        renderer.SetState model
     dispatchRef <- dispatch
     PaneShell.watchBreakpoint (fun wide -> dispatch (ViewportMsg wide))
     // The publication rule the real client runs (`Browser.fs`), because without it this page
@@ -2341,19 +2367,20 @@ do
     //
     // A person writing a message on a phone in a session that has been going for days.
     // Reported against a session of nineteen thousand events — 114 replies, 1,369 tool calls,
-    // 232 commands — where typing had become slow enough to notice. A keystroke there is a
-    // render of the whole page: the editor's own Yjs transaction reaches the program as a
-    // remote one (`Ylmish.Binding.subscribe` signals every update whose origin is not its own),
-    // and the caret it moved is reported a frame later (`CaretMovedMsg`), and each is the view,
-    // Lit's diff and every sync after it, over every item in the conversation. Nothing the
-    // keystroke changed is in the conversation, so this is the cost that should NOT grow with
-    // it, and the sweep is what says whether it does.
+    // 232 commands — where typing had become slow enough to notice. A keystroke there was two
+    // renders of the whole page. The editor's own Yjs transaction reached the program as a
+    // remote one, because Ylmish signalled every update whose origin was not its own; since
+    // 1.0.0-beta0236 it signals only an update to a root its codec binds, and a draft's body is
+    // not one. The caret the keystroke moved is still reported a frame later (`CaretMovedMsg`),
+    // and that render is the view, Lit's diff and every sync after it, over every item in the
+    // conversation. Nothing the keystroke changed is in the conversation, so this is the cost
+    // that should NOT grow with it, and the sweep is what says whether it does.
     //
-    // This page has no Ylmish binding, so the first of those two arrives another way: the
-    // draft-slot rule (`DraftSlot.follow`, wired above as the app wires it) reads the slot off
-    // the doc, finds it unpublished because nothing here writes the model back, and publishes
-    // it again on every keystroke. The dispatch is a different message and the render is the
-    // same render, which is what is timed.
+    // The draft's slot is published once, on the first keystroke, and the program above writes
+    // it into the doc as the app's binding does, so the draft-slot rule (`DraftSlot.follow`,
+    // wired above as the app wires it) finds it published on every key after that. Before this
+    // page wrote its model back, the rule found the slot missing on every key and published it
+    // again, and this scenario counted a render per key that the app no longer draws.
     //
     // A keystroke is timed from the browser's own event timestamp to the first task after the
     // frame it lands in — after the frame's own work, which is where the caret's render runs —
