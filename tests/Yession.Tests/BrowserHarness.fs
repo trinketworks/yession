@@ -44,6 +44,9 @@ module Harness =
     let run1 (page: IPage) (key: PageGlobal<'A -> unit>) (a: 'A) : Async<unit> =
         call page (PageGlobal.name key) [ box a ]
 
+    let run2 (page: IPage) (key: PageGlobal<System.Action<'A, 'B>>) (a: 'A) (b: 'B) : Async<unit> =
+        call page (PageGlobal.name key) [ box a; box b ]
+
     let run3 (page: IPage) (key: PageGlobal<System.Action<'A, 'B, 'C>>) (a: 'A) (b: 'B) (c: 'C) : Async<unit> =
         call page (PageGlobal.name key) [ box a; box b; box c ]
 
