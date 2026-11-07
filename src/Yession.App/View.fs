@@ -2940,7 +2940,8 @@ module View =
         let people = p.People
         let find (id: MessageId) = p.Targets |> List.tryFind (fun i -> i.MessageId = id)
         let terminalName (id: TerminalId) = p.Names |> List.tryPick (fun (at, name) -> if at = id then Some name else None)
-        let lostMark =
+        // A block its terminal's loss left open: it may have run (`terminalBlockStatusAt`).
+        let lostMark () =
             html $"""<span class="{Style.statusWait}" data-block-mark="{Dom.Text.blockUnknown}">{Dom.Text.blockMayHaveRun}</span>"""
         // A file an agent pointed at in a message — linked, in angle brackets, or written bare —
         // drawn as the reference it is (`RichText`): the SAME chip the fold below it draws for
@@ -3547,7 +3548,7 @@ module View =
                         aria-label="{Dom.Text.commandChip (BlockLabel.ofBlock block) (terminalBlockStatusWord people block.Status) where}"
                         @click={Ev(fun _ -> dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalId, blockId)))))}>
                   <span class="{Style.chatChipLine}" title="{block.Command}">{Entity.verb verb} {what}</span>
-                  <span class="shrink-0">{if lost then lostMark else terminalBlockStatus people block.Status}</span>
+                  <span class="shrink-0">{if lost then lostMark () else terminalBlockStatus people block.Status}</span>
                 </button>"""
         // A command the agent's call asked for, before its block exists — or when it never
         // will. The SAME chip the block will be, in the same place (`TimelineProjection`'s
@@ -3913,12 +3914,13 @@ module View =
         // until then the timeline says it is reading, rather than showing the oldest end of
         // the log a page at a time.
         let showsFolded = ClientModel.showsFolded model
-        let rows = if showsFolded then (ClientModel.drawing model).Rows else []        // Each row behind `memo`, keyed on its props (`EntryProps`): a row whose props are equal
+        let drawing = ClientModel.drawing model
+        let rows = if showsFolded then drawing.Rows else []
+        // Each row behind `memo`, keyed on its props (`EntryProps`): a row whose props are equal
         // to what it drew last is not drawn again, and lit leaves its elements as they are.
         // What the props hold is everything the row's drawing reads of the model, gathered
         // here, where the model is.
         let people = ClientModel.people model
-        let drawing = ClientModel.drawing model
         let pendingActs = ClientModel.pendingActs model
         let entryOf row =
             let p = entryProps model people drawing chapterOpenings pendingActs row
@@ -3929,7 +3931,6 @@ module View =
                     match timelineEntry actions dispatch p with
                     | Some (_, draw) -> draw ()
                     | None -> Lit.nothing))
-
         // What is about to run, at the tail — after everything that has happened, which is
         // where it happens. `rows` is a fold over EVENTS and a pending act is not one, so it
         // is not a row and cannot be: it joins the timeline as a block when it drains, and
