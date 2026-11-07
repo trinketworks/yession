@@ -611,14 +611,14 @@ module View =
                     | None -> html $""""""
                 html $"""
                     <div class="{Style.person}" data-peer-presence="{ActorRef.token who}">
-                      <span class="{Style.cls [ Style.avatar; Entity.actorMark model who; Style.personAvatar ]}"></span>
+                      <span class="{Style.cls [ Style.avatar; Entity.actorMark (ClientModel.people model) who; Style.personAvatar ]}"></span>
                       <span class="{Style.givesWay}">{name}</span>
                       {slot}
                     </div>""")
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.navLane1 ]}">
               <span class="{Style.label}">in this session</span>
-              <div class="{Style.person}"><span class="{Style.cls [ Style.avatar; Entity.actorMark model (PeerRef model.Peer.PeerId); Style.personAvatar ]}"></span><span class="truncate" data-display-name>{model.Peer.DisplayName}</span><span class="{Style.personYou}">you</span></div>
+              <div class="{Style.person}"><span class="{Style.cls [ Style.avatar; Entity.actorMark (ClientModel.people model) (PeerRef model.Peer.PeerId); Style.personAvatar ]}"></span><span class="truncate" data-display-name>{model.Peer.DisplayName}</span><span class="{Style.personYou}">you</span></div>
               {peerRows}
               {agentRow}
             </section>"""
@@ -1433,11 +1433,11 @@ module View =
     /// bar with a name label. The browser positions all three by measurement after render (from
     /// the peer's relative positions, decoded against the title `Y.Text`); colour is fixed here.
     let private remoteCursor (model: ClientModel) (who: ActorRef) (presence: RemotePresence) : TemplateResult =
-        let colour = Entity.presenceColour model who
+        let colour = Entity.presenceColour (ClientModel.people model) who
         // Container = the translucent selection highlight (positioned `lo..hi` by the browser);
         // the caret bar is offset to `head` inside it; the label rides above the caret.
         html $"""
-            <span class="{Style.remoteCursor}" data-cursor-peer="{ActorRef.token who}" style="background:{Entity.presenceSelection model who}">
+            <span class="{Style.remoteCursor}" data-cursor-peer="{ActorRef.token who}" style="background:{Entity.presenceSelection (ClientModel.people model) who}">
               <span class="{Style.remoteCursorCaret}" style="background:{colour}">
                 <span class="{Style.remoteCursorLabel}" style="background:{colour}">{presence.DisplayName}</span>
               </span>
@@ -1545,7 +1545,7 @@ module View =
             <article class="{Style.queueItem}" data-surface-folded="{surfaceId}">
               <button type="button" class="{Style.queueSummary}" aria-label="{Dom.Text.surfaceUnfoldLabel}"
                       @click={Ev(fun _ -> dispatch (UnfoldSurfaceMsg surfaceId))}>
-                <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model ActorRef.Agent ]}"></span>
+                <span class="{Style.cls [ Style.avatarSm; Entity.actorMark (ClientModel.people model) ActorRef.Agent ]}"></span>
                 <span class="{Style.queueSummaryBody}">{title}</span>
               </button>
               <div class="{Style.queueTools}">
@@ -1592,7 +1592,7 @@ module View =
                     html $"""
                         <article class="{Style.queueItem}" data-queue-id="{QueueId.value id}" data-queue-author="{PeerId.value entry.Author}" data-queue-order="{string entry.Order}">
                           <button type="button" class="{Style.queueSummary}" aria-label="Edit queued message" data-queue-summary="{QueueId.value id}" data-queue-open="{QueueId.value id}" @click={Ev(fun _ -> dispatch (OpenQueueEditMsg id))}>
-                            <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model (PeerRef entry.Author) ]}"></span>
+                            <span class="{Style.cls [ Style.avatarSm; Entity.actorMark (ClientModel.people model) (PeerRef entry.Author) ]}"></span>
                             <span class="{Style.queueSummaryBody}" data-rich-body="{BodyKey.queued id}" data-rich-readonly="true"></span>
                           </button>
                           <div class="{Style.queueTools}">
@@ -1789,17 +1789,17 @@ module View =
             ClientModel.editorsOf peerId model
             |> List.map (fun (editor, name) ->
                 html $"""
-                    <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model editor}"
+                    <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour (ClientModel.people model) editor}"
                           title="{name}" data-draft-editor-peer="{ActorRef.token editor}"></span>""")
         // A collapsed draft: whose it is, one clamped line of it (the same read-only editor the
         // browser mounts everywhere, so the CRDT keeps it current), and who is in it. Opening it
         // collapses whatever was open — including your own composer.
         let summary (peerId: PeerId) =
             html $"""
-                <button type="button" class="{Style.draftSummary}" style="border-left-color:{Entity.presenceColour model (ActorRef.PeerRef peerId)}"
+                <button type="button" class="{Style.draftSummary}" style="border-left-color:{Entity.presenceColour (ClientModel.people model) (ActorRef.PeerRef peerId)}"
                         data-draft-summary="{PeerId.value peerId}"
                         data-draft-expand="{PeerId.value peerId}" @click={Ev(fun _ -> dispatch (ExpandDraftMsg peerId))}>
-                  <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model (PeerRef peerId) ]}"></span>
+                  <span class="{Style.cls [ Style.avatarSm; Entity.actorMark (ClientModel.people model) (PeerRef peerId) ]}"></span>
                   <span class="{Style.draftSummaryName}">{ClientModel.nameOf peerId model}</span>
                   <span class="{Style.draftSummaryBody}" data-rich-body="{BodyKey.draft peerId}" data-rich-readonly="true"></span>
                   <span class="{Style.draftEditors}">{editors peerId}</span>
@@ -2034,7 +2034,7 @@ module View =
 
     /// How a block went, in WORDS — what a screen reader hears where the mark draws a glyph
     /// and a number, and what a command chip's accessible name says in its middle.
-    let private terminalBlockStatusWord (model: ClientModel) =
+    let private terminalBlockStatusWord (people: People) =
         function
         | BlockRunning -> Dom.Text.blockRunning
         | BlockFinished (CommandSucceeded code) -> Dom.Text.blockSucceeded code
@@ -2045,7 +2045,7 @@ module View =
         | BlockFinished (CommandOutcomeUnknown _) -> Dom.Text.blockEnded
         | BlockRejected ((ActorRef.Session | ActorRef.System), _) -> Dom.Text.blockRefusedPlain
         | BlockFinished (CommandKilledForMemory _) -> Dom.Text.blockKilledForMemory
-        | BlockRejected (by, _) -> Dom.Text.blockRefusedBy (Entity.actorName model by)
+        | BlockRejected (by, _) -> Dom.Text.blockRefusedBy (Entity.actorName people by)
         | BlockEnded _ -> Dom.Text.blockEnded
 
     /// How a block went, drawn. ONE renderer for every surface that shows a block — its line
@@ -2068,10 +2068,10 @@ module View =
     /// red words per SCREEN — which read, at 390x844, as five wrong commands with one red word
     /// between them: four failures wearing the record's ink and not looking wrong at all.
     /// Honesty is second in the Deciding order and a hidden failure trades it away.
-    let private terminalBlockStatus (model: ClientModel) (status: BlockStatus) : TemplateResult =
+    let private terminalBlockStatus (people: People) (status: BlockStatus) : TemplateResult =
         let token = terminalBlockStatusLabel status
         let pictured (voice: string) (mark: TemplateResult) =
-            html $"""<span class="{voice}" data-block-mark="{token}"><span aria-hidden="true">{mark}</span><span class="{Style.srOnly}">{terminalBlockStatusWord model status}</span></span>"""
+            html $"""<span class="{voice}" data-block-mark="{token}"><span aria-hidden="true">{mark}</span><span class="{Style.srOnly}">{terminalBlockStatusWord people status}</span></span>"""
         match status with
         | BlockRunning -> pictured Style.statusOk Icon.spin
         | BlockFinished (CommandSucceeded code) -> pictured Style.statusDone (html $"""{Icon.checkSm} {code}""")
@@ -2080,12 +2080,12 @@ module View =
         | BlockFinished (CommandExecutionFailed _)
         | BlockFinished (CommandNotRun _)
         | BlockFinished (CommandKilledForMemory _) ->
-            html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
+            html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{terminalBlockStatusWord people status}</span>"""
         // A record, not a wrong thing: nothing says it failed, so it is not red. Faint like
         // any other status with nothing to report, and the block's facts carry why it ended.
         | BlockFinished (CommandOutcomeUnknown _)
         | BlockEnded _ ->
-            html $"""<span class="{Style.statusFaint}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
+            html $"""<span class="{Style.statusFaint}" data-block-mark="{token}">{terminalBlockStatusWord people status}</span>"""
         // Named, not merely absent. "refused by nick" in line with the commands that ran
         // is the whole reason a refusal mints a block at all — so it is a NAME, resolved like
         // every other person on screen, not the id the hook carries.
@@ -2094,7 +2094,7 @@ module View =
         | BlockRejected ((ActorRef.Session | ActorRef.System), _) ->
             html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{Dom.Text.blockRefusedPlain}</span>"""
         | BlockRejected (by, _) ->
-            html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{Dom.Text.blockRefused} {Entity.render model by (EntityRef.Actor by)}</span>"""
+            html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{Dom.Text.blockRefused} {Entity.render people by (EntityRef.Actor by)}</span>"""
 
     /// Whether this block is the one its terminal's loss left open (`Projection.openAtLoss`).
     let private openAtLoss (model: ClientModel) (terminal: TerminalId) (block: Block) : bool =
@@ -2112,7 +2112,7 @@ module View =
     let private terminalBlockStatusAt (model: ClientModel) (terminal: TerminalId) (block: Block) : TemplateResult =
         if openAtLoss model terminal block then
             html $"""<span class="{Style.statusWait}" data-block-mark="{Dom.Text.blockUnknown}">{Dom.Text.blockMayHaveRun}</span>"""
-        else terminalBlockStatus model block.Status
+        else terminalBlockStatus (ClientModel.people model) block.Status
 
     let private stretchEndLabel =
         function
@@ -2123,10 +2123,10 @@ module View =
 
     /// How a stretch ended, said the way a reader asks it — in the `voice` of the surface it
     /// is said on: the chat's status capitals, or the pane's caption.
-    let private stretchEnding (voice: string) (model: ClientModel) =
+    let private stretchEnding (voice: string) (people: People) =
         function
         | LeaseReleased -> html $"""<span class="{voice}">handed back</span>"""
-        | LeaseStolen by -> html $"""<span class="{voice}">taken over by {Entity.render model by (EntityRef.Actor by)}</span>"""
+        | LeaseStolen by -> html $"""<span class="{voice}">taken over by {Entity.render people by (EntityRef.Actor by)}</span>"""
         | LeaseHolderGone -> html $"""<span class="{voice}">holder left</span>"""
         | LeaseIdle -> html $"""<span class="{voice}">went idle</span>"""
 
@@ -2157,8 +2157,8 @@ module View =
     /// A held act is a WAIT, and the pulse dot is the wait — the word only names the blocker
     /// (the same status voice every other wait in the product wears). A terminal whose shell
     /// cannot run commands holds nothing: the loss refuses its queue, so it has no status here.
-    let private pendingStatus (model: ClientModel) (entry: PendingAct) : string * TemplateResult =
-        if ClientModel.awaitsTerminal entry model then
+    let private pendingStatus (awaitsTerminal: bool) : string * TemplateResult =
+        if awaitsTerminal then
             Dom.Text.queuedAwaitingTerminal,
             html $"""<span class="{Style.statusWait}">{Icon.spinLead}terminal busy</span>"""
         else
@@ -2196,7 +2196,7 @@ module View =
         (model: ClientModel)
         (entry: PendingAct)
         : TemplateResult =
-        let statusToken, statusLine = pendingStatus model entry
+        let statusToken, statusLine = pendingStatus (ClientModel.awaitsTerminal entry model)
         let what = pendingSubject model entry
         // The command itself lives in a `Y.Text` root, not in the model — it is editable by
         // every peer until it drains — so the text is pushed in by the browser half
@@ -2709,7 +2709,7 @@ module View =
                         aria-label="{Dom.Text.offlineDismiss}" title="{Dom.Text.offlineDismiss}"
                         @click={Ev(fun _ -> dispatch (DismissOfflineAskMsg asked.Connection))}>{Icon.close}</button>"""
         let subject =
-            html $"""<span class="{Style.askSubject}">{Dom.Text.offlineAsker (Entity.actorName model ActorRef.Agent)}</span>"""
+            html $"""<span class="{Style.askSubject}">{Dom.Text.offlineAsker (Entity.actorName (ClientModel.people model) ActorRef.Agent)}</span>"""
         let why = askNote (html $"""<p class="{Style.small}">{asked.Why}</p>""")
         let pane =
             html $"""
@@ -2742,7 +2742,7 @@ module View =
         | Ask.Launch -> Dom.Text.repoPickerAsker, Dom.Text.repoPickerTitle
         | Ask.Trust (repo, _) -> RepoRef.value repo, Dom.Text.trustTitle
         | Ask.Offline asked ->
-            Dom.Text.offlineAsker (Entity.actorName model ActorRef.Agent),
+            Dom.Text.offlineAsker (Entity.actorName (ClientModel.people model) ActorRef.Agent),
             Dom.Text.offlineTitle (Yession.Domain.Access.ConnectedService.name asked.Connection)
         | Ask.Surface surfaceId ->
             Dom.Text.surfaceAsker,
@@ -2784,8 +2784,8 @@ module View =
                             Map.tryFind surfaceId model.SurfaceAnswers
                             |> Option.map (fun awaited ->
                                 let by = Principal.toActor awaited.Answer.By
-                                { SurfaceView.Answered.By = Entity.actorName model by
-                                  SurfaceView.Answered.ByMark = Entity.actorMark model by
+                                { SurfaceView.Answered.By = Entity.actorName (ClientModel.people model) by
+                                  SurfaceView.Answered.ByMark = Entity.actorMark (ClientModel.people model) by
                                   SurfaceView.Answered.Component = awaited.Answer.Component })
                         SurfaceView.view dispatch (model.Asked |> Map.toList |> List.map snd) answered surfaceId surface
                     | None -> Lit.nothing
@@ -2802,19 +2802,152 @@ module View =
     let private actorHead (model: ClientModel) (square: string) (actor: ActorRef) : TemplateResult =
         let whoClass = if actor = ActorRef.Agent then Style.whoAgent else Style.who
         html $"""
-            <span class="{Style.cls [ square; Entity.actorMark model actor ]}"></span>
-            <span class="{whoClass}">{Entity.actorName model actor}</span>"""
+            <span class="{Style.cls [ square; Entity.actorMark (ClientModel.people model) actor ]}"></span>
+            <span class="{whoClass}">{Entity.actorName (ClientModel.people model) actor}</span>"""
 
-    let private chat (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
-        // Where chapters open, asked once for the whole transcript: every row and every
-        // item's menu below looks itself up here rather than asking again.
-        let chapterOpenings = ClientModel.chapterOpenings model
+    /// Everything one row of the timeline reads to be drawn (`timelineEntry`): the row, and
+    /// exactly what its branch reads of the model besides, gathered by `entryProps`. Data
+    /// only, compared by F# structural equality (`Fable.LitExtras.memo`), so a row is drawn
+    /// again exactly when something it shows has changed. No function and no template in
+    /// here: neither compares equal to the next render's.
+    ///
+    /// Each list holds only what concerns THIS row's items, so a fold opening, a menu, a
+    /// chapter toggled or a reply landing changes the props of the rows it touches and no
+    /// others.
+    [<RequireQualifiedAccess>]
+    type private EntryProps =
+        { Row : TimelineRow
+          /// Who is who, for every name and mark the row draws.
+          People : People
+          /// The row's folds that are open.
+          Open : FoldKey list
+          /// The row's items a chapter opens at (each item's menu says which way it goes).
+          Chapters : MessageId list
+          /// The item menu, while it is open on one of the row's items.
+          Menu : MessageId option
+          /// How each of the row's acts draws its cause (`ConversationItem.causeLinks`).
+          Links : (MessageId * CauseLink) list
+          /// The row's acts whose chain continues below them.
+          Chained : MessageId list
+          /// What the row's items point at (a cause, a message replied to), as found.
+          Targets : ConversationItem list
+          /// The row's agent messages that are thinking rather than writing.
+          Thinking : MessageId list
+          /// The row's session breaks showing the moment rather than the elapsed time.
+          Dated : MessageId list
+          /// The row's blocks, as their terminals hold them.
+          Blocks : ((TerminalId * BlockId) * Block) list
+          /// The row's blocks its terminal's loss left open (`Projection.openAtLoss`).
+          Lost : (TerminalId * BlockId) list
+          /// What each terminal the row names is called (`Entity.terminalName`).
+          Names : (TerminalId * string) list
+          /// The row's tool calls.
+          Uses : ToolUse list
+          /// Queue entries for the row's command calls, each with whether it waits on its
+          /// terminal (`ClientModel.awaitsTerminal`).
+          Queued : (PendingAct * bool) list }
+
+    let private blockIn (p: EntryProps) (terminalId: TerminalId) (blockId: BlockId) : Block option =
+        p.Blocks |> List.tryPick (fun (at, block) -> if at = (terminalId, blockId) then Some block else None)
+
+    let private toolUseIn (p: EntryProps) (id: ToolUseId) : ToolUse option =
+        p.Uses |> List.tryFind (fun u -> u.ToolUseId = id)
+
+    /// The props of one row, read off the model (`EntryProps`).
+    let private entryProps
+        (model: ClientModel)
+        (people: People)
+        (drawing: TimelineDrawing)
+        (chapterOpenings: Set<MessageId>)
+        (pendingActs: PendingAct list)
+        (row: TimelineRow)
+        : EntryProps =
+        let members =
+            match row with
+            | RowItem item -> [ item ]
+            | RowWorkRun (_, items)
+            | RowTaskCard (_, items) -> items
+        let messages = members |> List.choose (function TimelineMessage item -> Some item | _ -> None)
+        let ids = messages |> List.map (fun item -> item.MessageId)
+        let blockKeys = members |> List.choose (function TimelineBlock (_, t, b) -> Some (t, b) | _ -> None)
+        let blocks =
+            blockKeys
+            |> List.choose (fun (terminalId, blockId) ->
+                Projection.tryFind terminalId model.Terminals
+                |> Option.bind (fun view -> view.Blocks |> List.tryFind (fun b -> b.BlockId = blockId))
+                |> Option.map (fun block -> (terminalId, blockId), block))
+        let uses =
+            members
+            |> List.choose (function TimelineToolUse (_, id) -> TimelineProjection.toolUse id model.Timeline | _ -> None)
+        let terminals =
+            (blockKeys |> List.map fst)
+            @ (members |> List.choose (function TimelineStretch s -> Some s.TerminalId | _ -> None))
+            |> List.distinct
+        let folds =
+            (ids |> List.map FoldKey.Act)
+            @ (uses |> List.map (fun u -> FoldKey.ToolCall u.ToolUseId))
+            @ (match row with
+               | RowWorkRun (turn, items) ->
+                   [ (match items with
+                      | TimelineToolUse (_, id) :: _ -> FoldKey.ToolRun id
+                      | _ -> FoldKey.ToolRun (ToolUseId.create (AgentTurnId.value turn) |> Result.defaultWith failwith)) ]
+               | RowTaskCard (turn, _) -> [ FoldKey.Task turn ]
+               | RowItem _ -> [])
+        let callIds = uses |> List.map (fun u -> Some u.ToolUseId)
+        { EntryProps.Row = row
+          EntryProps.People = people
+          EntryProps.Open = folds |> List.filter (fun key -> Set.contains key model.OpenFolds)
+          EntryProps.Chapters = ids |> List.filter (fun id -> Set.contains id chapterOpenings)
+          EntryProps.Menu = model.ItemMenu |> Option.filter (fun id -> List.contains id ids)
+          EntryProps.Links = ids |> List.choose (fun id -> Map.tryFind id drawing.CauseLinks |> Option.map (fun link -> id, link))
+          EntryProps.Chained = ids |> List.filter (fun id -> Set.contains id drawing.ChainedOn)
+          EntryProps.Targets =
+            messages
+            |> List.choose (fun item ->
+                match item.CausedBy with
+                | Some (Cause.Item target) -> model.Conversation.Find target
+                | Some Cause.Booted
+                | Some (Cause.Connected _)
+                | None -> None)
+          EntryProps.Thinking =
+            messages
+            |> List.filter (fun item -> item.Status = Streaming && ClientModel.agentThinking model item)
+            |> List.map (fun item -> item.MessageId)
+          EntryProps.Dated = ids |> List.filter (fun id -> Set.contains id model.DatedBreaks)
+          EntryProps.Blocks = blocks
+          EntryProps.Lost = blocks |> List.filter (fun ((t, _), block) -> openAtLoss model t block) |> List.map fst
+          EntryProps.Names = terminals |> List.choose (fun t -> Entity.terminalName model t |> Option.map (fun name -> t, name))
+          EntryProps.Uses = uses
+          EntryProps.Queued =
+            pendingActs
+            |> List.filter (fun entry -> List.contains entry.ToolUseId callIds)
+            |> List.map (fun entry -> entry, ClientModel.awaitsTerminal entry model) }
+
+    /// One row of the timeline, from its props alone: whose it is (`None` for a row drawn
+    /// outside any author's group), and how to draw it — or `None` for a row that draws
+    /// nothing (a call that became a block, a page boundary's missing block).
+    ///
+    /// It sees `EntryProps`, `actions` and `dispatch`, and nothing else: no model is in
+    /// scope. That is what lets `chat` put each row behind `memo`, which skips a row whose
+    /// props are equal to the last ones it drew — keeping its old elements AND their
+    /// listeners. A listener here can only have closed over the props it was drawn from,
+    /// which are the props it would have been drawn from again.
+    let private timelineEntry
+        (actions: ViewActions)
+        (dispatch: ClientMsg -> unit)
+        (p: EntryProps)
+        : (ActorRef option * (unit -> TemplateResult)) option =
+        let people = p.People
+        let find (id: MessageId) = p.Targets |> List.tryFind (fun i -> i.MessageId = id)
+        let terminalName (id: TerminalId) = p.Names |> List.tryPick (fun (at, name) -> if at = id then Some name else None)
+        let lostMark =
+            html $"""<span class="{Style.statusWait}" data-block-mark="{Dom.Text.blockUnknown}">{Dom.Text.blockMayHaveRun}</span>"""
         // A file an agent pointed at in a message — linked, in angle brackets, or written bare —
         // drawn as the reference it is (`RichText`): the SAME chip the fold below it draws for
         // the act of sharing one (`Entity.render`), because a body saying "see
         // file:///artifacts/chart.png" and a note saying "shared artifact chart.png" are
         // pointing at one thing and a reader should not have to notice that twice.
-        let contentChip (by: ActorRef) (ref: ContentRef) = Entity.render model by (EntityRef.Content ref)
+        let contentChip (by: ActorRef) (ref: ContentRef) = Entity.render people by (EntityRef.Content ref)
         // What can be done to one item, behind an ellipsis at its top-right. It goes on
         // every item that HAS an id — a message and an act alike — because "divide it
         // anywhere" is the promise, and chapters chosen for the reader would be somebody
@@ -2833,8 +2966,8 @@ module View =
         // `onHeadline`: the item's first line is not its headline (an act under its cause),
         // so the control and its menu are placed on the headline's row instead.
         let itemActionsAt (onHeadline: bool) (item: ConversationItem) =
-            let isChapter = Set.contains item.MessageId chapterOpenings
-            let opened = model.ItemMenu = Some item.MessageId
+            let isChapter = List.contains item.MessageId p.Chapters
+            let opened = p.Menu = Some item.MessageId
             let control = if onHeadline then Style.itemActionsOnHeadline else Style.itemActions
             let menuClass = if onHeadline then Style.itemMenuOnHeadline else Style.itemMenu
             let dress =
@@ -2886,7 +3019,7 @@ module View =
         // `Act.particulars`.
         let actNoteParticulars (by: ActorRef) (act: Act) =
             Act.particulars act
-            |> List.map (fun p -> html $"""<span class="{Style.actNoteDetail}" data-act-detail>{Entity.phrase model by p}</span>""")
+            |> List.map (fun p -> html $"""<span class="{Style.actNoteDetail}" data-act-detail>{Entity.phrase people by p}</span>""")
         // What the agent was told, as one row of a fact table. The facts around it are a
         // screen's arrangement of the act; this is the OTHER reader's, and a person is owed
         // the ability to see it — a timeline that showed a layout the agent never saw, and
@@ -2902,7 +3035,7 @@ module View =
         // as a reference, because that is the SCREEN saying whose sentence follows.
         let toldRow (act: Act) =
             html $"""
-                <div class="{Style.actNoteToldRow}">{Entity.render model ActorRef.Agent (EntityRef.Actor ActorRef.Agent)} {Dom.Text.actSaid} <span class="{Style.actNoteTold}" data-act-said>{Phrase.said (Act.sentence act)}</span></div>"""
+                <div class="{Style.actNoteToldRow}">{Entity.render people ActorRef.Agent (EntityRef.Actor ActorRef.Agent)} {Dom.Text.actSaid} <span class="{Style.actNoteTold}" data-act-said>{Phrase.said (Act.sentence act)}</span></div>"""
         // A sandbox start shows its TITLE and nothing else on the line: which sandbox, drawn
         // as a reference (under the repo that declared it, that is the bare `dev`). Everything
         // the sentence also carries — the backend, what it is for, where the checkout sits,
@@ -2946,7 +3079,7 @@ module View =
                     let references =
                         names
                         |> List.map (fun name ->
-                            html $"""<span data-act-fact="forwarded">{Entity.render model by (EntityRef.Connection name)}</span>""")
+                            html $"""<span data-act-fact="forwarded">{Entity.render people by (EntityRef.Connection name)}</span>""")
                     [ html $"""
                         <div class="{Style.actNoteFactRow}">
                           <span class="{Style.actNoteFactKey}">{Dom.Text.sandboxFactForwarding}</span>
@@ -3021,7 +3154,7 @@ module View =
         // inert arrow rather than a silently-fine one, which is the point — there is no
         // second path to the toggle to fall back to.
         let foldArrow (key: FoldKey) (mark: TemplateResult) (label: string) =
-            let opened = Set.contains key model.OpenFolds
+            let opened = List.contains key p.Open
             html $"""
                 <button type="button" class="{Style.fold}"
                         aria-expanded="{if opened then "true" else "false"}" aria-controls="fold-{FoldKey.value key}"
@@ -3055,7 +3188,7 @@ module View =
         // items are fold rows of their own, and spanning both columns is what puts their
         // arrows on this row's rail rather than one gutter in.
         let foldBodyIn (width: bool -> string) (key: FoldKey) (inner: string) (body: TemplateResult list) =
-            let opened = Set.contains key model.OpenFolds
+            let opened = List.contains key p.Open
             html $"""
                 <div id="fold-{FoldKey.value key}" class="{width opened}"
                      data-fold-body="{FoldKey.value key}" data-fold-open="{if opened then "yes" else "no"}">
@@ -3079,10 +3212,10 @@ module View =
         // jump — the same `RevealMessage` the chapter rail and a reply's ref use — on the
         // MARK, because the sentence holds links and a link cannot sit inside a button.
         // `data-cause-ref` / `data-cause-chain` are the hooks a test finds them by.
-        let causeLinks = (ClientModel.drawing model).CauseLinks
+        let causeLinkOf (id: MessageId) = p.Links |> List.tryPick (fun (at, link) -> if at = id then Some link else None)
         // The acts a chain continues below: each draws the rail from its chevron down to the
         // next link's mark, so the chain is one line rather than marks spaced along a gutter.
-        let chainedOn = (ClientModel.drawing model).ChainedOn
+        let chainedOn (id: MessageId) = List.contains id p.Chained
         let causeLine (item: ConversationItem) =
             let line (mark: TemplateResult) (said: TemplateResult list) (hook: string) =
                 html $"""
@@ -3098,7 +3231,7 @@ module View =
             let drawn cause =
                 match cause with
                 | Cause.Item target ->
-                    match model.Conversation.Find target with
+                    match find target with
                     | Some cause ->
                         let said =
                             match cause.Content with
@@ -3107,7 +3240,7 @@ module View =
                             | ItemContent.Act (Act.SessionStarted _) -> [ html $"""{Dom.Text.causeBooted}""" ]
                             | ItemContent.Act (Act.SessionResumed _) -> [ html $"""{Dom.Text.causeResumed}""" ]
                             | ItemContent.Act act ->
-                                Entity.phrase model cause.Author (Segment.Ref (EntityRef.Actor cause.Author) :: Segment.Text " " :: Act.phrase act)
+                                Entity.phrase people cause.Author (Segment.Ref (EntityRef.Actor cause.Author) :: Segment.Text " " :: Act.phrase act)
                             | _ -> [ html $"""{ConversationItem.said cause}""" ]
                         let jump =
                             html $"""<button type="button" class="{Style.cls [ Style.causeCorner; Style.causeJump ]}" data-cause-jump aria-label="{Dom.Text.causeJumpLabel}" @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealMessage target)))}>{corner}</button>"""
@@ -3122,12 +3255,11 @@ module View =
                 | Cause.Connected principal ->
                     line
                         still
-                        (Entity.phrase
-                            model
+                        (Entity.phrase people
                             item.Author
                             [ Segment.Ref (EntityRef.Actor (Principal.toActor principal)); Segment.Text (" " + Dom.Text.causeConnected) ])
                         "connected"
-            match Map.tryFind item.MessageId causeLinks with
+            match causeLinkOf item.MessageId with
             | Some (CauseLink.Drawn cause) -> drawn cause
             | Some CauseLink.Chained ->
                 html $"""
@@ -3205,11 +3337,11 @@ module View =
             let key = FoldKey.Act item.MessageId
             // A cause row above the headline moves the actions down onto the headline.
             let underCause =
-                match Map.tryFind item.MessageId causeLinks with
+                match causeLinkOf item.MessageId with
                 | Some (CauseLink.Drawn _) | Some CauseLink.Chained -> true
                 | Some CauseLink.Unlinked | None -> false
             let rail =
-                if Set.contains item.MessageId chainedOn then
+                if chainedOn item.MessageId then
                     html $"""<span class="{Style.causeRail}" aria-hidden="true"></span>"""
                 else
                     Lit.nothing
@@ -3218,11 +3350,11 @@ module View =
             // narrow screen puts it on its own line rather than wrapping mid-clause — and
             // nothing at all when the cause already names that person.
             let whom =
-                match ConversationItem.forWhom model.Conversation.Find item with
+                match ConversationItem.forWhom find item with
                 | [] -> Lit.nothing
-                | clause -> html $"""<span class="{Style.actNoteFor}" data-act-for>{Entity.phrase model by clause}</span>"""
+                | clause -> html $"""<span class="{Style.actNoteFor}" data-act-for>{Entity.phrase people by clause}</span>"""
             let titleSpan =
-                html $"""<span class="{Style.cls [ Style.foldContent; Style.actNoteText; Style.foldClickable ]}">{Entity.phrase model by title}{whom} {failedMark}</span>"""
+                html $"""<span class="{Style.cls [ Style.foldContent; Style.actNoteText; Style.foldClickable ]}">{Entity.phrase people by title}{whom} {failedMark}</span>"""
             // A press on the title toggles the same fold the arrow does — `notOnLink`
             // because the title itself can hold a real `<a>` (an entity reference, e.g. the
             // repo a `RepoAdded` names): that press means "go there", not "fold this up",
@@ -3261,7 +3393,7 @@ module View =
             html $"""
                 <article class="{Style.turnStop}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-turn-stopped="{how}" data-message-author="{Entity.actorToken item.Author}">
                   <span class="{mark}">{Icon.stopSm}<span class="{Style.srOnly}">{Dom.Text.turnStopped}</span></span>
-                  <span class="{Style.turnStopText}">{Entity.phrase model item.Author (TurnStop.phrase stop)}</span>
+                  <span class="{Style.turnStopText}">{Entity.phrase people item.Author (TurnStop.phrase stop)}</span>
                 </article>"""
         let messageItem (item: ConversationItem) =
             // What was said. An act never reaches here (`actNoteItem` takes those), and its
@@ -3314,7 +3446,7 @@ module View =
                     // the first word's caret glides in from there (`Glide`).
                     let turn = MessageId.value item.MessageId
                     let mark =
-                        if not (ClientModel.agentThinking model item) then
+                        if not (List.contains item.MessageId p.Thinking) then
                             html $"""<span class="{Style.agentCaret}" data-agent-writing {Glide.into turn}></span>"""
                         elif System.String.IsNullOrWhiteSpace body then
                             html $"""<span class="{Style.agentThinkingStart}" style="{Style.thinkFrom turn}" data-agent-writing {Glide.from turn}>{Icon.cube}</span>"""
@@ -3354,7 +3486,7 @@ module View =
                 | Some Cause.Booted
                 | Some (Cause.Connected _) -> Lit.nothing
                 | Some (Cause.Item target) ->
-                    match model.Conversation.Find target with
+                    match find target with
                     | Some parent ->
                         // In the PARENT'S voice, because the typeface says who is talking
                         // before a reader reaches the author line (docs/visual-design.md,
@@ -3387,9 +3519,7 @@ module View =
         // One line: who ran what, and how it went. No output — a tail inline would make the
         // chat noisiest exactly when it is busiest, and would put everything a command
         // printed one glance from anyone in the session rather than one tap.
-        let blockOf (terminalId: TerminalId) (blockId: BlockId) =
-            Projection.tryFind terminalId model.Terminals
-            |> Option.bind (fun view -> view.Blocks |> List.tryFind (fun b -> b.BlockId = blockId))
+        let blockOf (terminalId: TerminalId) (blockId: BlockId) = blockIn p terminalId blockId
         // No author of its own: WHO ran it is the group's author line above it (`group`
         // below), the same answer a message gets. Takes the block already RESOLVED, because
         // the grouping fold needs the block's authority before it can place the chip — a
@@ -3401,8 +3531,9 @@ module View =
         // in the accessible name and one tap away, not on the line.
         let blockChip (chip: string) (terminalId: TerminalId) (block: Block) =
             let blockId = block.BlockId
-            let status = terminalBlockTokenIn model terminalId block
-            let where = Entity.terminalName model terminalId |> Option.defaultValue (TerminalId.value terminalId)
+            let lost = List.contains (terminalId, blockId) p.Lost
+            let status = if lost then Dom.Text.blockUnknown else terminalBlockStatusLabel block.Status
+            let where = terminalName terminalId |> Option.defaultValue (TerminalId.value terminalId)
             let what =
                 match block.Description |> Option.bind BlockDescription.ofProse with
                 | Some description -> html $"""<span class="{Style.chatChipName}">{description}</span>"""
@@ -3413,10 +3544,10 @@ module View =
                         data-chat-block="{BlockId.value blockId}"
                         data-chat-block-status="{status}"
                         data-terminal-id="{TerminalId.value terminalId}"
-                        aria-label="{Dom.Text.commandChip (BlockLabel.ofBlock block) (terminalBlockStatusWord model block.Status) where}"
+                        aria-label="{Dom.Text.commandChip (BlockLabel.ofBlock block) (terminalBlockStatusWord people block.Status) where}"
                         @click={Ev(fun _ -> dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalId, blockId)))))}>
                   <span class="{Style.chatChipLine}" title="{block.Command}">{Entity.verb verb} {what}</span>
-                  <span class="shrink-0">{terminalBlockStatusAt model terminalId block}</span>
+                  <span class="shrink-0">{if lost then lostMark else terminalBlockStatus people block.Status}</span>
                 </button>"""
         // A command the agent's call asked for, before its block exists — or when it never
         // will. The SAME chip the block will be, in the same place (`TimelineProjection`'s
@@ -3434,8 +3565,8 @@ module View =
         // entry's own chip at the tail (`pendingChip`) is not drawn beside it.
         let commandCallChip (chip: string) (use': ToolUse) (call: CommandCall) =
             let queued =
-                ClientModel.pendingActs model
-                |> List.tryFind (fun entry ->
+                p.Queued
+                |> List.tryFind (fun (entry, _) ->
                     entry.ToolUseId = Some use'.ToolUseId && Authority.author entry.Authority = ActorRef.Agent)
             let command, description =
                 match ToolUseText.command use' with
@@ -3451,7 +3582,7 @@ module View =
                 | CommandDidNotStart _, _ ->
                     Dom.Text.commandNotStarted,
                     html $"""<span class="{Style.statusErr}">{Dom.Text.commandDidNotStart}</span>"""
-                | _, Some entry -> pendingStatus model entry
+                | _, Some (_, awaits) -> pendingStatus awaits
                 | CommandStarting, None ->
                     Dom.Text.commandStarting,
                     html $"""<span class="{Style.statusWait}">{Icon.spinLead}{Dom.Text.commandStarting}</span>"""
@@ -3462,7 +3593,7 @@ module View =
                     html $"""<span class="{Style.statusWait}">{Icon.spinLead}queued</span>"""
             let opens =
                 match queued with
-                | Some entry -> Some entry.Terminal
+                | Some (entry, _) -> Some entry.Terminal
                 | None -> None
             // Why it did not start, where a pointer finds it: the chip has nothing to open,
             // and the reason is what a reader of a failure wants.
@@ -3486,7 +3617,7 @@ module View =
             | CardLine.Call (use', call) -> commandCallChip chip use' call
         let stretchItem (stretch: TerminalStretch) =
             let length = durationText (TerminalStretch.duration stretch)
-            let where = Entity.terminalName model stretch.TerminalId |> Option.defaultValue stretch.Title
+            let where = terminalName stretch.TerminalId |> Option.defaultValue stretch.Title
             html $"""
                 <button type="button" class="{Style.chatChip}"
                         data-chat-stretch="{TerminalStretch.key stretch}"
@@ -3494,7 +3625,7 @@ module View =
                         data-terminal-id="{TerminalId.value stretch.TerminalId}"
                         @click={Ev(fun _ -> dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Stretch stretch))))}>
                   <span class="{Style.chatChipText}">typed in {where} for {length}</span>
-                  <span class="shrink-0">{stretchEnding Style.statusFaint model stretch.End}</span>
+                  <span class="shrink-0">{stretchEnding Style.statusFaint people stretch.End}</span>
                 </button>"""
         // One call the agent made. No pane tab: unlike a block there is nothing recorded to
         // open — but there IS something to read: what the call was given and what it answered.
@@ -3575,7 +3706,7 @@ module View =
                 |> List.choose (fun item ->
                     match item with
                     | TimelineToolUse (_, id) ->
-                        TimelineProjection.toolUse id model.Timeline
+                        toolUseIn p id
                         |> Option.map (fun use' -> toolCall Style.chatToolItem (named use') use')
                     | TimelineMessage ({ Content = ItemContent.Act act } as note) -> Some (actNoteItem act note)
                     | _ -> None)
@@ -3668,7 +3799,7 @@ module View =
         // announces nothing. The tooltip carries the moment even while the label shows the
         // duration, so hovering answers the question without changing anything.
         let sessionBreak (resumed: SessionResumed) (at: System.DateTimeOffset) (item: ConversationItem) =
-            let showingMoment = Set.contains item.MessageId model.DatedBreaks
+            let showingMoment = List.contains item.MessageId p.Dated
             let elapsed = sprintf "%s later" (Elapsed.inWords (at - resumed.LastHeardAt))
             let moment = Moment.stamp at
             let said, reading, label =
@@ -3683,6 +3814,70 @@ module View =
                           @click={Ev(fun _ -> dispatch (ToggleBreakTimeMsg item.MessageId))}>{said}</button>
                   <span class="{Style.sessionBreakLine}" aria-hidden="true"></span>
                 </div>"""
+        // Every row resolved to (whose act it is, its rendering) BEFORE grouping, so a row
+        // whose backing state a page boundary withheld contributes no entry — never an empty
+        // element, and never an author line standing over nothing. An act note carries
+        // its own author, like a block chip or a tool run: consecutive acts by one actor
+        // fold under a single author line rather than each repeating whose act it is.
+        match p.Row with
+                | RowItem (TimelineMessage item) ->
+                    match item.Content with
+                    // Before the general act rendering, because this act is not drawn as one:
+                    // the session being away is a gap in the page, not a line in it.
+                    | ItemContent.Act (Act.SessionResumed (resumed, at)) ->
+                        Some (None, fun () -> sessionBreak resumed at item)
+                    // Not drawn: the top of a timeline already says the session began. It
+                    // stays an item because a first boot's work names it as its cause, and
+                    // that cause line is where it is said.
+                    | ItemContent.Act (Act.SessionStarted _) -> None
+                    | ItemContent.Act act -> Some (Some item.Author, fun () -> actNoteItem act item)
+                    | ItemContent.Message _ -> Some (Some item.Author, fun () -> messageItem item)
+                    | ItemContent.Stopped stop -> Some (Some item.Author, fun () -> stoppedItem stop item)
+                | RowItem (TimelineBlock (_, terminalId, blockId)) ->
+                    // Both folds read the same page, so a chip without its block is a page
+                    // boundary, not a bug: the next page brings it.
+                    blockOf terminalId blockId
+                    |> Option.map (fun block ->
+                        Some (Authority.author block.Authority), fun () -> blockChip Style.chatChip terminalId block)
+                | RowItem (TimelineStretch stretch) -> Some (Some stretch.Holder, fun () -> stretchItem stretch)
+                // A lone call: `rows` leaves one call as its own row, and it draws as one —
+                // as the command it asked for, when it asked for one.
+                | RowItem (TimelineToolUse (_, id)) ->
+                    toolUseIn p id
+                    |> Option.map (fun use' ->
+                        match ToolUse.commandCall use' with
+                        | Some call -> Some ActorRef.Agent, (fun () -> commandCallChip Style.chatChip use' call)
+                        | None -> Some ActorRef.Agent, (fun () -> loneCall use'))
+                // Nor a thought: `rows` drops the kind outright, because reasoning was never
+                // said to anyone. Here for the same reason as the line above — the filter is
+                // a rule the type cannot hold — and this is the line that changes on the day
+                // somebody decides a screen should show it.
+                | RowItem (TimelineThought _) -> None
+                | RowWorkRun (turn, items) -> Some (Some ActorRef.Agent, fun () -> workRun turn items)
+                | RowTaskCard (turn, items) ->
+                    let lines =
+                        items
+                        |> List.choose (function
+                            | TimelineBlock (_, terminalId, blockId) ->
+                                blockOf terminalId blockId |> Option.map (fun block -> CardLine.Block (terminalId, block))
+                            | TimelineToolUse (_, id) ->
+                                toolUseIn p id
+                                |> Option.bind (fun use' ->
+                                    ToolUse.commandCall use' |> Option.map (fun call -> CardLine.Call (use', call)))
+                            | _ -> None)
+                    // A card at a page boundary can be short a line, exactly as a lone chip
+                    // can be missing: the next page brings it. Below two it is no longer a
+                    // burst, so it draws as the chips it is — never as a card of one.
+                    match lines with
+                    | [] -> None
+                    | [ CardLine.Block (terminalId, block) ] ->
+                        Some (Some (Authority.author block.Authority), fun () -> blockChip Style.chatChip terminalId block)
+                    | [ CardLine.Call (use', call) ] -> Some (Some ActorRef.Agent, fun () -> commandCallChip Style.chatChip use' call)
+                    | many -> Some (Some ActorRef.Agent, fun () -> taskCard turn many)
+    let private chat (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+        // Where chapters open, asked once for the whole transcript: every row and every
+        // item's menu below looks itself up here rather than asking again.
+        let chapterOpenings = ClientModel.chapterOpenings model
         let chapterRule (item: ConversationItem) =
             let held = Chapters.written CollabText.ylmish model.Synced.Chapters item
             let named = ClientModel.chapterRuleName model item
@@ -3718,68 +3913,23 @@ module View =
         // until then the timeline says it is reading, rather than showing the oldest end of
         // the log a page at a time.
         let showsFolded = ClientModel.showsFolded model
-        let rows = if showsFolded then (ClientModel.drawing model).Rows else []
-        // Every row resolved to (whose act it is, its rendering) BEFORE grouping, so a row
-        // whose backing state a page boundary withheld contributes no entry — never an empty
-        // element, and never an author line standing over nothing. An act note carries
-        // its own author, like a block chip or a tool run: consecutive acts by one actor
-        // fold under a single author line rather than each repeating whose act it is.
+        let rows = if showsFolded then (ClientModel.drawing model).Rows else []        // Each row behind `memo`, keyed on its props (`EntryProps`): a row whose props are equal
+        // to what it drew last is not drawn again, and lit leaves its elements as they are.
+        // What the props hold is everything the row's drawing reads of the model, gathered
+        // here, where the model is.
+        let people = ClientModel.people model
+        let drawing = ClientModel.drawing model
+        let pendingActs = ClientModel.pendingActs model
         let entryOf row =
-            match row with
-                | RowItem (TimelineMessage item) ->
-                    match item.Content with
-                    // Before the general act rendering, because this act is not drawn as one:
-                    // the session being away is a gap in the page, not a line in it.
-                    | ItemContent.Act (Act.SessionResumed (resumed, at)) ->
-                        Some (None, sessionBreak resumed at item)
-                    // Not drawn: the top of a timeline already says the session began. It
-                    // stays an item because a first boot's work names it as its cause, and
-                    // that cause line is where it is said.
-                    | ItemContent.Act (Act.SessionStarted _) -> None
-                    | ItemContent.Act act -> Some (Some item.Author, actNoteItem act item)
-                    | ItemContent.Message _ -> Some (Some item.Author, messageItem item)
-                    | ItemContent.Stopped stop -> Some (Some item.Author, stoppedItem stop item)
-                | RowItem (TimelineBlock (_, terminalId, blockId)) ->
-                    // Both folds read the same page, so a chip without its block is a page
-                    // boundary, not a bug: the next page brings it.
-                    blockOf terminalId blockId
-                    |> Option.map (fun block ->
-                        Some (Authority.author block.Authority), blockChip Style.chatChip terminalId block)
-                | RowItem (TimelineStretch stretch) -> Some (Some stretch.Holder, stretchItem stretch)
-                // A lone call: `rows` leaves one call as its own row, and it draws as one —
-                // as the command it asked for, when it asked for one.
-                | RowItem (TimelineToolUse (_, id)) ->
-                    TimelineProjection.toolUse id model.Timeline
-                    |> Option.map (fun use' ->
-                        match ToolUse.commandCall use' with
-                        | Some call -> Some ActorRef.Agent, commandCallChip Style.chatChip use' call
-                        | None -> Some ActorRef.Agent, loneCall use')
-                // Nor a thought: `rows` drops the kind outright, because reasoning was never
-                // said to anyone. Here for the same reason as the line above — the filter is
-                // a rule the type cannot hold — and this is the line that changes on the day
-                // somebody decides a screen should show it.
-                | RowItem (TimelineThought _) -> None
-                | RowWorkRun (turn, items) -> Some (Some ActorRef.Agent, workRun turn items)
-                | RowTaskCard (turn, items) ->
-                    let lines =
-                        items
-                        |> List.choose (function
-                            | TimelineBlock (_, terminalId, blockId) ->
-                                blockOf terminalId blockId |> Option.map (fun block -> CardLine.Block (terminalId, block))
-                            | TimelineToolUse (_, id) ->
-                                TimelineProjection.toolUse id model.Timeline
-                                |> Option.bind (fun use' ->
-                                    ToolUse.commandCall use' |> Option.map (fun call -> CardLine.Call (use', call)))
-                            | _ -> None)
-                    // A card at a page boundary can be short a line, exactly as a lone chip
-                    // can be missing: the next page brings it. Below two it is no longer a
-                    // burst, so it draws as the chips it is — never as a card of one.
-                    match lines with
-                    | [] -> None
-                    | [ CardLine.Block (terminalId, block) ] ->
-                        Some (Some (Authority.author block.Authority), blockChip Style.chatChip terminalId block)
-                    | [ CardLine.Call (use', call) ] -> Some (Some ActorRef.Agent, commandCallChip Style.chatChip use' call)
-                    | many -> Some (Some ActorRef.Agent, taskCard turn many)
+            let p = entryProps model people drawing chapterOpenings pendingActs row
+            timelineEntry actions dispatch p
+            |> Option.map (fun (author, _) ->
+                author,
+                Fable.LitExtras.memo p (fun p ->
+                    match timelineEntry actions dispatch p with
+                    | Some (_, draw) -> draw ()
+                    | None -> Lit.nothing))
+
         // What is about to run, at the tail — after everything that has happened, which is
         // where it happens. `rows` is a fold over EVENTS and a pending act is not one, so it
         // is not a row and cannot be: it joins the timeline as a block when it drains, and
@@ -4162,7 +4312,7 @@ module View =
             match block.StoppedBy with
             | Some who ->
                 html $"""<span class="{Style.terminalBlockFact}" data-terminal-block-stopped-by="{Entity.actorToken who}"
-                         >stopped by {Entity.render model who (EntityRef.Actor who)}</span>"""
+                         >stopped by {Entity.render (ClientModel.people model) who (EntityRef.Actor who)}</span>"""
             | None -> Lit.nothing
         let reason =
             match block.Status with
@@ -4312,7 +4462,7 @@ module View =
         (entry: PendingAct)
         : TemplateResult =
         let id = entry.QueueId
-        let statusToken, statusLine = pendingStatus model entry
+        let statusToken, statusLine = pendingStatus (ClientModel.awaitsTerminal entry model)
         // What this act IS, in words — the accessible name on the controls, because a screen
         // reader hearing "Delete" eleven times learns nothing about which one it is on.
         let what = pendingSubject model entry
@@ -4336,7 +4486,7 @@ module View =
               {body}
               <div class="{Style.terminalQueuedRow}">
                 {statusLine}
-                <span class="{Style.small}">{Entity.render model (Authority.author entry.Authority) (EntityRef.Actor (Authority.author entry.Authority))}</span>
+                <span class="{Style.small}">{Entity.render (ClientModel.people model) (Authority.author entry.Authority) (EntityRef.Actor (Authority.author entry.Authority))}</span>
                 <div class="ml-auto flex items-center gap-2">
                   {ordering}
                 </div>
@@ -4363,7 +4513,7 @@ module View =
         // Who holds it, said the way the roster says who is here: the square avatar and the
         // name. The pulsing "live" is the state; the button is what changes it; a sentence
         // ("X is using this terminal") restated all three.
-        let who = if holder = mine then "you" else Entity.actorName model holder
+        let who = if holder = mine then "you" else Entity.actorName (ClientModel.people model) holder
         // And WHERE, because the bar announces itself (`aria-live`) and "live, nick" heard
         // from a pane of four terminals does not say which one nick has.
         let where = Entity.terminalName model terminal |> Option.defaultValue (TerminalId.value terminal)
@@ -4382,7 +4532,7 @@ module View =
         html $"""
             <div class="{Style.terminalBandRow}" data-terminal-lease="{label}" aria-live="polite">
               <span class="{Style.paneLive}">{Icon.spinLead}live</span>
-              <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model holder ]}"></span>
+              <span class="{Style.cls [ Style.avatarSm; Entity.actorMark (ClientModel.people model) holder ]}"></span>
               <span class="{Style.paneSays}">{who} in {where}</span>
               <div class="ml-auto flex items-center gap-2">{control}</div>
             </div>"""
@@ -4400,8 +4550,8 @@ module View =
         let id = TerminalId.value terminal
         html $"""
             <div class="{Style.terminalBandRow}" data-terminal-stolen="{id}" role="alert">
-              <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model takenBy ]}"></span>
-              <span class="{Style.terminalStolenSays}">{Dom.Text.tookTheKeyboard (Entity.actorName model takenBy)}</span>
+              <span class="{Style.cls [ Style.avatarSm; Entity.actorMark (ClientModel.people model) takenBy ]}"></span>
+              <span class="{Style.terminalStolenSays}">{Dom.Text.tookTheKeyboard (Entity.actorName (ClientModel.people model) takenBy)}</span>
               <div class="ml-auto flex items-center gap-3">
                 <button type="button" class="{Style.bandActPrimary}" data-terminal-take="{id}"
                         @click={Ev(fun _ -> dispatch (TakeTerminalMsg terminal))}>{Dom.Text.takeBack}</button>
@@ -4483,7 +4633,7 @@ module View =
         else
             html $"""
                 <div class="{Style.terminalScreen}" data-terminal-screen="{id}" data-tail="{tail}"
-                     role="region" aria-live="off" aria-label="Live terminal, {Entity.actorName model holder} is typing">{body}</div>"""
+                     role="region" aria-live="off" aria-label="Live terminal, {Entity.actorName (ClientModel.people model) holder} is typing">{body}</div>"""
 
     /// The terminal composer: your command line, and everyone else's as they type them.
     let private terminalComposer (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) (terminal: TerminalId) : TemplateResult =
@@ -4495,7 +4645,7 @@ module View =
             ClientModel.terminalEditorsOf terminal author model
             |> List.map (fun (editor, name) ->
                 html $"""
-                    <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model editor}"
+                    <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour (ClientModel.people model) editor}"
                           title="{name}" data-terminal-draft-editor="{ActorRef.token editor}"></span>""")
         // What a send does NOW, said on the control rather than left for the queue card to
         // explain afterwards. While somebody holds the keyboard the session holds the queue,
@@ -4504,14 +4654,14 @@ module View =
         let sendName, sendWhen =
             match lease with
             | Some holder when holder = ClientModel.me model -> Dom.Text.queue, Dom.Text.runsOnHandBack None
-            | Some holder -> Dom.Text.queue, Dom.Text.runsOnHandBack (Some (Entity.actorName model holder))
+            | Some holder -> Dom.Text.queue, Dom.Text.runsOnHandBack (Some (Entity.actorName (ClientModel.people model) holder))
             | None -> Dom.Text.run, ""
         // Someone else mid-command: their live text, read-only here. Watching a collaborator
         // type a command is the same affordance as watching them type a message, which is
         // the whole reason the terminal composer is built out of the message composer's parts.
         let peerDraft (author: PeerId) =
             html $"""
-                <div class="{Style.terminalPeerDraft}" style="border-left-color:{Entity.presenceColour model (ActorRef.PeerRef author)}"
+                <div class="{Style.terminalPeerDraft}" style="border-left-color:{Entity.presenceColour (ClientModel.people model) (ActorRef.PeerRef author)}"
                      data-terminal-draft-author="{PeerId.value author}">
                   <span class="{Style.terminalPrompt}">$</span>
                   <input type="text" class="{Style.fieldMonoBare}" readonly aria-label="{ClientModel.nameOf author model}'s command"
@@ -4634,7 +4784,7 @@ module View =
                             html $"""
                                 <li class="{Style.terminalHeldRow}" data-terminal-refused="{BlockId.value block.BlockId}">
                                   <code class="{Style.chatChipCommand}" title="{block.Command}">{BlockLabel.ofBlock block}</code>
-                                  <span class="{Style.small}">{Entity.render model author (EntityRef.Actor author)}</span>
+                                  <span class="{Style.small}">{Entity.render (ClientModel.people model) author (EntityRef.Actor author)}</span>
                                 </li>"""
                         html $"""
                             <span class="{Style.small}">{Dom.Text.terminalRefusedHere refused.Length}</span>
@@ -4768,7 +4918,7 @@ module View =
                 // for them everywhere else on the screen reads, here, as somebody else.
                 | Some who when who = ClientModel.me model -> html $"""{Dom.Text.youKilled} {name}"""
                 | Some (UserRef _ | PeerRef _ | ActorRef.Agent as who) ->
-                    html $"""{name} {Dom.Text.killedBy} {Entity.render model who (EntityRef.Actor who)}"""
+                    html $"""{name} {Dom.Text.killedBy} {Entity.render (ClientModel.people model) who (EntityRef.Actor who)}"""
                 | Some (ActorRef.Session | ActorRef.System | ActorRef.Configured _)
                 | None -> html $"""{name} closed: {closed.Reason}"""
             | None -> html $"""{name} closed"""
@@ -4865,9 +5015,9 @@ module View =
                      never wrap, so a narrow pane gives way in the terminal's name and nowhere
                      else. -->
                 <div class="{Style.terminalQueuedRow}">
-                  <span class="{Style.paneWho}">{Entity.actorName model stretch.Holder}</span>
+                  <span class="{Style.paneWho}">{Entity.actorName (ClientModel.people model) stretch.Holder}</span>
                   <span class="{Style.cls [ Style.small; Style.givesWay ]}">typed in {where}</span>
-                  <span class="ml-auto shrink-0 whitespace-nowrap">{stretchEnding Style.paneSays model stretch.End}</span>
+                  <span class="ml-auto shrink-0 whitespace-nowrap">{stretchEnding Style.paneSays (ClientModel.people model) stretch.End}</span>
                   <span class="{Style.small} shrink-0 whitespace-nowrap tabular-nums">{length}</span>
                 </div>
                 {recording}
@@ -5062,10 +5212,10 @@ module View =
                 else
                     match view.Lease with
                     | Some (PeerRef peer) ->
-                        html $"""<span class="{Style.syncDot}" style="background:{Entity.presenceColour model (ActorRef.PeerRef peer)}"
-                                       title="{Entity.actorName model (PeerRef peer)}"></span>"""
+                        html $"""<span class="{Style.syncDot}" style="background:{Entity.presenceColour (ClientModel.people model) (ActorRef.PeerRef peer)}"
+                                       title="{Entity.actorName (ClientModel.people model) (PeerRef peer)}"></span>"""
                     | Some holder ->
-                        html $"""<span class="{Style.statusOk}" title="{Entity.actorName model holder}"><span class="{Style.statusDot}"></span></span>"""
+                        html $"""<span class="{Style.statusOk}" title="{Entity.actorName (ClientModel.people model) holder}"><span class="{Style.statusDot}"></span></span>"""
                     | None -> Lit.nothing
             // A hole in an audit trail is stated — beside the name, quietly
             // (`Style.terminalGone`): nine closed rows of it in the error red were a column of
@@ -5079,7 +5229,7 @@ module View =
                 ClientModel.editorsInTerminal view.TerminalId model
                 |> List.map (fun (who, name) ->
                     html $"""
-                        <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model who}"
+                        <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour (ClientModel.people model) who}"
                               title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>""")
             let reattach =
                 if not affords.CanReattach then Lit.nothing
@@ -5428,7 +5578,7 @@ module View =
             |> List.filter (fun (who, _) -> not (List.contains who excluding))
             |> List.map (fun (who, name) ->
                 html $"""
-                    <span class="{Style.paneViewerDot}" style="border-color:{Entity.presenceColour model who}"
+                    <span class="{Style.paneViewerDot}" style="border-color:{Entity.presenceColour (ClientModel.people model) who}"
                           title="{name} is watching" data-pane-viewer="{ActorRef.token who}"></span>""")
         // The roving stop: the one tab Tab reaches, which is the selected one — and the first
         // when none is, so the strip is never a row Tab cannot enter.
@@ -5470,7 +5620,7 @@ module View =
                 (editors
                  |> List.map (fun (who, name) ->
                      html $"""
-                         <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model who}"
+                         <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour (ClientModel.people model) who}"
                                title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>"""))
                 @ viewerDots (editors |> List.map fst) view.TerminalId
             // Its state (`terminalMark`), so a terminal you are not showing still says it is
@@ -5531,7 +5681,7 @@ module View =
                 |> Option.defaultValue (same (BlockId.value blockId))
             | PreviewSubject.Stretch stretch ->
                 let where = Entity.terminalName model stretch.TerminalId |> Option.defaultValue stretch.Title
-                same (sprintf "%s typed in %s" (Entity.actorName model stretch.Holder) where)
+                same (sprintf "%s typed in %s" (Entity.actorName (ClientModel.people model) stretch.Holder) where)
             // The file's own name, which is what the reader asked for. Not the path:
             // `artifacts/chart.png/0003-7f2a91` truncates to the part that says least.
             | PreviewSubject.Content ref -> same (ContentName.ofRef ref)

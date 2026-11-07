@@ -677,8 +677,8 @@ let create (deps: Deps) : Renderer =
             |> List.choose (fun (peerId, p) ->
                 standingIn field peerId p
                 |> Option.map (fun focus ->
-                    ({ Colour = Entity.presenceColour model peerId
-                       Selection = Entity.presenceSelection model peerId
+                    ({ Colour = Entity.presenceColour (ClientModel.people model) peerId
+                       Selection = Entity.presenceSelection (ClientModel.people model) peerId
                        Name = p.DisplayName
                        Anchor = focus.Pos.Anchor
                        Head = focus.Pos.Head } : Editor.RemoteBodyCursor)))

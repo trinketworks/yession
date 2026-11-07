@@ -92,6 +92,8 @@
     <PackageReference Include="Thoth.Json.Net" />
     <ProjectReference Include="..\Fable.BrowserExtras\Fable.BrowserExtras.fsproj" />
     <ProjectReference Include="..\Fable.ProseMirror\Fable.ProseMirror.fsproj" />
+    <!-- `memo`, the directive each timeline row is drawn behind (View.chat). -->
+    <ProjectReference Include="..\Fable.LitExtras\Fable.LitExtras.fsproj" />
   </ItemGroup>
 
   <ItemGroup>

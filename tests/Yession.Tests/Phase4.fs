@@ -1426,7 +1426,7 @@ let private peopleMarkTests =
             let model = ClientModel.init { PeerId = PeerId.create "peer-caret" |> expect; DisplayName = "Grace" }
             for i in 0 .. 199 do
                 let who = PeerRef (PeerId.create (sprintf "peer-%d" i) |> expect)
-                let colour = resolve css (Entity.presenceColour model who)
+                let colour = resolve css (Entity.presenceColour (ClientModel.people model) who)
                 Expect.isFalse (inBlueBand colour) (sprintf "peer-%d's caret is %s, the agent's blue (hue %A)" i colour (hue colour))
 
         // The session, the system and a repo's file are not people, and once wore a person's
@@ -1436,8 +1436,8 @@ let private peopleMarkTests =
             let model = ClientModel.init { PeerId = PeerId.create "peer-thing" |> expect; DisplayName = "Grace" }
             let things = [ ActorRef.Session; ActorRef.System; ActorRef.Configured (RepoRef.create "octo/hello" |> expect) ]
             for thing in things do
-                let caret = Entity.presenceColour model thing
-                let mark = Entity.actorMark model thing
+                let caret = Entity.presenceColour (ClientModel.people model) thing
+                let mark = Entity.actorMark (ClientModel.people model) thing
                 for seat in 0 .. Style.seats - 1 do
                     Expect.notEqual caret (Style.humanColour seat) (sprintf "%A's caret is seat %d's colour" thing seat)
                     Expect.isFalse (mark.Contains (Style.humanAvatar seat)) (sprintf "%A's mark is seat %d's checker" thing seat)
@@ -1452,7 +1452,7 @@ let private peopleMarkTests =
                     Attribution =
                         Attribution.ofEvents
                             [ for p in peers -> PeerJoined { PeerJoined.PeerId = p; PeerJoined.DisplayName = "peer"; PeerJoined.User = None } ] }
-            let colours = [ for p in peers -> Entity.presenceColour model (PeerRef p) ]
+            let colours = [ for p in peers -> Entity.presenceColour (ClientModel.people model) (PeerRef p) ]
             Expect.equal (List.length (List.distinct colours)) 6 (sprintf "six people wore %A" colours)
 
         // Distinct, not merely unequal: two colours a step apart in lightness are two values

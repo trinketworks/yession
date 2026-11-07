@@ -157,6 +157,13 @@
           "Fable.Fetch": "[2.7.0, )"
         }
       },
+      "fable.litextras": {
+        "type": "Project",
+        "dependencies": {
+          "Fable.Core": "[5.6.1, )",
+          "Fable.Lit": "[2.0.0, )"
+        }
+      },
       "fable.prosemirror": {
         "type": "Project",
         "dependencies": {

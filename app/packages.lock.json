@@ -295,6 +295,7 @@
           "Fable.BrowserExtras": "[1.0.0, )",
           "Fable.Elmish": "[5.0.2, )",
           "Fable.Lit": "[2.0.0, )",
+          "Fable.LitExtras": "[1.0.0, )",
           "Fable.ProseMirror": "[1.0.0, )",
           "Fable.Yjs": "[1.0.0-beta0236, )",
           "Thoth.Json": "[10.5.2, )",
