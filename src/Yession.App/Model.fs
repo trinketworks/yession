@@ -792,18 +792,22 @@ type ComposerChoice =
     | Own
     | Joined of PeerId
 
-/// Where a remote peer IS: the peer's name (for the cursor label), the `Focus` its caret is in
+/// Where a remote peer IS: the peer's name (for the cursor label), the FIELD its caret is in
 /// when it is in one, and what it has open in the pane. Ephemeral presence, delivered over
 /// `Presence` frames — never synced through Yjs, never durable. The peer's colour is derived
 /// from who it is (`Entity.presenceColour`), not carried.
 ///
 /// Both halves are optional and an entry exists while EITHER holds, because they are genuinely
 /// independent: someone reading an artifact is typing nowhere, and someone typing in the
-/// composer has no pane open. `Focus` stopped being total when viewing arrived, and every site
-/// that assumed a present peer had a caret is a site the compiler named.
+/// composer has no pane open. The caret stopped being total when viewing arrived, and every
+/// site that assumed a present peer had a caret is a site the compiler named.
+///
+/// The field and not the position: where in the field the caret stands is read by nothing the
+/// view draws, and moves on every keystroke a collaborator types, so it is kept beside the
+/// model (`Carets`), which tells the model of a peer only when what is here changes.
 type RemotePresence =
     { DisplayName : string
-      Focus : Focus option
+      Field : FocusField option
       Viewing : ViewRef option }
 
 /// One terminal's live transcript as this client has it (Plan 13). Records are keyed by
@@ -1784,8 +1788,9 @@ type ClientModel =
       Timeline      : TimelineProjection
       EventConsumer : EventConsumerState
       Agent         : AgentViewState
-      /// Live carets+selections, keyed by WHO. Cleared when somebody moves their caret out of
-      /// every collaborative field, or disconnects (their `Focus` becomes `None`).
+      /// Where everyone else is, keyed by WHO: the field each caret is in, and what each has
+      /// open. An entry goes when somebody is nowhere at all, or disconnects. Where in its
+      /// field a caret stands is not here (`Carets`).
       ///
       /// Keyed by actor rather than peer because the Session edits here too (Plan 25),
       /// and it never joined as a peer. `Peers` below stays peer-keyed: it is a fold of who
@@ -2411,9 +2416,11 @@ type ClientMsg =
     /// Edit the session title (collaborative text, merges like a draft body). A pure CRDT
     /// write; the Session reports the settled title to the Manager for the list.
     | EditTitleMsg of Ylmish.Text
-    /// A remote peer's cursor moved (or cleared) in the title — ephemeral presence folded
-    /// into `Presence`, never into the synced state.
-    | RemotePresenceMsg of PresencePayload
+    /// Where a remote actor is changed: its caret's field, its name or what it has open (or
+    /// all of it cleared) — ephemeral presence folded into `Presence`, never into the synced
+    /// state. Told by the slot that holds where carets stand (`Carets.Receive`), and only for
+    /// such a change: a caret moving within its field is not news to the model.
+    | RemotePresenceMsg of who: ActorRef * presence: RemotePresence
     /// This peer's caret moved to another collaborative field, or left every one (`None`).
     /// Told only when the field changed, and once a frame at most, by the slot that holds
     /// where the caret stands (`Carets.Report`) — a move within one field is not news to the
@@ -3431,7 +3438,7 @@ module ClientModel =
     let editorsOf (peer: PeerId) (model: ClientModel) : (ActorRef * string) list =
         model.Presence
         |> Map.toList
-        |> List.filter (fun (_, presence) -> presence.Focus |> Option.exists (fun f -> f.Field = DraftBody peer))
+        |> List.filter (fun (_, presence) -> presence.Field = Some (DraftBody peer))
         |> List.map (fun (editor, presence) -> editor, presence.DisplayName)
 
     /// The strip with this terminal in it, in the slot the order terminals OPENED in gives
@@ -4448,7 +4455,7 @@ module ClientModel =
         model.Presence
         |> Map.toList
         |> List.filter (fun (_, presence) ->
-            presence.Focus |> Option.exists (fun f -> f.Field = TerminalDraftBody (terminal, author)))
+            presence.Field = Some (TerminalDraftBody (terminal, author)))
         |> List.map (fun (editor, presence) -> editor, presence.DisplayName)
 
     // --- Where everyone is ------------------------------------------------------------------
@@ -4459,7 +4466,7 @@ module ClientModel =
     // the roster and the terminal strip render it.
     //
     // WHERE someone is comes from presence, and holds exactly while their caret is in a
-    // collaborative field: presence clears when the caret leaves (`Focus = None`) and when the
+    // collaborative field: presence clears when the caret leaves (`Field = None`) and when the
     // peer goes. WHETHER someone is here is a different question with a different source —
     // `Here`, the log's open connections — because a person reading the timeline has no caret
     // anywhere and is still in the room. The roster (`roster`, below `userName`) asks both.
@@ -4499,7 +4506,7 @@ module ClientModel =
         // from this list rather than carried with a made-up field. Where it is showing is
         // `viewersOf`, which the pane renders.
         |> List.choose (fun (who, presence) ->
-            presence.Focus |> Option.map (fun focus -> who, presence.DisplayName, focus.Field))
+            presence.Field |> Option.map (fun field -> who, presence.DisplayName, field))
         |> List.sortBy (fun (who, name, _) -> name, ActorRef.token who)
 
     /// The terminal a focus is in, when it is in one. A composer slot names its terminal
@@ -4811,8 +4818,8 @@ module ClientModel =
         let personOf (peer: PeerId) = Attribution.actorFor model.Attribution.PeerUsers peer
         let caretOf (who: ActorRef) =
             Map.tryFind who model.Presence
-            |> Option.bind (fun presence -> presence.Focus)
-            |> Option.map (fun focus -> who, focus.Field)
+            |> Option.bind (fun presence -> presence.Field)
+            |> Option.map (fun field -> who, field)
         let presentPeers =
             model.Presence
             |> Map.toList
@@ -4840,7 +4847,7 @@ module ClientModel =
             |> List.choose (fun (who, presence) ->
                 match who with
                 | ActorRef.PeerRef _ -> None
-                | _ -> presence.Focus |> Option.map (fun focus -> who, presence.DisplayName, Some (who, focus.Field)))
+                | _ -> presence.Field |> Option.map (fun field -> who, presence.DisplayName, Some (who, field)))
         people @ others |> List.sortBy (fun (who, name, _) -> name, ActorRef.token who)
 
     /// What the chapter at this item is called, on a surface.
@@ -5602,22 +5609,18 @@ module ClientModel =
             { model with Link = SessionLink.dropped model.Link; Asked = Map.empty }
         | EditTitleMsg title ->
             model |> withSynced { model.Synced with Title = title }
-        | RemotePresenceMsg payload ->
-            // Never render your own remote caret; a cleared focus removes the entry.
-            if payload.Who = ActorRef.PeerRef model.Peer.PeerId then model
+        | RemotePresenceMsg (who, present) ->
+            // Never render your own remote caret; a cleared caret and pane removes the entry.
+            if who = ActorRef.PeerRef model.Peer.PeerId then model
             else
                 // The entry goes when the peer is nowhere AT ALL — no caret and no pane. A
                 // cleared caret used to mean "forget them", and with viewing on the same frame
                 // that would drop a reader the moment they stopped typing, which is precisely
                 // the peer this feature exists to show.
                 let presence =
-                    match payload.Focus, payload.Viewing with
-                    | None, None -> Map.remove payload.Who model.Presence
-                    | focus, viewing ->
-                        Map.add
-                            payload.Who
-                            { DisplayName = payload.DisplayName; Focus = focus; Viewing = viewing }
-                            model.Presence
+                    match present.Field, present.Viewing with
+                    | None, None -> Map.remove who model.Presence
+                    | _ -> Map.add who present model.Presence
                 { model with Presence = presence }
         | CaretMovedMsg focus -> { model with Caret = focus }
         | EnsureDraftMsg (peerId, queueId) ->

@@ -1298,7 +1298,8 @@ module Client =
     /// its own beyond pairing a frame's request id with the read it carries.
     ///
     /// `carets` is the page's, not the channel's: a caret reported before this channel came
-    /// up still stands when it is accepted, and is what the restate sends.
+    /// up still stands when it is accepted, and is what the restate sends; and everyone
+    /// else's presence frames are taken in there (`Carets.Receive`).
     let connect
         (options: ConnectOptions)
         (doc: Y.Doc)
@@ -1354,7 +1355,15 @@ module Client =
             async {
                 try
                     do!
-                        Connection.run hello dispatchAndPush (DocSync.applyRemote doc) onResponse onEventsPage options.OnTerminalSnapshot channel
+                        Connection.run
+                            hello
+                            dispatchAndPush
+                            (DocSync.applyRemote doc)
+                            onResponse
+                            onEventsPage
+                            options.OnTerminalSnapshot
+                            (carets.Receive dispatchAndPush)
+                            channel
                 // However the pump ends — the channel closing, a fault, cancellation — the
                 // doc stops feeding it.
                 finally stopSending ()

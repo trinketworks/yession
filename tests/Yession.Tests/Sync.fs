@@ -1262,12 +1262,11 @@ let private composerTests =
             Expect.equal (ClientModel.nameOf ivy model) (PeerId.value ivy) "an unknown peer falls back to its id"
 
         testCase "the editors of a draft are the live carets in it" <| fun () ->
-            let focus (peer: PeerId) : Focus = { Field = DraftBody peer; Pos = { Anchor = "AQI="; Head = "AQI=" } }
             let model =
                 mine
                 |> withDrafts [ grace ]
-                |> Support.step (RemotePresenceMsg { Who = PeerRef ivy; DisplayName = "keen-fox"; Focus = Some (focus grace); Viewing = None })
-                |> Support.step (RemotePresenceMsg { Who = PeerRef grace; DisplayName = "brave-owl"; Focus = Some (focus ada); Viewing = None })
+                |> Support.step (RemotePresenceMsg (PeerRef ivy, { DisplayName = "keen-fox"; Field = Some (DraftBody grace); Viewing = None }))
+                |> Support.step (RemotePresenceMsg (PeerRef grace, { DisplayName = "brave-owl"; Field = Some (DraftBody ada); Viewing = None }))
             Expect.equal (ClientModel.editorsOf grace model) [ PeerRef ivy, "keen-fox" ] "only carets in THAT draft count"
             Expect.equal (ClientModel.editorsOf ada model) [ PeerRef grace, "brave-owl" ] "a peer in your draft shows in yours"
 
@@ -1315,29 +1314,100 @@ let private titlePresenceTests =
             let next = Support.step (ConnectedMsg accepted) base'
             Expect.equal next.Session (Some (SessionId.create "demo-session" |> expect)) "the session id is learned from PeerAccepted"
 
-        testCase "RemotePresenceMsg adds, updates, and clears a peer's cursor" <| fun () ->
-            let focusAt (a: string) : Focus = { Field = Title; Pos = { Anchor = a; Head = a } }
-            let typing (f: Focus option) : PresencePayload = { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = f; Viewing = None }
-            let added = Support.step (RemotePresenceMsg (typing (Some (focusAt "aa")))) base'
-            Expect.equal (Map.tryFind (PeerRef bob) added.Presence) (Some { DisplayName = "brave-owl"; Focus = Some (focusAt "aa"); Viewing = None }) "the peer's caret is recorded"
-            let moved = Support.step (RemotePresenceMsg (typing (Some (focusAt "bb")))) added
-            Expect.equal (Map.tryFind (PeerRef bob) moved.Presence |> Option.bind (fun c -> c.Focus) |> Option.map (fun f -> f.Pos.Anchor)) (Some "bb") "the caret moves"
-            let cleared = Support.step (RemotePresenceMsg { Who = PeerRef bob; DisplayName = ""; Focus = None; Viewing = None }) moved
+        testCase "RemotePresenceMsg adds and clears a peer's caret" <| fun () ->
+            let typing (field: FocusField option) : RemotePresence = { DisplayName = "brave-owl"; Field = field; Viewing = None }
+            let added = Support.step (RemotePresenceMsg (PeerRef bob, typing (Some Title))) base'
+            Expect.equal (Map.tryFind (PeerRef bob) added.Presence) (Some (typing (Some Title))) "the peer's caret is recorded"
+            let cleared = Support.step (RemotePresenceMsg (PeerRef bob, typing None)) added
             Expect.isFalse (Map.containsKey (PeerRef bob) cleared.Presence) "a peer with neither caret nor view is forgotten"
 
-        // The reason `Focus` became an option: a reader has no caret anywhere, and the old
+        // The reason the caret became an option: a reader has no caret anywhere, and the old
         // "no caret means gone" rule would drop them the moment they stopped typing.
         testCase "RemotePresenceMsg keeps a peer who is only viewing" <| fun () ->
             let ref' = ContentRef.create "artifacts/chart.png/0000-7f2a91" |> expect
-            let viewing = Support.step (RemotePresenceMsg { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = None; Viewing = Some (ViewingFile ref') }) base'
+            let viewing = Support.step (RemotePresenceMsg (PeerRef bob, { DisplayName = "brave-owl"; Field = None; Viewing = Some (ViewingFile ref') })) base'
             Expect.equal (Map.tryFind (PeerRef bob) viewing.Presence |> Option.bind (fun c -> c.Viewing)) (Some (ViewingFile ref')) "a peer with no caret is present while they hold something open"
-            let closed = Support.step (RemotePresenceMsg { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = None; Viewing = None }) viewing
+            let closed = Support.step (RemotePresenceMsg (PeerRef bob, { DisplayName = "brave-owl"; Field = None; Viewing = None })) viewing
             Expect.isFalse (Map.containsKey (PeerRef bob) closed.Presence) "closing the pane with no caret forgets them"
 
         testCase "RemotePresenceMsg ignores the local peer's own cursor" <| fun () ->
-            let focus : Focus = { Field = Title; Pos = { Anchor = "aa"; Head = "aa" } }
-            let next = Support.step (RemotePresenceMsg { Who = PeerRef base'.Peer.PeerId; DisplayName = "Ada"; Focus = Some focus; Viewing = None }) base'
+            let next = Support.step (RemotePresenceMsg (PeerRef base'.Peer.PeerId, { DisplayName = "Ada"; Field = Some Title; Viewing = None })) base'
             Expect.isFalse (Map.containsKey (PeerRef base'.Peer.PeerId) next.Presence) "you never render your own remote caret"
+    ]
+
+/// Where everyone else's carets stand, kept beside the model (`Carets.Receive`): which frames
+/// the model hears of, and what the slot keeps.
+let private remoteCaretTests =
+    let bob = PeerId.create "bob" |> expect
+    let at (field: FocusField) (anchor: string) : Focus option =
+        Some { Field = field; Pos = { Anchor = anchor; Head = anchor } }
+    let frame (name: string) (focus: Focus option) (viewing: ViewRef option) : PresencePayload =
+        { Who = PeerRef bob; DisplayName = name; Focus = focus; Viewing = viewing }
+    /// What `next` tells the model, received after `first` has been.
+    let told (first: PresencePayload) (next: PresencePayload) : ClientMsg list =
+        let carets = Carets ()
+        carets.Receive ignore first
+        let sent = ResizeArray<ClientMsg> ()
+        carets.Receive sent.Add next
+        List.ofSeq sent
+    let typing = frame "brave-owl" (at Title "AQI=") None
+
+    testList "Everyone else's carets are told to the model only when where they are changes" [
+        testCase "a peer's first frame is told to the model" <| fun () ->
+            let carets = Carets ()
+            let sent = ResizeArray<ClientMsg> ()
+            carets.Receive sent.Add typing
+            Expect.equal (List.ofSeq sent) [ RemotePresenceMsg (PeerRef bob, { DisplayName = "brave-owl"; Field = Some Title; Viewing = None }) ] "where they are, to the field"
+
+        testCase "a caret moving within its field is not news to the model" <| fun () ->
+            Expect.equal (told typing (frame "brave-owl" (at Title "AwQ=") None)) [] "the view draws nothing of where in the title it is"
+
+        testCase "a caret moving within its field is kept where it now stands" <| fun () ->
+            let carets = Carets ()
+            carets.Receive ignore typing
+            carets.Receive ignore (frame "brave-owl" (at Title "AwQ=") None)
+            Expect.equal (carets.Remote (PeerRef bob)) (at Title "AwQ=") "what the caret is drawn from"
+
+        testCase "a caret moving within its field is drawn" <| fun () ->
+            let carets = Carets ()
+            carets.Receive ignore typing
+            let mutable changes = 0
+            carets.Changed.Add (fun () -> changes <- changes + 1)
+            carets.Receive ignore (frame "brave-owl" (at Title "AwQ=") None)
+            Expect.equal changes 1 "whatever places carets hears of it"
+
+        testCase "a caret moving to another field is told to the model" <| fun () ->
+            let queued = QueueBody (QueueId.create "q-1" |> expect)
+            Expect.equal
+                (told typing (frame "brave-owl" (at queued "AQI=") None))
+                [ RemotePresenceMsg (PeerRef bob, { DisplayName = "brave-owl"; Field = Some queued; Viewing = None }) ]
+                "the field it is in now"
+
+        testCase "a new name is told to the model" <| fun () ->
+            Expect.equal
+                (told typing (frame "keen-fox" (at Title "AQI=") None))
+                [ RemotePresenceMsg (PeerRef bob, { DisplayName = "keen-fox"; Field = Some Title; Viewing = None }) ]
+                "the label a caret wears"
+
+        // A peer who stops typing but keeps a pane open is still somewhere.
+        testCase "a pane opened beside a caret is told to the model" <| fun () ->
+            let reading = Some (ViewingTerminal (TerminalId.create "term-a" |> expect))
+            Expect.equal
+                (told typing (frame "brave-owl" (at Title "AQI=") reading))
+                [ RemotePresenceMsg (PeerRef bob, { DisplayName = "brave-owl"; Field = Some Title; Viewing = reading }) ]
+                "what they have open"
+
+        testCase "a peer that is nowhere is told to the model" <| fun () ->
+            Expect.equal
+                (told typing (frame "brave-owl" None None))
+                [ RemotePresenceMsg (PeerRef bob, { DisplayName = "brave-owl"; Field = None; Viewing = None }) ]
+                "so the model forgets them"
+
+        testCase "a peer that is nowhere is forgotten where carets stand" <| fun () ->
+            let carets = Carets ()
+            carets.Receive ignore typing
+            carets.Receive ignore (frame "brave-owl" None None)
+            Expect.equal (carets.Remote (PeerRef bob)) None "no caret left to draw"
     ]
 
 // The harness's own guard. `WaitFor` resolving on a model change is exercised by every suite
@@ -1481,5 +1551,6 @@ let tests =
         composerTests
         queueUnitTests
         titlePresenceTests
+        remoteCaretTests
         Tag.needs "Draft sync E2E" [ Tag.Ports; Tag.Native ] (fun () -> e2eTests)
     ]
