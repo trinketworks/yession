@@ -72,37 +72,44 @@ let private pixels (element: HTMLElement) (property: string) : float =
     | true, pixels -> pixels
     | _ -> 0.0
 
+/// A known run of characters put in a box to be read: the CELL comes from what it takes —
+/// the only way to get a font's advance width without hard-coding one — wearing the class the
+/// output really renders in, so the font measured is the font used. `white-space: pre` inline
+/// over that class, because it wraps, and a wrapped run measures the box instead of the text.
+///
+/// Placed, read and taken out in three steps rather than one, so a render can put the read in
+/// its one read pass (`Render`): putting it in is a write, and a read after a write is a layout
+/// the browser must do there and then. Out of flow at the box's top corner and out of sight,
+/// so it moves nothing while it is in, and short — ten cells — so it overflows no box: a
+/// reader's place at the end (`Tail`), read while it is in, is the place it will have once it
+/// is out.
+let private cellsOfProbe = 10
+
+let private placeProbe (box: HTMLElement) : HTMLElement =
+    let probe = document.createElement "span"
+    probe.className <- Style.terminalOutput
+    setStyleProperty probe "position" "absolute"
+    setStyleProperty probe "top" "0"
+    setStyleProperty probe "left" "0"
+    setStyleProperty probe "visibility" "hidden"
+    setStyleProperty probe "white-space" "pre"
+    probe.textContent <- Array.create cellsOfProbe "M" |> String.concat ""
+    box.appendChild probe |> ignore
+    probe
+
 /// The viewport size in CHARACTER CELLS, measured from the rendered page rather than assumed:
 /// the pane is one width on a desktop and another on a phone, and the program on the other end
-/// lays its screen out to whatever it is told.
+/// lays its screen out to whatever it is told. Reads only: the probe is already in the box.
 ///
-/// Two measurements, neither of them a constant. The CELL comes from putting a known run of
-/// characters in the box and reading what it takes — the only way to get a font's advance
-/// width without hard-coding one — wearing the class the output really renders in, so the font
-/// measured is the font used. `white-space: pre` inline over that class, because it wraps, and
-/// a wrapped run measures the box instead of the text.
-///
-/// The BOX is `clientWidth` less its padding: that already excludes the border and any
+/// Two measurements, neither of them a constant: the CELL off the probe (`placeProbe`), and
+/// the BOX, `clientWidth` less its padding. That already excludes the border and any
 /// scrollbar, which are exactly the pixels no character is drawn on. Read rather than
 /// subtracted as a constant — the two modes pad differently, and the version of this that
 /// hard-coded `- 24` was one restyle from being quietly wrong.
-///
-/// Takes the box rather than a terminal id: finding one is `viewports` above, and it finds
-/// them all together.
-let private measure (box: HTMLElement) : (int * int) option =
-    let probe = document.createElement "span"
-    probe.className <- Style.terminalOutput
-    // Out of flow and out of sight, so measuring a box never moves it. `pre` over the
-    // class, which wraps: a wrapped run measures the box instead of the text.
-    setStyleProperty probe "position" "absolute"
-    setStyleProperty probe "visibility" "hidden"
-    setStyleProperty probe "white-space" "pre"
-    probe.textContent <- Array.create 80 "M" |> String.concat ""
-    box.appendChild probe |> ignore
+let private measure (box: HTMLElement) (probe: HTMLElement) : (int * int) option =
     let rect = probe.getBoundingClientRect ()
-    let cell = rect.width / 80.0
+    let cell = rect.width / float cellsOfProbe
     let line = rect.height
-    box.removeChild probe |> ignore
     if not (cell > 0.0) || not (line > 0.0) then None
     else
         let width = box.clientWidth - pixels box "padding-left" - pixels box "padding-right"
@@ -110,6 +117,10 @@ let private measure (box: HTMLElement) : (int * int) option =
         let cols = int (floor (width / cell))
         let rows = int (floor (height / line))
         if cols > 0 && rows > 0 then Some (cols, rows) else None
+
+/// The probes a measurement put in the page, by terminal id, with the box each is in: what
+/// `Read` reads and then takes out.
+type Measuring = private Measuring of (string * HTMLElement * HTMLElement) list
 
 /// One terminal's screen as this client composes it.
 type private Live =
@@ -125,6 +136,13 @@ type Screens =
       /// dispatch any that changed. Safe to call after every render: a screen that did not
       /// move dispatches nothing.
       Sync : ClientModel -> unit
+      /// The first step of measuring every box the render drew: a probe into each (writes).
+      Place : unit -> Measuring
+      /// The second: read each box's size off its probe (reads only), and hand back the third
+      /// — the probes taken out and the sizes told to the model — for after the render's
+      /// other reads. Measuring is asked of the render, never done by `Sync`, so it can stand
+      /// in the render's one read pass.
+      Read : Measuring -> (unit -> unit)
       /// Drop a terminal's emulator. An emulator is a live object with a worker behind it;
       /// one left behind for a terminal nobody is in is a leak with no screen.
       Forget : TerminalId -> unit }
@@ -181,18 +199,32 @@ let create (hosts: Hosts.Hosts) (dispatch: ClientMsg -> unit) (current: unit -> 
     /// model (`current`), not the one a sync was handed: a model that came during the frame
     /// and has not been drawn yet may already hold the size, and telling it again is a message
     /// for nothing. `measure` refuses a zero box as the model does, so what is told is kept.
-    let measureSizes (boxes: Map<string, HTMLElement>) =
+    let place () : Measuring =
         match current () with
-        | None -> ()
+        | None -> Measuring []
         | Some model ->
-            for terminal in Projection.openTerminals model.Terminals do
+            let boxes = viewports hosts
+            Projection.openTerminals model.Terminals
+            |> List.choose (fun terminal ->
                 let key = TerminalId.value terminal.TerminalId
-                match Map.tryFind key boxes |> Option.bind measure with
-                | None -> ()
-                | Some (cols, rows) ->
-                    let size = { Cols = cols; Rows = rows }
-                    if Map.tryFind terminal.TerminalId model.TerminalViewports <> Some size then
-                        dispatch (TerminalViewportMsg (terminal.TerminalId, size))
+                Map.tryFind key boxes |> Option.map (fun box -> key, box, placeProbe box))
+            |> Measuring
+
+    let read (Measuring probes) : unit -> unit =
+        let sizes = probes |> List.map (fun (key, box, probe) -> key, measure box probe)
+        fun () ->
+            for _, box, probe in probes do
+                box.removeChild probe |> ignore
+            match current () with
+            | None -> ()
+            | Some model ->
+                for terminal in Projection.openTerminals model.Terminals do
+                    match sizes |> List.tryPick (fun (key, size) -> if key = TerminalId.value terminal.TerminalId then size else None) with
+                    | None -> ()
+                    | Some (cols, rows) ->
+                        let size = { Cols = cols; Rows = rows }
+                        if Map.tryFind terminal.TerminalId model.TerminalViewports <> Some size then
+                            dispatch (TerminalViewportMsg (terminal.TerminalId, size))
 
     /// One observer, watching every terminal's box from the moment lit draws it to the moment
     /// lit takes it away. A box can change without the model changing — the splitter is
@@ -205,7 +237,7 @@ let create (hosts: Hosts.Hosts) (dispatch: ClientMsg -> unit) (current: unit -> 
     /// changes in.
     let observer =
         if ResizeObserver.isSupported () then
-            Some (ResizeObserver.create (fun () -> measureSizes (viewports hosts)))
+            Some (ResizeObserver.create (fun () -> (read (place ())) ()))
         else None
     hosts.Watch
         HostRole.Viewport
@@ -271,6 +303,6 @@ let create (hosts: Hosts.Hosts) (dispatch: ClientMsg -> unit) (current: unit -> 
                 |> Seq.filter (fun k -> not (Set.contains k open'))
                 |> Seq.toList do
                 forget stale
-            // Last, because it reads the boxes this render has just drawn: how big each is.
-            measureSizes (viewports hosts)
+      Place = place
+      Read = read
       Forget = fun id -> forget (TerminalId.value id) }

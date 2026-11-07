@@ -523,10 +523,16 @@ module private Strip =
 
     /// Write which ends have tabs past them, for the fade to key on — and only on a change,
     /// because this runs on every scroll event and an attribute write is a style recalc.
-    let mark (scroller: HTMLElement) : unit =
+    ///
+    /// Read now, written by what this hands back, so a caller can read every strip's geometry
+    /// with the rest of its reads and write after them (`syncStrip`).
+    let marking (scroller: HTMLElement) : unit -> unit =
         let token = Yession.App.TabStrip.Hidden.token (Yession.App.TabStrip.hidden (port scroller))
-        if scroller.getAttribute Yession.App.Dom.Hooks.paneStripHidden <> token then
-            scroller.setAttribute (Yession.App.Dom.Hooks.paneStripHidden, token)
+        fun () ->
+            if scroller.getAttribute Yession.App.Dom.Hooks.paneStripHidden <> token then
+                scroller.setAttribute (Yession.App.Dom.Hooks.paneStripHidden, token)
+
+    let mark (scroller: HTMLElement) : unit = marking scroller ()
 
     /// Scroll the strip the least distance that shows this tab clear of both edges, and not at
     /// all when it already is. The tab's span is taken in the scroller's own content
@@ -642,8 +648,11 @@ let setOpen (isOpen: bool) : unit =
 /// tabs the moment anything at all arrived.
 ///
 /// The strips the render drew are handed in (`HostRole.PaneStrip`), not found: a render asks
-/// the document nothing.
-let syncStrip (strips: HTMLElement list) : unit = strips |> List.iter Strip.mark
+/// the document nothing. Their geometry is read NOW, and the fade written by what this hands
+/// back, so a render reads it in its one read pass and writes after (`Render`).
+let syncStrip (strips: HTMLElement list) : unit -> unit =
+    let writes = strips |> List.map Strip.marking
+    fun () -> writes |> List.iter (fun write -> write ())
 
 /// The listeners that keep the strip honest between renders — bound once per page, delegated
 /// from the document so they survive Lit replacing the strip.
