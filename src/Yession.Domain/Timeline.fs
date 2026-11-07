@@ -126,6 +126,19 @@ module TimelineItem =
         | TimelineToolUse (offset, _) -> offset
         | TimelineThought (offset, _) -> offset
 
+    /// What this item IS, as a string a screen can key it by: the id it was minted with (a
+    /// message's, a block's, a call's), or for what has none, the offset it is anchored at.
+    /// The same on every replica and for the item's whole life, so what is drawn for it can
+    /// follow it when items arrive above it. A prefix per kind, so two kinds sharing an id
+    /// are still two keys.
+    let key =
+        function
+        | TimelineMessage item -> "message:" + MessageId.value item.MessageId
+        | TimelineBlock (_, _, blockId) -> "block:" + BlockId.value blockId
+        | TimelineStretch stretch -> "stretch:" + TerminalStretch.key stretch
+        | TimelineToolUse (_, id) -> "tool:" + ToolUseId.value id
+        | TimelineThought (offset, _) -> "thought:" + string (EventOffset.value offset)
+
 /// What a task card says about one of its commands — coarser than `BlockStatus`, and
 /// coarser on purpose. A card is read at a glance to answer three questions: is anything
 /// wrong, is anything still going, is it finished. The exact exit code is on the line itself
@@ -285,6 +298,17 @@ module WorkRun =
         |> String.concat ", "
 
 module TimelineRow =
+
+    /// What this row IS (`TimelineItem.key`): a lone item by its own key, and a run or a card
+    /// by its FIRST member's, which is what it keeps while members join it. Prefixed, so a
+    /// call that becomes the head of a run is a different row from the call drawn alone.
+    let key =
+        function
+        | RowItem item -> TimelineItem.key item
+        | RowWorkRun (turn, items) ->
+            "run:" + (items |> List.tryHead |> Option.map TimelineItem.key |> Option.defaultValue (AgentTurnId.value turn))
+        | RowTaskCard (turn, items) ->
+            "card:" + (items |> List.tryHead |> Option.map TimelineItem.key |> Option.defaultValue (AgentTurnId.value turn))
 
     let offset =
         function

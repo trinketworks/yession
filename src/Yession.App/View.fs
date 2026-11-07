@@ -3789,20 +3789,20 @@ module View =
         //
         // Not a command an agent's call queued, while that call is on the timeline: the
         // call's own chip already stands for it, in the call's place (`commandCallChip`).
-        let pending : (ActorRef option * TemplateResult) list =
+        let pending : (ActorRef option * string * TemplateResult) list =
             ClientModel.pendingActs model
             |> List.filter (fun entry ->
                 match entry.ToolUseId, Authority.author entry.Authority with
                 | Some id, ActorRef.Agent -> Option.isNone (TimelineProjection.toolUse id model.Timeline)
                 | _ -> true)
             |> List.map (fun entry ->
-                Some (Authority.author entry.Authority), pendingChip actions dispatch model entry)
+                Some (Authority.author entry.Authority), "pending:" + QueueId.value entry.QueueId, pendingChip actions dispatch model entry)
         // The agent's commands a loss refused, said where a person reads the conversation —
         // which is often not the pane. The refused blocks are on the timeline already, one
         // chip each; this is the sentence about them, and the way to the terminal. The
         // terminal's name is the control, never the sentence's subject: a name is often a
         // long command line, and "dotnet fsi … is paused" read as nonsense.
-        let refusedRows : (ActorRef option * TemplateResult) list =
+        let refusedRows : (ActorRef option * string * TemplateResult) list =
             Projection.openTerminals model.Terminals
             |> List.choose (fun view ->
                 match view.Lost with
@@ -3817,6 +3817,7 @@ module View =
                         let where = Entity.terminalName model view.TerminalId |> Option.defaultValue id
                         Some (
                             None,
+                            "refused:" + id,
                             html $"""
                                 <article class="{Style.chatPaused}" data-chat-refused="{id}" role="status">
                                   <span class="{Style.terminalPausedTitle}">{Dom.Text.chatRefused agents.Length}</span>
@@ -3828,15 +3829,22 @@ module View =
                                   </div>
                                 </article>"""
                         ))
-        let entries : (ActorRef option * TemplateResult) list =
+        // Each entry with its key: what it IS (`TimelineRow.key`), so that what is drawn for it
+        // is the same element for as long as it is the same thing — an editor, a focus, the
+        // anchor a scroll holds to all stay with it when something arrives above it, and a
+        // group re-forming around it moves it rather than drawing it again.
+        let entries : (ActorRef option * string * TemplateResult) list =
             (rows
              |> List.collect (fun row ->
                  let rule =
                      match row with
                      | RowItem (TimelineMessage item) when Set.contains item.MessageId chapterOpenings ->
-                         [ None, chapterRule item ]
+                         [ None, "chapter:" + MessageId.value item.MessageId, chapterRule item ]
                      | _ -> []
-                 rule @ Option.toList (entryOf row)))
+                 rule
+                 @ (entryOf row
+                    |> Option.map (fun (actor, rendered) -> actor, TimelineRow.key row, rendered)
+                    |> Option.toList)))
             @ refusedRows
             @ pending
         // Consecutive acts by ONE actor fold under one author line — the avatar and name a
@@ -3844,24 +3852,31 @@ module View =
         // sticky (`Style.messageGroupHead`), so a run longer than the screen keeps saying
         // whose it is; and it is what makes a lone tool run or command wear the same
         // attribution a message does, instead of a private caps label of its own.
-        let group (actor: ActorRef) (members: TemplateResult list) =
+        //
+        // Keyed as its members are (`entries`): a group is its FIRST member's, which it keeps
+        // while members join it at the end. A group that loses its first member to a message
+        // above is a different group, and is drawn as one.
+        let group (actor: ActorRef) (members: (string * TemplateResult) list) =
             html $"""
                 <section class="{Style.messageGroup}" data-message-author="{Entity.actorToken actor}">
                   <header class="{Style.messageGroupHead}">{actorHead model Style.avatar actor}</header>
-                  {members}
+                  {members |> Lit.mapUnique fst snd}
                 </section>"""
-        let items =
+        let items : (string * TemplateResult) list =
             let flush acc = function
                 | None -> acc
-                | Some (actor, members) -> group actor (List.rev members) :: acc
-            let step (acc, current) (actor, rendered) =
+                | Some (actor, members) ->
+                    let members = List.rev members
+                    ("group:" + fst (List.head members), group actor members) :: acc
+            let step (acc, current) (actor, key, rendered) =
                 match actor, current with
                 | Some actor, Some (actor', members) when actor = actor' ->
-                    acc, Some (actor', rendered :: members)
-                | Some actor, current -> flush acc current, Some (actor, [ rendered ])
-                | None, current -> rendered :: flush acc current, None
+                    acc, Some (actor', (key, rendered) :: members)
+                | Some actor, current -> flush acc current, Some (actor, [ key, rendered ])
+                | None, current -> (key, rendered) :: flush acc current, None
             let acc, current = entries |> List.fold step ([], None)
             List.rev (flush acc current)
+        let drawn = items |> Lit.mapUnique fst snd
         // A session with nothing in it yet opens on an empty column, and an empty column says
         // nothing about where the conversation starts or that the near-black composer below it
         // is where you type. So the chat carries its OWN idle symbol — a caret standing where
@@ -3953,8 +3968,8 @@ module View =
             // over a conversation already on this device, for that long, is a flash of a
             // state nobody is in. Anything of this client's own on the screen regardless — a
             // command it queued, an add the session refused — stays, under it.
-            | false, _, _ when catchingUp -> reading :: items
-            | false, _, _ -> items
+            | false, _, _ when catchingUp -> [ reading; drawn ]
+            | false, _, _ -> [ drawn ]
             // Shown, and there is genuinely nothing: the caret only ever means what it has
             // always said, which is why it can stay wordless and decorative. Unless what is
             // known is that history is missing — then the timeline is truncated rather than
@@ -3968,7 +3983,7 @@ module View =
                     // Hooked like the reading row, and for the same reason: what a mark MEANS
                     // is not readable from the mark, and these two mean opposite things.
                     [ html $"""<div class="{Style.timelineIdle}" data-timeline-empty aria-hidden="true"><span class="{Style.caretIdle}"></span></div>""" ]
-            | true, _, _ -> Option.toList missing @ items
+            | true, _, _ -> Option.toList missing @ [ drawn ]
         // A press on a content chip, wherever in the timeline it sits — a message body's link or
         // a fold's note — shows the file in the pane instead of leaving the page. Delegated on
         // the conversation rather than bound per chip, because a chip is a pure template that
