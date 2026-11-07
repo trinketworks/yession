@@ -40,9 +40,7 @@ let private nextFrame (act: unit -> unit) : unit =
 /// attributes the view puts on real controls, so the cast is the view's contract rather than
 /// an assumption: a hook on something unfocusable would be the bug, not this.
 let private find (selector: string) : HTMLElement option =
-    match document.querySelector selector with
-    | null -> None
-    | element -> Some (element :?> HTMLElement)
+    Scan.one selector |> Option.map (fun element -> element :?> HTMLElement)
 
 let private focusOn (element: HTMLElement option) : unit =
     element |> Option.iter (fun element -> element.focus ())
@@ -492,9 +490,8 @@ let private toStartIn () : unit =
 /// on screen's heading, not one in a pane waiting off to the side, which is `inert`. An agent's
 /// surface has no heading of ours, so the keyboard goes to its first control: its way out.
 let private toAsk () : unit =
-    let headings = document.querySelectorAll "[data-ask-stack] > section h2"
-    seq { for i in 0 .. headings.length - 1 -> headings.item i }
-    |> Seq.tryFind (fun heading -> (heading.closest "[inert]").IsNone)
+    Scan.all "[data-ask-stack] > section h2"
+    |> List.tryFind (fun heading -> (heading.closest "[inert]").IsNone)
     |> Option.map (fun heading -> heading :?> HTMLElement)
     |> Option.orElseWith (fun () -> find "[data-ask-stack] > section button")
     |> focusOn
@@ -762,8 +759,8 @@ let installPaneResize (dispatch: Yession.App.ClientMsg -> unit) : unit =
         match EventTargets.asNode target with
         | None -> None
         | Some node ->
-            let found = document.querySelectorAll "[data-term-resize]"
-            [ for i in 0 .. found.length - 1 -> found.[i] :?> HTMLElement ]
+            Scan.all "[data-term-resize]"
+            |> List.map (fun handle -> handle :?> HTMLElement)
             |> List.tryFind (fun handle -> handle.contains node)
     let setTo (wanted: float) = dispatch (Yession.App.PaneSplitMsg wanted)
     let nudge (by: float) = dispatch (Yession.App.PaneNudgedMsg by)

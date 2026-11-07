@@ -58,11 +58,8 @@ open Yession.App
 /// Every surface read from its end, by the name the view gives it.
 let private selector = "[" + Dom.Hooks.tail + "]"
 
-/// The surfaces on the page now. `querySelectorAll` answers a list indexed by number and every
-/// caller here walks it.
-let private surfaces () : HTMLElement list =
-    let found = document.querySelectorAll selector
-    [ for i in 0 .. found.length - 1 -> found.[i] :?> HTMLElement ]
+/// The surfaces on the page now: a whole-document scan, counted (`Scan`).
+let private surfaces () : HTMLElement list = Scan.all selector |> List.map (fun found -> found :?> HTMLElement)
 
 /// What a surface IS (`TailSurface.key`), never where it sits in the list: a terminal whose
 /// blocks gave way to its screen between two renders has changed which surfaces there are, and

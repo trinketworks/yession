@@ -17,9 +17,7 @@ open Fable.BrowserExtras
 open Yession.Domain
 open Yession.App
 
-let private mounts () : Browser.Types.Element list =
-    let found = Browser.Dom.document.querySelectorAll "[data-pane-replay]"
-    [ for i in 0 .. found.length - 1 -> found.[i] ]
+let private mounts () : Browser.Types.Element list = Scan.all "[data-pane-replay]"
 
 let private mountKey (el: Browser.Types.Element) : string = el.getAttribute "data-pane-replay"
 

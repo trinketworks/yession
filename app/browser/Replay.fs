@@ -64,9 +64,9 @@ let private blobUrl (text: string) : string =
 /// Idempotent, and a no-op for the sheet where no such link exists: a page may mount a replay
 /// without being the shell (the editor harness links the sheet the same way the shell does).
 let private measurable (hook: string) : JS.Promise<unit> =
-    match Browser.Dom.document.querySelector ("link[" + hook + "]") with
-    | null -> ()
-    | found ->
+    match Scan.one ("link[" + hook + "]") with
+    | None -> ()
+    | Some found ->
         let link = found :?> Browser.Types.HTMLLinkElement
         match StyleSheets.ofLink link with
         | null -> link.media <- "all"

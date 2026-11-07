@@ -1678,10 +1678,12 @@ let tests =
         // third of all the CPU a cold open spent, and 20s before the page stopped changing on
         // a phone-speed CPU. One scan that finds them all costs 10s.
         //
-        // What this pins is the SHAPE — scans per render, which is one however many terminals
-        // are open, and was one per terminal — and deliberately not a duration: a millisecond
-        // budget on a shared runner is the flaky test this repository warns about, while a
-        // count is the same number on every box.
+        // What this pins is the SHAPE — whole-document scans per render, a fixed number of
+        // passes each asking once however many terminals are open, where that pass asked once
+        // per terminal — and deliberately not a duration: a millisecond budget on a shared runner
+        // is the flaky test this repository warns about, while a count is the same number on
+        // every box. Every whole-document question goes through one counted door (`Scan` in
+        // app/browser), and the render publishes the ones IT asked (`Probes.scans`).
         //
         // Both counts are per DOCUMENT, so the reload is what makes them comparable: a fresh
         // document starts them at zero and a reopen is a burst of renders worth measuring.
@@ -1690,7 +1692,7 @@ let tests =
         // box that cannot host one no terminal ever appears, and untagged this would fail at once,
         // quoting the sandbox's reason, rather than skip.
         Tag.needs "measuring several terminals" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
-        sessionCase "measuring the terminals costs one look at the document, however many are open" <|
+        sessionCase "a render looks at the whole document the same number of times, however many terminals are open" <|
             fun page ->
             async {
                 let opened = 4
@@ -1720,7 +1722,7 @@ let tests =
                         renders
                 if scans <= 0 then
                     failwithf
-                        "the page reports %d viewport scans — `app/browser/Screens.fs` publishes \
+                        "the page reports %d scans by its renders — `app/browser/Render.fs` publishes \
                          `Probes.scans` and this budget means nothing without it"
                         scans
                 if not settled.Still then
@@ -1730,18 +1732,18 @@ let tests =
                 let perRender = float scans / float renders
                 printfn "  reopen with %d terminals open: %d scans over %d renders — %.2f per render"
                         opened scans renders perRender
-                // One per render, plus whatever the resize observer added — it fires on a
-                // box changing rather than on a render, and a load moves boxes. The line
-                // sits at two, which is well over what one scan a render plus a settling
-                // layout costs and well under the FOUR this case opens: a scan that goes
-                // back to being per-terminal cannot pass it, and neither can one that
-                // creeps to a second question per pass.
-                let budget = 2.0
+                // Ten passes after the commit each ask the document once (the tail's read and
+                // its restore, the editors, the command lines and their read-only mounts, the
+                // players, the screens, the strip, the two listing feet), and the rare pass looks
+                // again (a recording that changed under its player, a listing foot that came or
+                // went). The line sits at twelve: over that, and under the fourteen that one
+                // pass asking once per terminal would cost with the FOUR this case opens.
+                let budget = 12.0
                 if perRender > budget then
                     failwithf
-                        "the after-render pass asked the document where the terminal boxes are %.2f times \
-                         per render with %d terminals open (%d scans over %d renders); the budget is %.1f. \
-                         Measuring is finding them ONCE — see `viewports` in `app/browser/Screens.fs`."
+                        "a render asked the whole document %.2f times with %d terminals open (%d scans over \
+                         %d renders); the budget is %.1f. A pass after the render finds what it works on \
+                         ONCE — see `Scan` and `Render.fs` in app/browser."
                         perRender opened scans renders budget
             })
 

@@ -165,19 +165,36 @@ let private renderPhases =
     [ "view"; "lit"; "richBodies"; "terminalInputs"; "replays"; "screens"; "paneShell"
       "terminalSlots"; "listingFoot"; "presences"; "inputCursors"; "title"; "tail"; "total" ]
 
+/// One series out of a report's object of arrays (`phases`, `updates`), the first few dropped
+/// as `seriesFrom` drops them, for the same reason.
+let private columnSeries (column: JsonElement) (size: int) (key: string) (metric: string) (unit: string) : Series =
+    let all = column.GetProperty(key).EnumerateArray () |> Seq.map (fun e -> e.GetDouble ()) |> List.ofSeq
+    let values = if List.length all > warmup then List.skip warmup all else all
+    { Series.Metric = metric; Series.Unit = unit; Series.Size = size; Series.Values = values }
+
 /// Every render's phases while a scenario ran, as series — `<scenario>.render.<phase>` in
-/// milliseconds, and `<scenario>.nodes`, the document's element count after each render, so
-/// a phase can be read against the size of the page it ran over. The first renders are
-/// dropped as `seriesFrom` drops them, for the same reason.
+/// milliseconds; `<scenario>.nodes`, the document's element count after each render, so a
+/// phase can be read against the size of the page it ran over; and `<scenario>.scans`, how
+/// many times each render asked the whole document for something (`Scan` in app/browser),
+/// the walk the node count multiplies.
 let private phaseSeries (json: string) (size: int) (scenario: string) : Series list =
     use doc = JsonDocument.Parse json
-    let phases = doc.RootElement.GetProperty "phases"
-    let series (key: string) (metric: string) (unit: string) =
-        let all = phases.GetProperty(key).EnumerateArray () |> Seq.map (fun e -> e.GetDouble ()) |> List.ofSeq
-        let values = if List.length all > warmup then List.skip warmup all else all
-        { Series.Metric = metric; Series.Unit = unit; Series.Size = size; Series.Values = values }
+    let series = columnSeries (doc.RootElement.GetProperty "phases") size
     [ for phase in renderPhases -> series phase (sprintf "%s.render.%s" scenario phase) "ms" ]
-    @ [ series "nodes" (sprintf "%s.nodes" scenario) "nodes" ]
+    @ [ series "nodes" (sprintf "%s.nodes" scenario) "nodes"
+        series "scans" (sprintf "%s.scans" scenario) "scans" ]
+
+/// What a doc update costs when no render follows it (`Render.UpdatePhases`), by what the
+/// update listener calls: `<scenario>.update.<phase>`, in milliseconds, and
+/// `<scenario>.update.scans`. A keystroke is a doc update and, since the caret left the model,
+/// rarely a render, so this is the part of a key's cost the render phases cannot see.
+let private updatePhases = [ "terminalInputs"; "presences" ]
+
+let private updateSeries (json: string) (size: int) (scenario: string) : Series list =
+    use doc = JsonDocument.Parse json
+    let series = columnSeries (doc.RootElement.GetProperty "updates") size
+    [ for phase in updatePhases -> series phase (sprintf "%s.update.%s" scenario phase) "ms" ]
+    @ [ series "scans" (sprintf "%s.update.scans" scenario) "scans" ]
 
 /// A number that is not a series: a slope across a sweep, or a count. Name, unit, value, and
 /// what it was taken over.
@@ -488,6 +505,9 @@ let tests =
                         // items a slow runner timed three of fifty. A keystroke's cost, renders
                         // and all, is `compose.type`: one sample per key on any hardware.
                         let rendersPerKey = ResizeArray<string * int * float> ()
+                        // Doc updates per keystroke, per size, a COUNT: how many times a key
+                        // sets off the update listener, which is what multiplies its phases.
+                        let updatesPerKey = ResizeArray<string * int * float> ()
                         for (filler, tag) in fillers do
                           let scenario = "compose" + tag
                           for items in composeSizes do
@@ -514,7 +534,10 @@ let tests =
                                 failwithf "the compose scenario asked for %d %s items and the page drew %d" items filler drawn
                             printfn "  typed %d keys over %d %s items in %d renders" keys items filler renders
                             rendersPerKey.Add (scenario, items, float renders / float keys)
+                            updatesPerKey.Add (
+                                scenario, items, float (doc.RootElement.GetProperty("docUpdates").GetInt32 ()) / float keys)
                             collected.AddRange (seriesFrom report items [ "type", scenario + ".type" ])
+                            collected.AddRange (updateSeries report items scenario)
                             // The breakdown only where a keystroke draws: in a short
                             // conversation a key renders nothing most of the time (four renders
                             // in thirty keys at twenty items), and the few renders there are
@@ -621,6 +644,10 @@ let tests =
                                       Ratio.Over = sprintf "%d moves at %dms" watchMoves watchEveryMs } ]
                             @ [ for (scenario, items, perKey) in rendersPerKey ->
                                     { Ratio.Name = sprintf "%s.renders@%d" scenario items; Ratio.Unit = "x"
+                                      Ratio.Value = perKey
+                                      Ratio.Over = sprintf "%d keys at %.0fms" samples composeEveryMs } ]
+                            @ [ for (scenario, items, perKey) in updatesPerKey ->
+                                    { Ratio.Name = sprintf "%s.updates@%d" scenario items; Ratio.Unit = "x"
                                       Ratio.Value = perKey
                                       Ratio.Over = sprintf "%d keys at %.0fms" samples composeEveryMs } ]
 

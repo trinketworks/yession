@@ -73,6 +73,20 @@ let renders () : int =
     | Some n -> n
     | None -> 0
 
+// How many whole-document scans the renders have made (`Scan`), published beside the render
+// count and for its reason: the cost a render's scans multiply is the page's size, and the
+// count of them is the same on every box. Published after every render, zero included, so a
+// page that has rendered always has one.
+let private scansPublished : PageGlobal<int> = Probes.scans
+
+let private countScans (made: int) : unit =
+    PageGlobal.set
+        scansPublished
+        (made
+         + match PageGlobal.tryGet scansPublished with
+           | Some n -> n
+           | None -> 0)
+
 /// One render, phase by phase, in milliseconds: what a redraw spends where. `View` builds the
 /// template (`View.view`, every item's template made again); `Lit` commits it (Lit's diff
 /// of that template against the page); each sync after it is its own phase, the four
@@ -80,7 +94,8 @@ let renders () : int =
 /// everything else, together, because they are one mechanism split around the render.
 /// `Total` is the whole of it, start of `Tail.Before` to end of `Tail.Restore`. `Nodes` is
 /// how many elements the document held once the render was over, so a phase can be read
-/// against the size of the page it ran over.
+/// against the size of the page it ran over. `Scans` is how many times the render asked the
+/// WHOLE document for something (`Scan`), the walk a node count multiplies.
 ///
 /// Layout reads are not counted. The reads that force layout during a render are spread over
 /// `Tail`, `PaneShell`, `Screens`, this module, and the editors and terminals they mount
@@ -102,12 +117,27 @@ type RenderPhases =
       Title : float
       Tail : float
       Total : float
-      Nodes : int }
+      Nodes : int
+      Scans : int }
+
+/// What a doc update costs when no render follows it, in milliseconds: the two calls the
+/// update listener makes (`DocSync.onAnyUpdate` below). A keystroke in a body is a doc update
+/// and, since the caret left the model, usually no render, so this is where its time is
+/// spent outside the editor. `Presences` only ASKS for a push, which the next frame makes; the
+/// push itself is in a frame's time, not here. `Scans` as `RenderPhases.Scans`.
+[<RequireQualifiedAccess>]
+type UpdatePhases =
+    { TerminalInputs : float
+      Presences : float
+      Scans : int }
 
 /// Where each render's phases go, while somebody is measuring them, and nowhere otherwise:
 /// the bench harness sets it around a scenario and clears it after. Unset, a render reads the
 /// clock not once and allocates nothing for it, so the app pays nothing for the instrument.
 let mutable phases : (RenderPhases -> unit) option = None
+
+/// Where each doc update's phases go, while somebody is measuring them, as `phases`.
+let mutable updates : (UpdatePhases -> unit) option = None
 
 /// The clock, read only while somebody is measuring.
 let private stamp (measuring: bool) : float =
@@ -214,9 +244,9 @@ let private selectionSpan (length: int) (anchor: int) (head: int) : int * int * 
 /// positioned by are its offset parent's, so a marker taken from somewhere else on the page
 /// would be laid out against a box it does not live in.
 let private placeInputCursor (field: string) (peer: string) (anchor: int) (head: int) : unit =
-    match Browser.Dom.document.querySelector field with
-    | null -> ()
-    | found ->
+    match Scan.one field with
+    | None -> ()
+    | Some found ->
         let input = found :?> Browser.Types.HTMLInputElement
         match input.parentElement with
         | null -> ()
@@ -263,9 +293,7 @@ let private hiddenFrameMs = 1000
 // into each, bound to the body's live Y.XmlFragment (resolved from the BodyRegistry).
 // ProseMirror owns that DOM; Lit leaves the static host's children alone across re-renders
 // (as it preserved the textareas).
-let private richBodyHosts () : Browser.Types.Element list =
-    let found = Browser.Dom.document.querySelectorAll "[data-rich-body]"
-    [ for i in 0 .. found.length - 1 -> found.[i] ]
+let private richBodyHosts () : Browser.Types.Element list = Scan.all "[data-rich-body]"
 
 let private hostBodyKey (el: Browser.Types.Element) : string = el.getAttribute "data-rich-body"
 
@@ -280,15 +308,13 @@ let private hostReadOnly (el: Browser.Types.Element) : bool =
 
 /// Every command line on the page, in document order.
 let private terminalInputs () : Browser.Types.HTMLInputElement list =
-    let found = Browser.Dom.document.querySelectorAll "[data-terminal-input]"
-    [ for i in 0 .. found.length - 1 -> found.[i] :?> Browser.Types.HTMLInputElement ]
+    Scan.all "[data-terminal-input]" |> List.map (fun found -> found :?> Browser.Types.HTMLInputElement)
 
 // The READ of the same roots: a surface that SHOWS a command without offering to change it —
 // the chat's chip for a queued command, which is a `<button>` and so cannot hold an input.
 
 let private terminalTexts () : Browser.Types.HTMLElement list =
-    let found = Browser.Dom.document.querySelectorAll "[data-terminal-text]"
-    [ for i in 0 .. found.length - 1 -> found.[i] :?> Browser.Types.HTMLElement ]
+    Scan.all "[data-terminal-text]" |> List.map (fun found -> found :?> Browser.Types.HTMLElement)
 
 /// Show a command on a surface that cannot be typed into. Only on a change: assigning
 /// `textContent` replaces the node's children, which is a write the browser need not be
@@ -734,8 +760,21 @@ let create (deps: Deps) : Renderer =
     // render to be placed. The frame still paces the push, and an unchanged empty set is
     // still skipped.
     DocSync.onAnyUpdate doc (fun () ->
+        let sink = updates
+        let measuring = sink.IsSome
+        let scans = Scan.count ()
+        let t0 = stamp measuring
         syncTerminalInputs ()
-        pushPresences ())
+        let tInputs = stamp measuring
+        pushPresences ()
+        let tEnd = stamp measuring
+        match sink with
+        | Some report ->
+            report
+                { UpdatePhases.TerminalInputs = tInputs - t0
+                  UpdatePhases.Presences = tEnd - tInputs
+                  UpdatePhases.Scans = Scan.count () - scans }
+        | None -> ())
 
     /// Place collaborators' carets in the collaborative INPUTS by measurement (a native input
     /// has no per-character geometry): decode each such peer's relative anchor/head against the
@@ -794,7 +833,7 @@ let create (deps: Deps) : Renderer =
     // a watch rooted in the other one would be asking whether the foot is visible in a box it
     // is not in.
     let watchFoot (rootHook: string) (hook: string) (wanted: unit -> unit) =
-        let foot = Browser.Dom.document.querySelector ("[" + hook + "]")
+        let foot = Scan.one ("[" + hook + "]") |> Option.toObj
         if not (obj.ReferenceEquals (box foot, feetSeen |> Map.tryFind hook |> Option.defaultValue null)) then
             feetWatched |> Map.tryFind hook |> Option.iter (fun watch -> watch.disconnect ())
             feetWatched <- feetWatched |> Map.remove hook
@@ -805,7 +844,7 @@ let create (deps: Deps) : Renderer =
                     |> Map.add
                         hook
                         (watchListingFoot
-                            (Browser.Dom.document.querySelector ("[" + rootHook + "]"))
+                            (Scan.one ("[" + rootHook + "]") |> Option.toObj)
                             foot
                             wanted)
     let syncListingFoot () =
@@ -907,6 +946,7 @@ let create (deps: Deps) : Renderer =
         // Read once, so a render is measured whole or not at all.
         let sink = phases
         let measuring = sink.IsSome
+        let scans = Scan.count ()
         let t0 = stamp measuring
         let tails = tail.Before ()
         let tBefore = stamp measuring
@@ -966,6 +1006,8 @@ let create (deps: Deps) : Renderer =
         // looked.
         tail.Restore tails model
         let tEnd = stamp measuring
+        let scansMade = Scan.count () - scans
+        countScans scansMade
         match sink with
         | Some report ->
             report
@@ -984,7 +1026,8 @@ let create (deps: Deps) : Renderer =
                   RenderPhases.Tail = (tBefore - t0) + (tEnd - tTitle)
                   RenderPhases.Total = tEnd - t0
                   // Counted after the clock stops, so the count is not part of what it counts.
-                  RenderPhases.Nodes = int (Browser.Dom.document.getElementsByTagName "*").length }
+                  RenderPhases.Nodes = int (Browser.Dom.document.getElementsByTagName "*").length
+                  RenderPhases.Scans = scansMade }
         | None -> ()
         // The conversation's first appearance rises in, after the end it is pinned to has been
         // put back, so the rows that rise are the rows the reader is looking at. An arrival is
@@ -995,9 +1038,7 @@ let create (deps: Deps) : Renderer =
         if not arrived && ClientModel.showsConversation model then
             arrived <- true
             if frame > 1 then
-                Browser.Dom.document.querySelector ("[" + Dom.Hooks.conversation + "]")
-                |> Option.ofObj
-                |> Option.iter Arrival.play
+                Scan.one ("[" + Dom.Hooks.conversation + "]") |> Option.iter Arrival.play
 
     { SetState = setState
       SyncTerminalInputs = syncTerminalInputs

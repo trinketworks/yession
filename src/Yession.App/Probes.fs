@@ -529,9 +529,11 @@ module Probes =
     /// absent until the first render.
     let renders : Fable.BrowserExtras.PageGlobal<int> = Fable.BrowserExtras.PageGlobal.named "__yessionRenders"
 
-    /// How many times this document's view has scanned its viewports for what to draw —
-    /// published by `app/browser/Screens.fs`, absent until the first scan.
-    let scans : Fable.BrowserExtras.PageGlobal<int> = Fable.BrowserExtras.PageGlobal.named "__yessionViewportScans"
+    /// How many times this document's RENDERS have scanned it whole (`querySelector` or
+    /// `querySelectorAll` on `document`, counted by `app/browser/Scan.fs`) — published by
+    /// `app/browser/Render.fs` after every render, absent until the first. Only what a render
+    /// asks: a doc update's or a resize's scans are not a render's cost.
+    let scans : Fable.BrowserExtras.PageGlobal<int> = Fable.BrowserExtras.PageGlobal.named "__yessionRenderScans"
 
     /// Where focus has landed since `FocusBeforePane` began recording, in order: `pane` for a
     /// stop inside the content pane, `elsewhere` for any other.
