@@ -21,7 +21,8 @@ module Connection =
     /// responses go to `onResponse` and event pages to `onEventsPage` (the driver
     /// correlates both to their requests). A terminal's SCREEN goes to `onSnapshot` for
     /// the same reason state does: it seeds an emulator, which is a live object the
-    /// platform half owns and the reducer cannot hold.
+    /// platform half owns and the reducer cannot hold. Where a collaborator is goes to
+    /// `onPresence`, because where their caret stands is not the reducer's either (`Carets`).
     let run
         (hello: PeerHelloPayload)
         (dispatch: ClientMsg -> unit)
@@ -29,6 +30,7 @@ module Connection =
         (onResponse: RequestId -> SessionCommandResult -> unit)
         (onEventsPage: RequestId -> EventPage<SessionEvent> -> unit)
         (onSnapshot: TerminalId -> TranscriptKeyframe -> unit)
+        (onPresence: PresencePayload -> unit)
         (channel: FrameChannel<'State>)
         : Async<unit> =
         async {
@@ -57,8 +59,9 @@ module Connection =
                         onEventsPage requestId page
                         return! pump ()
                     | Some (Presence payload) ->
-                        // A collaborator's caret moved (or cleared) in the title.
-                        dispatch (RemotePresenceMsg payload)
+                        // Where a collaborator is: kept where carets are, which tells the
+                        // model only what the model holds of it (`Carets.Receive`).
+                        onPresence payload
                         return! pump ()
                     | Some (Terminal (TerminalRecord (terminal, seq, record))) ->
                         // Live terminal output. Durable before it was sent, and keyed by

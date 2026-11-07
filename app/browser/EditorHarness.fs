@@ -2014,6 +2014,7 @@ do
               Root = shellHost
               Actions = actions
               Dispatch = fun msg -> dispatchRef msg
+              Carets = carets
               // No session behind this page: a draft sent goes nowhere. A caret reported reaches
               // the slot and the model as it does in the app (`Browser.fs`); the presence that
               // asks for goes nowhere either, below, and nor does a move within a field.
@@ -2237,12 +2238,12 @@ do
                 |> Option.bind (fun paragraph -> Y.Text.tryOf (box (paragraph.get 0.)))
                 |> Option.defaultWith (fun () -> failwith "the words did not make one paragraph of text")
             let at = ProseMirror.relPosFromTypeIndex line words.Length |> ProseMirror.encodeRel
-            dispatch (
-                RemotePresenceMsg
-                    { Who = ActorRef.PeerRef grace
-                      DisplayName = "Grace"
-                      Focus = Some { Field = DraftBody grace; Pos = { Anchor = at; Head = at } }
-                      Viewing = None })
+            carets.Receive
+                dispatch
+                { Who = ActorRef.PeerRef grace
+                  DisplayName = "Grace"
+                  Focus = Some { Field = DraftBody grace; Pos = { Anchor = at; Head = at } }
+                  Viewing = None }
             // The caret is pushed at the frame after the render it arrived in, when there is
             // nothing here yet to resolve it against.
             do! nextFrame () |> Async.AwaitPromise
@@ -2295,12 +2296,12 @@ do
             if text.length = 0 then
                 ClientModel.chapterNameAt messageId model |> Option.iter (fun named -> text.insert (0, named))
             let at (index: int) = ProseMirror.relPosFromTypeIndex text index |> ProseMirror.encodeRel
-            dispatch (
-                RemotePresenceMsg
-                    { Who = ActorRef.PeerRef peerId
-                      DisplayName = "brave-owl"
-                      Focus = Some { Field = ChapterName messageId; Pos = { Anchor = at anchor; Head = at head } }
-                      Viewing = None })
+            carets.Receive
+                dispatch
+                { Who = ActorRef.PeerRef peerId
+                  DisplayName = "brave-owl"
+                  Focus = Some { Field = ChapterName messageId; Pos = { Anchor = at anchor; Head = at head } }
+                  Viewing = None }
         | _ -> ()
     PageGlobal.set HarnessPage.chapterCaret (System.Action<_, _, _> chapterCaret)
     PageGlobal.set HarnessPage.record (System.Action<_, _, _, _> (fun id seq kind data ->
@@ -2667,16 +2668,21 @@ do
     //
     // A person watching a long session while somebody else writes in its composer: their caret
     // moves every keystroke, and nothing the reader did asked for anything. Each move arrives as
-    // a presence frame, which the connection dispatches as it is (`Connection.fs`,
-    // `RemotePresenceMsg`), so here each is that message, a Focus in this reader's draft whose
-    // position has moved on by one character. Today each one is a render of the whole page, and
-    // the change that draws a caret without one is what this scenario is here to show.
+    // a presence frame, which the connection hands to where carets are kept (`Carets.Receive`),
+    // so here each is that frame, handed the same way: a Focus in this reader's draft whose
+    // position has moved on by one character. Each one was a render of the whole page until the
+    // position moved out of the model; this scenario is what shows a move draws with none.
     //
     // The conversation is the `Mixed` one, a working session's. The draft holds whatever the
     // compose scenario typed into it, or a line of words if nothing has, because a caret needs
     // text to stand in.
     PageGlobal.set HarnessPage.benchWatch (System.Func<_, _, _, _> (fun items moves everyMs ->
         async {
+            let grace = PeerId.create "grace" |> expect
+            // The sweep runs this once a size on one page, each over a fresh model, and where
+            // carets stand is the page's: Grace is said to be nowhere first, so her first move
+            // is news to the fresh model, as it is to a page that has just met her.
+            carets.Receive dispatch { Who = ActorRef.PeerRef grace; DisplayName = "Grace"; Focus = None; Viewing = None }
             model <- shellModelOf Mixed items
             render ()
             let me = model.Peer.PeerId
@@ -2692,28 +2698,33 @@ do
             // they are this page's, not the collaborator's.
             for _ in 1 .. 3 do
                 do! nextFrame () |> Async.AwaitPromise
-            let grace = PeerId.create "grace" |> expect
             let rendersAtBegin = Render.renders ()
             let phaseLog = measurePhases ()
             let length = int line.length
             for move in 1 .. moves do
                 let at = ProseMirror.relPosFromTypeIndex line (move % (length + 1)) |> ProseMirror.encodeRel
-                dispatch (
-                    RemotePresenceMsg
-                        { Who = ActorRef.PeerRef grace
-                          DisplayName = "Grace"
-                          Focus = Some { Field = DraftBody me; Pos = { Anchor = at; Head = at } }
-                          Viewing = None })
+                carets.Receive
+                    dispatch
+                    { Who = ActorRef.PeerRef grace
+                      DisplayName = "Grace"
+                      Focus = Some { Field = DraftBody me; Pos = { Anchor = at; Head = at } }
+                      Viewing = None }
                 do!
                     JS.Constructors.Promise.Create (fun resolve _ -> JS.setTimeout resolve everyMs |> ignore)
                     |> Async.AwaitPromise
             Render.phases <- None
-            // Anti-vacuity, from the page's side: the last move is the caret the model holds,
-            // and the composer it is in is on the page. A count of renders cannot say either,
-            // and the right count is the one a change to the render takes to none.
+            // Anti-vacuity, from the page's side: the model holds the caret in this reader's
+            // draft, the slot holds it where the last move put it, and the composer it is in is
+            // on the page. A count of renders cannot say any of them, and the right count is
+            // none.
+            let last =
+                ProseMirror.relPosFromTypeIndex line (moves % (length + 1)) |> ProseMirror.encodeRel
             let landed =
                 match Map.tryFind (ActorRef.PeerRef grace) model.Presence with
-                | Some presence -> presence.Focus |> Option.exists (fun focus -> focus.Field = DraftBody me)
+                | Some presence ->
+                    presence.Field = Some (DraftBody me)
+                    && carets.Remote (ActorRef.PeerRef grace)
+                       |> Option.exists (fun focus -> focus.Pos.Anchor = last)
                 | None -> false
             let composer =
                 Browser.Dom.document.querySelector (sprintf "#shell [data-rich-body='%s']" (BodyKey.draft me))

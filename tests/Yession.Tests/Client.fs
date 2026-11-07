@@ -88,7 +88,7 @@ let tests =
 
                 let! channel = WebRtc.connect (signalUrl ())
                 let hello = { PeerId = peerId; DisplayName = "Grace"; Token = host.Value.MintPeerToken () }
-                Async.StartImmediate(Connection.run hello dispatch ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ()) channel)
+                Async.StartImmediate(Connection.run hello dispatch ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ()) ignore channel)
 
                 // Handshake completes -> Connected, with the joined offset as latest-known.
                 do! connected

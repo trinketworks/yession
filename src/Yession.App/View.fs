@@ -1485,7 +1485,7 @@ module View =
         let cursors =
             model.Presence
             |> Map.toList
-            |> List.filter (fun (_, p) -> p.Focus |> Option.exists (fun f -> f.Field = Title))
+            |> List.filter (fun (_, p) -> p.Field = Some Title)
             |> List.map (fun (who, p) -> remoteCursor model who p)
         // The worst standing rides the way into the column that says them all, and its word
         // rides the control's name, so a screen reader hears what the mark shows.
@@ -3699,7 +3699,7 @@ module View =
             let cursors =
                 model.Presence
                 |> Map.toList
-                |> List.filter (fun (_, p) -> p.Focus |> Option.exists (fun f -> f.Field = ChapterName item.MessageId))
+                |> List.filter (fun (_, p) -> p.Field = Some (ChapterName item.MessageId))
                 |> List.map (fun (who, p) -> remoteCursor model who p)
             html $"""
                 <div class="{Style.chapterRule}" data-chapter-rule="{MessageId.value item.MessageId}">

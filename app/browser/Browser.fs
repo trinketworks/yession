@@ -1221,6 +1221,7 @@ let private start () =
                   Root = el
                   Actions = actions
                   Dispatch = fun msg -> dispatchRef msg
+                  Carets = carets
                   Links =
                     { SendDraft = fun author -> connectionRef |> Option.iter (fun c -> c.SendDraft author)
                       SendTerminalDraft =
