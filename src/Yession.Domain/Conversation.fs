@@ -151,10 +151,12 @@ module ConversationItem =
     /// Who an item's cause names as the one who caused it: the author of the item it points
     /// to, or the person who connected. `None` when the cause names nobody, or points at an
     /// item that is not among `items`.
-    let causer (items: ConversationItem list) (item: ConversationItem) : ActorRef option =
+    ///
+    /// `find` looks an item up by id (`ConversationProjection.Find`): a screen asks this of
+    /// every act it draws, and a walk of the transcript per act was the quadratic.
+    let causer (find: MessageId -> ConversationItem option) (item: ConversationItem) : ActorRef option =
         match item.CausedBy with
-        | Some (Cause.Item target) ->
-            items |> List.tryFind (fun i -> i.MessageId = target) |> Option.map (fun i -> i.Author)
+        | Some (Cause.Item target) -> find target |> Option.map (fun i -> i.Author)
         | Some (Cause.Connected principal) -> Some (Principal.toActor principal)
         | Some Cause.Booted
         | None -> None
@@ -194,10 +196,10 @@ module ConversationItem =
     /// "Nick added repo …" says Nick twice, whether that line is drawn over the act, over
     /// the chain it continues, or is the item right above. A cause that names somebody
     /// else, or nobody, leaves the clause as it was.
-    let forWhom (items: ConversationItem list) (item: ConversationItem) : Phrase =
+    let forWhom (find: MessageId -> ConversationItem option) (item: ConversationItem) : Phrase =
         match item.Content with
         | ItemContent.Act act ->
-            match Act.onBehalfOf act, causer items item with
+            match Act.onBehalfOf act, causer find item with
             | Some person, Some named when Principal.toActor person = named -> []
             | _ -> Act.forWhom act
         | ItemContent.Message _
@@ -233,6 +235,55 @@ module ConversationItem =
         | ItemContent.Message _, (ActorRef.UserRef _ | ActorRef.PeerRef _) -> true
         | _ -> false
 
+/// The transcript in reading order, and by id, worked out once per transcript rather than once
+/// per question (`ConversationProjection.Items` and `Find`).
+///
+/// The write order is newest first (`Recent`), and a reader wants oldest first or an item by
+/// id. Keeping either as a second field would cost every fold step a copy of the transcript,
+/// which is the cost `Recent` exists to avoid: a cold open folds thousands of events and reads
+/// the transcript once. So the reading is derived, and kept for exactly as long as the
+/// transcript it was derived from is the one asked about: the cell remembers WHICH `Recent` it
+/// read (by reference, which is what an unchanged transcript keeps), and a different one is
+/// read afresh. A copy of a projection (`{ proj with ... }`) shares the cell, and that is safe
+/// for the same reason: what it answers is checked against the transcript asking.
+///
+/// It is a cache, not state: it is equal to every other cell, so a projection is equal to
+/// another exactly when what it holds is.
+[<Sealed>]
+type ReadingOrder () =
+    let mutable source : ConversationItem list option = None
+    let mutable items : ConversationItem list = []
+    let mutable byId : System.Collections.Generic.Dictionary<string, ConversationItem> option = None
+    let reading (recent: ConversationItem list) =
+        match source with
+        | Some read when LanguagePrimitives.PhysicalEquality read recent -> ()
+        | Some _
+        | None ->
+            source <- Some recent
+            items <- List.rev recent
+            byId <- None
+    /// `recent`, oldest first.
+    member _.Items (recent: ConversationItem list) : ConversationItem list =
+        reading recent
+        items
+    /// The item in `recent` with this id.
+    member _.Find (recent: ConversationItem list) (messageId: MessageId) : ConversationItem option =
+        reading recent
+        let index =
+            match byId with
+            | Some index -> index
+            | None ->
+                let index = System.Collections.Generic.Dictionary<string, ConversationItem> ()
+                for item in recent do
+                    index.[MessageId.value item.MessageId] <- item
+                byId <- Some index
+                index
+        match index.TryGetValue (MessageId.value messageId) with
+        | true, item -> Some item
+        | false, _ -> None
+    override _.Equals (other: obj) = other :? ReadingOrder
+    override _.GetHashCode () = 0
+
 type ConversationProjection =
     { /// The transcript, NEWEST FIRST — which is the order it is written in and the order
       /// the hot edit reaches for, and neither is the order it is read in. `Items` below is
@@ -264,24 +315,28 @@ type ConversationProjection =
       /// `WokenTurn` for the other arm of `TurnCause`. The first message of the turn reads it
       /// to decide whether to carry a reply ref, and it resets at every `AgentTurnStarted`
       /// for the same reason `WokenTurn` does.
-      TriggeredTurn : (AgentTurnId * MessageId) option }
+      TriggeredTurn : (AgentTurnId * MessageId) option
+      /// `Items` and `Find`, kept (`ReadingOrder`). Nothing outside this module reads it.
+      Reading : ReadingOrder }
 
-    /// The transcript in reading order, oldest first.
-    ///
-    /// O(n), and a view rather than a field: it is computed from `Recent` on every access,
-    /// so BIND IT ONCE and read the binding. A caller that reaches for it inside a loop over
-    /// the items has written the quadratic this type exists to avoid, one level up.
-    member this.Items : ConversationItem list = List.rev this.Recent
+    /// The transcript in reading order, oldest first. Worked out once per transcript
+    /// (`ReadingOrder`), so asking again is free until the transcript changes.
+    member this.Items : ConversationItem list = this.Reading.Items this.Recent
+
+    /// The item with this id, if the transcript holds it. Indexed once per transcript
+    /// (`ReadingOrder`), so a screen asking it for every item it draws is not walking the
+    /// transcript each time.
+    member this.Find (messageId: MessageId) : ConversationItem option = this.Reading.Find this.Recent messageId
 
 module ConversationProjection =
 
     let empty : ConversationProjection =
-        { Recent = []; ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
+        { Recent = []; ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None; Reading = ReadingOrder () }
 
     /// A projection holding exactly these items, given in READING order — which is how a
     /// fixture writes a transcript down, and the opposite of how `Recent` stores one.
     let ofItems (items: ConversationItem list) : ConversationProjection =
-        { empty with Recent = List.rev items }
+        { empty with Recent = List.rev items; Reading = ReadingOrder () }
 
     /// Replace one item, copying only as far as it.
     ///

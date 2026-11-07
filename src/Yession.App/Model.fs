@@ -1727,6 +1727,30 @@ type UploadAnswer =
     /// The try did not land — no answer, or the session failing (a 5xx).
     | Failed of reason: string
 
+/// What the timeline draws, worked out from the facts it is drawn from once per change of
+/// them rather than once per render: the rows (`TimelineProjection.rows`), where chapters
+/// open, and how each act's cause is drawn. A render that changes none of these (a menu
+/// opening, a fold, a peer's caret, a draft) used to walk the whole conversation four times
+/// for answers it already had.
+///
+/// Carries its own inputs, so whether it is current is a question it answers by itself
+/// (`ClientModel.drawing`): the conversation and the timeline are folded from events, and a
+/// message that changed neither leaves the very same values, so they are compared by
+/// reference. Which chapters a person opened or closed is the one input from the synced
+/// doc, whose decode rebuilds every value on every change, so that is compared by value.
+[<RequireQualifiedAccess>]
+type TimelineDrawing =
+    { Conversation : ConversationProjection
+      Timeline : TimelineProjection
+      /// Each chapter mark's verdict: the part of `Synced.Chapters` where chapters open
+      /// reads. Not the names, which a keystroke in a chapter's name changes.
+      Opens : Map<MessageId, bool>
+      Rows : TimelineRow list
+      ChapterOpenings : Set<MessageId>
+      CauseLinks : Map<MessageId, CauseLink>
+      /// The acts a chain continues below: each act whose next item is `Chained` to it.
+      ChainedOn : Set<MessageId> }
+
 type ClientModel =
     { Peer          : PeerState
       /// This page's session: reaching it, and reading its log (`SessionLink`).
@@ -1786,6 +1810,10 @@ type ClientModel =
       /// time by `TimelineProjection.items` — a view-level fold, so the projection that
       /// builds the agent's context is untouched.
       Timeline      : TimelineProjection
+      /// What the timeline draws, derived from `Conversation`, `Timeline` and the chapter
+      /// marks (`TimelineDrawing`). Read it through `ClientModel.drawing`, which says whether
+      /// it is current.
+      Drawing       : TimelineDrawing
       EventConsumer : EventConsumerState
       Agent         : AgentViewState
       /// Where everyone else is, keyed by WHO: the field each caret is in, and what each has
@@ -3077,6 +3105,66 @@ module ClientModel =
     /// `connectingQuietMs` — rather than wearing the "not connected" strip for the ~75ms until
     /// the transport is asked and then reflowing the panes under it up by the strip's height. A
     /// genuine failure is said as one, and earns the strip.
+    /// The verdicts in a chapter map: what `Chapters.openings` reads of it.
+    let private opensOf (chapters: Map<MessageId, ChapterMark<'Text>>) : Map<MessageId, bool> =
+        chapters |> Map.map (fun _ mark -> mark.Opens)
+
+    /// What the timeline draws, from what it is drawn from (`TimelineDrawing`). Each part is
+    /// worked out again only when an input it reads has changed since `previous`: the rows
+    /// when the conversation or the timeline has, where chapters open when the conversation
+    /// or a verdict has, and the cause links when the conversation has.
+    let private drawingOver
+        (previous: TimelineDrawing option)
+        (conversation: ConversationProjection)
+        (timeline: TimelineProjection)
+        (opens: Map<MessageId, bool>)
+        (chapters: Map<MessageId, ChapterMark<'Text>>)
+        : TimelineDrawing =
+        let sameConversation =
+            previous |> Option.exists (fun d -> LanguagePrimitives.PhysicalEquality d.Conversation conversation)
+        let sameTimeline =
+            previous |> Option.exists (fun d -> LanguagePrimitives.PhysicalEquality d.Timeline timeline)
+        let sameOpens = previous |> Option.exists (fun d -> d.Opens = opens)
+        match previous with
+        | Some d when sameConversation && sameTimeline && sameOpens -> d
+        | _ ->
+            let rows =
+                match previous with
+                | Some d when sameConversation && sameTimeline -> d.Rows
+                | _ -> TimelineProjection.rows conversation timeline
+            let openings =
+                match previous with
+                | Some d when sameConversation && sameOpens -> d.ChapterOpenings
+                | _ -> Chapters.openings AutoChapters.policy chapters conversation.Items
+            let causeLinks, chainedOn =
+                match previous with
+                | Some d when sameConversation -> d.CauseLinks, d.ChainedOn
+                | _ ->
+                    let links = ConversationItem.causeLinks conversation.Items
+                    let chained =
+                        conversation.Items
+                        |> List.pairwise
+                        |> List.choose (fun (above, item) ->
+                            match Map.tryFind item.MessageId links with
+                            | Some CauseLink.Chained -> Some above.MessageId
+                            | _ -> None)
+                        |> Set.ofList
+                    links, chained
+            { TimelineDrawing.Conversation = conversation
+              TimelineDrawing.Timeline = timeline
+              TimelineDrawing.Opens = opens
+              TimelineDrawing.Rows = rows
+              TimelineDrawing.ChapterOpenings = openings
+              TimelineDrawing.CauseLinks = causeLinks
+              TimelineDrawing.ChainedOn = chainedOn }
+
+    /// What the timeline draws for this model: the one it carries when that is current, and
+    /// worked out afresh when it is not. `update` keeps it current (`withDrawing`), so a view
+    /// reading this after a message reads a field; a model built some other way (a fixture,
+    /// a harness) still answers for what it holds.
+    let drawing (model: ClientModel) : TimelineDrawing =
+        drawingOver (Some model.Drawing) model.Conversation model.Timeline (opensOf model.Synced.Chapters) model.Synced.Chapters
+
     let init (peer: PeerState) : ClientModel =
         { Peer = peer
           // Nothing said yet about where the log ends, and the server-rendered shell is this
@@ -3106,6 +3194,13 @@ module ClientModel =
           Launch = Launch.empty
           Repos = Repos.ReposProjection.empty
           Timeline = TimelineProjection.empty
+          Drawing =
+            drawingOver
+                None
+                ConversationProjection.empty
+                TimelineProjection.empty
+                Map.empty
+                (Map.empty : Map<MessageId, ChapterMark<Ylmish.Text>>)
           EventConsumer = { LastProcessedOffset = None; Reading = None }
           Agent = { ActiveTurn = None; Quiet = None; Interrupting = None }
           Presence = Map.empty
@@ -4890,9 +4985,7 @@ module ClientModel =
     /// up over the event feed, so the two legs are not in step. Saying "a chapter" then is
     /// honest; inventing a name for one nobody here has seen is not.
     let chapterNameAt (messageId: MessageId) (model: ClientModel) : string option =
-        model.Conversation.Items
-        |> List.tryFind (fun item -> item.MessageId = messageId)
-        |> Option.map (fun item -> chapterName model item)
+        model.Conversation.Find messageId |> Option.map (fun item -> chapterName model item)
 
     /// Every chapter in the session, oldest first — the conversation's own order, which is
     /// the order the contents lists them in and the order a reader walking the session would
@@ -4902,13 +4995,13 @@ module ClientModel =
     /// chapter IS on a screen is a measurement of a laid-out page, and the list is the same
     /// on a phone and a desk.
     let chapters (model: ClientModel) : ConversationItem list =
-        Chapters.over AutoChapters.policy model.Synced.Chapters model.Conversation.Items
+        let opened = (drawing model).ChapterOpenings
+        model.Conversation.Items |> List.filter (fun i -> Set.contains i.MessageId opened)
 
     /// Every message a chapter opens at, for a surface that draws the transcript and asks of
-    /// each row in turn. Asked once per render rather than once per row, because the policy
-    /// reads what came before an item (`Chapters.openings`).
-    let chapterOpenings (model: ClientModel) : Set<MessageId> =
-        Chapters.openings AutoChapters.policy model.Synced.Chapters model.Conversation.Items
+    /// each row in turn. Worked out once per change of what it reads (`drawing`), because
+    /// the policy reads what came before an item (`Chapters.openings`).
+    let chapterOpenings (model: ClientModel) : Set<MessageId> = (drawing model).ChapterOpenings
 
     /// What this session's pull-request watches currently stand at, read off the
     /// `pull_requests` query — the only shape a browser has them in, since the query stream
@@ -6210,7 +6303,7 @@ module ClientModel =
             // pressed again — including when the item was not found, where leaving it open
             // would be a menu offering something that cannot happen.
             let model = { model with ItemMenu = None }
-            match model.Conversation.Items |> List.tryFind (fun item -> item.MessageId = messageId) with
+            match model.Conversation.Find messageId with
             | Some item ->
                 model
                 |> withSynced
@@ -6219,7 +6312,7 @@ module ClientModel =
         // The item again, and for the reason the toggle needs it: a chapter nobody has touched
         // has no entry, so the rename has to record the verdict the item already carried.
         | EditChapterNameMsg (messageId, said) ->
-            match model.Conversation.Items |> List.tryFind (fun item -> item.MessageId = messageId) with
+            match model.Conversation.Find messageId with
             | Some item ->
                 model
                 |> withSynced
@@ -6707,9 +6800,19 @@ module ClientModel =
         |> withSynced { model.Synced with Attachments = Map.remove id model.Synced.Attachments },
         effects
 
-    /// A message and the effects it asks for. A kill's press is resolved here, against the
-    /// model as it stands, into the press it is (`killPress`) — then applied like any other.
-    let update (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
+    /// The model with its drawing current, while the timeline is drawn (`showsFolded`): the
+    /// one place the derivation is re-run after a message. A page that is still reading its
+    /// log is not drawing it, and working the rows out for every page of a cold open would
+    /// be the cost of a render with no render.
+    let private withDrawing (model: ClientModel) : ClientModel =
+        if not (showsFolded model) then model
+        else
+            let current = drawing model
+            if LanguagePrimitives.PhysicalEquality current model.Drawing then model
+            else { model with Drawing = current }
+
+    /// A message, applied.
+    let private applied (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
         match msg with
         | KillPressedMsg terminal ->
             match killPress terminal model with
@@ -6725,3 +6828,9 @@ module ClientModel =
             let uploads, effects = Uploads.update msg model.Uploads
             { model with Uploads = uploads }, effects
         | _ -> apply msg model
+
+    /// A message and the effects it asks for. A kill's press is resolved here, against the
+    /// model as it stands, into the press it is (`killPress`) — then applied like any other.
+    let update (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
+        let next, effects = applied msg model
+        withDrawing next, effects

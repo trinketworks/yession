@@ -157,6 +157,9 @@ let private representativeModel : ClientModel =
       Timeline =
         { TimelineProjection.empty with
             TerminalItems = [ TimelineBlock (EventOffset.create 2L |> expect, terminalId, blockId) ] }
+      // Derived from the two above, and worked out from them when it is not current (a model
+      // built by hand rather than by messages): an empty model's drawing never is, here.
+      Drawing = (ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }).Drawing
       EventConsumer =
         { LastProcessedOffset = Some (EventOffset.create 5L |> expect)
           Reading = None }

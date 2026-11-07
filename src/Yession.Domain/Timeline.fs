@@ -628,32 +628,40 @@ module TimelineProjection =
             | TimelineToolUse (_, id) -> drawsChip id proj
             | TimelineThought _ -> false
             | _ -> true)
+        // A run's or a card's members are gathered NEWEST FIRST and put in order once, at the
+        // end: appending to the end of an immutable list copies all of it, and a busy turn's
+        // run is the longest list here.
         |> List.fold
             (fun rows item ->
                 match turnOf item, burstOf item, rows with
-                | Some turn, _, RowWorkRun (previous, earlier) :: rest when previous = turn ->
-                    RowWorkRun (turn, earlier @ [ item ]) :: rest
+                | Some turn, _, RowWorkRun (previous, later) :: rest when previous = turn ->
+                    RowWorkRun (turn, item :: later) :: rest
                 // The run forms on the SECOND item, like the card: one call from a turn is
                 // its own row, and a run around it would be a fold over a fold.
                 | Some turn, _, RowItem (TimelineToolUse _ as first) :: rest when turnOf first = Some turn ->
-                    RowWorkRun (turn, [ first; item ]) :: rest
+                    RowWorkRun (turn, [ item; first ]) :: rest
                 | Some _, _, _ -> RowItem item :: rows
-                | None, _, RowWorkRun (turn, earlier) :: rest when agentAct item ->
-                    RowWorkRun (turn, earlier @ [ item ]) :: rest
+                | None, _, RowWorkRun (turn, later) :: rest when agentAct item ->
+                    RowWorkRun (turn, item :: later) :: rest
                 | None, _, RowItem (TimelineToolUse _ as first) :: rest when agentAct item ->
                     match turnOf first with
-                    | Some turn -> RowWorkRun (turn, [ first; item ]) :: rest
+                    | Some turn -> RowWorkRun (turn, [ item; first ]) :: rest
                     | None -> RowItem item :: rows
-                | _, Some turn, RowTaskCard (previous, earlier) :: rest when previous = turn ->
-                    RowTaskCard (turn, earlier @ [ item ]) :: rest
+                | _, Some turn, RowTaskCard (previous, later) :: rest when previous = turn ->
+                    RowTaskCard (turn, item :: later) :: rest
                 // The card forms on the SECOND command, not the first: one command from a
                 // turn is a chip, and wrapping it in a disclosure would hide the only thing
                 // the row has to say behind a click.
                 | _, Some turn, RowItem first :: rest when burstOf first = Some turn ->
-                    RowTaskCard (turn, [ first; item ]) :: rest
+                    RowTaskCard (turn, [ item; first ]) :: rest
                 | _, _, _ -> RowItem item :: rows)
             []
         |> List.rev
+        |> List.map (fun row ->
+            match row with
+            | RowWorkRun (turn, members) -> RowWorkRun (turn, List.rev members)
+            | RowTaskCard (turn, members) -> RowTaskCard (turn, List.rev members)
+            | RowItem _ -> row)
 
     /// The one place that answers "is this timeline item a task the session is doing RIGHT
     /// NOW, and how is it going" — so a task view (a live queue, a running count) is a FILTER
