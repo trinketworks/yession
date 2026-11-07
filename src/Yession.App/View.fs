@@ -4007,9 +4007,13 @@ module View =
         // Keyed as its members are (`entries`): a group is its FIRST member's, which it keeps
         // while members join it at the end. A group that loses its first member to a message
         // above is a different group, and is drawn as one.
-        let group (actor: ActorRef) (members: (string * TemplateResult) list) =
+        //
+        // Registered as a part of the conversation's tail (`HostRole.TailPart`): the browser
+        // skips a group off screen (`Style.messageGroup`), and drawing one changes its size
+        // with no render, which `Tail` has to hear to keep a following reader at the end.
+        let group (key: string) (actor: ActorRef) (members: (string * TemplateResult) list) =
             html $"""
-                <section class="{Style.messageGroup}" data-message-author="{Entity.actorToken actor}">
+                <section class="{Style.messageGroup}" data-message-author="{Entity.actorToken actor}" {HostRole.mark HostRole.TailPart key}>
                   <header class="{Style.messageGroupHead}">{actorHead model Style.avatar actor}</header>
                   {members |> Lit.mapUnique fst snd}
                 </section>"""
@@ -4018,7 +4022,8 @@ module View =
                 | None -> acc
                 | Some (actor, members) ->
                     let members = List.rev members
-                    ("group:" + fst (List.head members), group actor members) :: acc
+                    let key = "group:" + fst (List.head members)
+                    (key, group key actor members) :: acc
             let step (acc, current) (actor, key, rendered) =
                 match actor, current with
                 | Some actor, Some (actor', members) when actor = actor' ->
@@ -4093,7 +4098,7 @@ module View =
         // `srOnly`: a dot alone reaches nobody who cannot see it beat.
         let reading =
             html $"""
-                <section class="{Style.messageGroup}" role="status" data-history-loading>
+                <section class="{Style.messageGroup}" role="status" data-history-loading {HostRole.mark HostRole.TailPart "reading"}>
                   <header class="{Style.messageGroupHead}">
                     <span class="{Style.readingMark}">{Icon.spin}</span>
                     <span class="{Style.statusWait}">{Dom.Text.catchingUp}</span>

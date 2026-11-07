@@ -20,6 +20,10 @@ type HostRole =
     | TerminalText
     /// A surface read from its end (`data-tail`), keyed by its `TailSurface.key`.
     | Tail
+    /// A part of such a surface that the browser skips while it is off screen
+    /// (`Style.messageGroup`), keyed by the part's own key: its size can change with no
+    /// render, as it is drawn, and `Tail` watches it to keep a following reader at the end.
+    | TailPart
     /// The box a terminal's output is laid into, live screen or block scrollback, keyed by the
     /// terminal's id: what is measured for its size.
     | Viewport
@@ -40,6 +44,7 @@ module HostRole =
         | HostRole.TerminalInput -> "terminal-input"
         | HostRole.TerminalText -> "terminal-text"
         | HostRole.Tail -> "tail"
+        | HostRole.TailPart -> "tail-part"
         | HostRole.Viewport -> "viewport"
         | HostRole.Replay -> "replay"
         | HostRole.ListingFoot -> "listing-foot"
@@ -52,6 +57,7 @@ module HostRole =
         | "terminal-input" -> Some HostRole.TerminalInput
         | "terminal-text" -> Some HostRole.TerminalText
         | "tail" -> Some HostRole.Tail
+        | "tail-part" -> Some HostRole.TailPart
         | "viewport" -> Some HostRole.Viewport
         | "replay" -> Some HostRole.Replay
         | "listing-foot" -> Some HostRole.ListingFoot

@@ -291,6 +291,18 @@ let create (hosts: Hosts.Hosts) (dispatch: ClientMsg -> unit) (current: unit -> 
     /// the splitter is dragged — and each of those moves the end away from a reader whose
     /// `scrollTop` stayed exactly where it was: the last thing said, cut in half above the
     /// composer.
+    ///
+    /// And of every part of a surface the browser skips while it is off screen
+    /// (`HostRole.TailPart`). A skipped part measures as the size it last had on screen, or an
+    /// estimate before it has had one, until it comes near the screen and is drawn — and
+    /// drawing it moves the end with no render and no box resized. A reader jumped back to the
+    /// latest from far away was put at an end measured on a last group that had grown while it
+    /// was skipped, and was left 312px short once it was drawn (measured in the harness); a
+    /// page opening at its end drew its last groups a frame after it was put there. The part's
+    /// size changes as it is drawn, and an observer hears it after that layout and before the
+    /// paint, so the reader is never shown the end in the wrong place. Not the browser's
+    /// `contentvisibilityautostatechange`, which was tried: it arrives a frame late, and that
+    /// frame painted the 312px.
     let observer : ResizeObserver option =
         if ResizeObserver.isSupported () then
             Some (
@@ -304,12 +316,16 @@ let create (hosts: Hosts.Hosts) (dispatch: ClientMsg -> unit) (current: unit -> 
                     | None -> ()))
         else None
 
-    // The observer watches each surface from the moment lit draws it to the moment lit takes
-    // it away, so a render that drew the same surfaces starts nothing (observing fires once
-    // immediately, and that would be a pass per render for nothing), and one that dropped a
-    // surface does not leave the observer holding it.
+    // The observer watches each surface, and each part, from the moment lit draws it to the
+    // moment lit takes it away, so a render that drew the same ones starts nothing (observing
+    // fires once immediately, and that would be a pass per render for nothing), and one that
+    // dropped one does not leave the observer holding it.
     hosts.Watch
         HostRole.Tail
+        { Came = fun _ el -> observer |> Option.iter (fun observer -> observer.observe el)
+          Went = fun _ el -> observer |> Option.iter (fun observer -> observer.unobserve el) }
+    hosts.Watch
+        HostRole.TailPart
         { Came = fun _ el -> observer |> Option.iter (fun observer -> observer.observe el)
           Went = fun _ el -> observer |> Option.iter (fun observer -> observer.unobserve el) }
 

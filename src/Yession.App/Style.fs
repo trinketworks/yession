@@ -2379,7 +2379,47 @@ module Style =
     /// `gap-3` between the members is what the message GROUNDS grow into — `itemGround` pulls
     /// half of it back at each end — so two of them meet rather than leaving a dead stripe
     /// between two hoverable surfaces.
-    let messageGroup = cls [ "flex flex-col gap-3"; readingColumn; "max-md:max-w-none" ]
+    ///
+    /// SKIPPED while it is off screen (`content-visibility: auto`), so what a keystroke costs
+    /// stops growing with the conversation above it. Each layout walked every group the
+    /// session ever drew — 10,500 layout objects at a thousand items, three layouts a key, and
+    /// the browser's own frame work most of a key's CPU — though nothing a key touches is in
+    /// them. A skipped group keeps its DOM, so Cmd+F finds it, a screen reader reads it and
+    /// Tab reaches it (each renders it first); the browser only stops laying out and painting
+    /// it. `contain-intrinsic-size: auto` is what it measures as while skipped: the height it
+    /// last had on screen, and until it has been on screen once, the estimate — roughly a
+    /// group of a working session at a phone's width, between a lone message (90px) and a turn
+    /// with its work (800px). A wrong estimate moves the end of the conversation as groups near
+    /// it are drawn, with no render, and `Tail` watches each group to answer it
+    /// (`HostRole.TailPart`).
+    ///
+    /// Only where the browser ANCHORS its scroll (`overflow-anchor`). A reader scrolling up
+    /// draws groups above the screen, each changing from the estimate to its own height, and
+    /// an anchoring browser keeps what is under the eye where it was; one that does not moves
+    /// it by the difference, group after group, all the way up. Safari 26 does not anchor
+    /// (`CSS.supports("overflow-anchor", "auto")` is false there), so it lays out every group
+    /// as it always has, and nothing below changes what it draws.
+    ///
+    /// Skipping CLIPS: a skipped-or-not group paints only inside its own padding box, and what
+    /// it holds reaches past its edges — a ground's `-my-1.5` bleed, the author line's `-mt-2`,
+    /// a corner control, a focus ring 4px out, and on a phone every item's full bleed. So the
+    /// box reaches out by as much as they do and puts the same back as padding (`-m-3 p-3`, on a
+    /// phone the bleed's 16px across): the words do not move and nothing is clipped.
+    /// `box-content`, so the reading measure is still the CONTENT's. The vertical margin is
+    /// important (`!`) because `timeline` zeroes the first child's top margin, which would move
+    /// the first group down by the 12px it reaches up.
+    ///
+    /// `shrink-0`, because `timeline` is a flex column and a skipped box has no content to hold
+    /// it open: its automatic minimum height is nothing, and the column shrank every skipped
+    /// group to fit — a conversation of sixty replies measured 3,400px instead of 17,000. A
+    /// drawn group never shrank (its content was its minimum), so this changes nothing on
+    /// screen.
+    let messageGroup =
+        cls [ "flex flex-col gap-3 shrink-0"
+              readingColumn
+              "max-md:max-w-none box-content p-3 -mx-3 -my-3! max-md:-mx-4 max-md:px-4"
+              "supports-[overflow-anchor:auto]:[content-visibility:auto]"
+              "supports-[overflow-anchor:auto]:[contain-intrinsic-block-size:auto_400px]" ]
 
     /// The author line: avatar and name, STICKY — while a long run scrolls, who is speaking
     /// stays readable at the top of the column.

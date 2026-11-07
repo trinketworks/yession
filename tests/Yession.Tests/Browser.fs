@@ -2850,13 +2850,31 @@ let private atItsEnd (page: IPage) (key: string) : Async<bool> =
         return scroll |> Option.exists (fun s -> s.Top + s.ClientHeight >= s.Height - 4.0)
     }
 
+/// Where the conversation's reader stands: the first message whose top is in the column, by
+/// its words, and how far below the column's top it stands. Not `scrollTop`: the browser skips
+/// what is off screen (`Style.messageGroup`) and measures it as an estimate, and as it draws a
+/// part it had only estimated it moves `scrollTop` to keep what is on screen where it was. The
+/// place is what is on screen.
+let private placeIn (page: IPage) : Async<string * float> =
+    async {
+        let chat = tailSurface "chat"
+        let! column = Probe.boxes page [ chat ]
+        let! messages = Probe.seen page (chat + " [data-message-id]")
+        match column with
+        | [ Some c ] ->
+            match messages |> List.tryFind (fun m -> m.Box.Top >= c.Top) with
+            | Some m -> return m.Text, m.Box.Top - c.Top
+            | None -> return failwith "no message stands in the conversation's column"
+        | _ -> return failwith "the conversation could not be measured"
+    }
+
 /// A long conversation (the scroll scenario's, so the harness counts the renders from here)
 /// with its reader more than a screen back from the end — the way to the latest offered in the
 /// composer's tray — and then the viewport shortened, as a keyboard shortens it, until the
 /// column has less room than one item and is not drawn (`too-short`, app/tailwind.css).
-/// Answers where the reader's scroll stood before the room went. Not the start: the start is
-/// 0, and 0 is also where a lost scroll lands.
-let private columnTooShort (page: IPage) : Async<float> =
+/// Answers where the reader stood before the room went (`placeIn`). Not the start: the start
+/// is where a lost scroll lands.
+let private columnTooShort (page: IPage) : Async<string * float> =
     async {
         do! Harness.run5 page HarnessPage.benchScrollBegin 80 0 16 true "replies"
         do! twoFrames page
@@ -2871,11 +2889,7 @@ let private columnTooShort (page: IPage) : Async<float> =
         let! _ = Probe.scrollTo page chat top
         do! twoFrames page
         do! waitPresent "the way back to the latest message to be offered" page "#shell [data-jump-to-latest=\"chat\"] button"
-        let! was = Probe.scroll page chat
-        let was =
-            match was with
-            | Some s -> s.Top
-            | None -> failwith "the conversation went as it was read"
+        let! was = placeIn page
         // On a phone the header, the composer and the tray leave the column under one item
         // (76px) at this height.
         do! awaitU (page.SetViewportSizeAsync (390, 240))
@@ -5668,6 +5682,10 @@ let editorTests =
                 let conversation = "#shell [data-conversation]"
                 let! measured = boxesOf page [ conversation; conversation + " > :last-child" ]
                 let! padding = Probe.computed page conversation "padding-bottom"
+                // Where the last item's CONTENT ends: a group's box reaches past what it draws
+                // by its own padding, so that what bleeds out of it is not clipped while the
+                // browser skips it (`Style.messageGroup`), and that padding is not the item.
+                let! itemPadding = Probe.computed page (conversation + " > :last-child") "padding-bottom"
                 let! scroll = Probe.scroll page conversation
                 let over, top =
                     match scroll with
@@ -5677,10 +5695,14 @@ let editorTests =
                 // iOS bounces it even when short (`Style.timeline`). Being scrolled to the end
                 // takes `scrollTop` to that pixel, which is why `gap` is measured in the
                 // column's content rather than on screen.
+                let px (value: string option) =
+                    value
+                    |> Option.filter (fun p -> p.EndsWith "px")
+                    |> Option.map (fun p -> float (p.Substring (0, p.Length - 2)))
                 let gap =
-                    match measured, padding |> Option.filter (fun p -> p.EndsWith "px") with
-                    | [ c; last ], Some padding -> c.Bottom - float (padding.Substring (0, padding.Length - 2)) - top - last.Bottom
-                    | _ -> failwith "the conversation, its last item or its padding could not be read"
+                    match measured, px padding, px itemPadding with
+                    | [ c; last ], Some padding, Some itemPadding -> c.Bottom - padding - top - (last.Bottom - itemPadding)
+                    | _ -> failwith "the conversation, its last item or their padding could not be read"
                 Expect.equal over 1.0 "the conversation is shorter than its column but for the pixel it bounces on, so where it ends is a choice"
                 Expect.isTrue (abs gap < 1.0) (sprintf "the last item ends %.0fpx above the column's foot" gap)
                 return ()
@@ -6107,6 +6129,26 @@ let editorTests =
                     let! focused = focusedAttr page "data-tail"
                     Expect.equal focused (Some "chat") "the keyboard is on the conversation it was taken to"
                 }
+            // The browser skips the parts of a long conversation that are off screen
+            // (`Style.messageGroup`), and a part it has not drawn measures as an estimate. So what
+            // was said while the reader was away measured as the estimate when the jump put them
+            // at the end, and grew once it was drawn there: measured, the reader was left 312px
+            // short of an end that had moved on under them, with no render to put them back.
+            editorCaseIn 390 844 "the jump to the latest message lands at its end when what was said meanwhile is taller than it was taken for" <| fun page ->
+                async {
+                    do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
+                    do! Harness.run5 page HarnessPage.benchScrollBegin 80 0 16 true "replies"
+                    do! toTheEnd page "chat"
+                    do! toTheStart page "chat"
+                    do! Wait.until "the way to the latest message to be on screen" (fun () -> jumpOffered page "chat") id
+                    do! messageLands page 300L (String.replicate 60 "a line said while the reader was away, " + "tail-mark-tall")
+                    do! waitTextIn "the message said while the reader was away" page (tailSurface "chat") "tail-mark-tall"
+                    do! twoFrames page
+                    do! awaitU (page.ClickAsync "#shell [data-jump-to-latest='chat'] button")
+                    let! shown = newestShown page "chat" "tail-mark-tall"
+                    let! _ = Harness.ask page HarnessPage.benchScrollEnd
+                    Expect.isTrue (shownFully shown) (sprintf "the end of what was said meanwhile is wholly on screen: %A" shown)
+                }
             // The same press over a terminal's blocks, whose scroller is no place for focus of its
             // own: it lands on the panel the blocks are shown in.
             editorCaseIn 1440 900 "the jump to the latest output lands at the end with the keyboard in the pane" <| fun page ->
@@ -6138,8 +6180,8 @@ let editorTests =
                     do! Wait.until "the column to have its room back" (fun () -> Probe.scroll page (tailSurface "chat")) (Option.exists (fun s -> s.ClientHeight >= 72.0))
                     do! twoFrames page
                     let! _ = Harness.ask page HarnessPage.benchScrollEnd
-                    let! now = Probe.scroll page (tailSurface "chat")
-                    Expect.equal (now |> Option.map (fun s -> s.Top)) (Some was) "the reader is where they were before the column went"
+                    let! now = placeIn page
+                    Expect.equal now was "the reader is where they were before the column went"
                 }
             // …and nothing happens to it, frame after frame, while it has no room. With the scroll
             // lost, a column with no box read as at its end, so the model stopped offering the way
