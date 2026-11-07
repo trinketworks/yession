@@ -159,6 +159,35 @@ let private orderTests =
                 [ "said:m-1"; "ran:b-1"; "held:term-a"; "said:m-2" ]
                 "said, ran, held, said — in log order"
 
+        // A screen keys what it draws for a row by this (`View.chat`), and two rows with one
+        // key would be drawn as one element moved between two places.
+        testCase "no two rows share a key" <| fun () ->
+            let events =
+                [ at 1L 0.0 (opened terminalA "build")
+                  at 2L 0.0 (sent "1" "first")
+                  at 3L 1.0 (started terminalA "1" agentForAda "ls" 1)
+                  at 4L 2.0 (took terminalA (PeerRef bob) 5)
+                  at 5L 9.0 (released terminalA (PeerRef bob) LeaseReleased 30)
+                  at 6L 10.0 (sent "2" "done?")
+                  at 7L 11.0 (started terminalA "2" byAda "make" 31) ]
+            let conversation, _ = ConversationProjection.applyEvents None events ConversationProjection.empty
+            let timeline, _ = TimelineProjection.applyEvents None events TimelineProjection.empty
+            let keys = TimelineProjection.rows conversation timeline |> List.map TimelineRow.key
+            Expect.equal (List.distinct keys) keys "one key per row"
+
+        // What keeps an item's element when something lands above it: its key is its own,
+        // not where it sits.
+        testCase "a row's key does not move when a row arrives above it" <| fun () ->
+            let keyOf events =
+                let conversation, _ = ConversationProjection.applyEvents None events ConversationProjection.empty
+                let timeline, _ = TimelineProjection.applyEvents None events TimelineProjection.empty
+                TimelineProjection.rows conversation timeline |> List.last |> TimelineRow.key
+            let later = at 5L 2.0 (sent "2" "later")
+            Expect.equal
+                (keyOf [ at 1L 0.0 (sent "0" "earlier"); later ])
+                (keyOf [ later ])
+                "the same item, the same key"
+
         testCase "re-applying an overlapping page adds nothing twice" <| fun () ->
             // The same offset gate the other projections carry, for the same reason: pages
             // overlap, and a chip that appeared twice would be a bug a reload could not fix.
