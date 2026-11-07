@@ -3079,17 +3079,10 @@ module View =
         // jump — the same `RevealMessage` the chapter rail and a reply's ref use — on the
         // MARK, because the sentence holds links and a link cannot sit inside a button.
         // `data-cause-ref` / `data-cause-chain` are the hooks a test finds them by.
-        let causeLinks = ConversationItem.causeLinks model.Conversation.Items
+        let causeLinks = (ClientModel.drawing model).CauseLinks
         // The acts a chain continues below: each draws the rail from its chevron down to the
         // next link's mark, so the chain is one line rather than marks spaced along a gutter.
-        let chainedOn =
-            model.Conversation.Items
-            |> List.pairwise
-            |> List.choose (fun (above, item) ->
-                match Map.tryFind item.MessageId causeLinks with
-                | Some CauseLink.Chained -> Some above.MessageId
-                | _ -> None)
-            |> Set.ofList
+        let chainedOn = (ClientModel.drawing model).ChainedOn
         let causeLine (item: ConversationItem) =
             let line (mark: TemplateResult) (said: TemplateResult list) (hook: string) =
                 html $"""
@@ -3105,7 +3098,7 @@ module View =
             let drawn cause =
                 match cause with
                 | Cause.Item target ->
-                    match model.Conversation.Items |> List.tryFind (fun i -> i.MessageId = target) with
+                    match model.Conversation.Find target with
                     | Some cause ->
                         let said =
                             match cause.Content with
@@ -3225,7 +3218,7 @@ module View =
             // narrow screen puts it on its own line rather than wrapping mid-clause — and
             // nothing at all when the cause already names that person.
             let whom =
-                match ConversationItem.forWhom model.Conversation.Items item with
+                match ConversationItem.forWhom model.Conversation.Find item with
                 | [] -> Lit.nothing
                 | clause -> html $"""<span class="{Style.actNoteFor}" data-act-for>{Entity.phrase model by clause}</span>"""
             let titleSpan =
@@ -3361,7 +3354,7 @@ module View =
                 | Some Cause.Booted
                 | Some (Cause.Connected _) -> Lit.nothing
                 | Some (Cause.Item target) ->
-                    match model.Conversation.Items |> List.tryFind (fun i -> i.MessageId = target) with
+                    match model.Conversation.Find target with
                     | Some parent ->
                         // In the PARENT'S voice, because the typeface says who is talking
                         // before a reader reaches the author line (docs/visual-design.md,
@@ -3725,7 +3718,7 @@ module View =
         // until then the timeline says it is reading, rather than showing the oldest end of
         // the log a page at a time.
         let showsFolded = ClientModel.showsFolded model
-        let rows = if showsFolded then TimelineProjection.rows model.Conversation model.Timeline else []
+        let rows = if showsFolded then (ClientModel.drawing model).Rows else []
         // Every row resolved to (whose act it is, its rendering) BEFORE grouping, so a row
         // whose backing state a page boundary withheld contributes no entry — never an empty
         // element, and never an author line standing over nothing. An act note carries

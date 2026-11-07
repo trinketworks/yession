@@ -431,6 +431,69 @@ let private shownOf (events: EventEnvelope<SessionEvent> list) : ClientModel =
               AssignedDisplayName = "swift-heron"
               LatestOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset) })
 
+// --- What the timeline draws, kept ---------------------------------------------------------
+//
+// A render reads the transcript in order, by id, as rows, and as where chapters open. Each is
+// worked out once per change of what it reads (`ReadingOrder`, `ClientModel.drawing`) rather
+// than once per render, and what is pinned here is that the kept answer is always the answer
+// for what the model holds now.
+
+let private folded (events: EventEnvelope<SessionEvent> list) (projection: ConversationProjection) =
+    ConversationProjection.applyEvents None events projection |> fst
+
+let private ids (items: ConversationItem list) = items |> List.map (fun i -> MessageId.value i.MessageId)
+
+/// The model after one more page of the log.
+let private paged (events: EventEnvelope<SessionEvent> list) (model: ClientModel) : ClientModel =
+    Support.step
+        (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
+        model
+
+let private keptTests =
+    testList "What the timeline draws, kept" [
+        testCase "an item that arrives after the transcript was read is in the reading" <| fun () ->
+            let first = folded [ at 1L 0.0 (sent "1" "one") ] ConversationProjection.empty
+            ignore first.Items
+            let second = folded [ at 2L 1.0 (sent "2" "two") ] first
+            Expect.equal (ids second.Items) [ "m-1"; "m-2" ] "the reading follows the transcript"
+
+        // A copy of a projection shares what it kept: reading the newer one must not change
+        // what the older one answers.
+        testCase "an earlier projection still reads its own transcript" <| fun () ->
+            let first = folded [ at 1L 0.0 (sent "1" "one") ] ConversationProjection.empty
+            let second = folded [ at 2L 1.0 (sent "2" "two") ] first
+            ignore second.Items
+            Expect.equal (ids first.Items) [ "m-1" ] "what it held, not what came after"
+
+        testCase "an item is found by id after it arrives" <| fun () ->
+            let first = folded [ at 1L 0.0 (sent "1" "one") ] ConversationProjection.empty
+            ignore (first.Find (message "1"))
+            let second = folded [ at 2L 1.0 (sent "2" "two") ] first
+            Expect.isSome (second.Find (message "2")) "the index follows the transcript"
+
+        testCase "the drawn rows are the rows of what the model holds" <| fun () ->
+            let model = shownOf [ at 1L 0.0 (sent "1" "one") ] |> paged [ at 2L 1.0 (sent "2" "two") ]
+            Expect.equal
+                (ClientModel.drawing model).Rows
+                (TimelineProjection.rows model.Conversation model.Timeline)
+                "a message that landed is a row"
+
+        // The point of keeping them: a message that changes nothing the timeline reads costs
+        // nothing to draw.
+        testCase "a message the timeline does not read keeps the rows it had" <| fun () ->
+            let model = shownOf [ at 1L 0.0 (sent "1" "one") ]
+            let after = Support.step (ToggleFoldMsg (FoldKey.Act (message "1"))) model
+            Expect.isTrue
+                (obj.ReferenceEquals ((ClientModel.drawing model).Rows, (ClientModel.drawing after).Rows))
+                "the same rows, not rows worked out again"
+
+        testCase "a chapter opened by hand is where a chapter opens" <| fun () ->
+            let model =
+                shownOf [ at 1L 0.0 (sent "1" "one"); at 2L 1.0 (sent "2" "two") ]
+                |> Support.step (ToggleChapterMsg (message "2"))
+            Expect.isTrue (Set.contains (message "2") (ClientModel.chapterOpenings model)) "the verdict is read again"
+    ]
+
 /// A terminal's blocks, the surface the tail cases read from its end.
 let private blocksA = TailSurface.Blocks terminalA
 
@@ -5218,7 +5281,8 @@ let private startingFor (n: string) (person: PeerId) (cause: Cause option) =
 /// Who the note for start `n` says it was for, as a screen that draws its cause says it.
 let private forWhomOf (n: string) events =
     let items = conversationOf events
-    items |> List.find (fun i -> i.MessageId = message n) |> ConversationItem.forWhom items |> Phrase.said
+    let find id = items |> List.tryFind (fun i -> i.MessageId = id)
+    items |> List.find (fun i -> i.MessageId = message n) |> ConversationItem.forWhom find |> Phrase.said
 
 let private causeOf (n: string) events =
     conversationOf events
@@ -6409,6 +6473,7 @@ let tests =
         sessionBreakTests
         tabTests
         orderTests
+        keptTests
         toolTests
         commandCallTests
         cardTests
