@@ -1593,7 +1593,7 @@ module View =
                         <article class="{Style.queueItem}" data-queue-id="{QueueId.value id}" data-queue-author="{PeerId.value entry.Author}" data-queue-order="{string entry.Order}">
                           <button type="button" class="{Style.queueSummary}" aria-label="Edit queued message" data-queue-summary="{QueueId.value id}" data-queue-open="{QueueId.value id}" @click={Ev(fun _ -> dispatch (OpenQueueEditMsg id))}>
                             <span class="{Style.cls [ Style.avatarSm; Entity.actorMark (ClientModel.people model) (PeerRef entry.Author) ]}"></span>
-                            <span class="{Style.queueSummaryBody}" data-rich-body="{BodyKey.queued id}" data-rich-readonly="true"></span>
+                            <span class="{Style.queueSummaryBody}" data-rich-body="{BodyKey.queued id}" data-rich-readonly="true" {HostRole.mark HostRole.RichBody (BodyKey.queued id)}></span>
                           </button>
                           <div class="{Style.queueTools}">
                             <button type="button" class="{Style.queueVerb}" aria-label="Move up" data-queue-up="{QueueId.value id}" @click={Ev(fun _ -> match QueueOrder.moveUp synced.Queue id with Some o -> dispatch (ReorderQueuedMsg (id, o)) | None -> ())}>{Icon.up}</button>
@@ -1769,7 +1769,7 @@ module View =
                   <span class="{Style.bandEdge}"></span>
                   <article class="{Style.draftBox}">
                     <div class="{Style.draftBody}">
-                      <div class="{Style.draftInput}" data-rich-body="{BodyKey.queued id}" data-rich-readonly="false" data-queue-input="{QueueId.value id}"></div>
+                      <div class="{Style.draftInput}" data-rich-body="{BodyKey.queued id}" data-rich-readonly="false" data-queue-input="{QueueId.value id}" {HostRole.mark HostRole.RichBody (BodyKey.queued id)}></div>
                     </div>
                     <div class="{Style.draftActionsRow}">
                       <div class="{Style.draftLead}"></div>
@@ -1801,7 +1801,7 @@ module View =
                         data-draft-expand="{PeerId.value peerId}" @click={Ev(fun _ -> dispatch (ExpandDraftMsg peerId))}>
                   <span class="{Style.cls [ Style.avatarSm; Entity.actorMark (ClientModel.people model) (PeerRef peerId) ]}"></span>
                   <span class="{Style.draftSummaryName}">{ClientModel.nameOf peerId model}</span>
-                  <span class="{Style.draftSummaryBody}" data-rich-body="{BodyKey.draft peerId}" data-rich-readonly="true"></span>
+                  <span class="{Style.draftSummaryBody}" data-rich-body="{BodyKey.draft peerId}" data-rich-readonly="true" {HostRole.mark HostRole.RichBody (BodyKey.draft peerId)}></span>
                   <span class="{Style.draftEditors}">{editors peerId}</span>
                 </button>"""
         // The same fact for a reader who cannot see the caret, and the only place the sentence
@@ -1915,7 +1915,7 @@ module View =
                          @paste={Ev(pasted)} @dragover={Ev(dragged)} @drop={Ev(dropped)}>
                   <div class="{Style.draftBody}">
                     {author}
-                    <div class="{Style.draftInput}" data-rich-body="{BodyKey.draft target}" data-rich-readonly="false" data-draft-input="{PeerId.value target}"></div>
+                    <div class="{Style.draftInput}" data-rich-body="{BodyKey.draft target}" data-rich-readonly="false" data-draft-input="{PeerId.value target}" {HostRole.mark HostRole.RichBody (BodyKey.draft target)}></div>
                     {files}
                   </div>
                   <div class="{Style.draftActionsRow}">
@@ -2210,7 +2210,7 @@ module View =
                     data-terminal-id="{TerminalId.value entry.Terminal}"
                     @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading entry.Terminal)))}>
               <span class="{Style.cls [ Style.chatChipPrompt; Style.terminalPrompt ]}">$</span>
-              <code class="{Style.chatChipCommand}" data-terminal-text="{BodyKey.terminalQueued entry.QueueId}"></code>
+              <code class="{Style.chatChipCommand}" data-terminal-text="{BodyKey.terminalQueued entry.QueueId}" {HostRole.mark HostRole.TerminalText (BodyKey.terminalQueued entry.QueueId)}></code>
               <span class="{Style.chatChipIn}">in</span>
               <span class="{Style.chatChipSubject}" data-pending-subject="terminal:{TerminalId.value entry.Terminal}" title="{what}">{what}</span>
               <span class="shrink-0">{statusLine}</span>
@@ -4474,7 +4474,7 @@ module View =
                   <span class="{Style.terminalPrompt}">$</span>
                   <input type="text" class="{Style.fieldMonoBare}" aria-label="Queued command"
                          autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
-                         data-terminal-input="{BodyKey.terminalQueued id}">
+                         data-terminal-input="{BodyKey.terminalQueued id}" {HostRole.mark HostRole.TerminalInput (BodyKey.terminalQueued id)}>
                 </div>"""
         let ordering =
             html $"""
@@ -4666,7 +4666,7 @@ module View =
                      data-terminal-draft-author="{PeerId.value author}">
                   <span class="{Style.terminalPrompt}">$</span>
                   <input type="text" class="{Style.fieldMonoBare}" readonly aria-label="{ClientModel.nameOf author model}'s command"
-                         data-terminal-input="{BodyKey.terminalDraft terminal author}">
+                         data-terminal-input="{BodyKey.terminalDraft terminal author}" {HostRole.mark HostRole.TerminalInput (BodyKey.terminalDraft terminal author)}>
                   <span class="{Style.terminalEditors}">{editors author}</span>
                   <button type="button" class="{Style.btnSendInField}" aria-label="{sendName}" title="{sendWhen}"
                           data-terminal-send="{PeerId.value author}"
@@ -4724,7 +4724,7 @@ module View =
                         <input type="text" class="{Style.terminalCommand}" aria-label="Command"
                                placeholder="$"
                                autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
-                               data-terminal-input="{BodyKey.terminalDraft terminal mine}">
+                               data-terminal-input="{BodyKey.terminalDraft terminal mine}" {HostRole.mark HostRole.TerminalInput (BodyKey.terminalDraft terminal mine)}>
                         <div class="{Style.terminalCommandTrail}">
                           <span class="{Style.terminalEditors}">{editors mine}</span>
                           <button type="button" class="{runClass}" aria-label="{sendName}" title="{sendWhen}" aria-keyshortcuts="Enter"

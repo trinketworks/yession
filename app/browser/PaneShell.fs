@@ -755,13 +755,18 @@ let installPaneResize (dispatch: Yession.App.ClientMsg -> unit) : unit =
     // Which handle an event happened on, asked as "does a handle contain this": a press on
     // the grip's own children is a press on the handle. A target that is not a node at all is
     // under no handle.
+    //
+    // Asked UP from the target, never of the document: these listeners hear every key and
+    // press on the page, and a whole-document scan for the handles on each one was a walk of
+    // every node per keystroke typed anywhere.
     let handleUnder (target: EventTarget) : HTMLElement option =
-        match EventTargets.asNode target with
-        | None -> None
-        | Some node ->
-            Scan.all "[data-term-resize]"
-            |> List.map (fun handle -> handle :?> HTMLElement)
-            |> List.tryFind (fun handle -> handle.contains node)
+        EventTargets.asNode target
+        |> Option.bind (fun node ->
+            match EventTargets.asElement target with
+            | Some element -> Some element
+            | None -> Option.ofObj node.parentElement)
+        |> Option.bind (fun element -> element.closest "[data-term-resize]")
+        |> Option.map (fun handle -> handle :?> HTMLElement)
     let setTo (wanted: float) = dispatch (Yession.App.PaneSplitMsg wanted)
     let nudge (by: float) = dispatch (Yession.App.PaneNudgedMsg by)
 

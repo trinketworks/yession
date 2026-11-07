@@ -126,6 +126,13 @@ and private renderParts (parts: Parts) : string =
         elif binding.IsMatch s then
             // Drop the binding syntax and its value — a string can't carry a listener.
             sb.Append (bindingWithSpace.Replace (s, "")) |> ignore
+        elif (match context, Hole.classify values.[i] with
+              | InTag, Hole.Inert -> not (unquotedValue.IsMatch s)
+              | _ -> false) then
+            // A directive in an element's tag (`host`) is the browser's business and renders
+            // nothing here — and nor does the space that set it apart from the attribute
+            // before it, so the tag reads as it would without it.
+            sb.Append (s.TrimEnd ()) |> ignore
         else
             sb.Append s |> ignore
             match context with

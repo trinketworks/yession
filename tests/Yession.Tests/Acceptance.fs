@@ -3191,6 +3191,12 @@ module private Holes =
 
     let memoised (part: string) = html $"""<p>{Fable.LitExtras.memo part item}</p>"""
 
+    // An element registered with the browser's hosts (`HostRole.mark`), and the same element
+    // without, written as a view writes it: last in the tag, after a space.
+    let hosted (part: string) = html $"""<p data-part="{part}" {Fable.LitExtras.host "probe" part}></p>"""
+
+    let unhosted (part: string) = html $"""<p data-part="{part}"></p>"""
+
 // The renderer's sequence arm (`Ssr.renderValue`), which every surface reaches through and no
 // view test can tell apart from the markup around it. A view builds its sequences with
 // `List.map`, so the list shape is the only one the suite was exercising by accident — while
@@ -3252,6 +3258,14 @@ let private templateHoleTests =
                 (Support.renderTemplate (Holes.memoised "<b>"))
                 (Support.renderTemplate (Holes.plainNested "<b>"))
                 "`memo` draws what its template returns for the props"
+
+        // The browser's business, in a tag: a first paint renders the tag as it would be
+        // without it, byte for byte, the space that set it apart included.
+        testCase "a host in a tag renders as the tag without it" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.hosted "<b>"))
+                (Support.renderTemplate (Holes.unhosted "<b>"))
+                "`host` renders nothing, and leaves no space where it was"
     ]
 
 /// One update of a `memo` directive by hand, the way lit calls it on a render of its part:

@@ -37,6 +37,11 @@ module HarnessPage =
     let sends : PageGlobal<int> = PageGlobal.named "__sends"
     /// Start or stop pushing presence decorations into the MIRROR on every animation frame.
     let caretStorm : PageGlobal<bool -> unit> = PageGlobal.named "__caretStorm"
+    /// Draw one of the host-lifecycle arrangements (`Fable.LitExtras.host` under lit's own
+    /// structures: a `repeat` that drops an item, a `memo` that skips, a `memo`'d subtree
+    /// whose parent goes, an element whose key changes) into a container of its own, and
+    /// answer the keys its sink holds afterwards, comma-separated, in the order they came.
+    let hostLifecycle : PageGlobal<string -> string> = PageGlobal.named "__hostLifecycle"
     /// How many frames the storm has actually pushed on. Anti-vacuity: a convergence assertion
     /// passes trivially if the storm never ran, and "never ran" and "ran and was harmless" look
     /// identical from the outside.
