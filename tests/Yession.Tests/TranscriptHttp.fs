@@ -449,6 +449,7 @@ let private readingThrough (feed: Client.TranscriptFetch.TranscriptFeed) (readTh
             doc
             (BodyRegistry doc)
             (TextRegistry doc)
+            (Carets ())
             { PeerId = PeerId.create "reader" |> expect; DisplayName = "Reader"; Token = "t" }
             dispatch
             clientEnd

@@ -466,8 +466,7 @@ let tests =
                 // deliberately: opening is what makes the chapter owed a name, and a caret
                 // arriving after that would be a different rule (stopping) than this one
                 // (not starting).
-                b.Runner.Dispatch (
-                    user (CaretMovedMsg (Some { Field = ChapterName item.MessageId; Pos = { Anchor = "AQI="; Head = "AQI=" } })))
+                reportCaret b (Some { Field = ChapterName item.MessageId; Pos = { Anchor = "AQI="; Head = "AQI=" } })
                 do! a.Runner.WaitFor (fun m -> Map.containsKey (PeerRef b.Hello.PeerId) m.Presence)
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 // It IS owed, and it IS asked — so the only thing left that can stop the
@@ -649,7 +648,7 @@ let tests =
                 let! b = connectInMemoryClient host "bob" "Bob"
                 // Ada's caret is in the title; the Host relays the presence frame to Bob.
                 let titleFocus : Focus = { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } }
-                a.Runner.Dispatch (user (CaretMovedMsg (Some titleFocus)))
+                reportCaret a (Some titleFocus)
                 do! b.Runner.WaitFor (fun m -> Map.containsKey (PeerRef a.Hello.PeerId) m.Presence)
                 Expect.equal
                     (Map.tryFind (PeerRef a.Hello.PeerId) (b.Runner.Model ()).Presence |> Option.bind (fun c -> c.Focus))
@@ -657,7 +656,7 @@ let tests =
                     "B sees A's title caret with the reported anchor/head"
                 // Ada moves into her own draft body: the field changes, and it still relays.
                 let bodyFocus : Focus = { Field = DraftBody a.Hello.PeerId; Pos = { Anchor = "BQY="; Head = "BQY=" } }
-                a.Runner.Dispatch (user (CaretMovedMsg (Some bodyFocus)))
+                reportCaret a (Some bodyFocus)
                 do! b.Runner.WaitFor (fun m ->
                         Map.tryFind (PeerRef a.Hello.PeerId) m.Presence |> Option.bind (fun c -> c.Focus) = Some bodyFocus)
                 Expect.equal
@@ -670,6 +669,24 @@ let tests =
                 do! a.Channel.Close ()
                 do! b.Runner.WaitFor (fun m -> not (Map.containsKey (PeerRef a.Hello.PeerId) m.Presence))
                 Expect.isFalse (Map.containsKey (PeerRef a.Hello.PeerId) (b.Runner.Model ()).Presence) "A's caret vanishes when she disconnects"
+                do! host.Stop ()
+            }
+
+        // A caret moving within its field is no message to its own model (`Carets`), so it
+        // reaches the wire by the other road; this is that road, end to end.
+        testCaseAsync "a peer's caret moving within its field relays to others" <|
+            async {
+                let! host = Host.start (sid ()) 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                let! b = connectInMemoryClient host "bob" "Bob"
+                let caretAt (anchor: string) : Focus = { Field = Title; Pos = { Anchor = anchor; Head = anchor } }
+                let seen () =
+                    Map.tryFind (PeerRef a.Hello.PeerId) (b.Runner.Model ()).Presence |> Option.bind (fun c -> c.Focus)
+                reportCaret a (Some (caretAt "AQI="))
+                do! b.Runner.WaitFor (fun _ -> seen () = Some (caretAt "AQI="))
+                reportCaret a (Some (caretAt "AwQ="))
+                do! b.Runner.WaitFor (fun _ -> seen () = Some (caretAt "AwQ="))
+                Expect.equal (seen ()) (Some (caretAt "AwQ=")) "B sees where in the title A's caret moved to"
                 do! host.Stop ()
             }
 

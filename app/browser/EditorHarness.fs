@@ -2003,8 +2003,8 @@ do
     // queue would render a chip with nothing in it — and a case reading the command off that
     // chip would be asserting against the render's silence rather than against the doc.
     TerminalText.setTo shellTexts (BodyKey.terminalQueued harnessQueued) harnessQueuedCommand
-    // The caret the model holds, read off the renderer once there is one (`Render.focusReporter`).
-    let mutable caretHeld : unit -> Focus option = fun () -> None
+    // Where this page's caret stands (`Carets`), as the app keeps it.
+    let carets = Carets ()
     let renderer =
         Render.create
             { Doc = shellDoc
@@ -2015,12 +2015,12 @@ do
               Actions = actions
               Dispatch = fun msg -> dispatchRef msg
               // No session behind this page: a draft sent goes nowhere. A caret reported reaches
-              // the model as it does in the app (`Browser.fs`); the presence that asks for goes
-              // nowhere either, below.
+              // the slot and the model as it does in the app (`Browser.fs`); the presence that
+              // asks for goes nowhere either, below, and nor does a move within a field.
               Links =
                 { SendDraft = ignore
                   SendTerminalDraft = fun _ _ -> ()
-                  ReportFocus = Render.focusReporter (fun () -> caretHeld ()) (fun focus -> dispatchRef (CaretMovedMsg focus)) } }
+                  ReportFocus = Render.focusReporter carets (fun field -> dispatchRef (CaretMovedMsg field)) ignore } }
     let mutable model = { openingModel with Column = { openingModel.Column with Wide = PaneShell.onDesktop () } }
     // The model's synced half, written into this page's doc by the app's own binding: the
     // options `Client.makeProgram` hands `withYlmish`, so the same codec. This page keeps its
@@ -2501,7 +2501,6 @@ do
     // splitter, a pinned surface or a rail that only worked in the app is one no browser-tier
     // test could reach.
     renderer.Attach ()
-    caretHeld <- renderer.Caret
 
     // --- Scrolling while records arrive (the `bench` scroll scenario) ------------------------
     //
@@ -2588,10 +2587,11 @@ do
     // renders of the whole page. The editor's own Yjs transaction reached the program as a
     // remote one, because Ylmish signalled every update whose origin was not its own; since
     // 1.0.0-beta0236 it signals only an update to a root its codec binds, and a draft's body is
-    // not one. The caret the keystroke moved is still reported a frame later (`CaretMovedMsg`),
-    // and that render is the view, Lit's diff and every sync after it, over every item in the
-    // conversation. Nothing the keystroke changed is in the conversation, so this is the cost
-    // that should NOT grow with it, and the sweep is what says whether it does.
+    // not one. The caret the keystroke moved was then reported a frame later (`CaretMovedMsg`),
+    // and that render was the view, Lit's diff and every sync after it, over every item in the
+    // conversation; it is now kept beside the model (`Carets`), which hears only of a change of
+    // field. Nothing the keystroke changed is in the conversation, so this is the cost that
+    // should NOT grow with it, and the sweep is what says whether it does.
     //
     // The draft's slot is published once, on the first keystroke, and the program above writes
     // it into the doc as the app's binding does, so the draft-slot rule (`DraftSlot.follow`,

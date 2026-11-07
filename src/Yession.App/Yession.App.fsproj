@@ -48,6 +48,9 @@
          one answer, so selection and focus cannot disagree. -->
     <Compile Include="TabStrip.fs" />
     <Compile Include="Model.fs" />
+    <!-- Where carets stand to the character: outside the model, which holds only their
+         field, and below the connection that sends and receives them. -->
+    <Compile Include="Carets.fs" />
     <Compile Include="DraftSlot.fs" />
     <Compile Include="Connection.fs" />
     <Compile Include="PeerName.fs" />

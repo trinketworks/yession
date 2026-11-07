@@ -1791,20 +1791,16 @@ type ClientModel =
       /// and it never joined as a peer. `Peers` below stays peer-keyed: it is a fold of who
       /// has connected, which is a different question with a different answer.
       Presence      : Map<ActorRef, RemotePresence>
-      /// Where THIS peer's own caret is, as its editors last reported it (`CaretMovedMsg`):
-      /// the half of its presence the model cannot derive. The other half, what it has open,
-      /// is `viewing`. Kept here rather than beside the connection so one rule can say when
-      /// either half is told to everyone else (`presenceToSend`), and so a caret reported
-      /// before there is a channel is still known when one is accepted.
+      /// The FIELD THIS peer's own caret is in, as its editors last reported it
+      /// (`CaretMovedMsg`): the half of its presence the model cannot derive. The other half,
+      /// what it has open, is `viewing`. Kept here rather than beside the connection so one
+      /// rule can say when either half is told to everyone else (`presenceToSend`), and so a
+      /// caret reported before there is a channel is still known when one is accepted.
       ///
-      /// ONE slot, whoever reports to it — the rich editor's plugin, the title input and the
-      /// terminal command lines — so whether a report is news is asked of what this peer last
-      /// said from anywhere, never of what one reporter last said: a command line re-reporting
-      /// `None` after the editor had claimed the caret is a clear somebody needs. Most reports
-      /// are not news (a keyup for a key that typed, a click where the caret already was, an
-      /// editor going by in a scroll), and the reporter asks this field before telling it
-      /// (`Render.focusReporter`).
-      Caret         : Focus option
+      /// The field and not the position: where in the field the caret stands is read by
+      /// nothing the view draws, and moves on every keystroke, so it is kept outside the model
+      /// (`Carets`), which tells this field only when the caret changes field.
+      Caret         : FocusField option
       /// Every peer this session has seen, with the display name it joined under — folded from
       /// the durable log (`PeerJoined`/`PeerLeft`), so it survives a reload and names a draft's
       /// author even while that author is away. Presence is who is here NOW; this is who is who.
@@ -2418,10 +2414,11 @@ type ClientMsg =
     /// A remote peer's cursor moved (or cleared) in the title — ephemeral presence folded
     /// into `Presence`, never into the synced state.
     | RemotePresenceMsg of PresencePayload
-    /// This peer's caret+selection moved, or left every collaborative field (`None`). Told only
-    /// when it differs from `ClientModel.Caret`, and once a frame at most, by whoever reports
-    /// it — in the browser, `Render.focusReporter`.
-    | CaretMovedMsg of Focus option
+    /// This peer's caret moved to another collaborative field, or left every one (`None`).
+    /// Told only when the field changed, and once a frame at most, by the slot that holds
+    /// where the caret stands (`Carets.Report`) — a move within one field is not news to the
+    /// model, whose view draws nothing of it.
+    | CaretMovedMsg of FocusField option
     /// Ensure the draft slot keyed by `PeerId` exists (author only), carrying the queue key it
     /// will become when anyone sends it. The body is a rich-text `Y.XmlFragment` anchored by the
     /// codec once the slot exists, so the editor has a synced fragment to bind — the client
@@ -2897,8 +2894,10 @@ type ClientEffect =
     /// on it lays its screen out to the box the holder is looking at (`ClientModel.ptyResizes`).
     | ResizeTerminal of TerminalId * Size
     /// Tell everyone else where this peer is: its caret and what it has open, both halves on
-    /// one frame (`ClientModel.presenceToSend`).
-    | SendPresence of focus: Focus option * viewing: ViewRef option
+    /// one frame (`ClientModel.presenceToSend`). Only what it has open is carried: the caret
+    /// goes as it stands when the frame is sent, which is the slot's to say (`Carets.Own`), and
+    /// a copy here would be one that could be older.
+    | SendPresence of viewing: ViewRef option
     /// Read the event log after this offset, under read number `read` — one fetch or one
     /// frame, answered as `EventsReadMsg` carrying the same number (`ClientModel.reads`).
     | ReadEvents of read: int * after: EventOffset option
@@ -4685,13 +4684,25 @@ module ClientModel =
     /// and presence has no keepalive, so a frame nobody sent is a peer nobody sees. An
     /// acceptance with nothing to restate sends nothing: a peer that left was cleared
     /// everywhere when it went.
-    let presenceToSend (before: ClientModel) (after: ClientModel) : (Focus option * ViewRef option) option =
+    ///
+    /// Answers what the frame says this peer has open. The caret is the model's only to the
+    /// FIELD, so a change of field is what this sees of it; a move within one is told by
+    /// `positionToSend`.
+    let presenceToSend (before: ClientModel) (after: ClientModel) : ViewRef option option =
         let caret, view = after.Caret, viewing after
         match SessionLink.live before.Link, SessionLink.live after.Link with
-        | true, true when before.Caret <> caret || viewing before <> view -> Some (caret, view)
+        | true, true when before.Caret <> caret || viewing before <> view -> Some view
         | true, _ -> None
-        | false, true when caret.IsSome || view.IsSome -> Some (caret, view)
+        | false, true when caret.IsSome || view.IsSome -> Some view
         | false, _ -> None
+
+    /// What a caret moving WITHIN its field tells everyone else: the frame, with what this
+    /// peer has open beside it, while the page is linked, and nothing otherwise. Not news to
+    /// the model, which holds only the field (`Carets`), so asked of it directly rather than
+    /// by a message; and nothing is lost while unlinked, because acceptance restates the
+    /// caret as it then stands (`presenceToSend`).
+    let positionToSend (model: ClientModel) : ViewRef option option =
+        if SessionLink.live model.Link then Some (viewing model) else None
 
     /// What this browser writes down of the pane after a message (P0-4), or `None` when the
     /// pane it would write is the one already kept. Read off the model either side of the
