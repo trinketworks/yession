@@ -44,10 +44,10 @@ module Entity =
     /// was a `UserRef` in the first place — so chat and the sidebar can no longer show two
     /// names for one person. `Agent`/`System`/etc. are already a word, so only a peer or a
     /// user resolves.
-    let actorName (model: ClientModel) (actor: ActorRef) : string =
+    let actorName (people: People) (actor: ActorRef) : string =
         match actor with
-        | PeerRef peer -> ClientModel.nameOf peer model
-        | UserRef user -> ClientModel.userName user model
+        | PeerRef peer -> ClientModel.personName peer people
+        | UserRef user -> ClientModel.userNameIn user people
         | ActorRef.Agent | ActorRef.Session | ActorRef.System | ActorRef.Configured _ ->
             actorToken actor
 
@@ -71,17 +71,17 @@ module Entity =
         | Agent
         | Thing
 
-    let private wearer (model: ClientModel) (actor: ActorRef) : Wearer =
+    let private wearer (people: People) (actor: ActorRef) : Wearer =
         match actor with
         | UserRef u -> Person (Principal.User u)
-        | PeerRef p -> Person (Attribution.principalFor model.Attribution.PeerUsers p)
+        | PeerRef p -> Person (Attribution.principalFor people.Attribution.PeerUsers p)
         | ActorRef.Agent -> Agent
         | ActorRef.Session | ActorRef.System | ActorRef.Configured _ -> Thing
 
     /// The mark an actor wears: the class that draws it.
-    let actorMark (model: ClientModel) (actor: ActorRef) : string =
-        match wearer model actor with
-        | Person who -> Style.humanAvatar (Attribution.seatOf model.Attribution who)
+    let actorMark (people: People) (actor: ActorRef) : string =
+        match wearer people actor with
+        | Person who -> Style.humanAvatar (Attribution.seatOf people.Attribution who)
         | Agent -> Style.agentAvatar
         | Thing -> Style.thingAvatar
 
@@ -94,15 +94,15 @@ module Entity =
     /// whenever attribution named them both ways, and free to land on the agent's blue —
     /// which the people's colours exist to stay off. The agent wears that blue,
     /// and a thing the grey its mark is drawn in.
-    let presenceColour (model: ClientModel) (actor: ActorRef) : string =
-        match wearer model actor with
-        | Person who -> Style.humanColour (Attribution.seatOf model.Attribution who)
+    let presenceColour (people: People) (actor: ActorRef) : string =
+        match wearer people actor with
+        | Person who -> Style.humanColour (Attribution.seatOf people.Attribution who)
         | Agent -> "var(--color-blue)"
         | Thing -> "var(--color-ink-faint)"
 
     /// The same colour at a quarter, for a selection laid under text that must stay legible.
-    let presenceSelection (model: ClientModel) (actor: ActorRef) : string =
-        sprintf "color-mix(in srgb, %s 25%%, transparent)" (presenceColour model actor)
+    let presenceSelection (people: People) (actor: ActorRef) : string =
+        sprintf "color-mix(in srgb, %s 25%%, transparent)" (presenceColour people actor)
 
     /// What a terminal is called, on every surface that calls it anything — the tab, the
     /// pane's head, the list row, a chat chip, a queued command, the lease bar, the closed
@@ -138,9 +138,9 @@ module Entity =
     /// would otherwise read as two starts of one sandbox. The session's own carry no scope
     /// to drop. Prose keeps the whole spelling either way (`EntityRef.said`): it has no
     /// author line to lean on.
-    let name (model: ClientModel) (by: ActorRef) (entity: EntityRef) : string =
+    let name (people: People) (by: ActorRef) (entity: EntityRef) : string =
         match entity with
-        | EntityRef.Actor actor -> actorName model actor
+        | EntityRef.Actor actor -> actorName people actor
         | EntityRef.Repo repo -> RepoRef.value repo
         | EntityRef.Connection connection -> ConnectionName.value connection
         | EntityRef.Sandbox sandbox ->
@@ -200,11 +200,11 @@ module Entity =
     /// keyboard-reachable like every action on the page. `by` is whose sentence this is
     /// (see `name`); the whole spelling rides `title`, so a shortened name is still one
     /// hover from its scope.
-    let private draw (model: ClientModel) (spelled: string) (entity: EntityRef) : TemplateResult =
+    let private draw (people: People) (spelled: string) (entity: EntityRef) : TemplateResult =
         let mark =
             match entity with
             | EntityRef.Actor actor ->
-                html $"""<span class="{Style.cls [ Style.entityAvatar; actorMark model actor ]}" aria-hidden="true"></span>"""
+                html $"""<span class="{Style.cls [ Style.entityAvatar; actorMark people actor ]}" aria-hidden="true"></span>"""
             | EntityRef.Repo _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.repoSm}</span>"""
             | EntityRef.Connection connection ->
                 html $"""<span class="{Style.entityMark}" aria-hidden="true">{connectionMark connection}</span>"""
@@ -235,8 +235,8 @@ module Entity =
             html
                 $"""<span class="{Style.entity}" title="{EntityRef.said entity}" data-entity-kind="{kind entity}" data-entity="{EntityRef.said entity}">{mark}<span class="{Style.entityName}">{spelled}</span></span>"""
 
-    let render (model: ClientModel) (by: ActorRef) (entity: EntityRef) : TemplateResult =
-        draw model (name model by entity) entity
+    let render (people: People) (by: ActorRef) (entity: EntityRef) : TemplateResult =
+        draw people (name people by entity) entity
 
     /// What was done, drawn: the one look every deed's verb has — "started" on a sandbox's
     /// note, "ran" on a command's chip — so the thing it was done to always reads brighter
@@ -248,11 +248,11 @@ module Entity =
     /// the agent reads as `Phrase.said` and what a person reads here are the same segments,
     /// collapsed by two readers with two opinions — which is the whole reason a phrase is
     /// segments rather than a string. `by` is whose sentence it is.
-    let phrase (model: ClientModel) (by: ActorRef) (phrase: Phrase) : TemplateResult list =
+    let phrase (people: People) (by: ActorRef) (phrase: Phrase) : TemplateResult list =
         phrase
         |> List.map (fun segment ->
             match segment with
             | Segment.Text words -> html $"""{words}"""
             | Segment.Verb words -> verb words
-            | Segment.Ref entity -> render model by entity)
+            | Segment.Ref entity -> render people by entity)
 

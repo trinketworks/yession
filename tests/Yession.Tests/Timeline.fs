@@ -5494,7 +5494,7 @@ let private sharedArtifact (n: string) (ref: ArtifactRef) =
 /// The chip the chat passes in — the real one, because the point of the exercise is that a
 /// link in prose and a reference in a fold arrive at the SAME drawing.
 let private markerChip (ref: ContentRef) =
-    Entity.render (clientOf []) ActorRef.Agent (EntityRef.Content ref)
+    Entity.render (ClientModel.people (clientOf [])) ActorRef.Agent (EntityRef.Content ref)
 
 let private contentChipTests =
     testList "A file, referenced (Plan 26)" [

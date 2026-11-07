@@ -1727,6 +1727,20 @@ type UploadAnswer =
     /// The try did not land — no answer, or the session failing (a 5xx).
     | Failed of reason: string
 
+/// Who is who, as a screen names and marks a person: what `Entity` reads to draw an actor.
+///
+/// A slice of the model rather than the model, so a surface that draws people can say it
+/// depends on exactly this (a memoised timeline item compares it, `View.chat`). Data only,
+/// compared by value: this connection, the roster, the name each live presence carries, and
+/// who is who across peers and users.
+[<RequireQualifiedAccess>]
+type People =
+    { Me : PeerState
+      Peers : Map<PeerId, string>
+      /// The name each actor's live presence carries, for a peer the roster has not named.
+      Present : Map<ActorRef, string>
+      Attribution : Attribution.State }
+
 /// What the timeline draws, worked out from the facts it is drawn from once per change of
 /// them rather than once per render: the rows (`TimelineProjection.rows`), where chapters
 /// open, and how each act's cause is drawn. A render that changes none of these (a menu
@@ -4847,15 +4861,36 @@ module ClientModel =
     /// assigned — so a peer that rejoins under a new name has an old one still in the log, and
     /// a client reading the roster for itself would put a name in the chat that the sidebar's
     /// "you" row contradicts. Which is the exact defect resolving names was meant to end.
-    let nameOf (peer: PeerId) (model: ClientModel) : string =
-        if peer = model.Peer.PeerId && model.Peer.DisplayName <> "" then model.Peer.DisplayName
+    let private nameFrom (me: PeerState) (peers: Map<PeerId, string>) (present: ActorRef -> string option) (peer: PeerId) : string =
+        if peer = me.PeerId && me.DisplayName <> "" then me.DisplayName
         else
-            match Map.tryFind peer model.Peers with
+            match Map.tryFind peer peers with
             | Some name -> name
             | None ->
-                match Map.tryFind (ActorRef.PeerRef peer) model.Presence with
-                | Some presence when presence.DisplayName <> "" -> presence.DisplayName
+                match present (ActorRef.PeerRef peer) with
+                | Some name when name <> "" -> name
                 | _ -> PeerId.value peer
+
+    let nameOf (peer: PeerId) (model: ClientModel) : string =
+        nameFrom model.Peer model.Peers (fun actor -> Map.tryFind actor model.Presence |> Option.map (fun p -> p.DisplayName)) peer
+
+    /// Who is who (`People`), read off the model.
+    let people (model: ClientModel) : People =
+        { People.Me = model.Peer
+          People.Peers = model.Peers
+          People.Present = model.Presence |> Map.map (fun _ presence -> presence.DisplayName)
+          People.Attribution = model.Attribution }
+
+    /// A peer's display name (`nameOf`), from `People`: the same rule over the same facts.
+    let personName (peer: PeerId) (people: People) : string =
+        nameFrom people.Me people.Peers (fun actor -> Map.tryFind actor people.Present) peer
+
+    /// A user's display name (`userName`), from `People`.
+    let userNameIn (user: UserId) (people: People) : string =
+        people.Attribution.UserPeers
+        |> Map.tryFind user
+        |> Option.map (fun peer -> personName peer people)
+        |> Option.defaultValue (UserId.value user)
 
     /// Everybody here a message can address by name: each peer by the name it is seen under,
     /// those connected now as well as those the log remembers, and never this client itself —

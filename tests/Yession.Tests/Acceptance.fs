@@ -4489,8 +4489,8 @@ let private semanticsTests =
                 { representativeModel with
                     Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] } }
             Expect.equal
-                (Entity.actorMark model (PeerRef bob))
-                (Entity.actorMark model (UserRef carol))
+                (Entity.actorMark (ClientModel.people model) (PeerRef bob))
+                (Entity.actorMark (ClientModel.people model) (UserRef carol))
                 "the peer bob joined as, and the user bob is, are one person and one mark"
 
         // The same person, the same colour, where they are TYPING as well as where they are
@@ -4500,9 +4500,9 @@ let private semanticsTests =
             let model =
                 { representativeModel with
                     Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] } }
-            let caret = Entity.presenceColour model (PeerRef bob)
+            let caret = Entity.presenceColour (ClientModel.people model) (PeerRef bob)
             let seat = [ 0 .. Style.seats - 1 ] |> List.find (fun seat -> Style.humanColour seat = caret)
-            Expect.equal (Entity.actorMark model (UserRef carol)) (Style.humanAvatar seat)
+            Expect.equal (Entity.actorMark (ClientModel.people model) (UserRef carol)) (Style.humanAvatar seat)
                 "the caret bob types with is the colour of the mark carol wears"
 
         // The other half of the same rule: the mark a surface draws is the one `Entity`
@@ -4530,7 +4530,7 @@ let private semanticsTests =
                                 Woke = None; CausedBy = None } ]
                     Timeline = TimelineProjection.empty }
             let html = Support.render model
-            let mark = Entity.actorMark model (UserRef carol)
+            let mark = Entity.actorMark (ClientModel.people model) (UserRef carol)
             // The roster's row is the PERSON's — one a person, however many peers they are on
             // — so it is carol's row that bob's caret puts on it.
             let rosterRow =
@@ -4551,7 +4551,7 @@ let private semanticsTests =
                     Peers = Map.ofList [ bob, "quiet-otter" ]
                     Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] } }
             let phrase = [ Segment.Text "pushed on behalf of "; Segment.Ref (EntityRef.Actor (UserRef carol)) ]
-            let html = Entity.phrase model ActorRef.Agent phrase |> List.map Support.renderTemplate |> String.concat ""
+            let html = Entity.phrase (ClientModel.people model) ActorRef.Agent phrase |> List.map Support.renderTemplate |> String.concat ""
             let start = html.IndexOf (Dom.attr "data-entity" (EntityRef.said (EntityRef.Actor (UserRef carol))))
             Expect.isTrue (start >= 0) "the reference is its own element, found by the prose spelling"
             let element = html.Substring start

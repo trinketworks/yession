@@ -100,6 +100,10 @@ let private sameClass (a: DirectiveClass) (b: DirectiveClass option) : bool =
 /// it closes over what it closed over the last time the props differed. So a template under
 /// `memo` reads only its props and what is the same on every render (stable `dispatch` and
 /// action functions), never a wider value it could see from where it was written.
+///
+/// `AttachMembers`, because lit calls `render` and `update` as METHODS of the instance; Fable
+/// otherwise compiles a member to a module function that nothing on the prototype names.
+[<AttachMembers>]
 type MemoDirective() =
     inherit Lit.Types.Directive()
     let mutable drawn = false
