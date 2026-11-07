@@ -1906,7 +1906,8 @@ let private nodeBudgetMs (caps: Set<string>) =
 // The slowest, 301s, splits by what each allowance's cases took of it: 164s for the suites that
 // need only `Browser` (the editor's cases and the browser waits, 222 in all), 135s for the 48
 // `Native` ones, 2.5s for the one `Caddy` case. `bench`'s `Client performance` (`Browser Bench`,
-// narrowed to that suite) took 37-43s. One case at a time, the release tier took 390-453s on CI
+// narrowed to that suite) took 37-43s then, and 94s once it swept a working session's filler
+// beside the prose one and timed each render's phases (7 Nov). One case at a time, the release tier took 390-453s on CI
 // (six runs, 15 Oct), and a 4-core dev container, alone under a shared build lock, ran it in
 // 469-500s, against 216-233s three at a time.
 //
@@ -1931,7 +1932,7 @@ let private clrBudgetMs (caps: Set<string>) =
     allowing "Browser" 420_000
     + allowing "Native" 360_000
     + allowing "Caddy" 30_000
-    + allowing "Bench" 120_000
+    + allowing "Bench" 240_000
 
 // Build the installable from the WORKING TREE, which boots it: the derivation checks itself.
 //
@@ -2627,7 +2628,10 @@ let private slopeMetrics =
       "compose.mixed.type.slope"
       "compose.mixed.renders@20"
       "compose.mixed.renders@200"
-      "compose.mixed.renders@1000" ]
+      "compose.mixed.renders@1000"
+      // Renders per collaborator's caret move, a count like the composer's.
+      "watch.renders@200"
+      "watch.renders@1000" ]
 /// Below this many recorded points there is no baseline worth the name. A guard with nothing to
 /// compare against must not invent something.
 let private minimumHistory = 3
@@ -2665,9 +2669,11 @@ let private benchBaselines () : Map<string, float> =
 ///
 /// `Browser` is asked for because that one suite needs it. Its allowance is not bought: those
 /// 420s pay for the suites that need only a browser, the editor's 210 cases among them, and the
-/// narrowing keeps none of them. So the budget is `Bench`'s allowance alone, 120s against the
-/// 37-43s this suite takes on CI. It was the 720s of both, which let a hang hold the bench job
-/// for twelve minutes before it was named, and `bench-guard`'s re-measure for twelve more.
+/// narrowing keeps none of them. So the budget is `Bench`'s allowance alone, 240s against the
+/// 94s this suite took on CI once it swept two fillers (it was 120s against 37-43s, until the
+/// suite grew past the point where 120s was a margin rather than a deadline). It was the 720s
+/// of both, which let a hang hold the bench job for twelve minutes before it was named, and
+/// `bench-guard`'s re-measure for twelve more.
 let private measuring : CheckRun =
     { Caps = [ "Browser"; "Bench" ]
       Runtime = Some Runtime.Clr

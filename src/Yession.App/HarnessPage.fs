@@ -100,6 +100,10 @@ module HarnessPage =
     /// End it once `keys` keystrokes have each been timed (or a few seconds of frames have gone
     /// by without them): stop the clocks, and hand back what they recorded.
     let benchComposeEnd : PageGlobal<int -> JS.Promise<string>> = PageGlobal.named "__benchComposeEnd"
+    /// The watch scenario, whole: a `mixed` conversation of `items`, a collaborator's caret moved
+    /// `moves` times in this reader's composer, one every `everyMs`, and nobody here doing
+    /// anything. Says how many renders the moves cost and what each was spent on.
+    let benchWatch : PageGlobal<System.Func<int, int, int, JS.Promise<string>>> = PageGlobal.named "__benchWatch"
     let typed : PageGlobal<string> = PageGlobal.named "__typed"
     /// Hand the shell a terminal SCREEN, as the Session does over the data channel
     /// (Plan 14, stage 6). Exposed so the E2E can drive the one path that puts a real emulator
