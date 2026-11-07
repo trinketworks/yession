@@ -403,13 +403,29 @@ let private phaseReport (log: Render.RenderPhases seq) =
        title = column (fun p -> p.Title)
        tail = column (fun p -> p.Tail)
        total = column (fun p -> p.Total)
-       nodes = column (fun p -> float p.Nodes) |}
+       nodes = column (fun p -> float p.Nodes)
+       scans = column (fun p -> float p.Scans) |}
 
 /// Start keeping every render's phases, and hand back what has been kept so far. One
 /// scenario measures at a time, so a second begin replaces the first's sink.
 let private measurePhases () : ResizeArray<Render.RenderPhases> =
     let log = ResizeArray<Render.RenderPhases> ()
     Render.phases <- Some log.Add
+    log
+
+/// Every doc update's phases while a scenario ran (`Render.updates`), one array per phase —
+/// the `updates` of a scenario's report, which the bench reads as `<scenario>.update.<phase>`.
+/// How MANY there were is the array's length.
+let private updateReport (log: Render.UpdatePhases seq) =
+    let column (f: Render.UpdatePhases -> float) = ResizeArray<float> (Seq.map f log)
+    {| terminalInputs = column (fun p -> p.TerminalInputs)
+       presences = column (fun p -> p.Presences)
+       scans = column (fun p -> float p.Scans) |}
+
+/// Start keeping every doc update's phases, as `measurePhases` keeps renders'.
+let private measureUpdates () : ResizeArray<Render.UpdatePhases> =
+    let log = ResizeArray<Render.UpdatePhases> ()
+    Render.updates <- Some log.Add
     log
 
 let private scrollReport
@@ -2619,6 +2635,8 @@ do
         // Every render while the keys land: the caret's, a frame after each key, and the
         // draft slot's publication on the first.
         let phaseLog = measurePhases ()
+        // And every doc update, which is what a key that renders nothing still costs.
+        let updateLog = measureUpdates ()
         let mutable pressed = 0
         let listener : Browser.Types.Event -> unit =
             fun event ->
@@ -2645,6 +2663,7 @@ do
                         frames <- frames + 1
                     Browser.Dom.document.removeEventListener ("keydown", listener, true)
                     Render.phases <- None
+                    Render.updates <- None
                     return
                         JS.JSON.stringify
                             {| ``type`` = keys.ToArray ()
@@ -2654,7 +2673,9 @@ do
                                // What the model held: a `Mixed` conversation draws a turn's
                                // twelve calls as one row, so the rows on the page undercount it.
                                held = List.length (TimelineProjection.items model.Conversation model.Timeline)
-                               phases = phaseReport phaseLog |}
+                               phases = phaseReport phaseLog
+                               docUpdates = updateLog.Count
+                               updates = updateReport updateLog |}
                 }
                 |> Async.StartAsPromise)))
     PageGlobal.set HarnessPage.benchComposeEnd (fun expected ->

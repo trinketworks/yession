@@ -39,21 +39,6 @@ open Yession.App
 open Yession.Session
 open Yession.Host
 
-/// How many times this module has asked the DOCUMENT where the terminal boxes are, published
-/// for the reason `Render.fs` publishes its render count: the cost being guarded is a number
-/// of whole-document scans, and a test that inferred it by hooking `querySelectorAll` would
-/// read a private detail of the walk below and go quietly vacuous the day the walk changes
-/// shape. This is the walk saying what it did. Read in the page by name, as the render count
-/// is — the scans-per-render case in `Browser.fs` is its one reader.
-let private scansPublished : PageGlobal<int> = Probes.scans
-
-let private countScan () : unit =
-    PageGlobal.set
-        scansPublished
-        (match PageGlobal.tryGet scansPublished with
-         | Some n -> n + 1
-         | None -> 1)
-
 /// The box each terminal's output is laid into, whichever mode it is in: the live screen while
 /// a program holds it, the block scrollback while commands do. ONE selector, because it is one
 /// question — how wide is what this reader is looking at — and the pane shows one of the two
@@ -69,12 +54,13 @@ let private countScan () : unit =
 ///
 /// Keyed first-wins in document order, which is what the selector list answered before: a
 /// terminal holding both boxes at once resolves to the same one it always did.
+///
+/// A whole-document scan, counted (`Scan`): the scans-per-render case in `Browser.fs` reads the
+/// count.
 let private viewports () : Map<string, HTMLElement> =
-    countScan ()
-    let found = document.querySelectorAll "[data-terminal-screen], [data-terminal-scrollback][data-terminal-id]"
-    (Map.empty, [ 0 .. found.length - 1 ])
-    ||> List.fold (fun boxes i ->
-        let element = found.[i] :?> HTMLElement
+    (Map.empty, Scan.all "[data-terminal-screen], [data-terminal-scrollback][data-terminal-id]")
+    ||> List.fold (fun boxes found ->
+        let element = found :?> HTMLElement
         let id =
             match element.getAttribute "data-terminal-screen" with
             | null | "" -> element.getAttribute "data-terminal-id"

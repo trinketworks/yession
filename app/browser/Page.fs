@@ -17,8 +17,7 @@ open Yession.App
 /// The `<base href>` the shell was served with, or None where the document carries no base
 /// element or a base with no href.
 let private baseHref () : string option =
-    Browser.Dom.document.querySelector "base"
-    |> Option.ofObj
+    Scan.one "base"
     |> Option.bind (fun tag -> tag.getAttribute "href" |> Option.ofObj)
 
 let private documentBase : Lazy<DocumentBase> =

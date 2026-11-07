@@ -426,8 +426,7 @@ let private fetchMe (url: string) (deadlineMs: float) : Async<Result<ProbeAnswer
 /// attribute and a BLANK one are all None — the last one deliberately, because a meta that
 /// names nothing names nothing.
 let private metaContent (name: string) : string option =
-    Browser.Dom.document.querySelector (sprintf "meta[name=\"%s\"]" name)
-    |> Option.ofObj
+    Scan.one (sprintf "meta[name=\"%s\"]" name)
     |> Option.bind (fun tag -> tag.getAttribute "content" |> Option.ofObj)
     |> Option.filter (String.IsNullOrEmpty >> not)
 
