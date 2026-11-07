@@ -89,18 +89,20 @@ let private countScans (made: int) : unit =
 
 /// One render, phase by phase, in milliseconds: what a redraw spends where. `View` builds the
 /// template (`View.view`, every item's template made again); `Lit` commits it (Lit's diff
-/// of that template against the page); each sync after it is its own phase, the four
-/// `PaneShell` calls are one, and `Tail` is the read before the commit and the restore after
-/// everything else, together, because they are one mechanism split around the render.
-/// `Total` is the whole of it, start of `Tail.Before` to end of `Tail.Restore`. `Nodes` is
-/// how many elements the document held once the render was over, so a phase can be read
-/// against the size of the page it ran over. `Scans` is how many times the render asked the
-/// WHOLE document for something (`Scan`), the walk a node count multiplies.
+/// of that template against the page); each sync after it is its own phase. A mechanism split
+/// across the render's write, read and write passes is one phase, its pieces added: `Tail` is
+/// the read before the commit and the restore in the read pass; `Screens` the fold, the read
+/// of the boxes and the probes taken out; `PaneShell` the column's writes and the strip's read
+/// and write. `Total` is the whole of it. `Nodes` is how many elements the document held once
+/// the render was over, so a phase can be read against the size of the page it ran over.
+/// `Scans` is how many times the render asked the WHOLE document for something (`Scan`), the
+/// walk a node count multiplies.
 ///
-/// Layout reads are not counted. The reads that force layout during a render are spread over
-/// `Tail`, `PaneShell`, `Screens`, this module, and the editors and terminals they mount
-/// (ProseMirror, xterm), so a wrapper around the few in this file would count the smallest
-/// share of them. Forced layout shows up instead in the time of the phase that read it.
+/// Layout is not counted, and does not need to be: the render reads in one pass after all its
+/// writes, so the page is laid out once, by the FIRST read of that pass, and the time of that
+/// layout is in whichever phase read first (`Screens`, while the pane shows a terminal;
+/// otherwise `Tail`). A read that moved between two writes again would show as a second phase
+/// growing by a layout's worth.
 [<RequireQualifiedAccess>]
 type RenderPhases =
     { View : float
@@ -1013,9 +1015,7 @@ let create (deps: Deps) : Renderer =
         let tView = stamp measuring
         Fable.LitExtras.renderHosted hosts.Sink deps.Root template
         let tLit = stamp measuring
-        // Mount/dispose the rich editors on their body hosts (bound to live fragments), then
-        // overlay collaborators' cursors: remote carets in each body editor, and title carets
-        // measured against the just-rendered input.
+        // Mount/dispose the rich editors on their body hosts (bound to live fragments).
         syncRichBodies ()
         let tRich = stamp measuring
         // The command lines are bound as they register and follow their roots from then on
@@ -1024,11 +1024,10 @@ let create (deps: Deps) : Renderer =
         let tInputs = stamp measuring
         replays.Sync model
         let tReplays = stamp measuring
-        // The live screens, and the size the holder's viewport actually is. AFTER the
-        // render: the fold feeds an emulator whose serialization the next render draws,
-        // and the measurement needs a box that exists.
+        // The live screens folded forward: the fold feeds an emulator whose serialization the
+        // next render draws. No document in it; the measuring is below, with the reads.
         screens.Sync model
-        let tScreens = stamp measuring
+        let tFold = stamp measuring
         // The terminals column's open state is a class on the shell root, like the
         // sidebar's — presentation, so a re-render never fights it — but driven FROM the
         // model, because unlike the sidebar this column's visibility is something the app
@@ -1036,11 +1035,7 @@ let create (deps: Deps) : Renderer =
         PaneShell.setOpen model.TerminalsOpen
         PaneShell.setColumn model.Column
         PaneShell.setPaneSplit (ClientModel.paneSplit model)
-        // The strip's selected tab in view when the selection moved — read off the DOM rather
-        // than the model, so a tab a collaborator's `TabOpened` selected is covered too — and
-        // its fade on whichever ends have tabs past them.
-        PaneShell.syncStrip (hosts.In HostRole.PaneStrip |> List.map (fun (el, _) -> el :?> Browser.Types.HTMLElement))
-        let tPane = stamp measuring
+        let tPaneWrites = stamp measuring
         // Keep a slot rule running for every open terminal: a person may be mid-command
         // in more than one, and each slot follows its own command line.
         syncTerminalSlots model
@@ -1050,8 +1045,6 @@ let create (deps: Deps) : Renderer =
         let tFoot = stamp measuring
         pushPresences ()
         let tPresences = stamp measuring
-        placeInputCursorsAll model
-        let tCursors = stamp measuring
         // The tab's name, which lives outside the root and so is the model's to push rather
         // than Lit's to render. The NAME is computed in the model (`tabTitle`); this only
         // applies it, and only on a change — assigning `document.title` every render is a
@@ -1059,11 +1052,44 @@ let create (deps: Deps) : Renderer =
         let tab = ClientModel.tabTitle model
         if Browser.Dom.document.title <> tab then Browser.Dom.document.title <- tab
         let tTitle = stamp measuring
-        // Last, because everything above can move an end: an editor mounted into a message,
-        // the pane opened beside the chat, a screen folded forward. A reader put back at the
-        // end before those ran was put back at an end that had moved by the time anybody
-        // looked.
+
+        // ONE READ PASS. Everything above writes (lit's commit, the editors and players
+        // mounted, the column's classes and width, the title), and everything here reads,
+        // so the browser lays the page out once, at the first read, and every read after it
+        // is of a layout that is already done. A read between two writes is a layout of its
+        // own, done there and then; this render used to do four (the screens measured, the
+        // strip read, the screens' probe taken out, the tail's places), each over the whole
+        // page.
+        //
+        // The screens' probes go in first, the one write here: a probe is what a cell is read
+        // off (`Screens.Place`), and it moves nothing while it is in.
+        let measuringScreens = screens.Place ()
+        let tPlaced = stamp measuring
+        let screensRead = screens.Read measuringScreens
+        let tScreensRead = stamp measuring
+        // The strip's geometry, for its fade. Which tab is in view when the selection moved is
+        // a frame later (`DomMove.RevealPivot`), not here.
+        let stripRead = PaneShell.syncStrip (hosts.In HostRole.PaneStrip |> List.map (fun (el, _) -> el :?> Browser.Types.HTMLElement))
+        let tStripRead = stamp measuring
+        // Last of the reads, because everything above can move an end: an editor mounted into
+        // a message, the pane opened beside the chat, a screen folded forward. A reader put
+        // back at the end before those ran was put back at an end that had moved by the time
+        // anybody looked. Its writes are scroll positions, which move no layout, so the reads
+        // inside it are of the same one.
         tail.Restore tails model
+        let tRestore = stamp measuring
+
+        // THE WRITES THAT DEPEND ON THE READS: the probes out and the sizes told, the strip's
+        // fade, collaborators' carets placed in the inputs. Nothing reads after them in this
+        // render; the next layout is the frame's own.
+        screensRead ()
+        let tScreensDone = stamp measuring
+        stripRead ()
+        let tStripDone = stamp measuring
+        // Title and chapter carets, measured against the just-rendered input. Each caret is a
+        // read then a write, so where there are carets this lays the page out once a caret; on
+        // a render with none in an input, it does nothing.
+        placeInputCursorsAll model
         let tEnd = stamp measuring
         let scansMade = Scan.count () - scans
         countScans scansMade
@@ -1075,14 +1101,14 @@ let create (deps: Deps) : Renderer =
                   RenderPhases.RichBodies = tRich - tLit
                   RenderPhases.TerminalInputs = tInputs - tRich
                   RenderPhases.Replays = tReplays - tInputs
-                  RenderPhases.Screens = tScreens - tReplays
-                  RenderPhases.PaneShell = tPane - tScreens
-                  RenderPhases.TerminalSlots = tSlots - tPane
+                  RenderPhases.Screens = (tFold - tReplays) + (tScreensRead - tTitle) + (tScreensDone - tRestore)
+                  RenderPhases.PaneShell = (tPaneWrites - tFold) + (tStripRead - tScreensRead) + (tStripDone - tScreensDone)
+                  RenderPhases.TerminalSlots = tSlots - tPaneWrites
                   RenderPhases.ListingFoot = tFoot - tSlots
                   RenderPhases.Presences = tPresences - tFoot
-                  RenderPhases.InputCursors = tCursors - tPresences
-                  RenderPhases.Title = tTitle - tCursors
-                  RenderPhases.Tail = (tBefore - t0) + (tEnd - tTitle)
+                  RenderPhases.InputCursors = tEnd - tStripDone
+                  RenderPhases.Title = tTitle - tPresences
+                  RenderPhases.Tail = (tBefore - t0) + (tRestore - tStripRead)
                   RenderPhases.Total = tEnd - t0
                   // Counted after the clock stops, so the count is not part of what it counts.
                   RenderPhases.Nodes = int (Browser.Dom.document.getElementsByTagName "*").length
