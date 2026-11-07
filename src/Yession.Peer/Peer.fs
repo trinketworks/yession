@@ -210,10 +210,22 @@ type Client =
       Channel : FrameChannel<string>
       Doc : Y.Doc
       Hello : PeerHelloPayload
+      /// Where this client's own caret stands, to the character (`Carets`): the slot the
+      /// browser's editors report to, and the one its presence frames read.
+      Carets : Carets
       /// Point what the program asks of the session — a command, presence, a read — at this
       /// connection: the browser's `connectionRef`. A client that reconnects over a new one
       /// says so here, or its reads go on being asked of a channel that has gone.
       Wire : Client.Connection -> unit }
+
+/// Report this client's caret as the browser's editors do (`Render.focusReporter`, less the
+/// frame pacing): into its slot, which tells the model of a change of field and the connection
+/// of a move within one.
+let reportCaret (client: Client) (focus: Focus option) : unit =
+    client.Carets.Report
+        focus
+        (CaretMovedMsg >> user >> client.Runner.Dispatch)
+        (fun () -> Client.Ports.sendPosition (Some client.Connection) (client.Runner.Model ()))
 
 /// Why a client's waits should stop: the session's environment, where every command of a work
 /// sandbox starts, failed to START. Its reason is the product's own sentence (`srt sandbox
@@ -264,11 +276,12 @@ let connectClientWith (options: Client.ConnectOptions) (signalUrl: string) (toke
         // fragment is not one. So every doc update asks the waits again.
         DocSync.onAnyUpdate doc runner.Recheck
         let hello = { PeerId = local.PeerId; DisplayName = name; Token = token }
-        let connection = Client.connect options doc registry texts hello (user >> runner.Dispatch) channel
+        let carets = Carets ()
+        let connection = Client.connect options doc registry texts carets hello (user >> runner.Dispatch) channel
         wired.Value <- Some connection
         Async.StartImmediate connection.Run
         do! runner.WaitFor (fun m -> SessionLink.live m.Link)
-        return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = channel; Doc = doc; Hello = hello; Wire = fun c -> wired.Value <- Some c }
+        return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = channel; Doc = doc; Hello = hello; Carets = carets; Wire = fun c -> wired.Value <- Some c }
     }
 
 /// `connectClientWith` under the default options (frame-based event reads).

@@ -406,19 +406,20 @@ let private fieldOfKey (key: string) : FocusField option =
 /// A caret reported at most once per animation frame, and only when it is news: a caret
 /// sweep or drag fires many selection events, and an editor mounting, re-rendering or going
 /// (its plugin reports `None` as it is destroyed, which a scrolling conversation does to
-/// editors all the time) reports where its caret is or is not. The frame's last report is
-/// told to the model (`CaretMovedMsg`) only when it differs from the caret the model holds
-/// (`ClientModel.Caret`, read through `caret`), because telling is not free: every message
-/// is a pass through `update`, a Ylmish transaction and a render, whatever it changes, and
-/// one per editor going by is what a scroll cannot afford.
-///
-/// Compared against the MODEL rather than against what this last said, so there is one slot
-/// for the caret and the reporters (the rich editor's plugin, the title input, the command
-/// lines) all answer to it.
+/// editors all the time) reports where its caret is or is not. The frame's last report goes
+/// to the slot that holds this peer's caret (`Carets.Report`), which tells the model
+/// (`fieldMoved`) only of a change of field and the presence sender (`positionMoved`) of a
+/// move within one, because telling the model is not free: every message is a pass through
+/// `update`, a Ylmish transaction and a render, whatever it changes, and one per keystroke is
+/// what a long session cannot afford.
 ///
 /// Made separately from the render because the title input reports through it too, and that
 /// reporter is an action the view is built with before there is a render to ask.
-let focusReporter (caret: unit -> Focus option) (report: Focus option -> unit) : Focus option -> unit =
+let focusReporter
+    (carets: Carets)
+    (fieldMoved: FocusField option -> unit)
+    (positionMoved: unit -> unit)
+    : Focus option -> unit =
     let mutable scheduled = false
     let mutable latest : Focus option = None
     fun focus ->
@@ -427,7 +428,7 @@ let focusReporter (caret: unit -> Focus option) (report: Focus option -> unit) :
             scheduled <- true
             raf (fun () ->
                 scheduled <- false
-                if latest <> caret () then report latest)
+                carets.Report latest fieldMoved positionMoved)
 
 /// What the render reaches for that is not on the page. Every one of these is the session
 /// behind the shell, which the harness has none of and the app has only after its first
@@ -469,9 +470,9 @@ type Renderer =
       /// was last given — and the split between the two columns is the reader's to set, not
       /// the theme's.
       Attach : unit -> unit
-      /// This peer's caret as the model `SetState` was last given holds it (`ClientModel.Caret`)
-      /// — what `focusReporter` asks before telling it again.
-      Caret : unit -> Focus option }
+      /// The model `SetState` was last given, for what is told without a message
+      /// (`Client.Ports.sendPosition`).
+      Latest : unit -> ClientModel option }
 
 let create (deps: Deps) : Renderer =
     let doc = deps.Doc
@@ -591,8 +592,8 @@ let create (deps: Deps) : Renderer =
                 else Some key
             // Four events report the caret here and most report it unmoved — a keyup for
             // every key that types rather than navigates, a click landing where the caret
-            // already was, the focus that precedes both. They are dropped by the model, which
-            // holds the one slot they all write to (`ClientModel.Caret`).
+            // already was, the focus that precedes both. They are dropped by the slot they
+            // all write to (`Carets.Report`).
             let reportFocus () =
                 match lineOf () with
                 | Some key ->
@@ -978,4 +979,4 @@ let create (deps: Deps) : Renderer =
             tail.Attach ()
             PaneShell.installPaneResize dispatch
             PaneShell.installStrip ()
-      Caret = fun () -> latest |> Option.bind (fun model -> model.Caret) }
+      Latest = fun () -> latest }

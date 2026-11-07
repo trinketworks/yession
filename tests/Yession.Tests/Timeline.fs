@@ -5667,10 +5667,12 @@ let private revealTests =
     ]
 
 let private presenceTests =
-    let caret : Link.Focus = { Field = Link.FocusField.Title; Pos = { Anchor = "AQI="; Head = "AQI=" } }
+    // The field alone: where in it the caret stands is not the model's (`Carets`), and the
+    // frame reads it from there as it leaves.
+    let caret = Link.FocusField.Title
     let reading = Some (ViewingTerminal terminalA)
     let told (effects: ClientEffect list) =
-        effects |> List.choose (function ClientEffect.SendPresence (focus, viewing) -> Some (focus, viewing) | _ -> None)
+        effects |> List.choose (function ClientEffect.SendPresence viewing -> Some viewing | _ -> None)
     let accepted =
         ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (EventOffset.create 1L |> expect) }
     let terminal = [ at 1L 0.0 (opened terminalA "build") ]
@@ -5688,7 +5690,7 @@ let private presenceTests =
         testCase "acceptance restates the caret and the pane reported before it" <| fun () ->
             let before = clientOf terminal |> onTerminal |> Support.step (CaretMovedMsg (Some caret))
             let _, effects = ClientModel.update accepted before
-            Expect.equal (told effects) [ Some caret, reading ] "both halves, as the model holds them"
+            Expect.equal (told effects) [ reading ] "both halves, as the model holds them"
 
         // A peer that left was cleared everywhere when it went; there is nothing to restate.
         testCase "acceptance with nowhere to be tells nobody" <| fun () ->
@@ -5698,19 +5700,19 @@ let private presenceTests =
         // The two halves ride one frame, so a caret that moves must not erase the pane.
         testCase "a caret moving restates what is open beside it" <| fun () ->
             let _, effects = ClientModel.update (CaretMovedMsg (Some caret)) (heardOf terminal |> onTerminal)
-            Expect.equal (told effects) [ Some caret, reading ] "the pane is still open"
+            Expect.equal (told effects) [ reading ] "the pane is still open"
 
         // ...and a pane that moves must not erase the caret.
         testCase "the pane moving restates the caret beside it" <| fun () ->
             let before = heardOf terminal |> Support.step (CaretMovedMsg (Some caret))
             let _, effects = ClientModel.update (OpenInPaneMsg (Reading terminalA)) before
-            Expect.equal (told effects) [ Some caret, reading ] "the caret is still there"
+            Expect.equal (told effects) [ reading ] "the caret is still there"
 
         // Leaving every field is news too: it is how collaborators stop drawing the caret.
         testCase "a caret leaving every field is told" <| fun () ->
             let before = heardOf terminal |> Support.step (CaretMovedMsg (Some caret))
             let _, effects = ClientModel.update (CaretMovedMsg None) before
-            Expect.equal (told effects) [ None, None ] "cleared"
+            Expect.equal (told effects) [ None ] "cleared"
 
         // A render happens on every keystroke; a repeat tells a collaborator nothing.
         testCase "a caret reported where it already was tells nobody" <| fun () ->
@@ -5728,7 +5730,60 @@ let private presenceTests =
                 |> Support.step DisconnectedMsg
                 |> Support.step ConnectingMsg
             let _, effects = ClientModel.update accepted before
-            Expect.equal (told effects) [ Some caret, reading ] "both halves, again"
+            Expect.equal (told effects) [ reading ] "both halves, again"
+
+        // A move within the field is told without a message, so it asks the model directly.
+        testCase "a caret moving within its field while linked restates what is open beside it" <| fun () ->
+            let model = heardOf terminal |> onTerminal |> Support.step (CaretMovedMsg (Some caret))
+            Expect.equal (ClientModel.positionToSend model) (Some reading) "the pane is still open"
+
+        // ...and before acceptance the hello is still the first frame; acceptance restates it.
+        testCase "a caret moving within its field before acceptance tells nobody" <| fun () ->
+            let model = clientOf terminal |> Support.step (CaretMovedMsg (Some caret))
+            Expect.equal (ClientModel.positionToSend model) None "not connected yet"
+    ]
+
+/// Where this peer's caret stands, kept beside the model (`Carets`): which of the model and
+/// the sender each report reaches.
+let private caretSlotTests =
+    let at (field: Link.FocusField) (anchor: string) : Link.Focus option =
+        Some { Field = field; Pos = { Anchor = anchor; Head = anchor } }
+    /// What one report into a slot that already holds `held` tells: the model's field, the
+    /// sender's nudge, or neither.
+    let reported (held: Link.Focus option) (focus: Link.Focus option) =
+        let carets = Carets ()
+        carets.Report held ignore ignore
+        let fields = ResizeArray<Link.FocusField option> ()
+        let mutable positions = 0
+        carets.Report focus fields.Add (fun () -> positions <- positions + 1)
+        List.ofSeq fields, positions
+
+    testList "This peer's caret is told to the model only when its field changes" [
+        testCase "a caret moving within its field is not news to the model" <| fun () ->
+            let fields, _ = reported (at Link.FocusField.Title "AQI=") (at Link.FocusField.Title "AwQ=")
+            Expect.equal fields [] "the view draws nothing of where in the title it is"
+
+        testCase "a caret moving within its field is told to the sender" <| fun () ->
+            let _, positions = reported (at Link.FocusField.Title "AQI=") (at Link.FocusField.Title "AwQ=")
+            Expect.equal positions 1 "collaborators draw where it is"
+
+        testCase "a caret moving to another field is told to the model" <| fun () ->
+            let fields, _ = reported (at Link.FocusField.Title "AQI=") (at (Link.FocusField.QueueBody (QueueId.create "q-1" |> expect)) "AQI=")
+            Expect.equal fields [ Some (Link.FocusField.QueueBody (QueueId.create "q-1" |> expect)) ] "the field it is in now"
+
+        testCase "a caret leaving every field is told to the model" <| fun () ->
+            let fields, _ = reported (at Link.FocusField.Title "AQI=") None
+            Expect.equal fields [ None ] "cleared"
+
+        testCase "a caret reported where it already stands is told to nobody" <| fun () ->
+            let fields, positions = reported (at Link.FocusField.Title "AQI=") (at Link.FocusField.Title "AQI=")
+            Expect.equal (fields, positions) ([], 0) "nothing moved"
+
+        testCase "the slot holds the caret to the character" <| fun () ->
+            let carets = Carets ()
+            carets.Report (at Link.FocusField.Title "AQI=") ignore ignore
+            carets.Report (at Link.FocusField.Title "AwQ=") ignore ignore
+            Expect.equal carets.Own (at Link.FocusField.Title "AwQ=") "what the next frame sends"
     ]
 
 // --- What the read loop asks for ---------------------------------------------------------
@@ -6379,6 +6434,7 @@ let tests =
         dvrTests
         ptyResizeTests
         presenceTests
+        caretSlotTests
         revealTests
         readLoopTests
         historySyncTests

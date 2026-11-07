@@ -1125,6 +1125,7 @@ let private startLifecycle (host: Host.SessionHost) (token: string) (id: string)
                                 doc
                                 registry
                                 (TextRegistry doc)
+                                (Carets ())
                                 hello
                                 dispatch
                                 reading
@@ -1412,6 +1413,7 @@ let private releaseTests =
                         doc
                         registry
                         (TextRegistry doc)
+                        (Carets ())
                         { PeerId = local.PeerId; DisplayName = "Ada"; Token = "t" }
                         ignore
                         channel
@@ -1465,19 +1467,25 @@ let private releaseTests =
                             { Client.Ports.offline with Client.Ports.Connection = fun () -> wired.Value }
                             doc
                             (ClientModel.init local))
+                let carets = Carets ()
                 let connection =
                     Client.connect
                         Client.ConnectOptions.defaults
                         doc
                         (BodyRegistry doc)
                         (TextRegistry doc)
+                        carets
                         { PeerId = local.PeerId; DisplayName = "Ada"; Token = "t" }
                         (user >> runner.Dispatch)
                         channel
                 wired.Value <- Some connection
-                // Reported before anything runs, which is exactly what an editor can do.
+                // Reported before anything runs, which is exactly what an editor can do — into
+                // the slot, which tells the model of the field, as the browser's reporter does.
                 let caret : Focus = { Field = Title; Pos = { Anchor = "AQI="; Head = "AQI=" } }
-                runner.Dispatch (user (CaretMovedMsg (Some caret)))
+                carets.Report
+                    (Some caret)
+                    (CaretMovedMsg >> user >> runner.Dispatch)
+                    (fun () -> Client.Ports.sendPosition wired.Value (runner.Model ()))
                 Async.StartImmediate connection.Run
 
                 do! waitUntil "the connection announces itself" (fun () -> sent.Count > 0)

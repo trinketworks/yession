@@ -107,9 +107,12 @@ module Client =
           /// persists it.
           ///
           /// Both halves in one call because they leave as ONE frame, and when to send one is
-          /// the model's to decide (`ClientModel.presenceToSend`): the connection keeps no
-          /// presence of its own, so it has nothing to forget or to restate.
-          SendPresence : Focus option -> ViewRef option -> unit
+          /// the model's to decide (`ClientModel.presenceToSend`, `positionToSend`). The caret
+          /// goes as it stands when the frame leaves, read from the slot that holds it
+          /// (`Carets.Own`), so a restate on acceptance says where it is now and not where it
+          /// was when the model last heard of a field. The connection keeps no presence of its
+          /// own, so it has nothing to forget or to restate.
+          SendPresence : ViewRef option -> unit
           /// Keystrokes for a terminal this peer holds (Plan 14, stage 6). A FRAME, not a
           /// command: there is no response by design, because a keystroke that needed an
           /// acknowledgement would make typing a round trip. The Session checks the
@@ -207,6 +210,15 @@ module Client =
         /// A client with no session to ask: every request goes nowhere.
         let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None; Ports.Moves = ignore; Ports.Clipboard = (fun _ -> async.Return false); Ports.Retry = ignore; Ports.Keyframe = (fun _ _ -> async.Return None); Ports.Remember = ignore; Ports.Uploads = None }
 
+        /// This peer's caret moved within its field (`Carets.Report`'s `positionMoved`): the
+        /// frame, over the connection there is, when the model says the page is linked
+        /// (`ClientModel.positionToSend`). No message, because nothing the model holds moved;
+        /// so asked of the latest model by whoever holds it.
+        let sendPosition (connection: Connection option) (model: ClientModel) : unit =
+            match ClientModel.positionToSend model, connection with
+            | Some viewing, Some connection -> connection.SendPresence viewing
+            | _ -> ()
+
         /// A launch read, answered as the message that carries its result.
         let private launchRead (reads: LaunchReads) (dispatch: ClientMsg -> unit) (effect: LaunchEffect) : Async<unit> =
             let answer msg = dispatch (LaunchMsg msg)
@@ -266,7 +278,7 @@ module Client =
             | ClientEffect.InterruptTerminal terminal -> ask (InterruptTerminal terminal)
             | ClientEffect.ResizeTerminal (terminal, size) ->
                 connected (fun c -> c.ResizeTerminal terminal size.Cols size.Rows)
-            | ClientEffect.SendPresence (focus, viewing) -> connected (fun c -> c.SendPresence focus viewing)
+            | ClientEffect.SendPresence viewing -> connected (fun c -> c.SendPresence viewing)
             | ClientEffect.ReadEvents (read, after) -> connected (fun c -> c.ReadEvents read after)
             | ClientEffect.ReadTranscript (terminal, read, fromSeq) -> connected (fun c -> c.ReadTranscript terminal read fromSeq)
             | ClientEffect.OpenTerminal (title, sandbox) -> ask (OpenTerminal (title, sandbox))
@@ -1284,11 +1296,15 @@ module Client =
     /// what an answer settles are the model's (`ClientModel.reads`), which asks for each read
     /// as an effect and is handed every answer back as a message. This keeps no read state of
     /// its own beyond pairing a frame's request id with the read it carries.
+    ///
+    /// `carets` is the page's, not the channel's: a caret reported before this channel came
+    /// up still stands when it is accepted, and is what the restate sends.
     let connect
         (options: ConnectOptions)
         (doc: Y.Doc)
         (registry: BodyRegistry)
         (texts: TextRegistry)
+        (carets: Carets)
         (hello: PeerHelloPayload)
         (dispatch: ClientMsg -> unit)
         (channel: FrameChannel<string>)
@@ -1384,7 +1400,7 @@ module Client =
                 Async.StartImmediate (channel.Send (Command (Request (request, command))))
                 request
           SendPresence =
-            fun focus viewing ->
+            fun viewing ->
                 // Presence carries who is editing so collaborators can label and colour the
                 // caret; the Session relays it to everyone else. A browser is always a peer —
                 // the one party that is not is the Process itself.
@@ -1393,7 +1409,7 @@ module Client =
                         Presence
                             { Who = ActorRef.PeerRef hello.PeerId
                               DisplayName = hello.DisplayName
-                              Focus = focus
+                              Focus = carets.Own
                               Viewing = viewing }))
           TypeIntoTerminal =
             fun terminalId data ->

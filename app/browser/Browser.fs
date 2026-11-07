@@ -1101,12 +1101,21 @@ let private start () =
         // plain-text roots the terminal composers live in (Plan 13), resolved the same way.
         let registry = BodyRegistry doc
         let texts = TextRegistry doc
-        // A caret moved: told to the model once per frame, when it is not the caret the model
-        // already holds, and the model decides whether and when it reaches anybody
-        // (`ClientModel.presenceToSend`). The caret it holds is read off the renderer, which
-        // does not exist yet: the reporter is an action the view is built with.
-        let mutable caretHeld : unit -> Focus option = fun () -> None
-        let sendFocus = Render.focusReporter (fun () -> caretHeld ()) (fun focus -> dispatchRef (CaretMovedMsg focus))
+        // Where this peer's caret stands, to the character (`Carets`): the page's, so it
+        // outlives every channel, and read by each one as it sends.
+        let carets = Carets ()
+        // A caret moved: kept once per frame, when it moved at all. A change of field is told
+        // to the model, which decides whether and when it reaches anybody
+        // (`ClientModel.presenceToSend`); a move within the field goes straight to the
+        // connection, if the latest model says the page is linked (`Client.Ports.sendPosition`).
+        // That model is read off the renderer, which does not exist yet: the reporter is an
+        // action the view is built with.
+        let mutable modelHeld : unit -> ClientModel option = fun () -> None
+        let sendFocus =
+            Render.focusReporter
+                carets
+                (fun field -> dispatchRef (CaretMovedMsg field))
+                (fun () -> modelHeld () |> Option.iter (Client.Ports.sendPosition connectionRef))
 
         // The collaborative text behind a field somebody's caret is in, for the fields worn by
         // a plain `<input>` — which report char offsets and so need the type to measure them
@@ -1275,7 +1284,7 @@ let private start () =
 
         renderer.Attach ()
         Unhandled.hear (fun heard -> dispatchRef (PageFaultMsg (pageFault heard)))
-        caretHeld <- renderer.Caret
+        modelHeld <- renderer.Latest
 
         // The column is beside the chat or a drawer over it according to the stylesheet's
         // breakpoint, which a window resized or a phone turned can cross at any time.
@@ -1448,6 +1457,7 @@ let private start () =
                                         doc
                                         registry
                                         texts
+                                        carets
                                         hello
                                         dispatch
                                         channel
