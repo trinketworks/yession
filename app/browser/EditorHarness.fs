@@ -727,9 +727,26 @@ let private expect = function Ok v -> v | Error e -> failwith e
 /// every body's parsed Markdown into templates again (`RichText.render`, which parses a text
 /// only the first time it sees it), so what a render costs is the prose on the page — and a
 /// column of one-liners measured at a fifth of what a working session did.
+///
+/// `Mixed` is a working session's proportions rather than a conversation's: the session this
+/// filler is drawn from held 114 replies, 1,369 tool calls and 232 commands, so for each reply
+/// a person's message, twelve tool calls and two commands, with a chapter every 48 items
+/// (`mixedParts`). What a render costs over that is mostly folds, chips and cards, and only a
+/// little prose.
 type private Filler =
     | Lines
     | Replies
+    | Mixed
+
+module private Filler =
+    /// The name a bench driver passes. An unknown name is the driver's mistake, so it fails
+    /// here, where it can say so, and is not read as some default filler.
+    let parse (name: string) : Filler =
+        match name with
+        | "lines" -> Lines
+        | "replies" -> Replies
+        | "mixed" -> Mixed
+        | other -> failwithf "no filler is named '%s'; the harness has lines, replies and mixed" other
 
 /// The block-mode terminal the shell model opens. Module-level because two things name it:
 /// the model, and the scroll scenario below that streams records into it.
@@ -775,6 +792,137 @@ let private replyBody (i: int) : string =
 /// what is on the page, and one length of one-liners cannot show that growing.
 /// When the harness terminal's commands ran: one moment for all, since no case here asks when.
 let private harnessRanAt = System.DateTimeOffset (2026, 8, 2, 0, 0, 0, System.TimeSpan.Zero)
+
+/// What the agent says at the end of a `Mixed` turn: the reply above, and the change it
+/// made, as a fenced diff. A working session's replies show what changed, and a fence is the
+/// most expensive thing in a body to render.
+let private mixedReplyBody (i: int) : string =
+    String.concat
+        "\n"
+        [ replyBody i
+          ""
+          "```diff"
+          sprintf "@@ -%d,7 +%d,8 @@ let render (model: ClientModel) =" (10 * i) (10 * i)
+          "     let tails = tail.Before ()"
+          "-    Lit.render deps.Root (View.view deps.Actions model dispatch)"
+          "+    let template = View.view deps.Actions model dispatch"
+          "+    Lit.render deps.Root template"
+          "     syncRichBodies ()"
+          "     syncTerminalInputs ()"
+          "```" ]
+
+/// The terminal a `Mixed` session's commands ran in: the agent's, as a working session has
+/// one. Its own rather than `harnessTerminal`, because the scroll scenario streams records
+/// into that one from line 2, and a block of this filler's would read them as its own.
+let private mixedTerminal : TerminalId = TerminalId.create "term-mixed" |> expect
+
+/// How many items one `Mixed` turn takes: a person's message, twelve tool calls, two commands
+/// and the agent's reply.
+let private mixedTurnItems = 16
+
+/// A chapter opens every this many turns: every 48 items, a chapter every ~50.
+let private mixedTurnsPerChapter = 3
+
+/// The rows of a `Mixed` conversation of `items` items, and everything the model has to hold
+/// for them to draw: the said items, the tool calls and commands on the timeline, the calls
+/// themselves, which turn ran each command, the blocks and their transcript, the chapters, and
+/// the folds a reader has opened. Built from the same records the shell model's own burst and
+/// tool call are, item `i` at offset `10 + i` as the other fillers' are.
+///
+/// Within a turn, the calls are a turn's work run, folded to one line; the commands are chips,
+/// or a task card when the turn ran them back to back (every other turn); one turn in four has
+/// its run open and its first call's input and output showing. One call in ten failed, and
+/// one command in five.
+let private mixedParts (peerId: PeerId) (items: int) =
+    let offset (n: int64) : EventOffset = EventOffset.create n |> expect
+    let said = ResizeArray<ConversationItem> ()
+    let timeline = ResizeArray<_> ()
+    let toolUses = ResizeArray<_> ()
+    let blockTurns = ResizeArray<string * AgentTurnId> ()
+    let blocks = ResizeArray<_> ()
+    let records = ResizeArray<int * TranscriptRecord> ()
+    let chapters = ResizeArray<_> ()
+    let mutable opened : Set<FoldKey> = Set.empty
+    let tools = [| "read_file"; "search"; "edit_file"; "read_file"; "list_directory"; "write_file" |]
+    let commands =
+        [| "dotnet fsi tasks.fsx check --only \"Client performance\""
+           "git diff --stat origin/master"
+           "rg -n 'syncRichBodies' app/browser"
+           "npm run build" |]
+    for i in 1 .. items do
+        let turnNo = (i - 1) / mixedTurnItems
+        let k = (i - 1) % mixedTurnItems
+        let turn : AgentTurnId = AgentTurnId.create (sprintf "turn-mixed-%d" turnNo) |> expect
+        let at = offset (int64 (10 + i))
+        // Every other turn runs its two commands back to back, which the timeline draws as a
+        // card; the others run one in the middle of their calls and one at the end, two chips.
+        let isCommand = if turnNo % 2 = 0 then k = 7 || k = 14 else k = 13 || k = 14
+        let message (author: ActorRef) (body: string) =
+            let id = MessageId.create (sprintf "msg-filler-%d" i) |> expect
+            said.Add
+                { MessageId = id
+                  Author = author
+                  Content = ItemContent.Message body
+                  Status = Complete
+                  Offset = at
+                  Woke = None; CausedBy = None }
+            id
+        if k = 0 then
+            let id = message (PeerRef peerId) (sprintf "and then line %d, which is here to make the column long" i)
+            if turnNo % mixedTurnsPerChapter = 0 then
+                chapters.Add (id, { Opens = true; Name = Ylmish.Text.empty })
+        elif k = mixedTurnItems - 1 then
+            message ActorRef.Agent (mixedReplyBody i) |> ignore
+        elif isCommand then
+            let id : BlockId = BlockId.create (sprintf "block-mixed-%d" i) |> expect
+            let command = commands.[i % commands.Length]
+            let from = records.Count
+            for line in 1 .. 3 do
+                records.Add (
+                    records.Count,
+                    { At = float records.Count; Kind = TranscriptOutput; Data = sprintf "%s: line %d of 3\r\n" command line })
+            blocks.Add
+                { BlockId = id
+                  QueueId = None
+                  Authority = Authority.agentFor (Principal.Peer peerId)
+                  Command = command
+                  Description = None
+                  Background = false
+                  FromSeq = from
+                  ToSeq = Some records.Count
+                  Status = BlockFinished (if i % 5 = 0 then CommandFailed 1 else CommandSucceeded 0)
+                  StoppedBy = None
+                  StartedAt = harnessRanAt }
+            blockTurns.Add (BlockId.value id, turn)
+            timeline.Add (TimelineBlock (at, mixedTerminal, id))
+        else
+            let id : ToolUseId = ToolUseId.create (sprintf "tool-mixed-%d" i) |> expect
+            let name = tools.[i % tools.Length]
+            toolUses.Add (
+                ToolUseId.value id,
+                { ToolUseId = id
+                  AgentTurnId = turn
+                  Namespace = "yession"
+                  Name = name
+                  Arguments = Some (sprintf "{\"path\":\"app/browser/Render.fs\",\"line\":%d}" (10 * i))
+                  Outcome = Some (if i % 10 = 0 then ToolCallFailed "no such file" else ToolCallOk)
+                  Block = None
+                  Result =
+                    if i % 10 = 0 then None
+                    else Some (String.concat "\n" [ for line in 0 .. 4 -> sprintf "%d: let render (model: ClientModel) = // %s" (10 * i + line) name ])
+                  Queueing = None })
+            timeline.Add (TimelineToolUse (at, id))
+            // The first call of a turn's run, in one turn in four: the run open, and the call.
+            if turnNo % 4 = 1 && k = 1 then
+                opened <- opened |> Set.add (FoldKey.ToolRun id) |> Set.add (FoldKey.ToolCall id)
+    {| Said = List.ofSeq said
+       Timeline = List.ofSeq timeline
+       ToolUses = List.ofSeq toolUses
+       BlockTurns = List.ofSeq blockTurns
+       Blocks = List.ofSeq blocks
+       Records = List.ofSeq records
+       Chapters = List.ofSeq chapters
+       Opened = opened |}
 
 let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
     let terminalId = harnessTerminal
@@ -825,9 +973,10 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
     /// jump has to get right — landing its target where a person can READ it, rather than
     /// beneath the line saying who spoke — and a two-message fixture can show neither, so a
     /// test written against one passes whatever the jump does.
-    let filler : ConversationItem list =
-        [ for i in 1 .. fillerItems ->
-            let person = (match filler with Lines -> true | Replies -> i % 2 = 1)
+    let mixed = mixedParts peerId (match filler with Mixed -> fillerItems | Lines | Replies -> 0)
+    let said : ConversationItem list =
+        [ for i in 1 .. (match filler with Mixed -> 0 | Lines | Replies -> fillerItems) ->
+            let person = (match filler with Lines | Mixed -> true | Replies -> i % 2 = 1)
             { MessageId = MessageId.create (sprintf "msg-filler-%d" i) |> expect
               Author = if person then PeerRef peerId else ActorRef.Agent
               Content =
@@ -837,6 +986,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
               Status = Complete
               Offset = offset (int64 (10 + i))
               Woke = None; CausedBy = None } ]
+    let filler : ConversationItem list = match filler with Mixed -> mixed.Said | Lines | Replies -> said
     { ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" } with
         // A client already at work in the session, so what `__fold` brings is news rather
         // than a log being replayed on load (`ClientModel.heardThrough`).
@@ -856,10 +1006,11 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                 // One chapter somebody has named and one nobody has, which is what a session
                 // holds: a name is written over the heuristic's guess, never instead of it.
                 Chapters =
-                    Map.ofList
+                    Map.ofList (
                         [ messageId, { Opens = true; Name = Ylmish.Text.ofString "Where it was settled" }
                           MessageId.create "msg-filler-8" |> expect,
                           { Opens = true; Name = Ylmish.Text.empty } ]
+                        @ mixed.Chapters)
                 // One command the agent has asked for and that has not run: the chip at the
                 // tail of the conversation, which is the only surface whose text comes out
                 // of the doc rather than out of the model.
@@ -974,9 +1125,11 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                       // is mono and its own type step brings its own line-height, which is
                       // exactly what the arrow used to be measured wrong against.
                       TimelineToolUse (offset 7L, toolUseId) ]
+                    @ mixed.Timeline
                 ToolUses =
-                    Map.ofList
-                        [ ToolUseId.value toolUseId,
+                    Map.ofList (
+                        mixed.ToolUses
+                        @ [ ToolUseId.value toolUseId,
                           { ToolUseId = toolUseId
                             AgentTurnId = agentTurn
                             Namespace = "yession"
@@ -985,13 +1138,14 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                             Outcome = Some ToolCallOk
                             Block = None
                             Result = Some "src/Program.fs lines 1-2 of 2"
-                            Queueing = None } ]
+                            Queueing = None } ])
                 BlockTurns =
-                    Map.ofList
+                    Map.ofList (
                         [ BlockId.value burstOk, agentTurn
                           BlockId.value burstFailed, agentTurn
                           BlockId.value killedForMemory, agentTurn
-                          BlockId.value burstRunning, agentTurn ] }
+                          BlockId.value burstRunning, agentTurn ]
+                        @ mixed.BlockTurns) }
         Terminals =
             { Terminals =
                 [ { TerminalId = terminalId
@@ -1117,7 +1271,22 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     Lease = None
                     Lost = None
                     Blocks = []
-                    DroppedBytes = 0 } ] }
+                    DroppedBytes = 0 } ]
+                // The agent's terminal a `Mixed` session ran its commands in, open as an
+                // agent's is while it works. Only with that filler: the others ran nothing.
+                @ (if List.isEmpty mixed.Blocks then []
+                   else
+                       [ { TerminalId = mixedTerminal
+                           Title = TerminalTitle.fromProse "agent"
+                           OpenedBy = ActorRef.Agent
+                           Sandbox = Some SandboxRef.defaultRef
+                           Renewable = false
+                           IsOpen = true
+                           Closed = None
+                           Lease = None
+                           Lost = None
+                           Blocks = mixed.Blocks
+                           DroppedBytes = 0 } ]) }
         // The live terminal has a recording behind it too — that is what makes it
         // rewindable (Plan 14, stage 7), and a DVR with nothing recorded is a control with
         // nothing to do.
@@ -1158,7 +1327,15 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     KnownLength = 1
                     ReadThrough = 1
                     Header = Some { Width = 80; Height = 24; Timestamp = 0L }
-                    Unrecorded = false } ]
+                    Unrecorded = false }
+                  // Read through, so nothing about it asks for a read.
+                  if not (List.isEmpty mixed.Records) then
+                      mixedTerminal,
+                      { Records = Map.ofList mixed.Records
+                        KnownLength = List.length mixed.Records
+                        ReadThrough = List.length mixed.Records
+                        Header = Some { Width = 80; Height = 24; Timestamp = 0L }
+                        Unrecorded = false } ]
         // SHUT to begin with, like a fresh client: the phone case is about what happens when
         // a chip brings the pane on screen, which is nothing to watch if it is already there.
         // The screen the harness block's command began on — what a replay of that block rests
@@ -1171,7 +1348,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
         // than folded, and without them the strip would be empty, which is a fresh client's
         // state rather than a working one.
         Tabs = [ terminalId; liveId ]
-        TerminalsOpen = false }
+        TerminalsOpen = false
+        OpenFolds = mixed.Opened }
 
 let private shellModel : ClientModel = shellModelOf Lines 16
 
@@ -1309,15 +1487,17 @@ let private surfaceModelIn (state: string) : ClientModel =
 
 /// The model that the shell's page shows first. `/?replies=<n>` shows the `Replies`
 /// conversation with `n` items, so that a picture (`frames --harness replies`) shows the prose
-/// of a working session. `/?surface` shows `surfaceModel`. Every other address shows
-/// `shellModel`, which the cases use.
+/// of a working session; `/?mixed=<n>` the `Mixed` one, its tool calls and commands.
+/// `/?surface` shows `surfaceModel`. Every other address shows `shellModel`, which the cases
+/// use.
 let private openingModel : ClientModel =
-    let asked = "?replies="
     let search = Browser.Dom.window.location.search
-    if search.StartsWith asked then
+    let filled (asked: string) (filler: Filler) =
         match System.Int32.TryParse (search.Substring asked.Length) with
-        | true, items when items > 0 -> shellModelOf Replies items
-        | _ -> failwithf "%s: give a count above 0, for example ?replies=24" search
+        | true, items when items > 0 -> shellModelOf filler items
+        | _ -> failwithf "%s: give a count above 0, for example %s24" search asked
+    if search.StartsWith "?replies=" then filled "?replies=" Replies
+    elif search.StartsWith "?mixed=" then filled "?mixed=" Mixed
     elif search = "?surface" then surfaceModel
     elif search.StartsWith "?surface=" then surfaceModelIn (search.Substring "?surface=".Length)
     else shellModel
@@ -2348,8 +2528,8 @@ do
     let mutable finish : (unit -> string) option = None
     let mutable sentSoFar : unit -> int = fun () -> 0
     let elsewhereTerminal : TerminalId = TerminalId.create "term-elsewhere" |> expect
-    PageGlobal.set HarnessPage.benchScrollBegin (System.Action<_, _, _, _> (fun items records everyMs elsewhere ->
-        model <- shellModelOf Replies items
+    PageGlobal.set HarnessPage.benchScrollBegin (System.Action<_, _, _, _, _> (fun items records everyMs elsewhere filler ->
+        model <- shellModelOf (Filler.parse filler) items
         render ()
         let surface = conversation ()
         surface.scrollTop <- surface.scrollHeight
@@ -2430,8 +2610,8 @@ do
     // thousand items most of them went the untimed way, and a series of render times came back
     // with three samples from fifty renders.
     let mutable composeFinish : (int -> JS.Promise<string>) option = None
-    PageGlobal.set HarnessPage.benchComposeBegin (fun items ->
-        model <- shellModelOf Replies items
+    PageGlobal.set HarnessPage.benchComposeBegin (System.Action<_, _> (fun items filler ->
+        model <- shellModelOf (Filler.parse filler) items
         render ()
         let keys = ResizeArray<float> ()
         let rendersAtBegin = Render.renders ()
@@ -2470,9 +2650,12 @@ do
                                renders = Render.renders () - rendersAtBegin
                                keys = pressed
                                items = int (conversation ()).children.length
+                               // What the model held: a `Mixed` conversation draws a turn's
+                               // twelve calls as one row, so the rows on the page undercount it.
+                               held = List.length (TimelineProjection.items model.Conversation model.Timeline)
                                phases = phaseReport phaseLog |}
                 }
-                |> Async.StartAsPromise))
+                |> Async.StartAsPromise)))
     PageGlobal.set HarnessPage.benchComposeEnd (fun expected ->
         match composeFinish with
         | Some report ->

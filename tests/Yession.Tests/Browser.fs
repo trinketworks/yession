@@ -2860,7 +2860,7 @@ let private atItsEnd (page: IPage) (key: string) : Async<bool> =
 /// 0, and 0 is also where a lost scroll lands.
 let private columnTooShort (page: IPage) : Async<float> =
     async {
-        do! Harness.run4 page HarnessPage.benchScrollBegin 80 0 16 true
+        do! Harness.run5 page HarnessPage.benchScrollBegin 80 0 16 true "replies"
         do! twoFrames page
         let chat = tailSurface "chat"
         let! scroll = Probe.scroll page chat
@@ -5589,7 +5589,7 @@ let editorTests =
                 do! waitVisible "the shell's conversation" page "#shell [data-conversation]"
                 // Two hundred items, a record a frame for four hundred frames — the scroll has
                 // to reach the top well inside that, so every frame of it has a render in it.
-                do! Harness.run4 page HarnessPage.benchScrollBegin 200 400 16 true
+                do! Harness.run5 page HarnessPage.benchScrollBegin 200 400 16 true "replies"
                 // The page still opening is not a render landing. The composer's line unfolds
                 // over 200ms as the page arrives (`line-unfold`), and the conversation's box
                 // shrinks with it frame by frame; following the end through that is the
@@ -5637,7 +5637,7 @@ let editorTests =
         editorCaseIn 1440 1200 "a short conversation ends by the composer, not at the top of the column" <| fun page ->
             async {
                 do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-id]"
-                do! Harness.run4 page HarnessPage.benchScrollBegin 0 0 16 true
+                do! Harness.run5 page HarnessPage.benchScrollBegin 0 0 16 true "replies"
                 let! _ = Harness.ask page HarnessPage.benchScrollEnd
                 // Two frames before anything is measured: one for the render the empty
                 // scenario asks for, one for it to have landed — the same wait the states walk

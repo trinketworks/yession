@@ -2610,6 +2610,9 @@ let private slopeFactor = 2.0
 /// because renders merge where one outlasts the gap between keys and an average across the
 /// sizes would mix that in. A count that a fix takes to none leaves no baseline to judge
 /// against (`benchGuard` skips a baseline of 0), not a line that any render trips.
+///
+/// Each scroll and compose ratio again under `.mixed`: the same scenarios over a working
+/// session's tool calls and commands rather than prose (`fillers` in Bench.fs).
 let private slopeMetrics =
     [ "caret.push.slope"
       "transcript.read.slope"
@@ -2618,7 +2621,13 @@ let private slopeMetrics =
       "compose.type.slope"
       "compose.renders@20"
       "compose.renders@200"
-      "compose.renders@1000" ]
+      "compose.renders@1000"
+      "scroll.mixed.render.slope"
+      "scroll.mixed.renders"
+      "compose.mixed.type.slope"
+      "compose.mixed.renders@20"
+      "compose.mixed.renders@200"
+      "compose.mixed.renders@1000" ]
 /// Below this many recorded points there is no baseline worth the name. A guard with nothing to
 /// compare against must not invent something.
 let private minimumHistory = 3
@@ -2764,6 +2773,7 @@ let private benchSeries =
       "caret.paint", chars, "ms"
       "transcript.read", records, "ms"
       "scroll.render", items, "ms"
+      "scroll.mixed.render", items, "ms"
       "scroll.frame", items, "ms"
       "open.renders", items, "renders"
       "open.paints", items, "paints"
@@ -2775,7 +2785,8 @@ let private benchSeries =
       "cold.jump", items, "px"
       "cold.blocked", items, "ms"
       "cold.time", items, "ms"
-      "compose.type", composed, "ms" ]
+      "compose.type", composed, "ms"
+      "compose.mixed.type", composed, "ms" ]
 /// One hue per document size, darkest = largest. Ordered, because the sizes are.
 let private sizeColours = [ "#7fd0f5"; "#1ba1e2"; "#0b5f88" ]
 

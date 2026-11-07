@@ -75,7 +75,10 @@ module HarnessPage =
     /// running its setup behind a shut pane — so every one of them is a render that leaves the
     /// conversation exactly as it was. Off, they land in the burst card's running block, and the
     /// conversation grows under the reader with each.
-    let benchScrollBegin : PageGlobal<System.Action<int, int, int, bool>> = PageGlobal.named "__benchScrollBegin"
+    ///
+    /// `filler` is what the conversation is made of: `replies`, a person and the agent taking
+    /// turns, or `mixed`, a working session's tool calls and commands between them.
+    let benchScrollBegin : PageGlobal<System.Action<int, int, int, bool, string>> = PageGlobal.named "__benchScrollBegin"
     /// How many records the stream has sent so far. The driver flings until the stream is spent,
     /// so every size is measured over the same records rather than over however long one fling
     /// through it happened to take.
@@ -91,8 +94,9 @@ module HarnessPage =
     let benchOpenCold : PageGlobal<System.Func<int, int, int, JS.Promise<string>>> = PageGlobal.named "__benchOpenCold"
     /// Begin the compose scenario: a conversation of `items`, and every keystroke that reaches
     /// the composer timed to the frame it paints on, with the renders it set off counted. The
-    /// TYPING is the driver's to do, with real key events, once this returns.
-    let benchComposeBegin : PageGlobal<int -> unit> = PageGlobal.named "__benchComposeBegin"
+    /// TYPING is the driver's to do, with real key events, once this returns. `filler` as the
+    /// scroll scenario's.
+    let benchComposeBegin : PageGlobal<System.Action<int, string>> = PageGlobal.named "__benchComposeBegin"
     /// End it once `keys` keystrokes have each been timed (or a few seconds of frames have gone
     /// by without them): stop the clocks, and hand back what they recorded.
     let benchComposeEnd : PageGlobal<int -> JS.Promise<string>> = PageGlobal.named "__benchComposeEnd"

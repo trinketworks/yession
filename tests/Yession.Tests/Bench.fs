@@ -95,6 +95,15 @@ let private composeSizes = [ 20; 200; 1_000 ]
 /// would add a backlog nobody makes.
 let private composeEveryMs = 120.0f
 
+/// What the scroll and compose scenarios' conversations are made of, and the prefix their
+/// metrics carry. `replies` is a person and the agent taking turns in prose, and keeps the
+/// names it has always had, so its history stays one line. `mixed` is a working session's
+/// proportions (`Mixed` in EditorHarness.fs): for each reply a person's message, twelve tool
+/// calls and two commands — the session this suite's compose sweep was drawn from held 114
+/// replies, 1,369 tool calls and 232 commands. Its metrics are `scroll.mixed.*` and
+/// `compose.mixed.*`.
+let private fillers = [ "replies", ""; "mixed", ".mixed" ]
+
 /// The scroll scenario runs the main thread at a QUARTER speed (`Emulation.setCPUThrottlingRate`).
 /// A render that takes 5ms on the runner and 20ms on a phone lands in a frame on the phone and
 /// between two on the runner, so unthrottled the frame series could not see the collision this
@@ -419,10 +428,13 @@ let tests =
                         let throttle = Collections.Generic.Dictionary<string, obj> ()
                         throttle.["rate"] <- box scrollThrottle
                         let! _ = await (cdp.SendAsync ("Emulation.setCPUThrottlingRate", throttle))
-                        let rendersPerRecord = ResizeArray<float> ()
-                        for items in conversationSizes do
+                        let rendersPerRecord = Collections.Generic.Dictionary<string, ResizeArray<float>> ()
+                        for (filler, tag) in fillers do
+                          let scenario = "scroll" + tag
+                          rendersPerRecord.[scenario] <- ResizeArray<float> ()
+                          for items in conversationSizes do
                             do!
-                                Harness.run4 phonePage HarnessPage.benchScrollBegin items streamRecords streamEveryMs false
+                                Harness.run5 phonePage HarnessPage.benchScrollBegin items streamRecords streamEveryMs false filler
                             let! carried = flingWhileStreaming phonePage cdp streamRecords
                             let! report = Harness.ask phonePage HarnessPage.benchScrollEnd
                             use doc = JsonDocument.Parse report
@@ -437,19 +449,19 @@ let tests =
                             // The distance is a few screens' worth: a thumb's fling is one, and
                             // the stream outlasts several.
                             if startedAt <= 0.0 then
-                                failwithf "the conversation of %d items starts at scrollTop %.0f — it does not scroll, so nothing here was flung" items startedAt
+                                failwithf "the %s conversation of %d items starts at scrollTop %.0f — it does not scroll, so nothing here was flung" filler items startedAt
                             if carried < 3.0 * float (snd phone) then
-                                failwithf "flinging through %d items carried the conversation %.0fpx — less than three screens, so these frames are not a fling's" items carried
+                                failwithf "flinging through %d %s items carried the conversation %.0fpx — less than three screens, so these frames are not a fling's" items filler carried
                             if records < streamRecords || renders < 1 then
                                 failwithf
-                                    "the stream over %d items sent %d of %d records and the page rendered %d times — too few to have collided with a fling"
-                                    items records streamRecords renders
+                                    "the stream over %d %s items sent %d of %d records and the page rendered %d times — too few to have collided with a fling"
+                                    items filler records streamRecords renders
                             printfn
-                                "  flung %d items %.0fpx while %d records landed in %d renders"
-                                items carried records renders
-                            rendersPerRecord.Add (float renders / float records)
-                            collected.AddRange (seriesFrom report items [ "frame", "scroll.frame"; "render", "scroll.render" ])
-                            collected.AddRange (phaseSeries report items "scroll")
+                                "  flung %d %s items %.0fpx while %d records landed in %d renders"
+                                items filler carried records renders
+                            rendersPerRecord.[scenario].Add (float renders / float records)
+                            collected.AddRange (seriesFrom report items [ "frame", scenario + ".frame"; "render", scenario + ".render" ])
+                            collected.AddRange (phaseSeries report items scenario)
 
                         // The composer, at the same phone pace. What a keystroke costs should not
                         // grow with the conversation above it — nothing the key changed is in
@@ -462,9 +474,11 @@ let tests =
                         // dispatch draws, not one deferred to the frame's end, so at a thousand
                         // items a slow runner timed three of fifty. A keystroke's cost, renders
                         // and all, is `compose.type`: one sample per key on any hardware.
-                        let rendersPerKey = ResizeArray<int * float> ()
-                        for items in composeSizes do
-                            do! Harness.run1 phonePage HarnessPage.benchComposeBegin items
+                        let rendersPerKey = ResizeArray<string * int * float> ()
+                        for (filler, tag) in fillers do
+                          let scenario = "compose" + tag
+                          for items in composeSizes do
+                            do! Harness.run2 phonePage HarnessPage.benchComposeBegin items filler
                             let composer = (phonePage.Locator "#shell [data-draft-input]").First
                             do! awaitU (composer.ClickAsync ())
                             do! awaitU (
@@ -474,26 +488,29 @@ let tests =
                             use doc = JsonDocument.Parse report
                             let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
                             let keys = doc.RootElement.GetProperty("keys").GetInt32 ()
-                            let drawn = doc.RootElement.GetProperty("items").GetInt32 ()
+                            // Rows on the page for prose, which draws one per item; items in
+                            // the model for a working session, whose turn of twelve calls draws
+                            // as one row.
+                            let drawn = doc.RootElement.GetProperty(if filler = "replies" then "items" else "held").GetInt32 ()
                             // Anti-vacuity: keys that went somewhere else were not typed into
                             // the composer, and a conversation shorter than asked for is a
                             // sweep measuring one size several times.
                             if keys < samples then
-                                failwithf "typed %d keys and %d reached the composer over %d items" samples keys items
+                                failwithf "typed %d keys and %d reached the composer over %d %s items" samples keys items filler
                             if drawn < items then
-                                failwithf "the compose scenario asked for %d items and the page drew %d" items drawn
-                            printfn "  typed %d keys over %d items in %d renders" keys items renders
-                            rendersPerKey.Add (items, float renders / float keys)
-                            collected.AddRange (seriesFrom report items [ "type", "compose.type" ])
+                                failwithf "the compose scenario asked for %d %s items and the page drew %d" items filler drawn
+                            printfn "  typed %d keys over %d %s items in %d renders" keys items filler renders
+                            rendersPerKey.Add (scenario, items, float renders / float keys)
+                            collected.AddRange (seriesFrom report items [ "type", scenario + ".type" ])
                             // The breakdown only where a keystroke draws: in a short
                             // conversation a key renders nothing most of the time (four renders
                             // in thirty keys at twenty items), and the few renders there are
                             // the draft slot's, not a keystroke's, so a breakdown of them
                             // would be a breakdown of something else, short as well.
                             if renders * 2 >= keys then
-                                collected.AddRange (phaseSeries report items "compose")
+                                collected.AddRange (phaseSeries report items scenario)
                             else
-                                printfn "  no breakdown at %d items: %d renders for %d keys is not a render per key" items renders keys
+                                printfn "  no breakdown at %d %s items: %d renders for %d keys is not a render per key" items filler renders keys
                         do! awaitU (phoneContext.CloseAsync ())
 
                         let all = List.ofSeq collected
@@ -507,11 +524,11 @@ let tests =
                         let readAt = medianOf "transcript.read"
                         let transcriptSlope =
                             readAt (List.max transcriptSizes) / readAt (List.min transcriptSizes)
-                        let renderAt = medianOf "scroll.render"
-                        let scrollSlope =
+                        let scrollSlope (scenario: string) =
+                            let renderAt = medianOf (scenario + ".render")
                             renderAt (List.max conversationSizes) / renderAt (List.min conversationSizes)
-                        let composeAt = medianOf "compose.type"
-                        let composeSlope =
+                        let composeSlope (scenario: string) =
+                            let composeAt = medianOf (scenario + ".type")
                             composeAt (List.max composeSizes) / composeAt (List.min composeSizes)
                         let ratios =
                             [ // The one number that barely moves with the hardware it was taken
@@ -529,8 +546,9 @@ let tests =
                               // And on the third: does a render mid-scroll grow with the
                               // conversation? It does today — the view draws every item — and
                               // this is the number that says by how much.
-                              { Ratio.Name = "scroll.render.slope"; Ratio.Unit = "x"; Ratio.Value = scrollSlope
-                                Ratio.Over = sprintf "%d/%d items" (List.max conversationSizes) (List.min conversationSizes) }
+                              for (_, tag) in fillers do
+                                { Ratio.Name = sprintf "scroll%s.render.slope" tag; Ratio.Unit = "x"; Ratio.Value = scrollSlope ("scroll" + tag)
+                                  Ratio.Over = sprintf "%d/%d items" (List.max conversationSizes) (List.min conversationSizes) }
                               // Renders per record that arrived while the conversation was
                               // being flung. A COUNT: at most one, because the render draws at
                               // most once a frame and a record that lands in a frame already
@@ -538,21 +556,23 @@ let tests =
                               // faster than frames. Holding renders while a surface scrolls is
                               // the change that would move it further, and this is where that
                               // change would show.
-                              { Ratio.Name = "scroll.renders"; Ratio.Unit = "x"
-                                Ratio.Value = (Seq.sum rendersPerRecord) / float rendersPerRecord.Count
-                                Ratio.Over = sprintf "%d records at %dms" streamRecords streamEveryMs }
+                              for KeyValue (scenario, perRecord) in rendersPerRecord do
+                                { Ratio.Name = scenario + ".renders"; Ratio.Unit = "x"
+                                  Ratio.Value = (Seq.sum perRecord) / float perRecord.Count
+                                  Ratio.Over = sprintf "%d records at %dms" streamRecords streamEveryMs }
                               // Does a keystroke grow with the conversation above the composer?
                               // Flat is near 1. Today every keystroke renders every item, and
                               // this is the number that says by how much.
-                              { Ratio.Name = "compose.type.slope"; Ratio.Unit = "x"; Ratio.Value = composeSlope
-                                Ratio.Over = sprintf "%d/%d items" (List.max composeSizes) (List.min composeSizes) } ]
+                              for (_, tag) in fillers do
+                                { Ratio.Name = sprintf "compose%s.type.slope" tag; Ratio.Unit = "x"; Ratio.Value = composeSlope ("compose" + tag)
+                                  Ratio.Over = sprintf "%d/%d items" (List.max composeSizes) (List.min composeSizes) } ]
                             // Renders per keystroke at each size, a COUNT: what a change that
                             // stops a keystroke redrawing the page would move. Per size because
                             // the page draws at most once a frame, so where a render outlasts the
                             // gap between keys, renders merge, and an average over the sweep
                             // would mix that in with the sizes where they do not.
-                            @ [ for (items, perKey) in rendersPerKey ->
-                                    { Ratio.Name = sprintf "compose.renders@%d" items; Ratio.Unit = "x"
+                            @ [ for (scenario, items, perKey) in rendersPerKey ->
+                                    { Ratio.Name = sprintf "%s.renders@%d" scenario items; Ratio.Unit = "x"
                                       Ratio.Value = perKey
                                       Ratio.Over = sprintf "%d keys at %.0fms" samples composeEveryMs } ]
 
