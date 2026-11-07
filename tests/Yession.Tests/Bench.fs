@@ -135,6 +135,28 @@ let private seriesFrom (json: string) (size: int) (names: (string * string) list
         let values = if List.length all > warmup then List.skip warmup all else all
         { Series.Metric = metric; Series.Unit = "ms"; Series.Size = size; Series.Values = values } ]
 
+/// A render's phases, as the harness reports them (`phaseReport` in EditorHarness.fs), and
+/// what each is named here: `<scenario>.render.<phase>`, so the scenario's whole-render
+/// number and its breakdown sort together. Stable on purpose: each later change to the render
+/// is read against these, phase by phase.
+let private renderPhases =
+    [ "view"; "lit"; "richBodies"; "terminalInputs"; "replays"; "screens"; "paneShell"
+      "terminalSlots"; "listingFoot"; "presences"; "inputCursors"; "title"; "tail"; "total" ]
+
+/// Every render's phases while a scenario ran, as series — `<scenario>.render.<phase>` in
+/// milliseconds, and `<scenario>.nodes`, the document's element count after each render, so
+/// a phase can be read against the size of the page it ran over. The first renders are
+/// dropped as `seriesFrom` drops them, for the same reason.
+let private phaseSeries (json: string) (size: int) (scenario: string) : Series list =
+    use doc = JsonDocument.Parse json
+    let phases = doc.RootElement.GetProperty "phases"
+    let series (key: string) (metric: string) (unit: string) =
+        let all = phases.GetProperty(key).EnumerateArray () |> Seq.map (fun e -> e.GetDouble ()) |> List.ofSeq
+        let values = if List.length all > warmup then List.skip warmup all else all
+        { Series.Metric = metric; Series.Unit = unit; Series.Size = size; Series.Values = values }
+    [ for phase in renderPhases -> series phase (sprintf "%s.render.%s" scenario phase) "ms" ]
+    @ [ series "nodes" (sprintf "%s.nodes" scenario) "nodes" ]
+
 /// A number that is not a series: a slope across a sweep, or a count. Name, unit, value, and
 /// what it was taken over.
 [<RequireQualifiedAccess>]
@@ -170,13 +192,13 @@ let private writeReport (all: Series list) (ratios: Ratio list) =
 
 let private table (all: Series list) (ratios: Ratio list) =
     printfn ""
-    printfn "  %-16s %8s %9s %9s %5s" "metric" "size" "p50" "p95" "unit"
+    printfn "  %-30s %8s %9s %9s %5s" "metric" "size" "p50" "p95" "unit"
     for s in all do
         printfn
-            "  %-16s %8d %9.2f %9.2f %5s"
+            "  %-30s %8d %9.2f %9.2f %5s"
             s.Metric s.Size (percentile 0.5 s.Values) (percentile 0.95 s.Values) s.Unit
     for r in ratios do
-        printfn "  %-16s %8s %9.2f%s" r.Name r.Over r.Value r.Unit
+        printfn "  %-30s %8s %9.2f%s" r.Name r.Over r.Value r.Unit
     printfn ""
 
 /// One thumb, down near the top of the conversation and dragged fast to its foot, then
@@ -427,6 +449,7 @@ let tests =
                                 items carried records renders
                             rendersPerRecord.Add (float renders / float records)
                             collected.AddRange (seriesFrom report items [ "frame", "scroll.frame"; "render", "scroll.render" ])
+                            collected.AddRange (phaseSeries report items "scroll")
 
                         // The composer, at the same phone pace. What a keystroke costs should not
                         // grow with the conversation above it — nothing the key changed is in
@@ -462,6 +485,15 @@ let tests =
                             printfn "  typed %d keys over %d items in %d renders" keys items renders
                             rendersPerKey.Add (items, float renders / float keys)
                             collected.AddRange (seriesFrom report items [ "type", "compose.type" ])
+                            // The breakdown only where a keystroke draws: in a short
+                            // conversation a key renders nothing most of the time (four renders
+                            // in thirty keys at twenty items), and the few renders there are
+                            // the draft slot's, not a keystroke's, so a breakdown of them
+                            // would be a breakdown of something else, short as well.
+                            if renders * 2 >= keys then
+                                collected.AddRange (phaseSeries report items "compose")
+                            else
+                                printfn "  no breakdown at %d items: %d renders for %d keys is not a render per key" items renders keys
                         do! awaitU (phoneContext.CloseAsync ())
 
                         let all = List.ofSeq collected
