@@ -120,11 +120,12 @@ type RenderPhases =
       Nodes : int
       Scans : int }
 
-/// What a doc update costs when no render follows it, in milliseconds: the two calls the
-/// update listener makes (`DocSync.onAnyUpdate` below). A keystroke in a body is a doc update
-/// and, since the caret left the model, usually no render, so this is where its time is
-/// spent outside the editor. `Presences` only ASKS for a push, which the next frame makes; the
-/// push itself is in a frame's time, not here. `Scans` as `RenderPhases.Scans`.
+/// What a doc update costs when no render follows it, in milliseconds. A keystroke in a body
+/// is a doc update and, since the caret left the model, usually no render, so this is where
+/// its time is spent outside the editor. `TerminalInputs` is what the command lines spent
+/// following their roots in that update (`follow` below); `Presences` is the update
+/// listener's own (`DocSync.onAnyUpdate` below), which only ASKS for a push the next frame
+/// makes. `Scans` as `RenderPhases.Scans`.
 [<RequireQualifiedAccess>]
 type UpdatePhases =
     { TerminalInputs : float
@@ -289,32 +290,21 @@ let private raf (f: unit -> unit) : unit =
 let private hiddenFrameMs = 1000
 
 // --- Rich-text editor mount ------------------------------------------------------------
-// The view renders empty `[data-rich-body="<key>"]` hosts; the editor is mounted imperatively
-// into each, bound to the body's live Y.XmlFragment (resolved from the BodyRegistry).
-// ProseMirror owns that DOM; Lit leaves the static host's children alone across re-renders
-// (as it preserved the textareas).
-let private richBodyHosts () : Browser.Types.Element list = Scan.all "[data-rich-body]"
-
-let private hostBodyKey (el: Browser.Types.Element) : string = el.getAttribute "data-rich-body"
-
+// The view renders empty `[data-rich-body="<key>"]` hosts, each registered under its body's
+// key (`HostRole.RichBody`); the editor is mounted imperatively into each, bound to the body's
+// live Y.XmlFragment (resolved from the BodyRegistry). ProseMirror owns that DOM; Lit leaves
+// the static host's children alone across re-renders (as it preserved the textareas).
 let private hostReadOnly (el: Browser.Types.Element) : bool =
     el.getAttribute "data-rich-readonly" = "true"
 
 // --- Terminal command lines (Plan 13) --------------------------------------------------
 // The view renders `<input data-terminal-input="<key>">` for each terminal composer slot and
-// each queued command; the value is bound imperatively to that key's `Y.Text` root, the same
-// arrangement the rich bodies use one level up. An `<input>` rather than an editor because a
-// command is characters, and the CRDT merge happens per character either way.
-
-/// Every command line on the page, in document order.
-let private terminalInputs () : Browser.Types.HTMLInputElement list =
-    Scan.all "[data-terminal-input]" |> List.map (fun found -> found :?> Browser.Types.HTMLInputElement)
-
-// The READ of the same roots: a surface that SHOWS a command without offering to change it —
-// the chat's chip for a queued command, which is a `<button>` and so cannot hold an input.
-
-let private terminalTexts () : Browser.Types.HTMLElement list =
-    Scan.all "[data-terminal-text]" |> List.map (fun found -> found :?> Browser.Types.HTMLElement)
+// each queued command, registered under that key (`HostRole.TerminalInput`); the value is
+// bound imperatively to that key's `Y.Text` root, the same arrangement the rich bodies use one
+// level up. An `<input>` rather than an editor because a command is characters, and the CRDT
+// merge happens per character either way. The READ of the same roots is a surface that SHOWS
+// a command without offering to change it (`HostRole.TerminalText`) — the chat's chip for a
+// queued command, which is a `<button>` and so cannot hold an input.
 
 /// Show a command on a surface that cannot be typed into. Only on a change: assigning
 /// `textContent` replaces the node's children, which is a write the browser need not be
@@ -488,9 +478,6 @@ type Renderer =
       /// otherwise at the frame's end, as whichever model is latest by then (`setState`).
       /// A render is everything above, in order, synchronously.
       SetState : ClientModel -> unit
-      /// The terminal command lines re-bound and re-valued — on a doc update as well as a
-      /// render, because a command line is a root the Ylmish codec does not carry.
-      SyncTerminalInputs : unit -> unit
       /// The live screens, for the arrival of a snapshot from the session.
       Screens : Screens.Screens
       /// The listeners that belong with the render, bound once per page: renders keep the
@@ -510,35 +497,61 @@ let create (deps: Deps) : Renderer =
     let dispatch = deps.Dispatch
     let sendFocus = deps.Links.ReportFocus
 
+    // The elements the passes below work on, registered as lit connects them (`Hosts`). The
+    // render hands its sink to lit (`renderHosted`), so every `HostRole.mark` in the view
+    // reports here.
+    let hosts = Hosts.create ()
+
     // Rich-text editor mounts. `registry` resolves each body's live Y.XmlFragment (a
     // top-level doc root keyed by BodyKey, so the editor and the Session bind the
     // same fragment); `latest` lets the mount see the current draft slots. Each mount
     // records the fragment it bound so a fragment swap (a sent draft's slot recreated)
     // triggers a remount.
     let mutable latest : ClientModel option = None
-    // Keyed by body id; the mount records the fragment AND whether it bound read-only, because
-    // both can change under one key: a sent draft's slot is recreated (new fragment), and a
-    // draft collapsing to a summary rebinds the same fragment read-only. Either needs a remount
-    // — an editable editor left on a collapsed summary would let you type into a one-line
-    // preview.
-    let mountedBodies = System.Collections.Generic.Dictionary<string, Y.XmlFragment * bool * Editor.EditorHandle> ()
+    // Keyed by body id; the mount records the HOST it is in, the fragment, AND whether it bound
+    // read-only, because all three can change under one key: lit can draw the key into a new
+    // element, a sent draft's slot is recreated (new fragment), and a draft collapsing to a
+    // summary rebinds the same fragment read-only. Any of them needs a remount — an editable
+    // editor left on a collapsed summary would let you type into a one-line preview.
+    let mountedBodies =
+        System.Collections.Generic.Dictionary<string, Browser.Types.Element * Y.XmlFragment * bool * Editor.EditorHandle> ()
     // The last cursor set pushed into each editor, so a render only dispatches a decoration
     // transaction when it actually changed. Dispatching one every render competes with
     // y-prosemirror's ySync applying REMOTE edits and starves the read-only mirrors' rendering
     // of incoming content — so an unchanged (typically empty) set must never re-dispatch.
     let lastPushed = System.Collections.Generic.Dictionary<string, Editor.RemoteBodyCursor list> ()
 
-    /// Mount an editor on each `[data-rich-body]` host bound to its live fragment; remount when
-    /// a host's fragment identity changes; and dispose editors whose host has left the DOM.
-    /// Body edits sync through the doc, so the editor needs no change callback — but an editable
-    /// body reports its local selection (tagged with the host's field) as rAF-throttled
-    /// presence. Mounting publishes no draft slot: the slot follows the body's content
-    /// (`DraftSlot.follow`), so a peer that never types shows no draft box on any peer.
+    let unmount (key: string) =
+        match mountedBodies.TryGetValue key with
+        | true, (_, _, _, handle) ->
+            handle.Dispose ()
+            mountedBodies.Remove key |> ignore
+            lastPushed.Remove key |> ignore
+        | false, _ -> ()
+
+    // An editor goes with its host, as lit takes the host away — so there is no sweep after a
+    // render for an editor whose host has gone, and none to get wrong. Mounting waits for the
+    // pass after the render: a host registers before lit has put it in the page.
+    hosts.Watch
+        HostRole.RichBody
+        { Came = fun _ _ -> ()
+          Went =
+            fun key host ->
+                match mountedBodies.TryGetValue key with
+                | true, (mountedIn, _, _, _) when obj.ReferenceEquals (mountedIn, host) -> unmount key
+                | _ -> () }
+
+    /// Mount an editor on each registered `[data-rich-body]` host, bound to its live fragment;
+    /// remount when a host's element, fragment or read-only flag differs from what is mounted.
+    /// Body edits sync through the doc, so the editor needs no change callback — but an
+    /// editable body reports its local selection (tagged with the host's field) as
+    /// rAF-throttled presence. Mounting publishes no draft slot: the slot follows the body's
+    /// content (`DraftSlot.follow`), so a peer that never types shows no draft box on any peer.
+    ///
+    /// A key drawn into two hosts at once is mounted in the first: one editor per fragment.
     let syncRichBodies () =
-        let seen = System.Collections.Generic.HashSet<string> ()
-        for host in richBodyHosts () do
-            let key = hostBodyKey host
-            seen.Add key |> ignore
+        let present = hosts.In HostRole.RichBody
+        for host, key in present do
             let fragment = registry.Fragment key
             let mount () =
                 let reportFocus (sel: (string * string) option) =
@@ -563,7 +576,7 @@ let create (deps: Deps) : Renderer =
                 // Who an @ can name, off whatever model is latest at the keystroke.
                 let addressable () = latest |> Option.map ClientModel.addressable |> Option.defaultValue []
                 let handle = Editor.mountEditor host fragment readOnly reportFocus onSubmit placeholder addressable
-                mountedBodies.[key] <- (fragment, readOnly, handle)
+                mountedBodies.[key] <- (host, fragment, readOnly, handle)
                 // Opening a queued message moves it into the composer already editable
                 // (`readOnly` false) — this mount only happens on that transition (the host
                 // does not persist across Done, so there is nothing later to confuse with a
@@ -574,88 +587,124 @@ let create (deps: Deps) : Renderer =
                 | Some (QueueBody _) when not readOnly -> handle.Focus ()
                 | _ -> ()
             match mountedBodies.TryGetValue key with
-            | true, (bound, readOnly, handle) when
-                not (System.Object.ReferenceEquals (bound, fragment)) || readOnly <> hostReadOnly host ->
-                handle.Dispose (); mount ()
-            | true, _ -> ()
-            | _ -> mount ()
-        for stale in mountedBodies.Keys |> Seq.filter (seen.Contains >> not) |> Seq.toList do
-            let _, _, handle = mountedBodies.[stale]
-            handle.Dispose ()
-            mountedBodies.Remove stale |> ignore
-            lastPushed.Remove stale |> ignore
+            | true, (mountedIn, bound, readOnly, _) when obj.ReferenceEquals (mountedIn, host) ->
+                if not (obj.ReferenceEquals (bound, fragment)) || readOnly <> hostReadOnly host then
+                    unmount key
+                    mount ()
+            | true, (mountedIn, _, _, _) when present |> List.exists (fun (other, _) -> obj.ReferenceEquals (other, mountedIn)) -> ()
+            | true, _ ->
+                unmount key
+                mount ()
+            | false, _ -> mount ()
 
-    /// Bind every rendered terminal command line to its `Y.Text` root: push the CRDT's
-    /// value in, send the input's edits back out as the MINIMUM edit that gets there
-    /// (`TerminalText.setTo` — anything coarser would clobber a collaborator rather than
-    /// merge with them), and report the caret as presence.
-    ///
-    /// The read-only mounts (`data-terminal-text`) are filled in the same pass rather than
-    /// in one of their own, because they read the roots these lines write: two passes is two
-    /// callers to keep in step, and the one that forgot would show a command nobody is
-    /// typing any more.
-    ///
-    /// Called after every render AND on every doc update, because a terminal command
-    /// line is a root the Ylmish codec does not carry (it holds only the slot's
-    /// identity), so a remote keystroke in one does not necessarily reach the model.
-    let syncTerminalInputs () =
-        for el in terminalInputs () do
-            // WHICH line an input is, and whether it may be written to, are read off the
-            // element every time a handler runs — never captured when it was bound.
-            //
-            // Lit reuses one `<input>` across a tab switch (same template, same position,
-            // a different terminal's key) and the handlers are attached once per element,
-            // so a captured key outlives the terminal it named: keystrokes went into the
-            // terminal the input was FIRST rendered for while its value was pushed from
-            // the one it now shows, which wiped the line being typed into on every render
-            // and left the command in the other terminal, last character only. Same for
-            // read-only: a collaborator's slot and your own composer are the same
-            // position in that template, so "bind only the editable one" bound whichever
-            // it was first and got the other wrong ever after.
-            let lineOf () =
-                let key = el.getAttribute "data-terminal-input"
-                if isNull (box key) || key = "" then None
-                // A read-only line (a collaborator's slot) still shows live text; it just
-                // never writes back, and never claims a caret.
-                elif el.readOnly then None
-                else Some key
-            // Four events report the caret here and most report it unmoved — a keyup for
-            // every key that types rather than navigates, a click landing where the caret
-            // already was, the focus that precedes both. They are dropped by the slot they
-            // all write to (`Carets.Report`).
-            let reportFocus () =
-                match lineOf () with
-                | Some key ->
-                    match fieldOfKey key, inputSelection el with
-                    | Some field, Some (anchor, head) ->
-                        let enc i = ProseMirror.relPosFromTypeIndex (texts.Text key) i |> ProseMirror.encodeRel
-                        sendFocus (Some { Field = field; Pos = { Anchor = enc anchor; Head = enc head } })
-                    | _ -> sendFocus None
-                | None -> sendFocus None
-            // Enter runs a command from a composer SLOT — the line you are writing.
-            // A queued command's line has already been sent; Enter there does
-            // nothing rather than queueing it twice.
-            let onEnter () =
-                match lineOf () |> Option.bind fieldOfKey with
-                | Some (TerminalDraftBody (terminal, author)) -> deps.Links.SendTerminalDraft terminal author
-                | _ -> ()
-            // ^C from a composer slot is for the terminal the slot is in, whoever's slot it is.
-            let onInterrupt () =
-                match lineOf () |> Option.bind fieldOfKey with
-                | Some (TerminalDraftBody (terminal, _)) -> dispatch (InterruptTerminalMsg terminal)
-                | _ -> ()
-            bindTerminalInput
-                el
-                (fun () -> lineOf () |> Option.iter (fun key -> TerminalText.setTo texts key el.value))
-                reportFocus
-                (fun () -> sendFocus None)
-                onEnter
-                onInterrupt
+    // What the command lines cost while somebody is measuring (`UpdatePhases.TerminalInputs`):
+    // the time their roots' observers spent since the last doc update reported it.
+    let mutable linesSpent = 0.0
+
+    /// Bind a registered terminal command line's listeners: send the input's edits to its
+    /// `Y.Text` root as the MINIMUM edit that gets there (`TerminalText.setTo` — anything
+    /// coarser would clobber a collaborator rather than merge with them), and report the caret
+    /// as presence. Its VALUE follows the root (`follow` below).
+    let bindTerminalLine (el: Browser.Types.HTMLInputElement) =
+        // WHICH line an input is, and whether it may be written to, are read off the
+        // element every time a handler runs — never captured when it was bound.
+        //
+        // Lit reuses one `<input>` across a tab switch (same template, same position,
+        // a different terminal's key) and the handlers are attached once per element,
+        // so a captured key outlives the terminal it named: keystrokes went into the
+        // terminal the input was FIRST rendered for while its value was pushed from
+        // the one it now shows, which wiped the line being typed into on every render
+        // and left the command in the other terminal, last character only. Same for
+        // read-only: a collaborator's slot and your own composer are the same
+        // position in that template, so "bind only the editable one" bound whichever
+        // it was first and got the other wrong ever after.
+        let lineOf () =
             let key = el.getAttribute "data-terminal-input"
-            if not (isNull (box key)) && key <> "" then setInputValue el (TerminalText.read texts key)
-        for el in terminalTexts () do
-            let key = el.getAttribute "data-terminal-text"
-            if not (isNull (box key)) && key <> "" then setTextContent el (TerminalText.read texts key)
+            if isNull (box key) || key = "" then None
+            // A read-only line (a collaborator's slot) still shows live text; it just
+            // never writes back, and never claims a caret.
+            elif el.readOnly then None
+            else Some key
+        // Four events report the caret here and most report it unmoved — a keyup for
+        // every key that types rather than navigates, a click landing where the caret
+        // already was, the focus that precedes both. They are dropped by the slot they
+        // all write to (`Carets.Report`).
+        let reportFocus () =
+            match lineOf () with
+            | Some key ->
+                match fieldOfKey key, inputSelection el with
+                | Some field, Some (anchor, head) ->
+                    let enc i = ProseMirror.relPosFromTypeIndex (texts.Text key) i |> ProseMirror.encodeRel
+                    sendFocus (Some { Field = field; Pos = { Anchor = enc anchor; Head = enc head } })
+                | _ -> sendFocus None
+            | None -> sendFocus None
+        // Enter runs a command from a composer SLOT — the line you are writing.
+        // A queued command's line has already been sent; Enter there does
+        // nothing rather than queueing it twice.
+        let onEnter () =
+            match lineOf () |> Option.bind fieldOfKey with
+            | Some (TerminalDraftBody (terminal, author)) -> deps.Links.SendTerminalDraft terminal author
+            | _ -> ()
+        // ^C from a composer slot is for the terminal the slot is in, whoever's slot it is.
+        let onInterrupt () =
+            match lineOf () |> Option.bind fieldOfKey with
+            | Some (TerminalDraftBody (terminal, _)) -> dispatch (InterruptTerminalMsg terminal)
+            | _ -> ()
+        bindTerminalInput
+            el
+            (fun () -> lineOf () |> Option.iter (fun key -> TerminalText.setTo texts key el.value))
+            reportFocus
+            (fun () -> sendFocus None)
+            onEnter
+            onInterrupt
+
+    /// Each registered line's stop, by element: the observer it put on its root, taken off as
+    /// the element leaves.
+    let following = ResizeArray<Browser.Types.Element * (unit -> unit)> ()
+
+    /// Keep `show` in step with the root `key` names, from the moment the element registers to
+    /// the moment it leaves: once now, and on every change to that root. So a remote keystroke
+    /// in one command line updates that line and nothing else.
+    ///
+    /// A command line is a root the Ylmish codec does not carry (it holds only the slot's
+    /// identity), so a keystroke in one reaches no model and draws no render. It used to be
+    /// caught by re-binding every command line on the page on every doc update, which walked
+    /// the whole document twice for a keystroke in any body at all.
+    ///
+    /// One observer value for both calls: `unobserve` removes a listener only when handed the
+    /// very reference `observe` was given.
+    let follow (el: Browser.Types.Element) (key: string) (show: string -> unit) =
+        let text = texts.Text key
+        let observer _ _ =
+            let measuring = updates.IsSome
+            let t0 = stamp measuring
+            show (text.toString ())
+            if measuring then linesSpent <- linesSpent + (stamp measuring - t0)
+        show (text.toString ())
+        text.observe observer
+        following.Add ((el, fun () -> text.unobserve observer))
+
+    let unfollow (el: Browser.Types.Element) =
+        match following.FindIndex (fun (held, _) -> obj.ReferenceEquals (held, el)) with
+        | -1 -> ()
+        | i ->
+            (snd following.[i]) ()
+            following.RemoveAt i
+
+    hosts.Watch
+        HostRole.TerminalInput
+        { Came =
+            fun key el ->
+                let input = el :?> Browser.Types.HTMLInputElement
+                bindTerminalLine input
+                follow el key (setInputValue input)
+          Went = fun _ el -> unfollow el }
+    // The read-only mounts follow the roots the lines write, the same way: one mechanism for
+    // both, so the one that forgot cannot show a command nobody is typing any more.
+    hosts.Watch
+        HostRole.TerminalText
+        { Came = fun key el -> follow el key (setTextContent (el :?> Browser.Types.HTMLElement))
+          Went = fun _ el -> unfollow el }
 
     let replays = PaneReplays.create dispatch
 
@@ -744,7 +793,7 @@ let create (deps: Deps) : Renderer =
                 pushQueued <- false
                 for kv in mountedBodies do
                     let key = kv.Key
-                    let _, _, handle = kv.Value
+                    let _, _, _, handle = kv.Value
                     let cursors = cursorsFor key
                     let prev = match lastPushed.TryGetValue key with | true, v -> v | _ -> []
                     if not (List.isEmpty cursors) || prev <> cursors then
@@ -754,26 +803,30 @@ let create (deps: Deps) : Renderer =
     // What the doc holds outside the codec moves without a render. Ylmish signals a render
     // only for a transaction that changes a root its codec binds, and neither an editor's own
     // fragment nor a terminal's command line is one: a collaborator's keystroke in either
-    // changes that root alone. So every doc update refreshes the command lines from their
-    // roots, and asks for a presence push, since a caret whose relative position names content
-    // that had not arrived when its presence did would otherwise wait for some unrelated
-    // render to be placed. The frame still paces the push, and an unchanged empty set is
-    // still skipped.
+    // changes that root alone. The command lines follow their own roots (`follow`), and an
+    // editor holding a remote caret is pushed again on a doc update, since a caret whose
+    // relative position names content that had not arrived when its presence did would
+    // otherwise wait for some unrelated render to be placed. The frame still paces the push,
+    // and an unchanged empty set is still skipped.
     DocSync.onAnyUpdate doc (fun () ->
         let sink = updates
         let measuring = sink.IsSome
         let scans = Scan.count ()
         let t0 = stamp measuring
-        syncTerminalInputs ()
-        let tInputs = stamp measuring
-        pushPresences ()
+        // Only an editor already holding a remote caret can have one land: a caret whose
+        // relative position names content that had not arrived when its presence did is in
+        // the set last pushed (`lastPushed`), drawn nowhere yet, and placed by the push this
+        // asks for once its words land. With no remote caret in any body a doc update has
+        // nothing to place, and `Carets.Changed` and the render push the rest.
+        if lastPushed.Values |> Seq.exists (List.isEmpty >> not) then pushPresences ()
         let tEnd = stamp measuring
         match sink with
         | Some report ->
             report
-                { UpdatePhases.TerminalInputs = tInputs - t0
-                  UpdatePhases.Presences = tEnd - tInputs
+                { UpdatePhases.TerminalInputs = linesSpent
+                  UpdatePhases.Presences = tEnd - t0
                   UpdatePhases.Scans = Scan.count () - scans }
+            linesSpent <- 0.0
         | None -> ())
 
     /// Place collaborators' carets in the collaborative INPUTS by measurement (a native input
@@ -954,14 +1007,16 @@ let create (deps: Deps) : Renderer =
         // making every item's template costs, and what Lit's diff of it against the page does.
         let template = View.view deps.Actions model dispatch
         let tView = stamp measuring
-        Lit.render deps.Root template
+        Fable.LitExtras.renderHosted hosts.Sink deps.Root template
         let tLit = stamp measuring
         // Mount/dispose the rich editors on their body hosts (bound to live fragments), then
         // overlay collaborators' cursors: remote carets in each body editor, and title carets
         // measured against the just-rendered input.
         syncRichBodies ()
         let tRich = stamp measuring
-        syncTerminalInputs ()
+        // The command lines are bound as they register and follow their roots from then on
+        // (`follow`), so a render has nothing left to do for them. The phase stays, at
+        // nothing, so its history reads where the pass went.
         let tInputs = stamp measuring
         replays.Sync model
         let tReplays = stamp measuring
@@ -1041,7 +1096,6 @@ let create (deps: Deps) : Renderer =
                 Scan.one ("[" + Dom.Hooks.conversation + "]") |> Option.iter Arrival.play
 
     { SetState = setState
-      SyncTerminalInputs = syncTerminalInputs
       Screens = screens
       Attach =
         fun () ->

@@ -68,6 +68,9 @@ module Harness =
 
     let ask (page: IPage) (key: PageGlobal<unit -> 'T>) : Async<'T> = answer<'T> page (PageGlobal.name key) []
 
+    let ask1 (page: IPage) (key: PageGlobal<'A -> 'T>) (a: 'A) : Async<'T> =
+        answer<'T> page (PageGlobal.name key) [ box a ]
+
     let ask3 (page: IPage) (key: PageGlobal<System.Func<'A, 'B, 'C, 'T>>) (a: 'A) (b: 'B) (c: 'C) : Async<'T> =
         answer<'T> page (PageGlobal.name key) [ box a; box b; box c ]
 

@@ -1732,13 +1732,14 @@ let tests =
                 let perRender = float scans / float renders
                 printfn "  reopen with %d terminals open: %d scans over %d renders — %.2f per render"
                         opened scans renders perRender
-                // Ten passes after the commit each ask the document once (the tail's read and
-                // its restore, the editors, the command lines and their read-only mounts, the
-                // players, the screens, the strip, the two listing feet), and the rare pass looks
-                // again (a recording that changed under its player, a listing foot that came or
-                // went). The line sits at twelve: over that, and under the fourteen that one
-                // pass asking once per terminal would cost with the FOUR this case opens.
-                let budget = 12.0
+                // Seven passes after the commit each ask the document once (the tail's read and
+                // its restore, the players, the screens, the strip, the two listing feet), and
+                // the rare pass looks again (a recording that changed under its player, a
+                // listing foot that came or went). The editors and the command lines ask
+                // nothing: their elements register themselves (`Hosts`). The line sits at nine:
+                // over that, and under the eleven that one pass asking once per terminal would
+                // cost with the FOUR this case opens.
+                let budget = 9.0
                 if perRender > budget then
                     failwithf
                         "a render asked the whole document %.2f times with %d terminals open (%d scans over \
@@ -3146,6 +3147,26 @@ let private windowWidth (page: IPage) : Async<int> =
 
 let editorTests =
     testList "Editor rendering (browser)" [
+        // The passes after a render work on elements that register themselves as lit connects
+        // them and leave as lit takes them away (`Fable.LitExtras.host`, `app/browser/Hosts.fs`):
+        // an editor is disposed, a command line stops following its root, AS its element
+        // leaves, and nothing sweeps afterwards. So each structure the view draws with must
+        // tell an element's going, and each case is one of them, asked of a real lit
+        // (`HarnessPage.hostLifecycle` draws it and answers the keys still held).
+        testList "Host lifecycle" [
+            let holds (arrangement: string) (expected: string) (said: string) =
+                editorCase said <| fun page ->
+                    async {
+                        do! waitVisible "the shell's conversation" page "#shell [data-conversation]"
+                        let! held = Harness.ask1 page HarnessPage.hostLifecycle arrangement
+                        Expect.equal held expected said
+                    }
+            holds "repeat" "a,c" "an item `repeat` drops takes its host with it"
+            holds "repeat-memo" "a,c" "a memoized row `repeat` drops takes its host with it"
+            holds "memo-skipped" "a" "a memo that skips keeps its host, once"
+            holds "memo-removed" "" "a memoized subtree whose parent goes takes its host with it"
+            holds "key-changed" "b" "an element drawn under another key holds only the new one"
+        ]
         fixtureCase "Markdown typed in the rich editor renders formatted and round-trips to Markdown" <| fun page ->
             async {
                 do! waitVisible "the editor" page ".ProseMirror"

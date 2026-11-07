@@ -131,6 +131,95 @@ let private memoDirective : System.Func<obj, System.Func<TemplateResult>, Templa
 let memo<'Props when 'Props : equality> (props: 'Props) (template: 'Props -> TemplateResult) : TemplateResult =
     memoDirective.Invoke (box props, System.Func<TemplateResult> (fun () -> template props))
 
+/// Where `host` says which elements are on the page: the `host` of lit's render options, handed
+/// in by whoever renders (`renderHosted`). Told the element itself both ways, so a registry
+/// keyed by the element needs nothing else to drop one.
+type HostSink =
+    /// `element` stands in `role`'s set under `key` — or is about to: lit sets a new template's
+    /// parts on its fragment before it puts the fragment in the page, so a sink records here
+    /// and works on the element once the render is over.
+    abstract Came : role: string * key: string * element: Browser.Types.Element -> unit
+    /// `element` has left `role`'s set under `key`: lit took it out of the page, or the same
+    /// element answers to another key now (a `Came` for that follows).
+    abstract Went : role: string * key: string * element: Browser.Types.Element -> unit
+
+/// What lit hands a directive in an element's tag: the element, and the options of the render
+/// that drew it, whose `host` is the sink.
+type private HostPart =
+    abstract element : Browser.Types.Element
+    abstract options : HostOptions option
+
+and private HostOptions =
+    abstract host : HostSink option
+
+/// The directive behind `host`: tells the render's sink when its element comes and goes.
+///
+/// An `AsyncDirective`, because only those hear their element leave: lit calls `disconnected`
+/// on every one under a part it clears, however deep — the item `repeat` dropped, the branch a
+/// condition stopped drawing, the subtree under a `memo` that skipped its last update and was
+/// then removed whole (`Host lifecycle` in the browser suite pins each). A plain directive is
+/// told nothing when it goes, which is why the passes after a render used to find their
+/// elements by asking the document instead.
+///
+/// Why not lit's own `ref`: a ref callback is keyed by the FUNCTION, not by the place it is
+/// written, so one callback at many sites is called with `undefined` whenever another site
+/// renders, saying neither which element left nor that one did. And `undefined` is all a
+/// disconnect says. This says which element, under which key, both ways.
+///
+/// Told at most once each way: `told` is whether the sink holds this element now.
+[<AttachMembers>]
+type HostDirective() =
+    inherit Lit.Types.AsyncDirective()
+    let mutable sink : HostSink option = None
+    let mutable held : (string * string * Browser.Types.Element) option = None
+    let mutable told = false
+    member private _.Tell (came: bool) : unit =
+        match held, sink with
+        | Some (role, key, element), Some sink when came <> told ->
+            told <- came
+            if came then sink.Came (role, key, element) else sink.Went (role, key, element)
+        | _ -> ()
+    /// What a string renders, and lit's first draw outside a part: nothing.
+    member _.render (_role: string, _key: string) : TemplateResult = LitBindings.nothing
+    member this.update (part: Lit.Types.Part, args: obj array) : TemplateResult =
+        // Typed by `host` below, which is the only call that builds these arguments.
+        let role = unbox<string> args.[0]
+        let key = unbox<string> args.[1]
+        let part = unbox<HostPart> part
+        match held with
+        | Some (r, k, e) when r = role && k = key && obj.ReferenceEquals (e, part.element) -> ()
+        | Some _
+        | None ->
+            this.Tell false
+            sink <- part.options |> Option.bind (fun options -> options.host)
+            held <- Some (role, key, part.element)
+            if this.isConnected then this.Tell true
+        LitBindings.nothing
+    member this.disconnected () : unit = this.Tell false
+    member this.reconnected () : unit = this.Tell true
+
+let private hostDirective : System.Func<string, string, TemplateResult> =
+    unbox (LitBindings.directive (JsInterop.jsConstructor<HostDirective>))
+
+/// In an element's tag: tell the render's `HostSink` this element is in `role`'s set under
+/// `key` while lit keeps it in the page, and when it goes. Renders nothing, so a string
+/// renderer drops it (`Hole.Inert`).
+let host (role: string) (key: string) : TemplateResult = hostDirective.Invoke (role, key)
+
+type private HostRenderOptions =
+    abstract host : HostSink with get, set
+
+[<Import("render", "lit")>]
+let private litRender (_value: TemplateResult, _container: Browser.Types.Element, _options: HostRenderOptions) : unit =
+    jsNative
+
+/// Lit's `render`, with `sink` as the render's `host`, where every `host` directive in the
+/// template reports. Lit keeps the options a container was FIRST rendered with, so a container
+/// is rendered this way from its first render or never. The `host` option is also the `this`
+/// of the template's listeners; every listener here is an F# function, which has none.
+let renderHosted (sink: HostSink) (container: Browser.Types.Element) (template: TemplateResult) : unit =
+    litRender (template, container, JsInterop.jsOptions<HostRenderOptions> (fun options -> options.host <- sink))
+
 let private repeatClass : DirectiveClass option =
     classOf (LitBindings.repeat<int> ([||], (fun _ -> ""), (fun _ _ -> LitBindings.nothing)))
 

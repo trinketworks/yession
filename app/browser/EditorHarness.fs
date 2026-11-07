@@ -2928,3 +2928,55 @@ do
                               LastOffset = Some (List.last page).Offset
                               IsEnd = i = last })
             })))
+
+// --- Hosts under lit's own structures (`Host lifecycle` in the browser suite) ---------------
+//
+// The passes after a render work on elements that register themselves as lit connects them
+// and leave as lit takes them away (`Fable.LitExtras.host`, `Hosts`). Whether lit says so
+// under each structure the view draws with is lit's behaviour, not ours, so it is asked of a
+// real lit in a real page: each arrangement draws into a container of its own, through a sink
+// that keeps the keys it holds, and answers them.
+do
+    PageGlobal.set HarnessPage.hostLifecycle (fun arrangement ->
+        let container = Browser.Dom.document.createElement "div"
+        Browser.Dom.document.body.appendChild container |> ignore
+        let held = ResizeArray<string> ()
+        let sink =
+            { new Fable.LitExtras.HostSink with
+                member _.Came (_, key, _) = held.Add key
+                member _.Went (_, key, _) = held.Remove key |> ignore }
+        let draw (template: TemplateResult) = Fable.LitExtras.renderHosted sink container template
+        let item (key: string) = html $"""<span {Fable.LitExtras.host "probe" key}></span>"""
+        let row (key: string) = Fable.LitExtras.memo key item
+        // One template site each, so a second draw UPDATES the first rather than replacing it
+        // (lit keys a template by its site), which is what puts each structure to the test.
+        let list (keys: string list) (each: string -> TemplateResult) =
+            html $"""<div>{LitBindings.repeat (keys, id, fun key _ -> each key)}</div>"""
+        let parent (inner: TemplateResult) = html $"""<section>{inner}</section>"""
+        match arrangement with
+        // `repeat` drops an item: its host goes with it.
+        | "repeat" ->
+            draw (list [ "a"; "b"; "c" ] item)
+            draw (list [ "a"; "c" ] item)
+        // The timeline's shape: keyed rows, each behind a memo; one row dropped after a draw
+        // in which every memo skipped.
+        | "repeat-memo" ->
+            draw (list [ "a"; "b"; "c" ] row)
+            draw (list [ "a"; "b"; "c" ] row)
+            draw (list [ "a"; "c" ] row)
+        // A memo that skips keeps its host registered, once.
+        | "memo-skipped" ->
+            for _ in 1 .. 3 do
+                draw (parent (row "a"))
+        // A memo'd subtree that skipped its last update, then taken away whole by its parent.
+        | "memo-removed" ->
+            draw (parent (row "a"))
+            draw (parent (row "a"))
+            draw (html $"""<p></p>""")
+        // The same element, drawn under another key.
+        | "key-changed" ->
+            draw (item "a")
+            draw (item "b")
+        | other -> failwithf "__hostLifecycle: no arrangement named %s" other
+        container.remove ()
+        String.concat "," held)
