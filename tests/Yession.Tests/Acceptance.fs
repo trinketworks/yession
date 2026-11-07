@@ -3174,6 +3174,20 @@ module private Holes =
 
     let textAfterComment (value: string) = html $"""<!-- the column's rail --><p>{value}</p>"""
 
+    // One template each way: drawn plainly, and drawn through a directive that only chooses
+    // what to draw (`Fable.LitExtras.Hole.Sequence` says which directives those are).
+    let private item (part: string) = html $"""<li data-part="{part}">{part}</li>"""
+
+    let plainList (parts: string list) = html $"""<ul>{parts |> List.map item}</ul>"""
+
+    let repeatedList (parts: string list) = html $"""<ul>{parts |> Lit.mapUnique id item}</ul>"""
+
+    let plainNested (part: string) = html $"""<p>{item part}</p>"""
+
+    let guarded (part: string) = html $"""<p>{Lit.onChange (part, item)}</p>"""
+
+    let memoised (part: string) = html $"""<p>{Fable.LitExtras.memo part item}</p>"""
+
 // The renderer's sequence arm (`Ssr.renderValue`), which every surface reaches through and no
 // view test can tell apart from the markup around it. A view builds its sequences with
 // `List.map`, so the list shape is the only one the suite was exercising by accident — while
@@ -3214,6 +3228,54 @@ let private templateHoleTests =
                 (Support.renderTemplate (Holes.sequence (seq { yield "<b>" })))
                 "<p>&lt;b&gt;</p>"
                 "an element is rendered, never interpolated raw"
+
+        // A first paint has no DOM for a key or a skip to be about, so a directive that only
+        // chooses what to draw renders as what it chooses. Rendering it as nothing blanked
+        // whatever it wrapped.
+        testCase "a repeated list renders as the plain list" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.repeatedList [ "alpha"; "<b>" ]))
+                (Support.renderTemplate (Holes.plainList [ "alpha"; "<b>" ]))
+                "lit's `repeat` draws each item's template, in order"
+
+        testCase "a guarded template renders as the plain template" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.guarded "<b>"))
+                (Support.renderTemplate (Holes.plainNested "<b>"))
+                "lit's `guard` draws what its function returns"
+
+        testCase "a memoised template renders as the plain template" <| fun () ->
+            Expect.equal
+                (Support.renderTemplate (Holes.memoised "<b>"))
+                (Support.renderTemplate (Holes.plainNested "<b>"))
+                "`memo` draws what its template returns for the props"
+    ]
+
+/// One update of a `memo` directive by hand, the way lit calls it on a render of its part:
+/// whether it answered lit's `noChange`, and how many times the template ran.
+let private memoUpdates (props: {| Name: string; Folded: bool |} list) : bool list * int =
+    let directive = Fable.LitExtras.MemoDirective ()
+    let mutable drawn = 0
+    let answers =
+        props
+        |> List.map (fun p ->
+            let template = System.Func<Lit.TemplateResult> (fun () -> drawn <- drawn + 1; Lit.LitBindings.nothing)
+            let answer = directive.update (Unchecked.defaultof<Lit.Types.Part>, [| box p; box template |])
+            obj.ReferenceEquals (answer, Lit.LitBindings.noChange))
+    answers, drawn
+
+// The skip itself (`Fable.LitExtras.MemoDirective`): what makes a redraw cost what changed.
+// Props are compared by value, because the model rebuilds every record it passes on: two
+// equal records that are not the same object are the common case, not the edge.
+let private memoTests =
+    testList "Memoised templates" [
+        testCase "equal props skip the redraw" <| fun () ->
+            let skipped, _ = memoUpdates [ {| Name = "a"; Folded = false |}; {| Name = "a"; Folded = false |} ]
+            Expect.equal skipped [ false; true ] "the second, equal props answer lit's noChange"
+
+        testCase "changed props draw again" <| fun () ->
+            let _, drawn = memoUpdates [ {| Name = "a"; Folded = false |}; {| Name = "a"; Folded = true |} ]
+            Expect.equal drawn 2 "a field that differs runs the template"
     ]
 
 // What a hole is escaped for is decided by where it sits (`Ssr`'s scanner). `'` is the one
@@ -4580,6 +4642,7 @@ let tests =
         semanticsTests
         reconnectOfferTests
         templateHoleTests
+        memoTests
         holeContextTests
         shellTests
     ]
