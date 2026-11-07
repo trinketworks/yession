@@ -59,6 +59,10 @@ let private recordsPerBlock = 10
 /// back through is. The session the stutter was reported from held 57.
 let private conversationSizes = [ 20; 60; 200 ]
 
+/// The same sweep for a working session (`mixed`), without its middle: a scroll costs the
+/// same five seconds of stream at every size, and the two ends are what a slope is read from.
+let private mixedConversationSizes = [ 20; 200 ]
+
 /// The open scenario: the same conversation sizes, kept as EVENTS in the client's own store,
 /// `eventsPerAnswer` to each kept answer — a session somebody watched live keeps one answer
 /// per poll, and a poll answers with the few events that arrived since (the session this was
@@ -103,6 +107,15 @@ let private composeEveryMs = 120.0f
 /// replies, 1,369 tool calls and 232 commands. Its metrics are `scroll.mixed.*` and
 /// `compose.mixed.*`.
 let private fillers = [ "replies", ""; "mixed", ".mixed" ]
+
+/// The watch scenario: a collaborator's caret moving in the composer of a reader who is doing
+/// nothing, over a working session (`mixed`) of these many items — a long one, and the
+/// thousand the compose sweep ends at. A move every `watchEveryMs`, a keystroke's pace, and
+/// `watchMoves` of them. Its own name, `watch`: what is measured is a render nobody here asked
+/// for, which neither the scroll nor the compose scenario has.
+let private watchSizes = [ 200; 1_000 ]
+let private watchMoves = 20
+let private watchEveryMs = 100
 
 /// The scroll scenario runs the main thread at a QUARTER speed (`Emulation.setCPUThrottlingRate`).
 /// A render that takes 5ms on the runner and 20ms on a phone lands in a frame on the phone and
@@ -432,7 +445,7 @@ let tests =
                         for (filler, tag) in fillers do
                           let scenario = "scroll" + tag
                           rendersPerRecord.[scenario] <- ResizeArray<float> ()
-                          for items in conversationSizes do
+                          for items in (if filler = "mixed" then mixedConversationSizes else conversationSizes) do
                             do!
                                 Harness.run5 phonePage HarnessPage.benchScrollBegin items streamRecords streamEveryMs false filler
                             let! carried = flingWhileStreaming phonePage cdp streamRecords
@@ -511,6 +524,35 @@ let tests =
                                 collected.AddRange (phaseSeries report items scenario)
                             else
                                 printfn "  no breakdown at %d %s items: %d renders for %d keys is not a render per key" items filler renders keys
+                        // The watch, at the same phone pace: a collaborator's caret moving while
+                        // this reader does nothing. Renders per move is the count a change that
+                        // draws a remote caret without redrawing the page takes to none; until
+                        // then each move is a render, and its breakdown says of what.
+                        let rendersPerMove = ResizeArray<int * float> ()
+                        for items in watchSizes do
+                            let! report = Harness.await3 phonePage HarnessPage.benchWatch items watchMoves watchEveryMs
+                            use doc = JsonDocument.Parse report
+                            let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
+                            let moves = doc.RootElement.GetProperty("moves").GetInt32 ()
+                            let held = doc.RootElement.GetProperty("held").GetInt32 ()
+                            // Anti-vacuity: moves that never reached the model, a composer that
+                            // was not on the page for a caret to stand in, or a conversation
+                            // shorter than asked for, all of which would report a quiet page.
+                            if not (doc.RootElement.GetProperty("landed").GetBoolean ()) then
+                                failwithf "the watch over %d items moved a caret %d times and the model holds none" items moves
+                            if not (doc.RootElement.GetProperty("composer").GetBoolean ()) then
+                                failwithf "the watch over %d items had no composer on the page for the caret to move in" items
+                            if held < items then
+                                failwithf "the watch asked for %d items and the model held %d" items held
+                            printfn "  a caret moved %d times over %d mixed items in %d renders" moves items renders
+                            rendersPerMove.Add (items, float renders / float moves)
+                            // The breakdown where a move draws, as the composer's: a change that
+                            // stops a move redrawing the page leaves no render to break down,
+                            // and that is the result, not a failure to measure.
+                            if renders * 2 >= moves then
+                                collected.AddRange (phaseSeries report items "watch")
+                            else
+                                printfn "  no breakdown at %d items: %d renders for %d moves is not a render per move" items renders moves
                         do! awaitU (phoneContext.CloseAsync ())
 
                         let all = List.ofSeq collected
@@ -571,6 +613,12 @@ let tests =
                             // the page draws at most once a frame, so where a render outlasts the
                             // gap between keys, renders merge, and an average over the sweep
                             // would mix that in with the sizes where they do not.
+                            // Renders per caret move at each size, a COUNT, for the watch's
+                            // reason: one each today, and none is the answer.
+                            @ [ for (items, perMove) in rendersPerMove ->
+                                    { Ratio.Name = sprintf "watch.renders@%d" items; Ratio.Unit = "x"
+                                      Ratio.Value = perMove
+                                      Ratio.Over = sprintf "%d moves at %dms" watchMoves watchEveryMs } ]
                             @ [ for (scenario, items, perKey) in rendersPerKey ->
                                     { Ratio.Name = sprintf "%s.renders@%d" scenario items; Ratio.Unit = "x"
                                       Ratio.Value = perKey

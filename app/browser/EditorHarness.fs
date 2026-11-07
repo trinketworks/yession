@@ -2663,6 +2663,73 @@ do
             report expected
         | None -> failwith "__benchComposeEnd without a __benchComposeBegin — nothing was being measured")
 
+    // --- A collaborator typing beside an idle reader (the `bench` watch scenario) -------------
+    //
+    // A person watching a long session while somebody else writes in its composer: their caret
+    // moves every keystroke, and nothing the reader did asked for anything. Each move arrives as
+    // a presence frame, which the connection dispatches as it is (`Connection.fs`,
+    // `RemotePresenceMsg`), so here each is that message, a Focus in this reader's draft whose
+    // position has moved on by one character. Today each one is a render of the whole page, and
+    // the change that draws a caret without one is what this scenario is here to show.
+    //
+    // The conversation is the `Mixed` one, a working session's. The draft holds whatever the
+    // compose scenario typed into it, or a line of words if nothing has, because a caret needs
+    // text to stand in.
+    PageGlobal.set HarnessPage.benchWatch (System.Func<_, _, _, _> (fun items moves everyMs ->
+        async {
+            model <- shellModelOf Mixed items
+            render ()
+            let me = model.Peer.PeerId
+            let draft = shellRegistry.Fragment (BodyKey.draft me)
+            if (Markdown.ofFragment draft).Trim () = "" then
+                Markdown.intoFragment "a line somebody else is writing, one character at a time" draft
+            // Where y-prosemirror says a caret is: an index into the first paragraph's text.
+            let line =
+                Y.XmlFragment.tryOf (box (draft.get 0.))
+                |> Option.bind (fun paragraph -> Y.Text.tryOf (box (paragraph.get 0.)))
+                |> Option.defaultWith (fun () -> failwith "__benchWatch: the draft is not a paragraph of text")
+            // Let the draft's own renders (its slot published, its editor mounted) land first:
+            // they are this page's, not the collaborator's.
+            for _ in 1 .. 3 do
+                do! nextFrame () |> Async.AwaitPromise
+            let grace = PeerId.create "grace" |> expect
+            let rendersAtBegin = Render.renders ()
+            let phaseLog = measurePhases ()
+            let length = int line.length
+            for move in 1 .. moves do
+                let at = ProseMirror.relPosFromTypeIndex line (move % (length + 1)) |> ProseMirror.encodeRel
+                dispatch (
+                    RemotePresenceMsg
+                        { Who = ActorRef.PeerRef grace
+                          DisplayName = "Grace"
+                          Focus = Some { Field = DraftBody me; Pos = { Anchor = at; Head = at } }
+                          Viewing = None })
+                do!
+                    JS.Constructors.Promise.Create (fun resolve _ -> JS.setTimeout resolve everyMs |> ignore)
+                    |> Async.AwaitPromise
+            Render.phases <- None
+            // Anti-vacuity, from the page's side: the last move is the caret the model holds,
+            // and the composer it is in is on the page. A count of renders cannot say either,
+            // and the right count is the one a change to the render takes to none.
+            let landed =
+                match Map.tryFind (ActorRef.PeerRef grace) model.Presence with
+                | Some presence -> presence.Focus |> Option.exists (fun focus -> focus.Field = DraftBody me)
+                | None -> false
+            let composer =
+                Browser.Dom.document.querySelector (sprintf "#shell [data-rich-body='%s']" (BodyKey.draft me))
+                |> isNull
+                |> not
+            return
+                JS.JSON.stringify
+                    {| renders = Render.renders () - rendersAtBegin
+                       moves = moves
+                       landed = landed
+                       composer = composer
+                       held = List.length (TimelineProjection.items model.Conversation model.Timeline)
+                       phases = phaseReport phaseLog |}
+        }
+        |> Async.StartAsPromise))
+
     // --- Opening a session from what was kept (the `bench` open scenario) ---------------------
     //
     // A person opening a session they have been in before. Measured on the home deployment
