@@ -2783,7 +2783,9 @@ module View =
                         let answered =
                             Map.tryFind surfaceId model.SurfaceAnswers
                             |> Option.map (fun awaited ->
-                                { SurfaceView.Answered.By = Entity.actorName model (Principal.toActor awaited.Answer.By)
+                                let by = Principal.toActor awaited.Answer.By
+                                { SurfaceView.Answered.By = Entity.actorName model by
+                                  SurfaceView.Answered.ByMark = Entity.actorMark model by
                                   SurfaceView.Answered.Component = awaited.Answer.Component })
                         SurfaceView.view dispatch (model.Asked |> Map.toList |> List.map snd) answered surfaceId surface
                     | None -> Lit.nothing

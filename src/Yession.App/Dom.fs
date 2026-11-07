@@ -710,9 +710,12 @@ module Dom =
         /// What the pressed button says once the answer is on the record, in the same box,
         /// until the agent's turn on it ends.
         let surfaceAnsweredWord = "answered"
-        /// The line under an answered surface, for every reader: who answered, and that it is
-        /// the agent's move now.
-        let surfaceAnsweredBy (who: string) : string = sprintf "%s answered · waiting on the agent" who
+        /// The line under an answered surface, for every reader: who answered (their mark, their
+        /// name, then `surfaceAnsweredWord`), and that it is the agent's move now — the agent's
+        /// mark, then this.
+        let surfaceAwaitingAgent = "waiting…"
+        /// What a screen reader hears for the agent's mark on that line, which it cannot see.
+        let surfaceAwaitingAgentSr = "the agent is"
         let surfaceUnsupported (kind: string) : string =
             sprintf "The agent put a %s here, which this app does not show yet." kind
 
