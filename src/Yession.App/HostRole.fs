@@ -18,6 +18,18 @@ type HostRole =
     | TerminalInput
     /// A read-only mount of a command line (`data-terminal-text`).
     | TerminalText
+    /// A surface read from its end (`data-tail`), keyed by its `TailSurface.key`.
+    | Tail
+    /// The box a terminal's output is laid into, live screen or block scrollback, keyed by the
+    /// terminal's id: what is measured for its size.
+    | Viewport
+    /// A recording's player mount (`data-pane-replay`), keyed by its tab key.
+    | Replay
+    /// The foot of a paged listing, keyed by its hook (`Dom.Hooks.repoPickerFoot`,
+    /// `Dom.Hooks.repoBranchFoot`): watched for the reader reaching it.
+    | ListingFoot
+    /// The pane's tab strip (`data-pane-strip`), keyed by nothing: its fade is kept per render.
+    | PaneStrip
 
 module HostRole =
 
@@ -27,6 +39,11 @@ module HostRole =
         | HostRole.RichBody -> "rich-body"
         | HostRole.TerminalInput -> "terminal-input"
         | HostRole.TerminalText -> "terminal-text"
+        | HostRole.Tail -> "tail"
+        | HostRole.Viewport -> "viewport"
+        | HostRole.Replay -> "replay"
+        | HostRole.ListingFoot -> "listing-foot"
+        | HostRole.PaneStrip -> "pane-strip"
 
     /// The role a name says, or `None` for a name no role has.
     let ofName (name: string) : HostRole option =
@@ -34,10 +51,15 @@ module HostRole =
         | "rich-body" -> Some HostRole.RichBody
         | "terminal-input" -> Some HostRole.TerminalInput
         | "terminal-text" -> Some HostRole.TerminalText
+        | "tail" -> Some HostRole.Tail
+        | "viewport" -> Some HostRole.Viewport
+        | "replay" -> Some HostRole.Replay
+        | "listing-foot" -> Some HostRole.ListingFoot
+        | "pane-strip" -> Some HostRole.PaneStrip
         | _ -> None
 
-    /// In an element's tag, last: this element is in `role`'s set under `key` while it is in
-    /// the page. Last, because lit commits a tag's bindings in order, and the attributes the
-    /// pass reads (`readonly`, `data-rich-readonly`) are then already on the element when it
-    /// registers. A string renders it as nothing (`Ssr`).
+    /// In an element's tag, after its attributes: this element is in `role`'s set under `key`
+    /// while it is in the page. After, because lit commits a tag's bindings in order, and the
+    /// attributes a pass reads (`readonly`, `data-rich-readonly`, `data-tail`) are then already
+    /// on the element when it registers. A string renders it as nothing (`Ssr`).
     let mark (role: HostRole) (key: string) : Lit.TemplateResult = Fable.LitExtras.host (name role) key

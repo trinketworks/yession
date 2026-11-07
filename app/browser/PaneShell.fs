@@ -640,7 +640,10 @@ let setOpen (isOpen: bool) : unit =
 /// view is the model's to ask for (`ClientModel.pivotReveal`), never every render's: a reveal
 /// on EVERY render would take the strip back from a reader scrolling it to look at the other
 /// tabs the moment anything at all arrived.
-let syncStrip () : unit = Strip.markShown ()
+///
+/// The strips the render drew are handed in (`HostRole.PaneStrip`), not found: a render asks
+/// the document nothing.
+let syncStrip (strips: HTMLElement list) : unit = strips |> List.iter Strip.mark
 
 /// The listeners that keep the strip honest between renders — bound once per page, delegated
 /// from the document so they survive Lit replacing the strip.

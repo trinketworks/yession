@@ -40,33 +40,30 @@ open Yession.Session
 open Yession.Host
 
 /// The box each terminal's output is laid into, whichever mode it is in: the live screen while
-/// a program holds it, the block scrollback while commands do. ONE selector, because it is one
+/// a program holds it, the block scrollback while commands do. ONE role, because it is one
 /// question — how wide is what this reader is looking at — and the pane shows one of the two
 /// at a time. It used to name only the screen, which is why block mode never had a width:
 /// there was nothing to measure until somebody took the keyboard.
 ///
-/// Every box at once, ONE scan, rather than a scan per terminal id. The pane draws one
-/// terminal, so a session with a dozen open ones asked the document about eleven boxes that
-/// were not in it — and a compound attribute selector that MISSES is the most expensive
-/// question there is, because nothing is indexed and the walk cannot stop early. Measured on
-/// a session of 20,650 events (54k nodes, 12 open terminals): 616 of these, 5.3 seconds, a
-/// third of all the CPU a cold open spent.
+/// Each box registers itself under its terminal's id as lit draws it (`HostRole.Viewport`), so
+/// finding them asks the document nothing. It used to: one compound attribute selector per
+/// open terminal per render, every one but the shown terminal's a MISS, which is the most
+/// expensive question there is (nothing is indexed and the walk cannot stop early) — measured
+/// on a session of 20,650 events (54k nodes, 12 open terminals): 616 of them, 5.3 seconds, a
+/// third of all the CPU a cold open spent. Then one scan for all of them, every render. Now
+/// none.
 ///
-/// Keyed first-wins in document order, which is what the selector list answered before: a
-/// terminal holding both boxes at once resolves to the same one it always did.
-///
-/// A whole-document scan, counted (`Scan`): the scans-per-render case in `Browser.fs` reads the
-/// count.
-let private viewports () : Map<string, HTMLElement> =
-    (Map.empty, Scan.all "[data-terminal-screen], [data-terminal-scrollback][data-terminal-id]")
-    ||> List.fold (fun boxes found ->
+/// First in document order where a terminal holds both boxes at once, as the selector list
+/// answered: the same one it always resolved to.
+let private viewports (hosts: Hosts.Hosts) : Map<string, HTMLElement> =
+    (Map.empty, hosts.In HostRole.Viewport)
+    ||> List.fold (fun boxes (found, id) ->
         let element = found :?> HTMLElement
-        let id =
-            match element.getAttribute "data-terminal-screen" with
-            | null | "" -> element.getAttribute "data-terminal-id"
-            | screen -> screen
-        if isNull (box id) || id = "" || Map.containsKey id boxes then boxes
-        else Map.add id element boxes)
+        match Map.tryFind id boxes with
+        // `4` is DOCUMENT_POSITION_FOLLOWING: the held box comes first.
+        | Some held when (int (held.compareDocumentPosition element) &&& 4) <> 0 -> boxes
+        | Some _
+        | None -> Map.add id element boxes)
 
 /// A CSS length as pixels, or zero. `getPropertyValue` answers `"12px"` for a resolved length
 /// and `""` for anything it cannot resolve, and only the first is a number to subtract.
@@ -144,7 +141,7 @@ type Screens =
 /// drives the harness, which has no copy of it — which is how the one thing it did wrong went
 /// unnoticed: it ran only from `setState`, so a splitter drag or a window resize, which change
 /// the box and dispatch nothing, never measured anything at all.
-let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) : Screens =
+let create (hosts: Hosts.Hosts) (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) : Screens =
     let live = System.Collections.Generic.Dictionary<string, Live> ()
 
     let forget (key: string) =
@@ -197,36 +194,23 @@ let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) :
                     if Map.tryFind terminal.TerminalId model.TerminalViewports <> Some size then
                         dispatch (TerminalViewportMsg (terminal.TerminalId, size))
 
-    /// One observer, re-pointed at whichever terminal the pane is showing. A box can change
-    /// without the model changing — the splitter is dragged, the window is resized, the phone
-    /// is turned — and those are exactly the cases a render-loop measurement cannot see.
+    /// One observer, watching every terminal's box from the moment lit draws it to the moment
+    /// lit takes it away. A box can change without the model changing — the splitter is
+    /// dragged, the window is resized, the phone is turned — and those are exactly the cases a
+    /// render-loop measurement cannot see.
     ///
     /// Comparing against the model is what keeps this cheap: an observer fires on every frame
-    /// of a drag, and only the frames that cross a whole character cell say anything.
+    /// of a drag, and only the frames that cross a whole character cell say anything. The pane
+    /// draws one terminal at a time, so there is one box, or two for the frame its mode
+    /// changes in.
     let observer =
         if ResizeObserver.isSupported () then
-            Some (ResizeObserver.create (fun () -> measureSizes (viewports ())))
+            Some (ResizeObserver.create (fun () -> measureSizes (viewports hosts)))
         else None
-    let mutable observed : HTMLElement option = None
-
-    /// The pane shows one terminal at a time, so there is one box worth watching. Named from
-    /// the MODEL rather than found by a bare selector: two variants of a screen and a
-    /// scrollback all match, and the one that matters is the one whose terminal is selected.
-    let watchViewport (boxes: Map<string, HTMLElement>) (model: ClientModel) =
-        let element =
-            ClientModel.selectedTerminal model
-            |> Option.bind (fun terminal -> Map.tryFind (TerminalId.value terminal) boxes)
-        let unchanged =
-            match element, observed with
-            | Some element, Some observed -> System.Object.ReferenceEquals (element, observed)
-            | None, None -> true
-            | _ -> false
-        if not unchanged then
-            observer
-            |> Option.iter (fun observer ->
-                observer.disconnect ()
-                element |> Option.iter (fun element -> observer.observe (element :> Element)))
-            observed <- element
+    hosts.Watch
+        HostRole.Viewport
+        { Came = fun _ el -> observer |> Option.iter (fun observer -> observer.observe el)
+          Went = fun _ el -> observer |> Option.iter (fun observer -> observer.unobserve el) }
 
     { Snapshot =
         fun id keyframe ->
@@ -287,11 +271,6 @@ let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) :
                 |> Seq.filter (fun k -> not (Set.contains k open'))
                 |> Seq.toList do
                 forget stale
-            // Last, because both read the document this render has just produced: which box
-            // this reader is looking at, and how big it is.
-            // One look at the document for both, because both ask it the same question —
-            // where are the terminal boxes — and asking twice is asking twice.
-            let boxes = viewports ()
-            watchViewport boxes model
-            measureSizes boxes
+            // Last, because it reads the boxes this render has just drawn: how big each is.
+            measureSizes (viewports hosts)
       Forget = fun id -> forget (TerminalId.value id) }
