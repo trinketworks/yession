@@ -1,5 +1,6 @@
 namespace Yession.App
 
+open Yession.Domain
 open Yession.Domain.Link
 
 /// Where carets are TO THE CHARACTER, kept outside the Elmish model.
@@ -18,9 +19,21 @@ open Yession.Domain.Link
 /// report is news is asked of what this peer last said from anywhere: a command line
 /// re-reporting `None` after the editor had claimed the caret is a clear somebody needs.
 ///
+/// Everyone else's carets are the same story from the other end: each presence frame lands
+/// here (`Receive`), the model hears of it only when where that actor IS changed
+/// (`RemotePresenceMsg`), and a move within a field reaches the page through `Changed`, which
+/// the render's caret placement listens to, with no render.
+///
 /// Not Yjs awareness, for the reason `PresencePayload` gives.
 type Carets () =
     let mutable own : Focus option = None
+    let mutable remote : Map<ActorRef, PresencePayload> = Map.empty
+    let changed = Event<unit> ()
+    /// What the model holds of a frame: everything but where in its field the caret stands.
+    let fieldLevel (payload: PresencePayload) : RemotePresence =
+        { DisplayName = payload.DisplayName
+          Field = payload.Focus |> Option.map (fun focus -> focus.Field)
+          Viewing = payload.Viewing }
 
     /// This peer's caret and selection, as its editors last reported them.
     member _.Own : Focus option = own
@@ -37,3 +50,29 @@ type Carets () =
             let after = focus |> Option.map (fun f -> f.Field)
             own <- focus
             if after <> before then fieldMoved after else positionMoved ()
+
+    /// Where a remote actor's caret and selection stand, as its last presence frame said, or
+    /// `None` when it is in no field (or has not said).
+    member _.Remote (who: ActorRef) : Focus option =
+        remote |> Map.tryFind who |> Option.bind (fun payload -> payload.Focus)
+
+    /// Fires after every presence frame `Receive` keeps, whatever it changed: what draws a
+    /// caret where it stands listens here, so a caret that moved within its field is drawn
+    /// with no message and no render.
+    member _.Changed : IEvent<unit> = changed.Publish
+
+    /// A presence frame arrived — the ONE way one is taken in, by the connection and by the
+    /// harness alike. Kept, then told to the model (`RemotePresenceMsg`) only when it changes
+    /// what the model holds of that actor: its caret's field, its name or what it has open.
+    /// A frame saying nowhere at all (`Focus` and `Viewing` both `None`) forgets the actor
+    /// here, and is told, because the model forgets it too. Then `Changed`, so whatever
+    /// draws carets draws this one where it now stands.
+    member _.Receive (dispatch: ClientMsg -> unit) (payload: PresencePayload) : unit =
+        let before = Map.tryFind payload.Who remote |> Option.map fieldLevel
+        remote <-
+            match payload.Focus, payload.Viewing with
+            | None, None -> Map.remove payload.Who remote
+            | _ -> Map.add payload.Who payload remote
+        let now = fieldLevel payload
+        if before <> Some now then dispatch (RemotePresenceMsg (payload.Who, now))
+        changed.Trigger ()

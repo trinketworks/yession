@@ -200,7 +200,7 @@ let private selectionSpan (length: int) (anchor: int) (head: int) : int * int * 
 /// (`anchor`,`head` indices), size its highlight span to `lo..hi` and offset the caret bar to
 /// `head`. Colour is set by the view (`Entity.presenceColour`); this only positions. Called per peer
 /// whose caret is in a collaborative input after every render — the DOM is up to date
-/// synchronously.
+/// synchronously — and at the frame after a caret moves within its field, which renders nothing.
 ///
 /// Everything the marker needs is READ OFF THE FIELD, never assumed from the stylesheet: the
 /// marker is a sibling of the input, and where the input's text sits in the block they share is
@@ -451,6 +451,9 @@ type Deps =
       Root : Browser.Types.Element
       Actions : ViewActions
       Dispatch : ClientMsg -> unit
+      /// Where carets stand to the character (`Carets`): the model says which field each is
+      /// in, and this says where in it.
+      Carets : Carets
       Links : Links }
 
 /// The render, and the things beside it that need what it keeps.
@@ -654,6 +657,15 @@ let create (deps: Deps) : Renderer =
             terminalSlots.[stale].Stop ()
             terminalSlots.Remove stale |> ignore
 
+    // Where a collaborator's caret stands in `field`: the model says it is in that field
+    // (`Presence`), and the slot says where (`Carets`). Both, because the model is what the
+    // page was drawn from — a caret in a field the drawn page does not have it in is drawn
+    // when the render that puts it there runs, not before.
+    let standingIn (field: FocusField) (who: ActorRef) (p: RemotePresence) : Focus option =
+        if p.Field = Some field then
+            deps.Carets.Remote who |> Option.filter (fun focus -> focus.Field = field)
+        else None
+
     // The remote cursors currently in a given body, coloured per peer.
     let cursorsFor (key: string) : Editor.RemoteBodyCursor list =
         match fieldOfKey key, latest with
@@ -663,14 +675,13 @@ let create (deps: Deps) : Renderer =
             model.Presence
             |> Map.toList
             |> List.choose (fun (peerId, p) ->
-                match p.Focus with
-                | Some focus when focus.Field = field ->
-                    Some ({ Colour = Entity.presenceColour model peerId
-                            Selection = Entity.presenceSelection model peerId
-                            Name = p.DisplayName
-                            Anchor = focus.Pos.Anchor
-                            Head = focus.Pos.Head } : Editor.RemoteBodyCursor)
-                | _ -> None)
+                standingIn field peerId p
+                |> Option.map (fun focus ->
+                    ({ Colour = Entity.presenceColour model peerId
+                       Selection = Entity.presenceSelection model peerId
+                       Name = p.DisplayName
+                       Anchor = focus.Pos.Anchor
+                       Head = focus.Pos.Head } : Editor.RemoteBodyCursor)))
         | _ -> []
 
     // Overlay each body's remote cursors, PACED BY THE FRAME: a render marks the push wanted
@@ -743,12 +754,29 @@ let create (deps: Deps) : Renderer =
                 Some (sprintf "input[data-chapter-name=\"%s\"]" (MessageId.value messageId))
             | DraftBody _ | QueueBody _ | TerminalDraftBody _ | TerminalQueuedBody _ -> None
         for (who, p) in Map.toList model.Presence do
-            match p.Focus |> Option.bind (fun f -> selectorOf f.Field |> Option.map (fun s -> s, f)) with
+            let standing =
+                p.Field
+                |> Option.bind (fun field ->
+                    selectorOf field |> Option.bind (fun s -> standingIn field who p |> Option.map (fun f -> s, f)))
+            match standing with
             | Some (selector, focus) ->
                 match ProseMirror.absIndexInDoc doc focus.Pos.Anchor, ProseMirror.absIndexInDoc doc focus.Pos.Head with
                 | Some a, Some h -> placeInputCursor selector (ActorRef.token who) a h
                 | _ -> ()
             | None -> ()
+
+    // A collaborator's caret moved within its field: no message, so no render (`Carets`), and
+    // the two placements a render would have run are run here instead. The body push is paced
+    // by the frame already; the inputs' measurement is paced the same way, against the latest
+    // model, so a burst of frames is one placement.
+    let mutable inputsQueued = false
+    deps.Carets.Changed.Add (fun () ->
+        pushPresences ()
+        if not inputsQueued then
+            inputsQueued <- true
+            raf (fun () ->
+                inputsQueued <- false
+                latest |> Option.iter placeInputCursorsAll))
 
     // The picker's foot, and the watch on it. Re-bound when the ELEMENT changes — Lit keeps
     // the same node across renders while the foot is drawn, so that is once when the listing

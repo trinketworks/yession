@@ -165,7 +165,7 @@ let private representativeModel : ClientModel =
         Map.ofList
             [ PeerRef bob,
               { DisplayName = "brave-owl"
-                Focus = Some { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } }
+                Field = Some Title
                 Viewing = None } ]
       Caret = None
       // The roster names a draft's author even when they are not here: a label, never a peer id.
@@ -470,7 +470,7 @@ let private joinedComposerModel : ClientModel =
             Map.ofList
                 [ PeerRef bob,
                   { DisplayName = "brave-owl"
-                    Focus = Some { Field = DraftBody bob; Pos = { Anchor = "AQI="; Head = "AQI=" } }
+                    Field = Some (DraftBody bob)
                     Viewing = None } ]
         Composer = Joined bob }
 
@@ -3381,7 +3381,7 @@ let private presenceTests =
                     Map.ofList
                         [ PeerRef bob,
                           { DisplayName = "brave-owl"
-                            Focus = Some { Field = field; Pos = { Anchor = "AQI="; Head = "AQI=" } }
+                            Field = Some field
                             Viewing = None } ] }
 
         testCase "a peer is in the roster with where they are" <| fun () ->
@@ -3435,7 +3435,7 @@ let private presenceTests =
                             Map.ofList
                                 [ PeerRef bob,
                                   { DisplayName = "brave-owl"
-                                    Focus = Some { Field = ChapterName messageId; Pos = { Anchor = "AQI="; Head = "AQI=" } }
+                                    Field = Some (ChapterName messageId)
                                     Viewing = None } ] }
             Expect.isTrue
                 (html.Contains
@@ -3457,7 +3457,7 @@ let private presenceTests =
                             Map.ofList
                                 [ PeerRef bob,
                                   { DisplayName = "brave-owl"
-                                    Focus = Some { Field = ChapterName here; Pos = { Anchor = "AQI="; Head = "AQI=" } }
+                                    Field = Some (ChapterName here)
                                     Viewing = None } ] }
             let ruleOf (messageId: MessageId) =
                 let opens = html.IndexOf (Dom.attr Dom.Hooks.chapterRule (MessageId.value messageId))
@@ -4452,7 +4452,7 @@ let private semanticsTests =
                         Map.ofList
                             [ PeerRef bob,
                               { DisplayName = "quiet-otter"
-                                Focus = Some { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } }
+                                Field = Some Title
                                 Viewing = None } ]
                     Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] }
                     Conversation =
