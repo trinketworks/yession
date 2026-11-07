@@ -92,7 +92,7 @@ module SurfaceView =
     /// An answer on the record that the agent has not finished acting on
     /// (`ClientModel.SurfaceAnswers`): who gave it, as this reader names them, and the button
     /// they pressed. Everyone's, unlike `Sending`, because everyone reads it off the log.
-    type Answered = { By : string; Component : string }
+    type Answered = { By : string; ByMark : string; Component : string }
 
     /// What one surface's components draw against.
     type private Canvas =
@@ -413,7 +413,12 @@ module SurfaceView =
             let awaiting =
                 match waiting with
                 | Some a ->
-                    Some (html $"""<p class="{Style.surfaceAwaiting}" role="status" data-surface-answered>{Icon.spinLead}{Dom.Text.surfaceAnsweredBy a.By}</p>""")
+                    Some (html $"""
+                        <p class="{Style.surfaceAwaiting}" role="status" data-surface-answered>
+                          <span class="{Style.surfaceAwaitingWho}"><span class="{Style.cls [ Style.avatarSm; a.ByMark ]}" aria-hidden="true"></span><span class="{Style.who}">{a.By}</span>{Dom.Text.surfaceAnsweredWord}</span>
+                          <span class="{Style.surfaceAwaitingDot}" aria-hidden="true">·</span>
+                          <span class="{Style.surfaceAwaitingAgent}"><span class="{Style.agentThinking}" style="{Style.thinkFrom surfaceId}" aria-hidden="true">{Icon.cube}</span><span class="{Style.srOnly}">{Dom.Text.surfaceAwaitingAgentSr}</span>{Dom.Text.surfaceAwaitingAgent}</span>
+                        </p>""")
                 | None -> None
             let actions =
                 match pinned, awaiting with

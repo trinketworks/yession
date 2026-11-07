@@ -3917,8 +3917,14 @@ module Style =
     let surfaceActions = cls [ askInset; "shrink-0 pb-6 phone:pb-4" ]
     let surfaceActionsLine = "min-w-0"
     /// Who answered, while the answer waits on the agent: the status voice the card's own
-    /// waits speak in (`statusWait`), under the button that gave it.
-    let surfaceAwaiting = cls [ statusWait; "pt-3 min-w-0"; readingColumn ]
+    /// waits speak in (`statusWait`), under the button that gave it. Two halves — who answered,
+    /// and the agent waited on — each with its author's mark, a dot between them on one line.
+    /// On a phone the line breaks at the dot instead and the dot goes: a half per line reads
+    /// cleaner than one that wraps wherever the name's length puts it.
+    let surfaceAwaiting = cls [ statusWait; "pt-3 min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1"; readingColumn ]
+    let surfaceAwaitingWho = "inline-flex items-center gap-2 min-w-0"
+    let surfaceAwaitingDot = "phone:hidden"
+    let surfaceAwaitingAgent = cls [ surfaceAwaitingWho; "phone:basis-full" ]
     let surfaceColumn = "flex flex-col gap-3 min-w-0"
     let surfaceRow = "flex flex-wrap items-center gap-3 min-w-0"
     /// A card inside a surface: one step up the greys, which is what nesting is said with.
