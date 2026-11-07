@@ -73,6 +73,46 @@ let renders () : int =
     | Some n -> n
     | None -> 0
 
+/// One render, phase by phase, in milliseconds: what a redraw spends where. `View` builds the
+/// template (`View.view`, every item's template made again); `Lit` commits it (Lit's diff
+/// of that template against the page); each sync after it is its own phase, the four
+/// `PaneShell` calls are one, and `Tail` is the read before the commit and the restore after
+/// everything else, together, because they are one mechanism split around the render.
+/// `Total` is the whole of it, start of `Tail.Before` to end of `Tail.Restore`. `Nodes` is
+/// how many elements the document held once the render was over, so a phase can be read
+/// against the size of the page it ran over.
+///
+/// Layout reads are not counted. The reads that force layout during a render are spread over
+/// `Tail`, `PaneShell`, `Screens`, this module, and the editors and terminals they mount
+/// (ProseMirror, xterm), so a wrapper around the few in this file would count the smallest
+/// share of them. Forced layout shows up instead in the time of the phase that read it.
+[<RequireQualifiedAccess>]
+type RenderPhases =
+    { View : float
+      Lit : float
+      RichBodies : float
+      TerminalInputs : float
+      Replays : float
+      Screens : float
+      PaneShell : float
+      TerminalSlots : float
+      ListingFoot : float
+      Presences : float
+      InputCursors : float
+      Title : float
+      Tail : float
+      Total : float
+      Nodes : int }
+
+/// Where each render's phases go, while somebody is measuring them, and nowhere otherwise:
+/// the bench harness sets it around a scenario and clears it after. Unset, a render reads the
+/// clock not once and allocates nothing for it, so the app pays nothing for the instrument.
+let mutable phases : (RenderPhases -> unit) option = None
+
+/// The clock, read only while somebody is measuring.
+let private stamp (measuring: bool) : float =
+    if measuring then Browser.Performance.performance.now () else 0.0
+
 /// Watch the foot of a paged listing inside the card's own scroller, so the next page arrives
 /// as the reader reaches it rather than on a press. The caller stops the observer when the
 /// foot goes.
@@ -835,18 +875,32 @@ let create (deps: Deps) : Renderer =
         // Where each reader of a surface read from its end stands, before anything moves
         // them; put back at the END of this render (`Tail`), after every sync below has
         // finished changing heights.
+        // Read once, so a render is measured whole or not at all.
+        let sink = phases
+        let measuring = sink.IsSome
+        let t0 = stamp measuring
         let tails = tail.Before ()
-        Lit.render deps.Root (View.view deps.Actions model dispatch)
+        let tBefore = stamp measuring
+        // Built into a value before it is committed, so the two can be timed apart: what
+        // making every item's template costs, and what Lit's diff of it against the page does.
+        let template = View.view deps.Actions model dispatch
+        let tView = stamp measuring
+        Lit.render deps.Root template
+        let tLit = stamp measuring
         // Mount/dispose the rich editors on their body hosts (bound to live fragments), then
         // overlay collaborators' cursors: remote carets in each body editor, and title carets
         // measured against the just-rendered input.
         syncRichBodies ()
+        let tRich = stamp measuring
         syncTerminalInputs ()
+        let tInputs = stamp measuring
         replays.Sync model
+        let tReplays = stamp measuring
         // The live screens, and the size the holder's viewport actually is. AFTER the
         // render: the fold feeds an emulator whose serialization the next render draws,
         // and the measurement needs a box that exists.
         screens.Sync model
+        let tScreens = stamp measuring
         // The terminals column's open state is a class on the shell root, like the
         // sidebar's — presentation, so a re-render never fights it — but driven FROM the
         // model, because unlike the sidebar this column's visibility is something the app
@@ -858,24 +912,51 @@ let create (deps: Deps) : Renderer =
         // than the model, so a tab a collaborator's `TabOpened` selected is covered too — and
         // its fade on whichever ends have tabs past them.
         PaneShell.syncStrip ()
+        let tPane = stamp measuring
         // Keep a slot rule running for every open terminal: a person may be mid-command
         // in more than one, and each slot follows its own command line.
         syncTerminalSlots model
+        let tSlots = stamp measuring
         // After the render, because the foot it watches is a node this render just drew.
         syncListingFoot ()
+        let tFoot = stamp measuring
         pushPresences ()
+        let tPresences = stamp measuring
         placeInputCursorsAll model
+        let tCursors = stamp measuring
         // The tab's name, which lives outside the root and so is the model's to push rather
         // than Lit's to render. The NAME is computed in the model (`tabTitle`); this only
         // applies it, and only on a change — assigning `document.title` every render is a
         // write the browser need not be asked to make.
         let tab = ClientModel.tabTitle model
         if Browser.Dom.document.title <> tab then Browser.Dom.document.title <- tab
+        let tTitle = stamp measuring
         // Last, because everything above can move an end: an editor mounted into a message,
         // the pane opened beside the chat, a screen folded forward. A reader put back at the
         // end before those ran was put back at an end that had moved by the time anybody
         // looked.
         tail.Restore tails model
+        let tEnd = stamp measuring
+        match sink with
+        | Some report ->
+            report
+                { RenderPhases.View = tView - tBefore
+                  RenderPhases.Lit = tLit - tView
+                  RenderPhases.RichBodies = tRich - tLit
+                  RenderPhases.TerminalInputs = tInputs - tRich
+                  RenderPhases.Replays = tReplays - tInputs
+                  RenderPhases.Screens = tScreens - tReplays
+                  RenderPhases.PaneShell = tPane - tScreens
+                  RenderPhases.TerminalSlots = tSlots - tPane
+                  RenderPhases.ListingFoot = tFoot - tSlots
+                  RenderPhases.Presences = tPresences - tFoot
+                  RenderPhases.InputCursors = tCursors - tPresences
+                  RenderPhases.Title = tTitle - tCursors
+                  RenderPhases.Tail = (tBefore - t0) + (tEnd - tTitle)
+                  RenderPhases.Total = tEnd - t0
+                  // Counted after the clock stops, so the count is not part of what it counts.
+                  RenderPhases.Nodes = int (Browser.Dom.document.getElementsByTagName "*").length }
+        | None -> ()
         // The conversation's first appearance rises in, after the end it is pinned to has been
         // put back, so the rows that rise are the rows the reader is looking at. An arrival is
         // a change: a conversation already on the page's first render was there from its first

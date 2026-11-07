@@ -381,8 +381,40 @@ let private oneSeries (a: string) (xs: float[]) : string =
 /// What the scroll scenario recorded, in the series shape the driver reads everywhere else,
 /// plus the counts that say whether it measured anything: renders against records sent, and
 /// where the scroll started and ended.
+/// Every render's phases while a scenario ran (`Render.phases`), one array per phase in the
+/// order the renders happened — the `phases` of a scenario's report, which the bench reads
+/// as `<scenario>.render.<phase>` and `<scenario>.nodes`. Every render, the ones drawn at a
+/// frame's end included, because the hook is in the render rather than around a dispatch.
+let private phaseReport (log: Render.RenderPhases seq) =
+    // A `ResizeArray`, which is a JavaScript array: a `float[]` is a `Float64Array` under
+    // Fable, and `JSON.stringify` writes one of those as an object keyed by index.
+    let column (f: Render.RenderPhases -> float) = ResizeArray<float> (Seq.map f log)
+    {| view = column (fun p -> p.View)
+       lit = column (fun p -> p.Lit)
+       richBodies = column (fun p -> p.RichBodies)
+       terminalInputs = column (fun p -> p.TerminalInputs)
+       replays = column (fun p -> p.Replays)
+       screens = column (fun p -> p.Screens)
+       paneShell = column (fun p -> p.PaneShell)
+       terminalSlots = column (fun p -> p.TerminalSlots)
+       listingFoot = column (fun p -> p.ListingFoot)
+       presences = column (fun p -> p.Presences)
+       inputCursors = column (fun p -> p.InputCursors)
+       title = column (fun p -> p.Title)
+       tail = column (fun p -> p.Tail)
+       total = column (fun p -> p.Total)
+       nodes = column (fun p -> float p.Nodes) |}
+
+/// Start keeping every render's phases, and hand back what has been kept so far. One
+/// scenario measures at a time, so a second begin replaces the first's sink.
+let private measurePhases () : ResizeArray<Render.RenderPhases> =
+    let log = ResizeArray<Render.RenderPhases> ()
+    Render.phases <- Some log.Add
+    log
+
 let private scrollReport
     (frames: float[]) (renders: float[]) (rendersN: int) (recordsN: int) (scrolledFrom: float) (scrolledTo: float)
+    (phases: Render.RenderPhases seq)
     : string =
     JS.JSON.stringify
         {| frame = frames
@@ -390,7 +422,8 @@ let private scrollReport
            renders = rendersN
            records = recordsN
            scrolledFrom = scrolledFrom
-           scrolledTo = scrolledTo |}
+           scrolledTo = scrolledTo
+           phases = phaseReport phases |}
 
 /// One frame's look at the conversation, as far as an eye can tell two frames apart: where
 /// its box is, what is scrolled into it, how much is in it, and which item is under the
@@ -2323,6 +2356,7 @@ do
         let scrolledFrom = surface.scrollTop
         let times = ResizeArray<float> ()
         renderTimes <- Some times
+        let phaseLog = measurePhases ()
         // Counted rather than taken from `times`: a render owed to a frame's end is a render,
         // and it is not one `dispatch` timed.
         let rendersAtBegin = Render.renders ()
@@ -2354,9 +2388,10 @@ do
                 running <- false
                 Browser.Dom.window.clearInterval interval
                 renderTimes <- None
+                Render.phases <- None
                 scrollReport
                     (frames.ToArray ()) (times.ToArray ()) (Render.renders () - rendersAtBegin) sent
-                    scrolledFrom (conversation ()).scrollTop)))
+                    scrolledFrom (conversation ()).scrollTop phaseLog)))
     PageGlobal.set HarnessPage.benchScrollSent (fun () -> sentSoFar ())
     PageGlobal.set HarnessPage.benchScrollEnd (fun () ->
         match finish with
@@ -2400,6 +2435,9 @@ do
         render ()
         let keys = ResizeArray<float> ()
         let rendersAtBegin = Render.renders ()
+        // Every render while the keys land: the caret's, a frame after each key, and the
+        // draft slot's publication on the first.
+        let phaseLog = measurePhases ()
         let mutable pressed = 0
         let listener : Browser.Types.Event -> unit =
             fun event ->
@@ -2425,12 +2463,14 @@ do
                         do! nextFrame () |> Async.AwaitPromise
                         frames <- frames + 1
                     Browser.Dom.document.removeEventListener ("keydown", listener, true)
+                    Render.phases <- None
                     return
                         JS.JSON.stringify
                             {| ``type`` = keys.ToArray ()
                                renders = Render.renders () - rendersAtBegin
                                keys = pressed
-                               items = int (conversation ()).children.length |}
+                               items = int (conversation ()).children.length
+                               phases = phaseReport phaseLog |}
                 }
                 |> Async.StartAsPromise))
     PageGlobal.set HarnessPage.benchComposeEnd (fun expected ->
