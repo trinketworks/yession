@@ -58,8 +58,6 @@ open Yession.App
 /// Every surface read from its end, by the name the view gives it.
 let private selector = "[" + Dom.Hooks.tail + "]"
 
-/// The surfaces on the page now: a whole-document scan, counted (`Scan`).
-let private surfaces () : HTMLElement list = Scan.all selector |> List.map (fun found -> found :?> HTMLElement)
 
 /// What a surface IS (`TailSurface.key`), never where it sits in the list: a terminal whose
 /// blocks gave way to its screen between two renders has changed which surfaces there are, and
@@ -214,7 +212,12 @@ type Tail =
 /// for the LATEST model, not the one a render was handed, both to say whether a reader is
 /// following between renders (a scroll, a box resized) and so that a fact the model already
 /// holds is not told again.
-let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) : Tail =
+let create (hosts: Hosts.Hosts) (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) : Tail =
+
+    /// The surfaces on the page now: each registers itself as lit draws it (`HostRole.Tail`),
+    /// so where they are is never a question for the document.
+    let surfaces () : HTMLElement list =
+        hosts.In HostRole.Tail |> List.map (fun (el, _) -> el :?> HTMLElement)
 
     /// Where each surface's scroll stood the last time anything here looked, by name rather
     /// than by element, because Lit replaces elements. A MEASUREMENT, kept so that a scroll
@@ -301,22 +304,14 @@ let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) :
                     | None -> ()))
         else None
 
-    /// What the observer is watching, so a render that drew the same surfaces does not start
-    /// it again (observing fires once immediately, and that would be a pass per render for
-    /// nothing), and one that dropped a surface does not leave the observer holding it.
-    let mutable observed : HTMLElement list = []
-
-    let observe (current: HTMLElement list) : unit =
-        let same =
-            List.length current = List.length observed
-            && List.forall2 (fun a b -> System.Object.ReferenceEquals (a, b)) current observed
-        if not same then
-            observer
-            |> Option.iter (fun observer ->
-                observer.disconnect ()
-                for el in current do
-                    observer.observe (el :> Element))
-            observed <- current
+    // The observer watches each surface from the moment lit draws it to the moment lit takes
+    // it away, so a render that drew the same surfaces starts nothing (observing fires once
+    // immediately, and that would be a pass per render for nothing), and one that dropped a
+    // surface does not leave the observer holding it.
+    hosts.Watch
+        HostRole.Tail
+        { Came = fun _ el -> observer |> Option.iter (fun observer -> observer.observe el)
+          Went = fun _ el -> observer |> Option.iter (fun observer -> observer.unobserve el) }
 
     /// Every surface put back where its reader was, once the render and everything after it —
     /// the editors mounted, the pane opened, the screens folded — has finished moving them.
@@ -388,7 +383,6 @@ let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) :
                       toEnd el
                       tops.[key] <- el.scrollTop
                       yield el, ReaderMove.Arrived ]
-        observe present
         shown <- model.Readers
         for el, move in moves do
             tell el move

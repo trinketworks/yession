@@ -2385,7 +2385,7 @@ module View =
                     | None, _ -> Lit.nothing
                     | Some _, MoreFailed reason ->
                         html $"""
-                            <div class="{Style.askFoot}" data-repo-picker-foot="failed">
+                            <div class="{Style.askFoot}" data-repo-picker-foot="failed" {HostRole.mark HostRole.ListingFoot Dom.Hooks.repoPickerFoot}>
                               <div class="{Style.askFootLine}">
                                 <span class="{Style.statusErr}" role="status">{reason}</span>
                                 <button type="button" class="{Style.askLink}" data-repo-picker-again
@@ -2394,7 +2394,7 @@ module View =
                             </div>"""
                     | Some _, (MoreIdle | MoreFetching) ->
                         html $"""
-                            <div class="{Style.askFoot}" data-repo-picker-foot="more">
+                            <div class="{Style.askFoot}" data-repo-picker-foot="more" {HostRole.mark HostRole.ListingFoot Dom.Hooks.repoPickerFoot}>
                               <div class="{Style.askFootLine}">
                                 <span class="{Style.caretWorking}" aria-hidden="true"></span>
                                 <span class="{Style.label}" role="status">{Dom.Text.repoPickerMoreComing}</span>
@@ -2529,7 +2529,7 @@ module View =
                             | Some _, _, typed when typed <> "" -> Lit.nothing
                             | Some _, MoreFailed reason, _ ->
                                 html $"""
-                                    <div class="{Style.askFoot}" data-repo-branch-foot="failed">
+                                    <div class="{Style.askFoot}" data-repo-branch-foot="failed" {HostRole.mark HostRole.ListingFoot Dom.Hooks.repoBranchFoot}>
                                       <div class="{Style.askFootLine}">
                                         <span class="{Style.statusErr}" role="status">{reason}</span>
                                         <button type="button" class="{Style.askLink}" data-repo-branch-again
@@ -2538,7 +2538,7 @@ module View =
                                     </div>"""
                             | Some _, (MoreIdle | MoreFetching), _ ->
                                 html $"""
-                                    <div class="{Style.askFoot}" data-repo-branch-foot="more">
+                                    <div class="{Style.askFoot}" data-repo-branch-foot="more" {HostRole.mark HostRole.ListingFoot Dom.Hooks.repoBranchFoot}>
                                       <div class="{Style.askFootLine}">
                                         <span class="{Style.caretWorking}" aria-hidden="true"></span>
                                         <span class="{Style.label}" role="status">{Dom.Text.repoPickerMoreComing}</span>
@@ -4165,7 +4165,7 @@ module View =
         let tail = TailSurface.key TailSurface.Conversation
         html $"""
             <div class="{Style.chatRegion}">
-              <section class="{Style.timeline}" data-conversation data-tail="{tail}" tabindex="-1" @click={Ev(Events.mouse contentOpen)}>{body}</section>
+              <section class="{Style.timeline}" data-conversation data-tail="{tail}" tabindex="-1" @click={Ev(Events.mouse contentOpen)} {HostRole.mark HostRole.Tail tail}>{body}</section>
             </div>"""
 
     /// What a block printed, as TEXT — the cheap read of the same bytes the recording holds,
@@ -4258,7 +4258,7 @@ module View =
     let private replayMount (label: string) (key: string) : TemplateResult =
         html $"""
             <div class="{Style.paneReadonly}" role="region" aria-label="{label}"
-                 data-pane-replay="{key}"></div>"""
+                 data-pane-replay="{key}" {HostRole.mark HostRole.Replay key}></div>"""
 
     /// One block: the command that ran, then everything it printed.
     ///
@@ -4589,7 +4589,8 @@ module View =
             // lease to belong to yet.
             html $"""
                 <div class="{Style.terminalScreen}" data-terminal-screen="{id}" data-tail="{tail}"
-                     role="region" aria-live="off" aria-label="Live terminal, nobody is typing">{body}</div>"""
+                     role="region" aria-live="off" aria-label="Live terminal, nobody is typing"
+                     {HostRole.mark HostRole.Tail tail} {HostRole.mark HostRole.Viewport id}>{body}</div>"""
         | Some holder ->
 
         if ClientModel.typesInto terminal model then
@@ -4613,7 +4614,8 @@ module View =
             html $"""
                 <div class="{Style.terminalScreen}" data-terminal-screen="{id}" data-tail="{tail}"
                      role="region" aria-live="off" aria-label="Live terminal, you are typing here"
-                     @click={Ev(keysOnPress dispatch terminal)}>{body}<textarea class="{Style.terminalKeys}" data-terminal-keys="{id}"
+                     @click={Ev(keysOnPress dispatch terminal)}
+                     {HostRole.mark HostRole.Tail tail} {HostRole.mark HostRole.Viewport id}>{body}<textarea class="{Style.terminalKeys}" data-terminal-keys="{id}"
                        aria-label="Type into the terminal" rows="1" wrap="off" inputmode="text" enterkeyhint="enter"
                        autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"
                        @keydown={Ev(Events.key (fun key ->
@@ -4634,7 +4636,8 @@ module View =
         else
             html $"""
                 <div class="{Style.terminalScreen}" data-terminal-screen="{id}" data-tail="{tail}"
-                     role="region" aria-live="off" aria-label="Live terminal, {Entity.actorName (ClientModel.people model) holder} is typing">{body}</div>"""
+                     role="region" aria-live="off" aria-label="Live terminal, {Entity.actorName (ClientModel.people model) holder} is typing"
+                     {HostRole.mark HostRole.Tail tail} {HostRole.mark HostRole.Viewport id}>{body}</div>"""
 
     /// The terminal composer: your command line, and everyone else's as they type them.
     let private terminalComposer (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) (terminal: TerminalId) : TemplateResult =
@@ -5875,7 +5878,9 @@ module View =
                         <div class="{Style.terminalTailRegion}">
                           <div class="{Style.terminalScrollback}" data-terminal-scrollback
                                data-terminal-id="{TerminalId.value view.TerminalId}"
-                               data-tail="{TailSurface.key (TailSurface.Blocks view.TerminalId)}">
+                               data-tail="{TailSurface.key (TailSurface.Blocks view.TerminalId)}"
+                               {HostRole.mark HostRole.Tail (TailSurface.key (TailSurface.Blocks view.TerminalId))}
+                               {HostRole.mark HostRole.Viewport (TerminalId.value view.TerminalId)}>
                             <div class="{Style.terminalStream}" data-tail-entries>
                               {truncated}
                               {blocks}
@@ -6019,7 +6024,7 @@ module View =
                 <div class="{Style.panePivotRow}">
                   {listButton}
                   <div class="{Style.panePivotList}" role="tablist" aria-label="{Dom.Text.paneItems}" data-pane-pivot>
-                    <div class="{Style.panePivotScroller}" data-pane-strip>
+                    <div class="{Style.panePivotScroller}" data-pane-strip {HostRole.mark HostRole.PaneStrip ""}>
                       {strip}
                     </div>
                   </div>

@@ -706,15 +706,15 @@ let create (deps: Deps) : Renderer =
         { Came = fun key el -> follow el key (setTextContent (el :?> Browser.Types.HTMLElement))
           Went = fun _ el -> unfollow el }
 
-    let replays = PaneReplays.create dispatch
+    let replays = PaneReplays.create hosts dispatch
 
     /// The live screens (Plan 14, stage 6): one emulator per terminal this client has a
     /// snapshot for, folded forward from the records the model already holds — and the
     /// size of each terminal's box, measured into the model (which decides what reaches a pty).
-    let screens = Screens.create dispatch (fun () -> latest)
+    let screens = Screens.create hosts dispatch (fun () -> latest)
     // The tail rule's document half (`Tail`): it reads the reader's intent off the model each
     // render hands it, and tells the model what the reader did.
-    let tail = Tail.create dispatch (fun () -> latest)
+    let tail = Tail.create hosts dispatch (fun () -> latest)
 
     // The publication rule, one subscription per open terminal. Started when a terminal
     // appears and stopped when it goes, so a closed terminal's rule cannot republish a
@@ -885,8 +885,15 @@ let create (deps: Deps) : Renderer =
     // Each foot is watched inside ITS OWN pane's scroller: the panes scroll independently, so
     // a watch rooted in the other one would be asking whether the foot is visible in a box it
     // is not in.
+    //
+    // The feet register themselves under their hook as lit draws them (`HostRole.ListingFoot`),
+    // and each one's scroller is the one it is IN: asked up from the foot, never of the page.
+    // Asked here, after the render, because a foot registers before lit has put it in the page.
     let watchFoot (rootHook: string) (hook: string) (wanted: unit -> unit) =
-        let foot = Scan.one ("[" + hook + "]") |> Option.toObj
+        let foot =
+            hosts.In HostRole.ListingFoot
+            |> List.tryPick (fun (el, key) -> if key = hook then Some el else None)
+            |> Option.toObj
         if not (obj.ReferenceEquals (box foot, feetSeen |> Map.tryFind hook |> Option.defaultValue null)) then
             feetWatched |> Map.tryFind hook |> Option.iter (fun watch -> watch.disconnect ())
             feetWatched <- feetWatched |> Map.remove hook
@@ -896,10 +903,7 @@ let create (deps: Deps) : Renderer =
                     feetWatched
                     |> Map.add
                         hook
-                        (watchListingFoot
-                            (Scan.one ("[" + rootHook + "]") |> Option.toObj)
-                            foot
-                            wanted)
+                        (watchListingFoot (foot.closest ("[" + rootHook + "]") |> Option.toObj) foot wanted)
     let syncListingFoot () =
         // Every sighting is sent: whether it asks for a page is the reducer's rule
         // (`Launch.wanting`), and the watcher fires many times for one scroll.
@@ -1035,7 +1039,7 @@ let create (deps: Deps) : Renderer =
         // The strip's selected tab in view when the selection moved — read off the DOM rather
         // than the model, so a tab a collaborator's `TabOpened` selected is covered too — and
         // its fade on whichever ends have tabs past them.
-        PaneShell.syncStrip ()
+        PaneShell.syncStrip (hosts.In HostRole.PaneStrip |> List.map (fun (el, _) -> el :?> Browser.Types.HTMLElement))
         let tPane = stamp measuring
         // Keep a slot rule running for every open terminal: a person may be mid-command
         // in more than one, and each slot follows its own command line.

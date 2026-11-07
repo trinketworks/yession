@@ -1676,14 +1676,16 @@ let tests =
         // so the walk visits every node and cannot stop early. Measured on a session of 20,650
         // events (54k nodes, twelve terminals open): 616 of those scans costing 5.3 seconds, a
         // third of all the CPU a cold open spent, and 20s before the page stopped changing on
-        // a phone-speed CPU. One scan that finds them all costs 10s.
+        // a phone-speed CPU. One scan that finds them all costs 10s, and every other pass
+        // after the render had one of its own.
         //
-        // What this pins is the SHAPE — whole-document scans per render, a fixed number of
-        // passes each asking once however many terminals are open, where that pass asked once
-        // per terminal — and deliberately not a duration: a millisecond budget on a shared runner
-        // is the flaky test this repository warns about, while a count is the same number on
-        // every box. Every whole-document question goes through one counted door (`Scan` in
-        // app/browser), and the render publishes the ones IT asked (`Probes.scans`).
+        // None of them asks now: what a pass works on registers itself as lit draws it
+        // (`app/browser/Hosts.fs`). What this pins is that — a render asks the whole document
+        // NOTHING, however many terminals are open — and deliberately not a duration: a
+        // millisecond budget on a shared runner is the flaky test this repository warns about,
+        // while a count is the same number on every box. Every whole-document question goes
+        // through one counted door (`Scan` in app/browser), and the render publishes the ones
+        // IT asked (`Probes.scans`), zero included, after every render.
         //
         // Both counts are per DOCUMENT, so the reload is what makes them comparable: a fresh
         // document starts them at zero and a reopen is a burst of renders worth measuring.
@@ -1692,7 +1694,7 @@ let tests =
         // box that cannot host one no terminal ever appears, and untagged this would fail at once,
         // quoting the sandbox's reason, rather than skip.
         Tag.needs "measuring several terminals" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
-        sessionCase "a render looks at the whole document the same number of times, however many terminals are open" <|
+        sessionCase "a render asks the whole document nothing, however many terminals are open" <|
             fun page ->
             async {
                 let opened = 4
@@ -1720,11 +1722,12 @@ let tests =
                         "the page reports %d renders — `app/browser/Render.fs` publishes \
                          `Probes.renders` and this budget means nothing without it"
                         renders
-                if scans <= 0 then
-                    failwithf
-                        "the page reports %d scans by its renders — `app/browser/Render.fs` publishes \
-                         `Probes.scans` and this budget means nothing without it"
-                        scans
+                // A count the render stopped publishing reads -1: a page that rendered
+                // publishes one after every render, zero included.
+                if scans < 0 then
+                    failwith
+                        "the page reports no count of its renders' scans — `app/browser/Render.fs` \
+                         publishes `Probes.scans` after every render and this means nothing without it"
                 if not settled.Still then
                     failwithf
                         "the reopened session was still rendering after 30s (%d renders, %d scans)"
@@ -1732,20 +1735,12 @@ let tests =
                 let perRender = float scans / float renders
                 printfn "  reopen with %d terminals open: %d scans over %d renders — %.2f per render"
                         opened scans renders perRender
-                // Seven passes after the commit each ask the document once (the tail's read and
-                // its restore, the players, the screens, the strip, the two listing feet), and
-                // the rare pass looks again (a recording that changed under its player, a
-                // listing foot that came or went). The editors and the command lines ask
-                // nothing: their elements register themselves (`Hosts`). The line sits at nine:
-                // over that, and under the eleven that one pass asking once per terminal would
-                // cost with the FOUR this case opens.
-                let budget = 9.0
-                if perRender > budget then
+                if scans > 0 then
                     failwithf
                         "a render asked the whole document %.2f times with %d terminals open (%d scans over \
-                         %d renders); the budget is %.1f. A pass after the render finds what it works on \
-                         ONCE — see `Scan` and `Render.fs` in app/browser."
-                        perRender opened scans renders budget
+                         %d renders); a render asks it nothing. A pass after the render works on the \
+                         elements registered with it — see `Hosts` and `Render.fs` in app/browser."
+                        perRender opened scans renders
             })
 
         // A command line belongs to ONE terminal. The domain says so — a draft is keyed by
