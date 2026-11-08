@@ -1224,22 +1224,13 @@ let private composerTests =
             Expect.equal (ClientModel.editingQueue closed) None "editing is done"
             Expect.equal (ClientModel.composerTarget closed) ada "Done lands on a new message, not back on grace's draft"
 
-        testCase "opening a queued message clears whatever delete was armed before it" <| fun () ->
+        testCase "deleting the queued message open for editing closes the edit" <| fun () ->
             let a = QueueId.create "q-a" |> expect
-            let b = QueueId.create "q-b" |> expect
             let model =
-                { mine with
-                    Synced =
-                        { mine.Synced with
-                            Queue =
-                                Map.ofList
-                                    [ a, { QueueId = a; Author = ada; Order = 1.0 }
-                                      b, { QueueId = b; Author = ada; Order = 2.0 } ] } }
+                { mine with Synced = { mine.Synced with Queue = Map.ofList [ a, { QueueId = a; Author = ada; Order = 1.0 } ] } }
                 |> Support.step (OpenQueueEditMsg a)
-                |> Support.step (ArmQueueDeleteMsg (Some a))
-            Expect.equal model.QueueDeleteArmed (Some a) "armed on the one open for editing"
-            let switched = Support.step (OpenQueueEditMsg b) model
-            Expect.equal switched.QueueDeleteArmed None "a freshly opened entry does not inherit the old arm"
+                |> Support.step (DeleteQueuedMsg a)
+            Expect.equal (ClientModel.editingQueue model) None "the entry is gone, so nothing is being edited"
 
         testCase "a draft that is sent or discarded stops being the composer" <| fun () ->
             let joined = Support.step (ExpandDraftMsg grace) (mine |> withDrafts [ grace ])

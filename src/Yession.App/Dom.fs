@@ -517,7 +517,7 @@ module Dom =
         /// A surface put away, as its line in the dock's band, carrying its surface id.
         let surfaceFolded = "data-surface-folded"
         /// The app's own control that takes a surface down unanswered for everyone, on every
-        /// put-away surface's line; `data-surface-dismiss-armed` says a second press does it.
+        /// put-away surface's line, in one press.
         let surfaceDismiss = "data-surface-dismiss"
         /// The call's outcome, in the SAME tokens a block's status uses (`running` / `ok` /
         /// `failed`) rather than a parallel vocabulary meaning the same three things.

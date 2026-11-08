@@ -2143,17 +2143,6 @@ type ClientModel =
       /// says. Borrowing the key would make a break the fourth kind of fold and the doc
       /// comment on `FoldKey` a lie.
       DatedBreaks   : Set<MessageId>
-      /// Which queued entry's delete is ARMED — one press from gone, waiting on a second
-      /// press to confirm it (`ArmQueueDeleteMsg`). View state, local and transient for the
-      /// same reason `Copied` below is: an unconfirmed press is one person's moment, not a
-      /// fact the room needs to agree on.
-      ///
-      /// ONE slot rather than a set, same rule as `ItemMenu`: arming a second entry disarms
-      /// whatever was armed before it, so at most one delete in the queue is ever a press
-      /// away from happening. Taken back on its own after `armedMs`
-      /// (`ClientModel.timers`) — an arm nobody confirms must not stay armed forever, the way
-      /// a menu left open or a copy's confirmation left showing would be wrong too.
-      QueueDeleteArmed : QueueId option
       /// The one queued message open for editing, if any — moved there out of the band's own
       /// list and into the composer (`View.drafts`), the same slot a draft composes in. Local
       /// view state, same reason `Composer` is: which entry a tap opened is this client's own
@@ -2491,19 +2480,7 @@ type ClientMsg =
     | ReorderQueuedMsg of QueueId * order: float
     /// Delete a queued message. Until consumed, deletion wins: a deleted entry never
     /// becomes an event.
-    ///
-    /// Dispatched by the view only on a SECOND press, once the entry is already
-    /// `QueueDeleteArmed` — the first press sends `ArmQueueDeleteMsg` instead. This message
-    /// itself still deletes unconditionally, the way it always has: the two-press rule is a
-    /// property of the click handler, not of the delete, so nothing here changes for a test
-    /// (or a race) that dispatches it directly.
     | DeleteQueuedMsg of QueueId
-    /// Arm (`Some`) or take back the arming (`None`) of a queued entry's delete — the
-    /// confirm-before-destroy a mis-tap next to reorder needs, and did not have. `Some`
-    /// replaces whatever was armed before it, the one-slot rule `ItemMenu` already uses;
-    /// `None` is sent back by the entry's own wait (`armedMs`) when nobody
-    /// confirms it, the same shape as `CopiedMsg`'s expiry.
-    | ArmQueueDeleteMsg of QueueId option
     /// Open this queued message for editing: it moves out of the band's list and into the
     /// composer (`View.drafts`), the same slot a draft composes in, same escape as
     /// `ExpandDraftMsg`'s — opening one collapses whatever was open. Local view state.
@@ -3258,7 +3235,6 @@ module ClientModel =
           Asked = Map.empty
           OpenFolds = Set.empty
           DatedBreaks = Set.empty
-          QueueDeleteArmed = None
           EditingQueue = None
           QueueShown = Set.empty
           Copied = None
@@ -5214,14 +5190,6 @@ module ClientModel =
     /// enough that the code it stands in front of comes back before anybody needs it again.
     let copiedShownMs = 1500
 
-    /// How long an armed destructive press — a queue delete, a terminal's kill — stays armed
-    /// waiting for the confirming one. Shared, because the two are one gesture and a reader
-    /// who learns its rhythm on one should not find a different clock on the other. Long enough
-    /// that the second press is the same gesture as the first — a deliberate double-tap,
-    /// not a race against a clock — short enough that a row left alone settles back to
-    /// "editable", not "one press from gone", by the time anyone returns to it.
-    let armedMs = 2000
-
     /// A message's stamp, while it is one the agent is still writing and has said something in.
     /// Nothing is a stamp before the first word: an empty body already reads as thinking, and
     /// has no quiet to wait for.
@@ -5309,13 +5277,6 @@ module ClientModel =
             | Some copy ->
                 [ { Key = [ "copied"; copy.Box; string copy.Nth ]; After = copiedShownMs; Fire = CopiedMsg None } ]
             | None -> []
-        let queueDeleteArmed =
-            match model.QueueDeleteArmed with
-            | Some queueId ->
-                [ { Key = [ "queue-delete-armed"; QueueId.value queueId ]
-                    After = armedMs
-                    Fire = ArmQueueDeleteMsg None } ]
-            | None -> []
         // One wait per entry still in the doc and not yet shown, on the same clock as
         // `effort`'s `catchUpQuietMs` — the cause is the one it already names (a send one
         // round trip behind itself). An id already shown needs no more waiting for, and one
@@ -5340,7 +5301,7 @@ module ClientModel =
                           After = int Pending.deadlineMillis
                           Fire = PendingWaitedMsg (since + Pending.deadlineMillis) }
                 | Pending.Ready | Pending.Sending | Pending.Refused _ -> None)
-        effort @ waited @ dwell @ copied @ queueDeleteArmed @ queueShown @ pending @ quiet @ GitHubPoll.timer model.GitHub
+        effort @ waited @ dwell @ copied @ queueShown @ pending @ quiet @ GitHubPoll.timer model.GitHub
 
     /// Fold a message into the model — the state half of `update`, its only caller.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
@@ -5804,23 +5765,15 @@ module ClientModel =
                     { model.Synced with Queue = Map.add queueId { entry with Order = order } model.Synced.Queue }
             | None -> model
         | DeleteQueuedMsg queueId ->
-            // The armed slot dies with the entry it was guarding either way — a confirmed
-            // press consumes it, and a direct dispatch (a test, a race) finds the entry gone
-            // and nothing left for the armed id to mean.
-            let model = if model.QueueDeleteArmed = Some queueId then { model with QueueDeleteArmed = None } else model
             model |> withSynced { model.Synced with Queue = Map.remove queueId model.Synced.Queue }
-        | ArmQueueDeleteMsg next ->
-            { model with QueueDeleteArmed = next }
         | OpenQueueEditMsg queueId ->
-            // A fresh arm from whatever was open before this one does not carry over onto an
-            // entry it was never pressed on.
-            { model with EditingQueue = Some queueId; QueueDeleteArmed = None }
+            { model with EditingQueue = Some queueId }
         | CloseQueueEditMsg ->
             // Back to the local peer's own "new message" composer always, not whatever draft
             // was open before the edit — the word on the control that gets here is "Done",
             // never "back", and a person who finished editing a queued message is not asking
             // to resume somebody else's half-written draft.
-            { model with EditingQueue = None; QueueDeleteArmed = None; Composer = Own }
+            { model with EditingQueue = None; Composer = Own }
         | QueueShownMsg queueId ->
             { model with QueueShown = Set.add queueId model.QueueShown }
         | ClaudeStatusMsg status ->
