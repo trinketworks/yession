@@ -3930,13 +3930,17 @@ module Style =
     /// question on a phone on its side (844x390) took the whole column and pushed the
     /// conversation and the composer off screen. It stands in the ask slot's stack
     /// (`View.askSlot`) when it is the ask in front; the cap is a share of the shell's own
-    /// height (`--visual-h`, see `shell`), which already accounts for the iOS keyboard.
+    /// height, which already accounts for the iOS keyboard (see `app`), asked for as a
+    /// container query unit: the shell is the nearest size container above the slot
+    /// (`chatRegion` is one too, but stands beside the slot, not over it), and `50cqh` is
+    /// half its height. Not `var(--visual-h)`: the shell holds that as a property that does
+    /// not inherit, for the reason `app` gives, so nothing under it can read it.
     ///
     /// It rises in as the card does, growing its cap from nothing (`animate-surface-rise`), so
     /// the conversation gives way over a beat rather than jumping by the surface's height.
     let agentSurface =
         cls [ "relative shrink-0 flex flex-col bg-surface overflow-hidden"; askColumn
-              "max-h-[calc(var(--visual-h,100dvh)/2)]"
+              "max-h-[50cqh]"
               "animate-surface-rise motion-reduce:animate-none"; Stroke.dividerTop ]
     /// The card's lead, for the card's reason: it spans the band rather than the scrollport,
     /// so it stays put while a long surface scrolls.
@@ -5519,8 +5523,19 @@ module Style =
     /// (`--shell-position` says fixed). Unset, as before the script runs and on every page that
     /// does not run it, they are relative, `100dvh` and 0: the same box as before, in flow, so a
     /// page that mounts several (the fixtures harness) stacks them rather than piling them up.
+    ///
+    /// The three are set on the shell itself and registered as NOT inherited (app/tailwind.css,
+    /// `@property`), because WebKit answers a change to an inherited custom property by
+    /// recomputing the style of everything under the element it changed on: on `<html>`, every
+    /// keyboard open or close recomputed the whole page, 47ms of a 65ms resize at a thousand
+    /// items on desktop WebKit, for a value only this box reads. A box inside the shell that
+    /// needs the shell's height asks for it in container query units instead, which is why the
+    /// shell is a size container (`agentSurface` caps itself at `50cqh`). Size containment
+    /// costs it nothing — its height is explicit and its width is the page's — and the layout
+    /// containment that comes with it holds its fixed descendants (the drawers, the scrims) to
+    /// a box that is the viewport anyway.
     let app =
-        "[position:var(--shell-position,relative)] inset-x-0 top-[var(--visual-top,0px)] flex h-[var(--visual-h,100dvh)] overflow-hidden bg-bg text-ink font-ui antialiased"
+        "[position:var(--shell-position,relative)] inset-x-0 top-[var(--visual-top,0px)] flex h-[var(--visual-h,100dvh)] [container-type:size] overflow-hidden bg-bg text-ink font-ui antialiased"
 
     /// The same ground and face as `app`, on a page that is a DOCUMENT rather than a shell: the
     /// Manager's standalone pages (`/open` while a session launches, a refusal with a way

@@ -6,6 +6,19 @@
 @import "tailwindcss";
 @import "./tokens.css";
 
+/* The shell's geometry (`Style.app`): `PaneShell.followVisualViewport` sets these on the shell
+   to fit it to the visual viewport, and they must NOT inherit. A custom property inherits by
+   default, and WebKit answers a change to an inherited one by recomputing the style of every
+   element under it — the whole page, from `<html>`, on every keyboard open or close: 47ms of
+   a 65ms resize at a thousand items — though only the shell reads them. Not inherited, the
+   change costs the shell's own style and the layout that follows. `syntax: "*"` with no
+   initial value keeps an unset one guaranteed-invalid, so the `var()` fallbacks in `Style.app`
+   still apply on a page the script never runs on. A box under the shell that needs its height
+   asks in container query units (`Style.agentSurface`). */
+@property --visual-h { syntax: "*"; inherits: false; }
+@property --visual-top { syntax: "*"; inherits: false; }
+@property --shell-position { syntax: "*"; inherits: false; }
+
 /* The asciinema player's own stylesheet is NOT here: it is `app/player.css`, built beside this
    one and linked inert in the shell until a replay is mounted. It is 16KB that most sessions
    never render, and this sheet is render-blocking.

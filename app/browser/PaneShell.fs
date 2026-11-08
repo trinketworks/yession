@@ -352,13 +352,19 @@ let watchBreakpoint (changed: bool -> unit) : unit =
 ///
 /// Not while pinch-zoomed: then the visual viewport is a magnified part of the page, and a
 /// shell resized to it would re-lay out under the reader's fingers.
-let followVisualViewport () : unit =
-    let root = document.documentElement
-    setStyleProperty root "--shell-position" "fixed"
+///
+/// Set ON THE SHELL, and registered as not inherited (app/tailwind.css, `@property`). They
+/// were set on `<html>`, and a custom property inherits by default, so WebKit answered every
+/// change — each keyboard opening or closing — by recomputing the style of every element on
+/// the page: 47ms of the 65ms a keyboard cost at a thousand items (8,300 nodes, desktop
+/// WebKit; a phone is slower), for a value only the shell reads. On the shell and not
+/// inherited, a change costs the shell's own style and the layout that follows (20ms there).
+let followVisualViewport (shell: HTMLElement) : unit =
+    setStyleProperty shell "--shell-position" "fixed"
     let fit () =
         if Viewport.visualScale () <= 1.0 then
-            setStyleProperty root "--visual-h" (sprintf "%fpx" (Viewport.visualHeight ()))
-            setStyleProperty root "--visual-top" (sprintf "%fpx" (Viewport.visualOffsetTop ()))
+            setStyleProperty shell "--visual-h" (sprintf "%fpx" (Viewport.visualHeight ()))
+            setStyleProperty shell "--visual-top" (sprintf "%fpx" (Viewport.visualOffsetTop ()))
     fit ()
     Viewport.onVisualChange fit
 
