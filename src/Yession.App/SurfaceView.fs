@@ -92,7 +92,7 @@ module SurfaceView =
     /// An answer on the record that the agent has not finished acting on
     /// (`ClientModel.SurfaceAnswers`): who gave it, as this reader names them, and the button
     /// they pressed. Everyone's, unlike `Sending`, because everyone reads it off the log.
-    type Answered = { By : string; ByMark : string; Component : string }
+    type Answered = { By : string; ByPortrait : Entity.Portrait; Component : string }
 
     /// What one surface's components draw against.
     type private Canvas =
@@ -410,14 +410,18 @@ module SurfaceView =
                 match waiting with
                 | Some _ -> Lit.nothing
                 | None -> html $"""<div class="{Style.surfaceLeadBar}" aria-hidden="true"></div>"""
+            // Both halves wear one picture at one size, so the two lines a phone breaks this
+            // into start at the same place.
             let awaiting =
                 match waiting with
                 | Some a ->
+                    let who = Entity.picture Style.avatarSm a.ByPortrait
+                    let agent = Entity.picture Style.avatarSm (Entity.Portrait.AgentAtWork surfaceId)
                     Some (html $"""
                         <p class="{Style.surfaceAwaiting}" role="status" data-surface-answered>
-                          <span class="{Style.surfaceAwaitingWho}"><span class="{Style.cls [ Style.avatarSm; a.ByMark ]}" aria-hidden="true"></span><span class="{Style.who}">{a.By}</span>{Dom.Text.surfaceAnsweredWord}</span>
+                          <span class="{Style.surfaceAwaitingWho}">{who}<span class="{Style.who}">{a.By}</span>{Dom.Text.surfaceAnsweredWord}</span>
                           <span class="{Style.surfaceAwaitingDot}" aria-hidden="true">·</span>
-                          <span class="{Style.surfaceAwaitingAgent}"><span class="{Style.agentThinking}" style="{Style.thinkFrom surfaceId}" aria-hidden="true">{Icon.cube}</span><span class="{Style.srOnly}">{Dom.Text.surfaceAwaitingAgentSr}</span>{Dom.Text.surfaceAwaitingAgent}</span>
+                          <span class="{Style.surfaceAwaitingAgent}">{agent}<span class="{Style.srOnly}">{Dom.Text.surfaceAwaitingAgentSr}</span>{Dom.Text.surfaceAwaitingAgent}</span>
                         </p>""")
                 | None -> None
             let actions =

@@ -1343,6 +1343,11 @@ module Style =
     let agentAvatarSm =
         "bg-agent-ground grid place-items-center after:content-[''] after:w-1.5 after:h-1.5 after:bg-agent after:rotate-45"
 
+    /// The agent's picture while it works (`Entity.Portrait.AgentAtWork`): `agentAvatar`'s own
+    /// square, holding the turning cube (`agentThinkingSeat`) where the diamond stands — so
+    /// the agent at work is the agent's square, the size of anybody's beside it.
+    let agentAvatarWorking = "bg-agent-ground grid place-items-center"
+
     /// A thing's mark — the session, the system, a repo's file: the agent's shape with the
     /// colour taken out. A dark square holding a small grey SQUARE, upright where the agent's
     /// is turned, so the two read as kin and never as each other, and grey because a colour
@@ -2744,6 +2749,11 @@ module Style =
     /// used to draw, `markRun`, is retired with it). `block`, not inline: there is no baseline
     /// to sit on here.
     let attentionCube = agentThinking + " agent-think-mark block shrink-0"
+
+    /// The same cube in the agent's picture (`agentAvatarWorking`): sized as the diamond the
+    /// still picture holds (`.agent-think-seat` in app/tailwind.css), so starting and stopping
+    /// work turns the diamond into the cube and back without the mark changing size.
+    let agentThinkingSeat = agentThinking + " agent-think-seat"
 
     /// How many slots the thinking series has and how long each lasts — `think-tip` in
     /// `app/tailwind.css` is ten moves of two seconds. Kept beside `thinkFrom`, the one place

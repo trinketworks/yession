@@ -632,6 +632,15 @@ summary::-webkit-details-marker { display: none; }
   --think-unit: 12px;
   display: block;
 }
+/* The agent at work in its picture (`Entity.Portrait.AgentAtWork`): the cube where
+   `Style.agentAvatar`'s diamond stands, at the diamond's size. The diamond is an 8px square
+   turned 45°, and the cube's unit is the diagonal of the face it shows from above, so the unit
+   is that square's diagonal: the still picture's diamond is the working cube's first frame.
+   The diamond is a fixed size in every square, so this is too. */
+.agent-think-seat {
+  --think-unit: calc(0.5rem * 1.41421356);
+  display: block;
+}
 .agent-think-tip {
   position: absolute;
   left: 50%;
