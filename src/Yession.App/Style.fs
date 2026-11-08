@@ -2351,7 +2351,7 @@ module Style =
         + focusRingInset
 
     /// The box around `timeline`, the scroller. Nothing floats over it any more: the way back
-    /// to the latest message stands in the composer's tray (`composerTray`), below the words
+    /// to the latest message stands in the conversation's tray (`composerTray`), below the words
     /// rather than on them.
     ///
     /// It is the SIZE CONTAINER the room rule reads (`room-for-items`), because this box is
@@ -3755,6 +3755,9 @@ module Style =
     /// through it. The trailing edge is the composer's gutter (`px-4`), so the jump's arrow
     /// ends on Send's. 44px on a phone, a thumb's target; one control high elsewhere.
     ///
+    /// It always stands, empty at rest: its height is reserved so a "latest", "running" or
+    /// interrupt arriving moves nothing. Excess room, never a covered line.
+    ///
     /// It ARRIVES rather than appears: drawn first (`starting:`) a touch low and clear, it
     /// rises onto the composer's rule and fades in, on the pace every arrival here takes
     /// (`Motion.pace`) — out from behind the composer, which is later in the document and
@@ -3776,11 +3779,12 @@ module Style =
     /// (docs/visual-design.md, Phone and wide) — and it is not one inset but a family, every
     /// full-bleed `-mx-4` in the conversation measured against it. The two answers have to
     /// agree, so this one follows the column rather than asking the shell's question beside
-    /// it. On a wide screen the strip stands in the dock (`dock`), whose edge is already the
-    /// ground's edge a message stands on, so the gutter there is no padding at all: the mark
+    /// it. On a wide screen the strip stands in the dock's own column (`askColumn`), whose edge is
+    /// already the ground's edge a message stands on, so the gutter there is no padding at all: the mark
     /// takes the avatars' column at the edge and the word lands on the rail after it.
     let composerTray =
         cls [ "shrink-0 flex items-center h-8 phone:h-touch pl-8 pr-4 max-md:pl-4 wide:pl-0 wide:pr-rail bg-panel"
+              askColumn
               "transition-[translate,opacity] starting:translate-y-1 starting:opacity-0"; Motion.pace ]
 
     /// The label voice (`caps`), not Send's step up: these are controls for the timeline
@@ -3831,8 +3835,9 @@ module Style =
     // from the ground by their tone. They used to be lead-edged cards inside a padded strip —
     // a third rectangle vocabulary two centimetres from the band that already had the answer.
 
-    /// The dock itself: the queue, the tray and the composer, held as one block so one rule
-    /// sets all three edges.
+    /// The dock itself: the folded surfaces, the queue and the composer, held as one block so
+    /// one rule sets their edges. The tray (`composerTray`) stands above it, under the
+    /// conversation, in the same column.
     ///
     /// On a phone it runs edge to edge, as every ground in the conversation above it does.
     /// On a wide screen it stands where a message's ground does: one rail in from the column
