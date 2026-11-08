@@ -574,7 +574,7 @@ module View =
                     if ClientModel.claudeNeedsSignIn model then
                         html $"""<button type="button" class="{Style.cls [ Style.btnBare; Style.rosterVerb ]}" data-agent-sign-in @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>{Dom.Text.signInAgainStatus}</button>"""
                     else Lit.nothing
-                html $"""<div class="{Style.person}" data-agent-presence="live"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]}"></span>agent{verb}</div>"""
+                html $"""<div class="{Style.person}" data-agent-presence="live">{Entity.actorPicture (ClientModel.people model) (Style.cls [ Style.avatar; Style.personAvatar ]) ActorRef.Agent}agent{verb}</div>"""
             // One roster row, like the live one: the dimmed avatar says nobody is here, and the
             // bare verb at the right says what to do about it. It used to hang a full-width
             // bordered button under the row with a rule beside it, which took the roster's
@@ -611,14 +611,14 @@ module View =
                     | None -> html $""""""
                 html $"""
                     <div class="{Style.person}" data-peer-presence="{ActorRef.token who}">
-                      <span class="{Style.cls [ Style.avatar; Entity.actorMark (ClientModel.people model) who; Style.personAvatar ]}"></span>
+                      {Entity.actorPicture (ClientModel.people model) (Style.cls [ Style.avatar; Style.personAvatar ]) who}
                       <span class="{Style.givesWay}">{name}</span>
                       {slot}
                     </div>""")
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.navLane1 ]}">
               <span class="{Style.label}">in this session</span>
-              <div class="{Style.person}"><span class="{Style.cls [ Style.avatar; Entity.actorMark (ClientModel.people model) (PeerRef model.Peer.PeerId); Style.personAvatar ]}"></span><span class="truncate" data-display-name>{model.Peer.DisplayName}</span><span class="{Style.personYou}">you</span></div>
+              <div class="{Style.person}">{Entity.actorPicture (ClientModel.people model) (Style.cls [ Style.avatar; Style.personAvatar ]) (PeerRef model.Peer.PeerId)}<span class="truncate" data-display-name>{model.Peer.DisplayName}</span><span class="{Style.personYou}">you</span></div>
               {peerRows}
               {agentRow}
             </section>"""
@@ -1545,7 +1545,7 @@ module View =
             <article class="{Style.queueItem}" data-surface-folded="{surfaceId}">
               <button type="button" class="{Style.queueSummary}" aria-label="{Dom.Text.surfaceUnfoldLabel}"
                       @click={Ev(fun _ -> dispatch (UnfoldSurfaceMsg surfaceId))}>
-                <span class="{Style.cls [ Style.avatarSm; Entity.actorMark (ClientModel.people model) ActorRef.Agent ]}"></span>
+                {Entity.actorPicture (ClientModel.people model) Style.avatarSm ActorRef.Agent}
                 <span class="{Style.queueSummaryBody}">{title}</span>
               </button>
               <div class="{Style.queueTools}">
@@ -1592,7 +1592,7 @@ module View =
                     html $"""
                         <article class="{Style.queueItem}" data-queue-id="{QueueId.value id}" data-queue-author="{PeerId.value entry.Author}" data-queue-order="{string entry.Order}">
                           <button type="button" class="{Style.queueSummary}" aria-label="Edit queued message" data-queue-summary="{QueueId.value id}" data-queue-open="{QueueId.value id}" @click={Ev(fun _ -> dispatch (OpenQueueEditMsg id))}>
-                            <span class="{Style.cls [ Style.avatarSm; Entity.actorMark (ClientModel.people model) (PeerRef entry.Author) ]}"></span>
+                            {Entity.actorPicture (ClientModel.people model) Style.avatarSm (PeerRef entry.Author)}
                             <span class="{Style.queueSummaryBody}" data-rich-body="{BodyKey.queued id}" data-rich-readonly="true" {HostRole.mark HostRole.RichBody (BodyKey.queued id)}></span>
                           </button>
                           <div class="{Style.queueTools}">
@@ -1799,7 +1799,7 @@ module View =
                 <button type="button" class="{Style.draftSummary}" style="border-left-color:{Entity.presenceColour (ClientModel.people model) (ActorRef.PeerRef peerId)}"
                         data-draft-summary="{PeerId.value peerId}"
                         data-draft-expand="{PeerId.value peerId}" @click={Ev(fun _ -> dispatch (ExpandDraftMsg peerId))}>
-                  <span class="{Style.cls [ Style.avatarSm; Entity.actorMark (ClientModel.people model) (PeerRef peerId) ]}"></span>
+                  {Entity.actorPicture (ClientModel.people model) Style.avatarSm (PeerRef peerId)}
                   <span class="{Style.draftSummaryName}">{ClientModel.nameOf peerId model}</span>
                   <span class="{Style.draftSummaryBody}" data-rich-body="{BodyKey.draft peerId}" data-rich-readonly="true" {HostRole.mark HostRole.RichBody (BodyKey.draft peerId)}></span>
                   <span class="{Style.draftEditors}">{editors peerId}</span>
@@ -2785,7 +2785,7 @@ module View =
                             |> Option.map (fun awaited ->
                                 let by = Principal.toActor awaited.Answer.By
                                 { SurfaceView.Answered.By = Entity.actorName (ClientModel.people model) by
-                                  SurfaceView.Answered.ByMark = Entity.actorMark (ClientModel.people model) by
+                                  SurfaceView.Answered.ByPortrait = Entity.portrait (ClientModel.people model) by
                                   SurfaceView.Answered.Component = awaited.Answer.Component })
                         SurfaceView.view dispatch (model.Asked |> Map.toList |> List.map snd) answered surfaceId surface
                     | None -> Lit.nothing
@@ -2802,7 +2802,7 @@ module View =
     let private actorHead (model: ClientModel) (square: string) (actor: ActorRef) : TemplateResult =
         let whoClass = if actor = ActorRef.Agent then Style.whoAgent else Style.who
         html $"""
-            <span class="{Style.cls [ square; Entity.actorMark (ClientModel.people model) actor ]}"></span>
+            {Entity.actorPicture (ClientModel.people model) square actor}
             <span class="{whoClass}">{Entity.actorName (ClientModel.people model) actor}</span>"""
 
     /// Everything one row of the timeline reads to be drawn (`timelineEntry`): the row, and
@@ -4538,7 +4538,7 @@ module View =
         html $"""
             <div class="{Style.terminalBandRow}" data-terminal-lease="{label}" aria-live="polite">
               <span class="{Style.paneLive}">{Icon.spinLead}live</span>
-              <span class="{Style.cls [ Style.avatarSm; Entity.actorMark (ClientModel.people model) holder ]}"></span>
+              {Entity.actorPicture (ClientModel.people model) Style.avatarSm holder}
               <span class="{Style.paneSays}">{who} in {where}</span>
               <div class="ml-auto flex items-center gap-2">{control}</div>
             </div>"""
@@ -4556,7 +4556,7 @@ module View =
         let id = TerminalId.value terminal
         html $"""
             <div class="{Style.terminalBandRow}" data-terminal-stolen="{id}" role="alert">
-              <span class="{Style.cls [ Style.avatarSm; Entity.actorMark (ClientModel.people model) takenBy ]}"></span>
+              {Entity.actorPicture (ClientModel.people model) Style.avatarSm takenBy}
               <span class="{Style.terminalStolenSays}">{Dom.Text.tookTheKeyboard (Entity.actorName (ClientModel.people model) takenBy)}</span>
               <div class="ml-auto flex items-center gap-3">
                 <button type="button" class="{Style.bandActPrimary}" data-terminal-take="{id}"

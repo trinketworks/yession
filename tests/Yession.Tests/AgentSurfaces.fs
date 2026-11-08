@@ -708,8 +708,10 @@ let private answeredTests =
             Expect.stringContains (tagWith "data-surface-answered" surface) "role=\"status\"" "a status line says who"
             let status = surface.Substring (surface.IndexOf "data-surface-answered")
             Expect.stringContains status $"class=\"{Style.who}\"" "named, as the transcript names an author"
-            Expect.stringContains status Style.avatarSm "with their mark"
-            Expect.stringContains status Style.agentThinking "then the agent's mark"
+            let pictureOf mark = $"class=\"{Style.cls [ Style.avatarSm; mark ]}\""
+            Expect.stringContains status (pictureOf (Entity.actorMark (ClientModel.people model) (Yession.Domain.Principal.toActor ada))) "with their picture"
+            Expect.stringContains status (pictureOf Style.agentAvatarWorking) "then the agent's, in a square the same size"
+            Expect.stringContains status $"class=\"{Style.agentThinkingSeat}\"" "turning its cube where the diamond stands"
             Expect.stringContains status Dom.Text.surfaceAwaitingAgent "and that it waits on the agent"
             Expect.stringContains status $"class=\"{Style.surfaceAwaitingDot}\"" "a dot between the halves, gone on a phone"
             Expect.stringContains status $"class=\"{Style.surfaceAwaitingAgent}\"" "where the agent's half takes its own line"

@@ -85,6 +85,33 @@ module Entity =
         | Agent -> Style.agentAvatar
         | Thing -> Style.thingAvatar
 
+    /// What an actor's picture shows: the mark the actor always wears (`actorMark`), or the
+    /// agent at work — its own square, with the cube its diamond is the top of turning where
+    /// the diamond stood (`Icon.cube`). Resolved apart from drawing, so a view that holds no
+    /// `People` can be handed one and still draw it at the size its own line asks for.
+    [<RequireQualifiedAccess>]
+    type Portrait =
+        | Wears of mark: string
+        | AgentAtWork of seed: string
+
+    let portrait (people: People) (actor: ActorRef) : Portrait = Portrait.Wears (actorMark people actor)
+
+    /// An actor's display picture: one square, sized by `square` (`Style.avatar`, `.avatarSm`,
+    /// a terminal's), whatever it holds. The square is what makes actors drawn side by side
+    /// agree — a person's checker beside the agent at work are two pictures of one size
+    /// because both are this element at one `square`, not because two call sites happened to
+    /// pick matching sizes. The picture says nothing a reader needs: the name beside it does.
+    let picture (square: string) (portrait: Portrait) : TemplateResult =
+        match portrait with
+        | Portrait.Wears mark -> html $"""<span class="{Style.cls [ square; mark ]}" aria-hidden="true"></span>"""
+        | Portrait.AgentAtWork seed ->
+            html
+                $"""<span class="{Style.cls [ square; Style.agentAvatarWorking ]}" aria-hidden="true"><span class="{Style.agentThinkingSeat}" style="{Style.thinkFrom seed}">{Icon.cube}</span></span>"""
+
+    /// The picture an actor wears at rest.
+    let actorPicture (people: People) (square: string) (actor: ActorRef) : TemplateResult =
+        picture square (portrait people actor)
+
     /// The colour an actor's presence is drawn in — a caret and its name flag, a dot saying
     /// who is in a field, the edge of a draft — as a CSS colour for an inline style.
     ///
@@ -204,7 +231,7 @@ module Entity =
         let mark =
             match entity with
             | EntityRef.Actor actor ->
-                html $"""<span class="{Style.cls [ Style.entityAvatar; actorMark people actor ]}" aria-hidden="true"></span>"""
+                actorPicture people Style.entityAvatar actor
             | EntityRef.Repo _ -> html $"""<span class="{Style.entityMark}" aria-hidden="true">{Icon.repoSm}</span>"""
             | EntityRef.Connection connection ->
                 html $"""<span class="{Style.entityMark}" aria-hidden="true">{connectionMark connection}</span>"""
