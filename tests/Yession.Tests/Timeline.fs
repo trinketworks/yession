@@ -1086,7 +1086,7 @@ let private trayRunningTests =
             Expect.equal (html.Split Dom.Hooks.interruptTurn |> Array.length) 2 "one interrupt"
             Expect.isFalse (html.Contains Dom.Hooks.revealRunning) "and no running beside it"
 
-        testCase "nothing running, no turn: no tray" <| fun () ->
+        testCase "nothing running, no turn: an empty tray" <| fun () ->
             let finished =
                 clientOf
                     (twoOpenOneEnded
@@ -1094,7 +1094,8 @@ let private trayRunningTests =
                          at 6L 5.0 (completed terminalA "1" (CommandSucceeded 0) 9) ])
             let html = Support.render finished
             Expect.isFalse (html.Contains Dom.Hooks.revealRunning) "a finished command is not running"
-            Expect.isFalse (html.Contains "data-composer-tray") "and the strip has nothing to hold"
+            Expect.isFalse (html.Contains Dom.Hooks.interruptTurn) "and no interrupt"
+            Expect.isTrue (html.Contains "data-composer-tray") "the strip stands anyway, so the timeline never moves"
 
         testCase "going to an agent's command opens the task card it sits in" <| fun () ->
             let model =

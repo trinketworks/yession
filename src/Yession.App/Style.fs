@@ -3699,6 +3699,9 @@ module Style =
     /// through it. The trailing edge is the composer's gutter (`px-4`), so the jump's arrow
     /// ends on Send's. 44px on a phone, a thumb's target; one control high elsewhere.
     ///
+    /// It always stands, empty at rest: its height is reserved so a "latest", "running" or
+    /// interrupt arriving moves nothing. Excess room, never a covered line.
+    ///
     /// It ARRIVES rather than appears: drawn first (`starting:`) a touch low and clear, it
     /// rises onto the composer's rule and fades in, on the pace every arrival here takes
     /// (`Motion.pace`) — out from behind the composer, which is later in the document and
