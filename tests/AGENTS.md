@@ -171,6 +171,16 @@ once. A bare `.Contains "swift-heron"` passes on the ROSTER while the element un
 prints a raw id. Scope the assertion to the element, or to the phrase around it. A test loosened
 into vacuity is worse than the brittle one it replaced, because it reads as coverage.
 
+### WebKit
+
+The browser tier launches Chromium only, and the Nix Playwright has no WebKit. To see what
+Safari does, outside the dev shell, in a scratch directory: `npm i playwright && npx playwright
+install webkit` (a build in `~/Library/Caches/ms-playwright`; no Safari window, keychain or screen).
+Build the harness with `frames --harness replies=60 --still`, serve `tests/browser` (`/` is
+`editor-harness.html`), and drive it with that Playwright's own `webkit.launch()`. Playwright's
+WebKit is AHEAD of Safari: it reports `overflow-anchor` support that Safari 26 lacks. Turn that off
+on the surface (`[data-tail] { overflow-anchor: none }`) to stand in for Safari.
+
 ### End to end against the real binaries
 
 The browser tier IS the end-to-end harness. `startHost` (`Browser.fs`) runs the real Manager with

@@ -2868,6 +2868,42 @@ let private placeIn (page: IPage) : Async<string * float> =
         | _ -> return failwith "the conversation could not be measured"
     }
 
+/// Where each message of the conversation stands, its top against the column's, in the order
+/// they were said. The order is the page's and does not change while nothing is said, so the
+/// same place in two of these is the same message.
+let private messageTops (page: IPage) : Async<float list> =
+    async {
+        let chat = tailSurface "chat"
+        let! column = Probe.boxes page [ chat ]
+        let! messages = Probe.seen page (chat + " [data-message-id]")
+        match column with
+        | [ Some c ] -> return messages |> List.map (fun m -> m.Box.Top - c.Top)
+        | _ -> return failwith "the conversation could not be measured"
+    }
+
+/// Scroll the conversation up by `step`, `steps` times or until it is less than a step from its
+/// start, and answer how far the message read each time moved on screen: the first whose top is
+/// in the column before the step, measured again after it.
+let private readWhileScrollingUp (page: IPage) (step: float) (steps: int) : Async<float list> =
+    let chat = tailSurface "chat"
+    let rec go (left: int) (moves: float list) =
+        async {
+            let! scroll = Probe.scroll page chat
+            match scroll with
+            | Some s when left > 0 && s.Top >= step ->
+                let! before = messageTops page
+                match before |> List.tryFindIndex (fun top -> top >= 0.0) with
+                | Some read ->
+                    let! _ = Probe.scrollTo page chat (s.Top - step)
+                    do! twoFrames page
+                    let! after = messageTops page
+                    return! go (left - 1) ((after.[read] - before.[read]) :: moves)
+                | None -> return failwith "no message stands in the conversation's column"
+            | Some _ -> return List.rev moves
+            | None -> return failwith "the conversation went as it was read"
+        }
+    go steps []
+
 /// A long conversation (the scroll scenario's, so the harness counts the renders from here)
 /// with its reader more than a screen back from the end — the way to the latest offered in the
 /// composer's tray — and then the viewport shortened, as a keyboard shortens it, until the
@@ -6148,6 +6184,27 @@ let editorTests =
                     let! shown = newestShown page "chat" "tail-mark-tall"
                     let! _ = Harness.ask page HarnessPage.benchScrollEnd
                     Expect.isTrue (shownFully shown) (sprintf "the end of what was said meanwhile is wholly on screen: %A" shown)
+                }
+            // A group the browser skips measures as an estimate until it is drawn
+            // (`Style.messageGroup`), and drawing one above the screen moves what is under the
+            // reader's eye by the difference, unless the browser anchors the scroll as it draws it.
+            // Safari does not, so there `Tail` lets the browser skip a group only once it has been
+            // laid out, and what it measures as is its own height. Chromium does anchor, so the
+            // case turns that off on the surface: the path Safari takes, in the browser CI has.
+            // Red without it: the line read jumped by a group's estimate less its height, group
+            // after group, all the way up.
+            editorCaseIn 390 844 "scrolling up a long conversation moves what is read only as far as the scroll, where the browser does not anchor it" <| fun page ->
+                async {
+                    do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
+                    let! _ = await (page.AddStyleTagAsync (PageAddStyleTagOptions (Content = "[data-tail] { overflow-anchor: none }")))
+                    do! Harness.run5 page HarnessPage.benchScrollBegin 80 0 16 true "replies"
+                    do! toTheEnd page "chat"
+                    let! moves = readWhileScrollingUp page 300.0 24
+                    let! _ = Harness.ask page HarnessPage.benchScrollEnd
+                    Expect.isTrue (List.length moves >= 12) (sprintf "the conversation is long enough to scroll up through: %d steps" (List.length moves))
+                    Expect.isTrue
+                        (moves |> List.forall (fun moved -> abs (moved - 300.0) < 1.0))
+                        (sprintf "each 300px up moved the message read 300px down the screen: %A" moves)
                 }
             // The same press over a terminal's blocks, whose scroller is no place for focus of its
             // own: it lands on the panel the blocks are shown in.

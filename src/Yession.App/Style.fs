@@ -2393,12 +2393,18 @@ module Style =
     /// it are drawn, with no render, and `Tail` watches each group to answer it
     /// (`HostRole.TailPart`).
     ///
-    /// Only where the browser ANCHORS its scroll (`overflow-anchor`). A reader scrolling up
-    /// draws groups above the screen, each changing from the estimate to its own height, and
-    /// an anchoring browser keeps what is under the eye where it was; one that does not moves
-    /// it by the difference, group after group, all the way up. Safari 26 does not anchor
-    /// (`CSS.supports("overflow-anchor", "auto")` is false there), so it lays out every group
-    /// as it always has, and nothing below changes what it draws.
+    /// Only once `Tail` allows it (`Dom.Hooks.skippable`). A reader scrolling up draws groups
+    /// above the screen, and one that measured as the estimate moves what is under the eye by
+    /// the difference unless the browser anchors the scroll as it draws it. Chromium does, so
+    /// there a group is skippable from the start. WebKit does not (Safari 26 has no anchoring
+    /// at all; WebKit 27 anchors a box that grows and not a group drawn), so there a group is
+    /// laid out once as it arrives and made skippable a frame later: the size it then measures
+    /// as while skipped is the one it had (`contain-intrinsic-size: auto`), and drawing it
+    /// again moves nothing. `Tail` asks the browser which it is (`anchoring`).
+    ///
+    /// And only where the estimate is honoured: a browser that skipped a group but ignored
+    /// `contain-intrinsic-block-size` would measure every skipped group as nothing, and the
+    /// conversation as a screen or two. One that cannot do both lays out every group.
     ///
     /// Skipping CLIPS: a skipped-or-not group paints only inside its own padding box, and what
     /// it holds reaches past its edges — a ground's `-my-1.5` bleed, the author line's `-mt-2`,
@@ -2418,8 +2424,8 @@ module Style =
         cls [ "flex flex-col gap-3 shrink-0"
               readingColumn
               "max-md:max-w-none box-content p-3 -mx-3 -my-3! max-md:-mx-4 max-md:px-4"
-              "supports-[overflow-anchor:auto]:[content-visibility:auto]"
-              "supports-[overflow-anchor:auto]:[contain-intrinsic-block-size:auto_400px]" ]
+              "supports-[(content-visibility:auto)_and_(contain-intrinsic-block-size:auto_400px)]:data-skippable:[content-visibility:auto]"
+              "[contain-intrinsic-block-size:auto_400px]" ]
 
     /// The author line: avatar and name, STICKY — while a long run scrolls, who is speaking
     /// stays readable at the top of the column.
