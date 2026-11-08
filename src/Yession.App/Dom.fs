@@ -137,6 +137,11 @@ module Dom =
         /// it opens upward: `Tail` keeps what follows the entry where it was on screen (a
         /// keyboard's press keeps the control pressed there instead).
         let tailEntries = "data-tail-entries"
+        /// On a part of a `tail` surface (`HostRole.TailPart`): the browser may skip it while it
+        /// is off screen (`Style.messageGroup`). `Tail` sets it, at once where the browser keeps
+        /// the screen still as skipped parts are drawn, and otherwise only once the part has been
+        /// laid out, so that what it measures as while skipped is its own height.
+        let skippable = "data-skippable"
         let messageId = "data-message-id"
         let messageAuthor = "data-message-author"
         let messageStatus = "data-message-status"

@@ -190,6 +190,39 @@ let private pressedIn (target: Node) : (HTMLElement * Element) option =
         | Some entry, Some surface -> Some (surface :?> HTMLElement, entry)
         | _ -> None)
 
+/// Ask the browser whether it keeps a scroll still as a part skipped above the screen is drawn
+/// (`Style.messageGroup`), by doing it where nobody sees: a scroller 100px tall, a part 2000px
+/// down it that is skipped and measures 400px but holds 50, and the scroll put just under that
+/// part. A browser that draws what is NEAR the screen draws it there, and it shrinks by 350;
+/// one that anchors moves the scroll up with it. Chromium does, a frame later. WebKit 27 does
+/// not draw it there, and does not anchor a part it draws; Safari 26 anchors nothing. `answer`
+/// is told once, two frames after the scroll, and the scroller is gone by then.
+///
+/// Asked, not looked up: `CSS.supports("overflow-anchor", "auto")` is true in WebKit 27, which
+/// anchors a box that grows and moved the screen 14,460px over a long scroll up through skipped
+/// parts (measured in the harness at a phone's size).
+let private anchoring (answer: bool -> unit) : unit =
+    let block (style: string) : Element =
+        let made = document.createElement "div"
+        made.setAttribute ("style", style)
+        made
+    let scroller = block "position:fixed;top:0;left:0;width:10px;height:100px;overflow:auto;opacity:0;pointer-events:none"
+    scroller.setAttribute ("aria-hidden", "true")
+    let part = block "content-visibility:auto;contain-intrinsic-block-size:400px"
+    part.appendChild (block "height:50px") |> ignore
+    scroller.appendChild (block "height:2000px") |> ignore
+    scroller.appendChild part |> ignore
+    scroller.appendChild (block "height:2000px") |> ignore
+    document.body.appendChild scroller |> ignore
+    let frame (act: unit -> unit) = window.requestAnimationFrame (fun _ -> act ()) |> ignore
+    frame (fun () ->
+        scroller.scrollTop <- 2420.0
+        frame (fun () ->
+            frame (fun () ->
+                let anchors = scroller.scrollTop < 2400.0
+                scroller.remove ()
+                answer anchors)))
+
 /// Where one surface's scroll stood as a render began, and whether it had gone UP since
 /// anything here last looked — the reader leaving, seen before the scroll event that will
 /// report it (`following`).
@@ -324,10 +357,85 @@ let create (hosts: Hosts.Hosts) (dispatch: ClientMsg -> unit) (current: unit -> 
         HostRole.Tail
         { Came = fun _ el -> observer |> Option.iter (fun observer -> observer.observe el)
           Went = fun _ el -> observer |> Option.iter (fun observer -> observer.unobserve el) }
+    /// Whether the browser keeps the screen still as a skipped part above it is drawn
+    /// (`anchoring`), or `None` until it has answered.
+    let mutable anchorsDrawn : bool option = None
+
+    /// Parts that came since the last frame, waiting to be told whether they may be skipped.
+    let arrived = ResizeArray<Element> ()
+
+    /// Parts laid out this frame, to be made skippable the next.
+    let measured = ResizeArray<Element> ()
+
+    /// Whether the browser keeps this part's screen still as it is drawn: it does that for a
+    /// skipped part (`anchorsDrawn`), and the surface lets it anchor (`overflow-anchor`). Until
+    /// the browser has answered, as though it did, which keeps a page that anchors exactly as
+    /// it was and costs one that does not a layout of what had come by then.
+    let anchorsAt (surfaceAnchors: Element -> bool) (part: Element) : bool =
+        match anchorsDrawn, part.closest selector with
+        | Some false, _ -> false
+        | _, Some surface -> surfaceAnchors surface
+        | _, None -> true
+
+    /// Decide, one frame after they came (in the page by then, and not yet laid out), whether
+    /// the parts that came may be skipped from the start. Those that may not are drawn whole
+    /// this frame and made skippable the next (`measured`), once the browser has a size of
+    /// theirs to remember.
+    let rec settle () : unit =
+        let anchorOf = System.Collections.Generic.Dictionary<Element, bool> (HashIdentity.Reference)
+        let surfaceAnchors (surface: Element) =
+            match anchorOf.TryGetValue surface with
+            | true, anchors -> anchors
+            | false, _ ->
+                let anchors = computedProperty (surface :?> HTMLElement) "overflow-anchor" = "auto"
+                anchorOf.[surface] <- anchors
+                anchors
+        let ready = List.ofSeq measured
+        measured.Clear ()
+        for part in ready do
+            if document.body.contains part then part.setAttribute (Dom.Hooks.skippable, "")
+        let came = List.ofSeq arrived
+        arrived.Clear ()
+        for part in came do
+            // Not in the page yet: lit registers a part before its fragment is put in, and a
+            // part asked about too early would keep whatever it came with. Asked next frame.
+            if not (document.body.contains part) then arrived.Add part
+            elif not (anchorsAt surfaceAnchors part) then
+                part.removeAttribute Dom.Hooks.skippable
+                measured.Add part
+        if measured.Count > 0 || arrived.Count > 0 then window.requestAnimationFrame (fun _ -> settle ()) |> ignore
+
+    /// A part that has gone is nobody's to settle.
+    let gone (part: Element) : unit =
+        arrived.RemoveAll (fun waiting -> obj.ReferenceEquals (waiting, part)) |> ignore
+        measured.RemoveAll (fun waiting -> obj.ReferenceEquals (waiting, part)) |> ignore
+
+    /// A part has come: skippable at once (a browser that anchors, or one not yet asked), and
+    /// looked at again next frame. Batched, so a page opening on a thousand parts asks the
+    /// stylesheet once a surface and takes one frame.
+    let came (part: Element) : unit =
+        if anchorsDrawn <> Some false then part.setAttribute (Dom.Hooks.skippable, "")
+        if arrived.Count = 0 && measured.Count = 0 then window.requestAnimationFrame (fun _ -> settle ()) |> ignore
+        arrived.Add part
+
+    /// The browser has said whether it anchors. One that does not is owed every part it was
+    /// handed as skippable before it said so: each is laid out once, and skippable again after.
+    let answered (anchors: bool) : unit =
+        anchorsDrawn <- Some anchors
+        if not anchors then
+            for part, _ in hosts.In HostRole.TailPart do
+                came part
+
     hosts.Watch
         HostRole.TailPart
-        { Came = fun _ el -> observer |> Option.iter (fun observer -> observer.observe el)
-          Went = fun _ el -> observer |> Option.iter (fun observer -> observer.unobserve el) }
+        { Came =
+            fun _ el ->
+                came el
+                observer |> Option.iter (fun observer -> observer.observe el)
+          Went =
+            fun _ el ->
+                gone el
+                observer |> Option.iter (fun observer -> observer.unobserve el) }
 
     /// Every surface put back where its reader was, once the render and everything after it —
     /// the editors mounted, the pane opened, the screens folded — has finished moving them.
@@ -431,6 +539,7 @@ let create (hosts: Hosts.Hosts) (dispatch: ClientMsg -> unit) (current: unit -> 
     /// nothing. Passive, as the browser makes every wheel and touch listener on the document,
     /// so none of them holds a scroll back.
     let attach () : unit =
+        anchoring answered
         document.addEventListener (
             "click",
             Events.mouse (fun event ->
