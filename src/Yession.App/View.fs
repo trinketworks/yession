@@ -1678,11 +1678,15 @@ module View =
               {noteEl}
             </div>"""
 
-    /// The strip on the composer's top edge (`Style.composerTray`): the way to stop the turn
+    /// The strip on the conversation's foot (`Style.composerTray`): the way to stop the turn
     /// that is running at its leading edge, the way back to the latest message at its
     /// trailing one. The strip always stands, empty while neither has anything to do: one
     /// that came and went moved the timeline's box by its height each time, and the newest
     /// line with it.
+    ///
+    /// It stands directly under the conversation, ABOVE the ask cards and the folded surfaces
+    /// an agent opened, and so above the queue and the composer: what it does is about the
+    /// transcript above it, not about the box a message is written in.
     ///
     /// Interrupt is the only control here that DOES something about a running turn rather
     /// than report it: whether one is running is said by the caret in the timeline, and to a
@@ -1764,7 +1768,6 @@ module View =
             let deleteLabel = if armed then "Confirm delete" else "Delete"
             let onDelete = if armed then DeleteQueuedMsg id else ArmQueueDeleteMsg (Some id)
             html $"""
-                {composerTray dispatch model}
                 <section class="{Style.composer}" data-draft-editor data-queue-editor="{QueueId.value id}">
                   <span class="{Style.bandRail}"></span>
                   <span class="{Style.bandEdge}"></span>
@@ -1943,7 +1946,6 @@ module View =
                     <button type="button" class="{Style.draftNew}" data-draft-new
                             @click={Ev(fun _ -> dispatch StartDraftMsg)}>+ New message</button>"""
         html $"""
-            {composerTray dispatch model}
             <section class="{Style.composer}" data-draft-editor>
               <span class="{Style.bandRail}"></span>
               <span class="{Style.bandEdge}"></span>
@@ -5849,6 +5851,7 @@ module View =
               <div class="{Style.chatColumn}">
                 <div class="{Style.launchArea}">
                   {chat actions dispatch model}
+                  {composerTray dispatch model}
                   {askSlot actions dispatch model}
                 </div>
                 <div class="{Style.dock}">
