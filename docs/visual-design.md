@@ -30,11 +30,10 @@ Apply each test before you change a surface.
    still be visible.*
 
 3. **One verb per surface.** Each surface has one primary act, and only that act wears the
-   blue fill. Every other control wears a border, nothing, or text. An armed control's `err`
-   fill is a different mark with a different job, and a surface may wear one of each.
+   blue fill. Every other control wears a border, nothing, or text.
    *Test: count the blue filled rectangles on a surface. The count is one or zero.*
 
-4. **State is worn, not hinted.** What a thing is doing — waiting, held, armed, live, wrong —
+4. **State is worn, not hinted.** What a thing is doing — waiting, held, live, wrong —
    is visible at rest. A thumb has no hover. A reader has no tooltip.
    *Test: take a screenshot. You must be able to tell what each control is doing.*
 
@@ -254,9 +253,6 @@ border, so its word drops to `ink-faint`, which keeps AA on every surface. A con
 is landing is `aria-busy` and wears the *held* face (the `pressed` variant) until the act
 lands. Neither is `disabled`. The attribute `disabled` does not exist in this product.
 *Test: search for `disabled`. It appears nowhere.*
-
-An armed control is a destructive act one tap from done. It wears the `err` fill at rest
-(principle 3).
 
 ### Attention
 

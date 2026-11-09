@@ -775,7 +775,7 @@ let private foldTests =
             let folded = withSurface (choiceSurface []) |> step (FoldSurfaceMsg "ask")
             Expect.stringContains (tagWith Dom.Hooks.surfaceDismiss (render folded)) Dom.Text.surfaceDismissLabel "its bin says what it does"
             let _, effects = ClientModel.update (DismissSurfaceMsg "ask") folded
-            Expect.equal effects [ ClientEffect.DismissSurface "ask" ] "the first press asks the session"
+            Expect.equal effects [ ClientEffect.DismissSurface "ask" ] "the press asks the session"
 
         testCase "a surface the agent took down is not still put away when its id comes back" <| fun () ->
             let folded = withSurface (choiceSurface []) |> step (FoldSurfaceMsg "ask")

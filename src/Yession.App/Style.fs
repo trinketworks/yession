@@ -471,11 +471,6 @@ module Style =
     //     (app/tailwind.css), so a face cannot fill for the finger and forget the hold. A
     //     site adopts it by setting `aria-busy` from the model, and `whenReady`/`whenBusy`
     //     swap the word inside it.
-    //   * ARMED — a destructive act one press from done. ONE way, whatever weight it arms
-    //     from: the `err` FILL at rest (`btnIconBareDangerArmed`). A touch
-    //     has no hover, so the state a phone must see is worn rather than revealed. The fill
-    //     is not the surface's verb, so principle 3 does not count it, and it is a fill and
-    //     not a red WORD, so the one-red-word budget is untouched either.
     //
     // Nothing in this section writes two utilities on ONE property. Which of them wins is
     // stylesheet order rather than authoring order, so a base that sets a background, a
@@ -494,13 +489,10 @@ module Style =
     /// so a base that zeroed the padding and a site that set its own would race. Nor is the
     /// cursor, which the waiting faces have to be able to answer differently.
     ///
-    /// Nor, and this one was a live bug, the BACKGROUND. It used to carry `bg-transparent`,
-    /// and Tailwind emits `.bg-transparent` AFTER `.bg-err` — so `btnIconBareDangerArmed`,
-    /// which is this base plus `bg-err`, painted no fill at all: the armed queue delete, the
-    /// one control in the product whose whole job is to LOOK armed before the second press,
-    /// looked exactly like the unarmed one. A bare control does not need the utility anyway:
-    /// Tailwind's own preflight already gives every `button` a transparent background, and an
-    /// `<a>` or a `<span>` has one by default.
+    /// Nor the BACKGROUND. It used to carry `bg-transparent`, and Tailwind emits
+    /// `.bg-transparent` AFTER `.bg-err`, so a face that added a fill painted none. A bare
+    /// control does not need the utility anyway: Tailwind's own preflight already gives every
+    /// `button` a transparent background, and an `<a>` or a `<span>` has one by default.
     ///
     /// Not a `Stroke` tone either: this is the user agent's own border being cancelled,
     /// which is a fact about the control rather than an edge this product draws.
@@ -588,8 +580,6 @@ module Style =
     /// something. Not a second bordered face — at rest it is the one above to the pixel,
     /// because `err` at rest is this product's tone for *something is wrong* rather than for
     /// *this could go wrong*, and what a control does is not visible until you reach for it.
-    /// An ARMED control is the exception, and it wears the err FILL at rest instead
-    /// (`btnIconBareDangerArmed`).
     let btnDanger =
         cls [ btnFace; btnFlex; "bg-transparent cursor-pointer"; Stroke.rim; "text-ink"
               Stroke.hoverErr; "hover:text-err pressed:bg-err pressed:text-bg" ]
@@ -890,15 +880,6 @@ module Style =
               focusRing ]
     let btnIconBare = cls [ btnIconBareBase; bareInk ]
     let btnIconBareDanger = cls [ btnIconBareBase; bareInkDanger ]
-    /// `btnIconBareDanger`, ARMED: a second press away from actually deleting (the queue's
-    /// delete — see `View.queue`), which this says by wearing the err fill AT REST rather
-    /// than only under the hand. A touch has no hover to hold the hint up, so the state a
-    /// phone needs to see has to be worn rather than revealed — the same reasoning
-    /// `trayInterrupt` uses to stay unworn, read the other way: that button is never armed
-    /// twice, this one specifically IS, between the two presses the confirm needs.
-    /// Un-arms itself back to `btnIconBareDanger` on its own (`armedMs`), so a
-    /// press nobody confirms cannot leave a row looking primed for ever.
-    let btnIconBareDangerArmed = cls [ btnIconBareBase; "cursor-pointer bg-err text-bg" ]
     /// A bare verb's thumb target, on a phone and only there: the box pads out to
     /// `spacing-touch`, so the BORDER box is 44px — which is what a finger lands on and what
     /// the focus ring is drawn round — while the glyph, centred in the content box the padding
@@ -3915,10 +3896,8 @@ module Style =
     /// still widens the gap PAST `draftCommit`'s own `gap-1`, because the one that destroys
     /// should cost a thumb more distance than the one beside it.
     let private queueDeleteGap = "ml-2"
-    /// Delete, and delete ARMED — a second press from dropping the message, which it says by
-    /// wearing the err fill at rest, because a touch has no hover to hold a warning up.
+    /// Delete: one press drops the message, so it rests quiet like any other verb.
     let queueVerbDelete = cls [ btnIconBareDanger; hitTouch; queueDeleteGap ]
-    let queueVerbDeleteArmed = cls [ btnIconBareDangerArmed; hitTouch; queueDeleteGap ]
 
     /// Done: the way out of editing a queued message, back to the list and the local peer's
     /// own composer — riding the composer's own action row (`draftCommit`, `View.drafts`),

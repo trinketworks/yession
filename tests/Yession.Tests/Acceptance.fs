@@ -249,7 +249,6 @@ let private representativeModel : ClientModel =
       Asked = Map.empty
       OpenFolds = Set.empty
       DatedBreaks = Set.empty
-      QueueDeleteArmed = None
       EditingQueue = None
       // Past the wait (`ClientModel.QueueShown`) already: this fixture is the checklist's
       // camera on the mount itself, not on the flash the wait exists to hide.
