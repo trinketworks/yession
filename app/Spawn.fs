@@ -96,10 +96,11 @@ let private Sampler = "/usr/bin/sample"
 /// before its own code runs never reaches the line that would have turned it on. The quotes
 /// are Node's own escaping for a path with a space in it.
 let private childNodeOptions (diagnosticsDir: string) : string =
-    let inherited = ProcessEnv.get "NODE_OPTIONS" |> Option.defaultValue ""
     let report =
         sprintf "--report-on-signal --report-signal=%s --report-directory=\"%s\"" ReportSignal diagnosticsDir
-    if inherited.Trim().Length = 0 then report else inherited + " " + report
+    match ProcessEnv.get "NODE_OPTIONS" with
+    | Some inherited when inherited.Trim().Length > 0 -> inherited + " " + report
+    | _ -> report
 
 /// Record what a session missing its readiness deadline is stuck on, then call `kill`.
 ///
