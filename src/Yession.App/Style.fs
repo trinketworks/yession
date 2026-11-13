@@ -2436,11 +2436,11 @@ module Style =
     /// has to clear the first item's own GROUND rather than just its first line, and that
     /// starts 8px above the words in it. At `pb-1` a hovered first message came within four
     /// pixels of the name.
-    /// The phone's FULL BLEED, exactly as an item carries it (`itemGround`): the band escapes
-    /// the scroller's padding and puts the same back, so the opaque strip reaches both edges of
-    /// the screen and the name still stands on the line. Without it the band stopped at the
-    /// column's padding while every item under it ran 16px past, so a scrolled item's own
-    /// trailing control showed in that strip, beside the author line pinned over it.
+    /// On a phone the band bleeds to the screen's LEFT edge only (`max-md:-ml-4 max-md:pl-4`):
+    /// it escapes the scroller's padding on that side and puts the same back, so the name still
+    /// stands on the line. It stops at the column's right padding edge, because the scroller's
+    /// overlay scrollbar is drawn in the strip beyond it and a band that ran to the screen's
+    /// edge painted over the bar, cutting the thumb in two wherever a name was pinned.
     ///
     /// PINNED, it is a BAND, not a label left floating. It was the name on 28px of black flush
     /// against the header's rule, with the ground ending 8px under the name: at 1440x900 the
@@ -2459,7 +2459,7 @@ module Style =
     /// tint are `acrylic`'s, spelled out under the variant, because Tailwind writes only the
     /// classes a `.fs` file spells as a literal.
     let messageGroupHead =
-        cls [ "sticky top-0 z-10 flex items-center gap-3 pt-2 -mt-2 pb-2 -mb-1 max-md:-mx-4 max-md:px-4"
+        cls [ "sticky top-0 z-10 flex items-center gap-3 pt-2 -mt-2 pb-2 -mb-1 max-md:-ml-4 max-md:pl-4"
               "[container-type:scroll-state] before:absolute before:inset-0 before:-z-10 before:bg-bg"
               "stuck:before:bg-acrylic stuck:before:backdrop-blur-acrylic stuck:before:backdrop-saturate-150"
               "reduced-transparency:stuck:before:bg-panel reduced-transparency:stuck:before:backdrop-blur-none"
