@@ -79,10 +79,18 @@ let spanWith
                     (if reason.Length > statusMessageCap then reason.Substring (0, statusMessageCap) else reason)
             let! token = Async.CancellationToken
             // Started INSIDE the span's context, so every await in `work` carries it.
-            let running = OpenTelemetry.withSpan span (fun () -> Async.StartAsPromise (work, token))
+            //
+            // Settled in the step that starts it, and not at the `let!` below. Work that
+            // throws at once rejects its promise in this step. `Interop.awaitPromise`
+            // attaches the handler at its call, and the trampoline can move this workflow
+            // to a timer before it reaches the `let!`. Node ends a process for a rejection
+            // that has no handler at the end of a turn.
+            let settled =
+                OpenTelemetry.withSpan span (fun () -> Async.StartAsPromise (work, token))
+                |> Interop.awaitPromise
             try
                 try
-                    let! outcome = Interop.awaitPromise running
+                    let! outcome = settled
                     failed outcome |> Option.iter fail
                     return outcome
                 with e ->
