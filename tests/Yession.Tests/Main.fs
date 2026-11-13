@@ -152,6 +152,7 @@ let all =
         Tag.needs "Manager MCP forms" [] (fun () -> ManagerForms.tests)
         Tag.needs "Phase4" [] (fun () -> Phase4.tests)
         Tag.needs "the resources algebra" [] (fun () -> Resources.tests)
+        Tag.needs "the Seatbelt profile" [] (fun () -> Seatbelt.tests)
         Tag.needs "Volume leases" [] (fun () -> VolumeLeases.tests)
         Tag.needs "seeded files" [] (fun () -> SeededFiles.tests)
         Tag.needs "Properties" [] (fun () -> Properties.tests)
