@@ -87,9 +87,14 @@ at boot and fails closed: a value it does not know stops the session.
 
 | variable | runs | values | default |
 |---|---|---|---|
-| `YESSION_SESSION_WORK_BACKEND` | the agent's terminals, blocks and `setup:` | `host`, `srt`, `docker` | `srt` |
+| `YESSION_SESSION_WORK_BACKEND` | the agent's terminals, blocks and `setup:` | `host`, `srt`, `seatbelt`, `docker` | `srt` |
 | `YESSION_SESSION_AGENT_BACKEND` | the `claude` CLI | `host`, `srt` | `host` |
 | `YESSION_SESSION_GIT_BACKEND` | the session's own git verbs: clone, fetch, switch, status, log, diff | `host`, `srt` | `srt` |
+
+`seatbelt` is a Mac's backend. It confines with macOS's Seatbelt under a profile that Yession
+writes, and keeps srt only as the proxy that filters egress. It opens no terminal yet, so a
+terminal there runs each block as its own process (docs/GAPS.md lists the rest). A session on
+any other platform refuses to start with it.
 
 The git verbs work on checkouts that every work sandbox can write, `.git/config` included. Under
 `srt` a program that config names runs with the git sandbox's reach: the repos directory, and

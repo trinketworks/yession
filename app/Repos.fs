@@ -118,7 +118,7 @@ let hardenedEnv (backend: SandboxBackend) (allowProtocol: string) : (string * st
       "GIT_CONFIG_COUNT", string (List.length configs) ]
     @ (match backend with
        | HostBackend -> [ "NO_PROXY", "*" ]
-       | SrtBackend | DockerBackend -> [])
+       | SrtBackend | SeatbeltBackend | DockerBackend -> [])
     @ (configs
        |> List.mapi (fun i (key, value) ->
            [ sprintf "GIT_CONFIG_KEY_%d" i, key

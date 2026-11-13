@@ -295,7 +295,8 @@ module SessionLayout =
     let forSandbox (dataDir: string) (backend: SandboxBackend) (sandbox: SandboxRef) : Contribution =
         match backend with
         | HostBackend
-        | SrtBackend ->
+        | SrtBackend
+        | SeatbeltBackend ->
             { Name = SandboxRef.name sandbox
               Workspace = Some (workspaceFor dataDir sandbox)
               SharedRepos = Some (reposDir dataDir)
@@ -415,7 +416,8 @@ let checkoutAt (reposDir: string) (repo: RepoRef) : string =
 let artifactsVisibleAt (backend: SandboxBackend) (hostArtifactsDir: string) : string =
     match backend with
     | HostBackend
-    | SrtBackend -> hostArtifactsDir
+    | SrtBackend
+    | SeatbeltBackend -> hostArtifactsDir
     | DockerBackend -> "/artifacts"
 
 /// The same answer for a SANDBOX, which is the form every caller outside this module wants.
@@ -480,7 +482,8 @@ let withSessionShares
                                   Target = artifactsVisibleAt backend artifactsDir
                                   Mode = ReadWrite } ] } }
     | HostBackend
-    | SrtBackend -> requested
+    | SrtBackend
+    | SeatbeltBackend -> requested
 
 /// What an operator's granted leaves add to a policy.
 ///
@@ -525,6 +528,9 @@ let limitsFor (backend: SandboxBackend) (platform: Node.Base.Platform) : HostLim
         if platform = Node.Base.Platform.Darwin then
             HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.EgressByHost ]
         else HostLimits.of' [ HostDistinction.EgressByHost ]
+    // Seatbelt names a socket's path in a rule of its own, and its egress is the same
+    // filtering proxy srt's is. A Mac's backend only, so there is no platform to split on.
+    | SeatbeltBackend -> HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.EgressByHost ]
     | DockerBackend -> HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.NamedVolumes ]
 
 /// What a backend can distinguish on the host this process is running on.
@@ -562,6 +568,9 @@ let hostAddressFrom (hostname: string) (platform: Node.Base.Platform) (backend: 
     | DockerBackend -> Some "host.docker.internal"
     | HostBackend -> Some "127.0.0.1"
     | SrtBackend -> if platform = Node.Base.Platform.Darwin then Some hostname else Some "127.0.0.2"
+    // srt's answer on macOS, for srt's reason: the proxy is the same proxy, and a client in
+    // the sandbox is told to dial the loopback directly (`SeatbeltProxy.environment`).
+    | SeatbeltBackend -> Some hostname
 
 /// `hostAddressFrom` on the host this process runs on — the same one-place reading of the
 /// platform `limitsHere` is, for the same reason.
@@ -601,6 +610,7 @@ let hostDoorAddressFrom (platform: Node.Base.Platform) (backend: SandboxBackend)
     match backend with
     | SrtBackend when platform <> Node.Base.Platform.Darwin -> "127.0.0.2"
     | SrtBackend
+    | SeatbeltBackend
     | DockerBackend
     | HostBackend -> "127.0.0.1"
 
@@ -652,9 +662,12 @@ let hostRouteFrom
     (backend: SandboxBackend)
     (door: HostDoor)
     : string list =
-    match backend with
-    | SrtBackend when platform = Node.Base.Platform.Darwin ->
+    let namedWithItsAddresses =
         atPort door.Host door.Port :: (ownAddresses |> List.map (fun address -> atPort address door.Port))
+    match backend with
+    | SrtBackend when platform = Node.Base.Platform.Darwin -> namedWithItsAddresses
+    // The same proxy with the same guard, on the one platform this backend has.
+    | SeatbeltBackend -> namedWithItsAddresses
     | _ -> [ door.Host ]
 
 /// `hostRouteFrom` on the host this process runs on.
@@ -828,7 +841,8 @@ let policyFor
     let grantedReads, grantedWrites =
         match backend with
         | HostBackend
-        | SrtBackend -> granted'.Reads, granted'.Writes
+        | SrtBackend
+        | SeatbeltBackend -> granted'.Reads, granted'.Writes
         | DockerBackend ->
             let at mode =
                 granted'.Binds
@@ -928,7 +942,8 @@ let policyFor
             match backend with
             | DockerBackend -> None
             | HostBackend
-            | SrtBackend ->
+            | SrtBackend
+            | SeatbeltBackend ->
                 ambient
                 |> Map.tryFind "YESSION_BIN_GIT"
                 |> Option.map (fun path -> path.Trim ())
@@ -961,7 +976,10 @@ let policyFor
         // anyway: github.com is reached through the gateway, which carries the credential
         // itself. An empty value is git's own spelling for "forget the helpers configured
         // before this", the same entry `Repos.hardenedEnv` gives the session's own git.
-        | SrtBackend -> mergeEnv (mergeEnv inherited fromGrants) resolved |> withGitConfig [ "credential.helper", "" ]
+        //
+        // Seatbelt's sandbox reaches the network through the same proxy, named the same way.
+        | SrtBackend
+        | SeatbeltBackend -> mergeEnv (mergeEnv inherited fromGrants) resolved |> withGitConfig [ "credential.helper", "" ]
         | DockerBackend -> mergeEnv (mergeEnv dockerBaseline fromGrants) resolved
     Ok
         { ReadPaths = grantedReads
@@ -980,7 +998,8 @@ let policyFor
             match backend with
             | HostBackend
             | DockerBackend -> None
-            | SrtBackend -> Some (List.distinct grantedDomains)
+            | SrtBackend
+            | SeatbeltBackend -> Some (List.distinct grantedDomains)
           Sockets = List.distinct grantedSockets
           // Both container channels filled from the same fold as the lists above — one
           // fact, several consumers. Under the host family `Volumes` is structurally
@@ -2730,7 +2749,9 @@ module SrtSandbox =
             | Wrap of id: int * command: string * cwd: string option
 
         type Reply =
-            | Ready
+            /// The manager is up, and this is where its filtering proxy listens. `None` is
+            /// a manager that started none, which a backend that needs one refuses.
+            | Ready of proxy: SeatbeltProxy option
             /// The manager did not start, in words; the host exits after saying so.
             | Refused of reason: string
             | Confined of id: int * argv: string list
@@ -2801,7 +2822,15 @@ module SrtSandbox =
 
         let reply (reply: Reply) : string =
             match reply with
-            | Ready -> Encode.object [ "ready", Encode.bool true ]
+            | Ready proxy ->
+                Encode.object [
+                    "ready",
+                    Encode.object (
+                        match proxy with
+                        | Some proxy -> [ "port", Encode.int proxy.Port; "token", Encode.string proxy.Token ]
+                        | None -> []
+                    )
+                ]
             | Refused reason -> Encode.object [ "refused", Encode.string reason ]
             | Confined (id, argv) -> Encode.object [ "confined", Encode.object [ "id", Encode.int id; "argv", strings argv ] ]
             | Unconfined (id, reason) ->
@@ -2810,7 +2839,12 @@ module SrtSandbox =
 
         let private decodeReply : Decoder<Reply> =
             Decode.oneOf [
-                Decode.field "ready" Decode.bool |> Decode.map (fun _ -> Ready)
+                Decode.field
+                    "ready"
+                    (Decode.object (fun get ->
+                        match get.Optional.Field "port" Decode.int, get.Optional.Field "token" Decode.string with
+                        | Some port, Some token -> Ready (Some { SeatbeltProxy.Port = port; SeatbeltProxy.Token = token })
+                        | _ -> Ready None))
                 Decode.field "refused" Decode.string |> Decode.map Refused
                 Decode.field
                     "confined"
@@ -2902,7 +2936,15 @@ module SrtSandbox =
                     manager <- Some (Interop.awaitPromise started)
                     async {
                         match! Interop.awaitPromise started with
-                        | Ok _ -> say HostWire.Ready
+                        | Ok (srt, _) ->
+                            // Read after `initialize` resolved, which is when the proxy
+                            // listens. Every sandbox is told. Only a sandbox whose profile
+                            // is written here (`SeatbeltSandbox`) uses the answer.
+                            let proxy =
+                                match srt.getProxyPort (), srt.getProxyAuthToken () with
+                                | Some port, Some token -> Some { SeatbeltProxy.Port = port; SeatbeltProxy.Token = token }
+                                | _ -> None
+                            say (HostWire.Ready proxy)
                         | Error reason -> say (HostWire.Refused reason)
                     }
                     |> Async.StartImmediate
@@ -2936,6 +2978,8 @@ module SrtSandbox =
     /// its own three descriptors (`holdingOnlyItsOwn`) — and a way to let it go.
     type private Confiner =
         { Wrap : string -> string option -> Async<Result<string list, string>>
+          /// Where the host's manager filters egress, as the host said when it was ready.
+          Proxy : SeatbeltProxy option
           /// End the host's input. It resets its manager and exits.
           Close : unit -> unit }
 
@@ -2986,6 +3030,7 @@ module SrtSandbox =
                                 nextId <- nextId + 1
                                 pending.[nextId] <- answer
                                 send (HostWire.Wrap (nextId, holdingOnlyItsOwn (platform ()) command, cwd)))
+                  Proxy = None
                   Close = fun () -> if Option.isNone gone then input.finish () }
             let answered (id: int) (result: Result<string list, string>) =
                 match pending.TryGetValue id with
@@ -3005,7 +3050,7 @@ module SrtSandbox =
                 (ChildProcessStreams.stdout child)
                 (lines (fun line ->
                     match HostWire.parseReply line with
-                    | Some HostWire.Ready -> settle (Ok confiner)
+                    | Some (HostWire.Ready proxy) -> settle (Ok { confiner with Proxy = proxy })
                     | Some (HostWire.Refused reason) ->
                         settle (Error reason)
                         input.finish ()
@@ -3013,6 +3058,31 @@ module SrtSandbox =
                     | Some (HostWire.Unconfined (id, reason)) -> answered id (Error reason)
                     | None -> eprintfn "[srt host %d] %s" (int child.pid) line))
             send (HostWire.Start config))
+
+    /// One sandbox's filtering proxy, and the way to let it go.
+    type Egress =
+        { Proxy : SeatbeltProxy
+          /// End the host that holds the proxy. Nothing reaches the network through it after.
+          Close : unit -> unit }
+
+    /// Start this policy's filtering proxy and nothing else of srt's: a host and its
+    /// manager, on the policy's allowlist, wrapping no command.
+    ///
+    /// For a backend that confines with a profile of its own (`SeatbeltSandbox`) and still
+    /// needs egress filtered by host, which a profile cannot do: Seatbelt matches an address
+    /// and a port, never a name. The manager is started on the whole config, as `create`
+    /// starts it, so the proxy's allowlist is the one a sandbox srt confined would have.
+    let egressFor (tools: SrtTools) (policy: SandboxPolicy) : Async<Result<Egress, string>> =
+        async {
+            match! confine (configFor tools policy) with
+            | Error reason -> return Error reason
+            | Ok confiner ->
+                match confiner.Proxy with
+                | Some proxy -> return Ok { Proxy = proxy; Close = confiner.Close }
+                | None ->
+                    confiner.Close ()
+                    return Error "srt's manager started no filtering proxy. A sandbox with no proxy has no egress to filter."
+        }
 
     let create (tools: SrtTools) : CreateSandbox =
         fun policy ->
@@ -3130,6 +3200,106 @@ module SrtSandbox =
                     | Ok [] -> return failwith "srt returned an empty argv"
                     | Ok argv -> return argv
                     | Error reason -> return failwith reason
+            }
+
+// --- seatbelt: macOS confinement under a profile written here -----------------------------
+
+/// macOS's Seatbelt under a `SeatbeltProfile`: each spawn is `sandbox-exec`, handed the
+/// profile and then the command as it is. No wrapper shell, so an argv reaches its program
+/// as an argv, and no round trip to another process for each spawn.
+///
+/// What srt still does here is filter egress. A profile can admit a port and cannot admit
+/// a host name, so the sandbox's one route out is the loopback port of srt's proxy
+/// (`SrtSandbox.egressFor`), and the proxy holds the allowlist.
+module SeatbeltSandbox =
+
+    /// Where macOS keeps it. By path, as every tool a session execs is named: a
+    /// `sandbox-exec` found on a sandbox's own PATH would be whichever one was put there.
+    let private sandboxExec = "/usr/bin/sandbox-exec"
+
+    /// Whether this platform has a Seatbelt at all. Asked before a sandbox is built, so a
+    /// host that is not a Mac is refused in words and not by a missing binary.
+    let hostedOn (platform: Node.Base.Platform) : Result<unit, string> =
+        if platform = Node.Base.Platform.Darwin then Ok ()
+        else Error "the seatbelt backend confines with macOS's Seatbelt, and this host is not a Mac. The confining backend here is srt."
+
+    /// `hostedOn`, for the host this process runs on.
+    let hostedHere () : Result<unit, string> = hostedOn (platform ())
+
+    /// What a spawn under `profile` is started as.
+    ///
+    /// The profile is an ARGUMENT, never a file. A file would have to live somewhere, the
+    /// only places a session writes are places its sandboxes write too, and a profile a
+    /// confined process can edit confines the next spawn to whatever that process chose.
+    let argvFor (profile: string) (exec: SandboxExec) : string * string list =
+        sandboxExec, [ "-p"; profile; exec.Executable ] @ exec.Arguments
+
+    /// A spawn's environment: the policy's, then the request's, then the proxy's, so that
+    /// nothing a repo or a command sets can point a client past the filter. git is told to
+    /// present the proxy's credential with its first request, which is what srt's own
+    /// wrapper tells it (`http.proxyAuthMethod=basic`).
+    let environmentFor (proxy: SeatbeltProxy) (policy: SandboxPolicy) (exec: SandboxExec) : Map<string, string> =
+        mergeEnv (mergeEnv (environment Map.empty policy) exec.Env) (SeatbeltProxy.environment proxy)
+        |> withGitConfig [ "http.proxyAuthMethod", "basic" ]
+
+    /// No terminal yet (`SpawnPty = None`), and that is a statement about what has been
+    /// built, not about Seatbelt. A shell with job control opens `/dev/tty`, which the
+    /// kernel judges as the terminal's own device, so the profile has to name that device.
+    /// Naming `/dev/ttys*` (srt's `allowPty`) admits every terminal the user has open along
+    /// with this one. Naming the one needs the pty opened before the profile is written.
+    /// Until that is done a terminal here runs each block as its own spawn.
+    let create (tools: SrtTools) : CreateSandbox =
+        fun policy ->
+            async {
+                try
+                    policy.WorkingDirectory |> Option.iter Fs.ensureDir
+                    Fs.ensureDir (SessionLayout.tmpDir ())
+                    match! SrtSandbox.egressFor tools policy with
+                    | Error reason -> return Error (sprintf "seatbelt sandbox failed: %s" reason)
+                    | Ok egress ->
+                        let host =
+                            { RuntimePaths = tools.Runtime
+                              Tmp = SessionLayout.tmpDir ()
+                              ProxyPort = Some egress.Proxy.Port }
+                        match SeatbeltProfile.forPolicy host policy with
+                        | Error refusal ->
+                            egress.Close ()
+                            return Error (sprintf "seatbelt sandbox failed: %s" refusal)
+                        | Ok profile ->
+                            // Rendered once: the policy is fixed for the sandbox's life, so
+                            // every spawn in it is confined by the same text.
+                            let text = SeatbeltProfile.render profile
+                            let children = Children.Registry ()
+                            let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
+                                async {
+                                    try
+                                        let cwd =
+                                            SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
+                                            |> Option.toObj
+                                        let executable, arguments = argvFor text exec
+                                        return
+                                            Ok (
+                                                children.Spawn
+                                                    (executable, arguments, cwd, environmentFor egress.Proxy policy exec)
+                                                    onChunk
+                                            )
+                                    with ex -> return Error ex.Message
+                                }
+                            return
+                                Ok
+                                    { Ref = "seatbelt"
+                                      Spawn = spawn
+                                      SpawnPty = None
+                                      Shell = None
+                                      // The proxy goes with the sandbox, as srt's host does
+                                      // with the sandbox it confined.
+                                      Dispose =
+                                        fun () ->
+                                            async {
+                                                children.KillAll ()
+                                                egress.Close ()
+                                            } }
+                with ex -> return Error (sprintf "seatbelt sandbox failed: %s" ex.Message)
             }
 
 // --- The AgentSandbox: where the agent CLI process runs ----------------------------------
@@ -3363,8 +3533,8 @@ module AgentSandbox =
 
             proxy)
 
-    /// The spawner for the configured agent backend. Docker is not one: `parseAgent`
-    /// refused it at boot.
+    /// The spawner for the configured agent backend. Docker and seatbelt are not one:
+    /// `parseAgent` refused each at boot.
     let claudeSpawnerFor (backend: SandboxBackend) (ambient: Map<string, string>) (home: string) (env: Map<string, string>) : Sdk.Spawner =
         match backend with
         | SrtBackend ->
@@ -3376,6 +3546,7 @@ module AgentSandbox =
                 let policy = policyFor ambient home env
                 srtClaudeSpawner (SrtSandbox.wrapperFor tools policy)
         | HostBackend
+        | SeatbeltBackend
         | DockerBackend -> hostClaudeSpawner ()
 
     /// Everything the SDK needs to run one turn's CLI: the environment to give it, the
@@ -3415,7 +3586,7 @@ let forBackend (backend: SandboxBackend) (network: DockerSandbox.Network) (name:
     // backend is the operator's and the spec is partly the repo's, so they are authored by
     // different people and meet only here. Refused rather than ignored — a sandbox that
     // silently did not run what it was asked to run is worse than one that says so.
-    | (HostBackend | SrtBackend), Container container ->
+    | (HostBackend | SrtBackend | SeatbeltBackend), Container container ->
         Error (
             sprintf
                 "this session's work sandbox is %s. It runs no container.%s A container needs the docker backend."
@@ -3430,3 +3601,9 @@ let forBackend (backend: SandboxBackend) (network: DockerSandbox.Network) (name:
     | DockerBackend, Confinement -> Ok (DockerSandbox.create network name spec ContainerSpec.defaults)
     | SrtBackend, Confinement ->
         SrtSandbox.toolsFrom ambient |> Result.map SrtSandbox.create
+    // The tools are srt's record, read the same way: what stays readable on this host, and
+    // where the package is whose proxy this backend starts.
+    | SeatbeltBackend, Confinement ->
+        SeatbeltSandbox.hostedHere ()
+        |> Result.bind (fun () -> SrtSandbox.toolsFrom ambient)
+        |> Result.map SeatbeltSandbox.create
