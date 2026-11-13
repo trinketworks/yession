@@ -468,6 +468,25 @@ module ContainerSpec =
                 CgroupParent.forDriver ceiling.CgroupParent cgroupDriver
                 |> Result.map (fun parent -> { ContainerLimits.Memory = memory; PidsLimit = pids; CgroupParent = parent })))
 
+/// What a sandbox on the host's own userland declares about itself: what its work runs
+/// behind. It brings no image, so it has nothing else to say that a container says.
+///
+/// Qualified, because `Entrypoint` is `ContainerSpec`'s label too, and a bare
+/// `{ Entrypoint = … }` must not come to mean this record where a container's was meant.
+[<RequireQualifiedAccess>]
+type HostSpec =
+    { /// What every piece of WORK here runs behind, as an argv (`ProcessEntry`): a devshell
+      /// that assembles the toolchain, on a host that offers a repository none of its own.
+      /// The session's housekeeping runs bare, as it does in a container. `None` runs
+      /// everything as it stands.
+      Entrypoint : string list option }
+
+module HostSpec =
+
+    /// A sandbox on the host that declares nothing about itself, which is what the
+    /// session's own `default` is.
+    let none : HostSpec = { HostSpec.Entrypoint = None }
+
 /// What the sandbox IS, and the distinction is load-bearing rather than descriptive.
 ///
 /// This used to be four optional fields on one record, and every one of them was meaningless
@@ -485,10 +504,16 @@ module ContainerSpec =
 /// the repo's, so the two are authored by different people and can only be reconciled where
 /// they meet (`Sandboxes.forBackend`).
 type SandboxRuntime =
-    /// host / srt. Nothing to build, nothing to run: the sandbox IS the confinement its
-    /// spawns go through. (Not `Confined` — `FilesystemConfinement` already has that case,
-    /// and a second one would shadow it wherever the domain is opened.)
+    /// The declaration named no body. Nothing to build, nothing to run: the sandbox IS the
+    /// confinement its spawns go through, and which confinement is the backend's answer.
+    /// Only the session's own sandboxes may say nothing (`backendFor`). (Not `Confined` —
+    /// `FilesystemConfinement` already has that case, and a second one would shadow it
+    /// wherever the domain is opened.)
     | Confinement
+    /// The host's own userland, by name (`host:`): what `Confinement` is, said on purpose,
+    /// with what its work runs behind. The one body a repo's sandbox has besides a
+    /// container.
+    | OnHost of HostSpec
     /// docker.
     | Container of ContainerSpec
 
@@ -500,6 +525,9 @@ module SandboxRuntime =
     let describe (runtime: SandboxRuntime) : string =
         match runtime with
         | Confinement -> "no container"
+        | OnHost { HostSpec.Entrypoint = None } -> "the host's userland"
+        | OnHost { HostSpec.Entrypoint = Some entrypoint } ->
+            sprintf "the host's userland, behind '%s'" (String.concat " " entrypoint)
         | Container container ->
             let what =
                 match container.Image, container.Build with
@@ -510,45 +538,87 @@ module SandboxRuntime =
             | Some command -> sprintf "%s running '%s'" what command
             | None -> what
 
-    /// The backend every repo-owned work sandbox runs under — the decision this codebase
-    /// pivoted on: a repo-owned sandbox is WORK, and work runs in a container. Running a
-    /// BUILD under the light confinement was driven end to end and died behind walls no
-    /// grant can open (GAPS: "srt work sandboxes do not run builds").
+    /// The backend a repo's CONTAINER runs under. Named once, HERE, because it is one fact
+    /// with several readers, and each re-encoding "a repo's container means docker" by hand
+    /// is how a split shipped with three seams still answering for the wrong backend.
+    let containerBackend : SandboxBackend = DockerBackend
+
+    /// The backend a WORK sandbox runs under, decided by its scope and by the body it
+    /// declared.
     ///
-    /// Named once, HERE, because several places downstream need only this half of the
-    /// decision — which workspace a sandbox gets, which view of the repos directory its
-    /// declaration resolves against, which host limits judge its asks — and each of them
-    /// re-encoding "repo-owned means docker" by hand is how the split shipped with three
-    /// seams still answering for the wrong backend.
-    let repoWorkBackend : SandboxBackend = DockerBackend
-
-    /// The backend a WORK sandbox runs under, decided by its scope alone. The
-    /// session-owned sandboxes keep the operator's configured light confinement
-    /// (srt/host) for the checkout and small edits; a repo's are `repoWorkBackend`.
+    /// The session's own sandboxes keep the operator's configured backend, whatever they
+    /// declare. A repo's are decided by their body: a container is docker's, and a sandbox
+    /// on the host's own userland is whichever backend the operator named for one
+    /// (`repoHost`, `SandboxBackend.parseRepo`). The body is the repo's to say and the
+    /// backend under it is the operator's, so the two meet here and nowhere earlier.
+    ///
     /// Total: everything that follows from the backend (paths, views, limits,
-    /// descriptions) asks this, whether or not the sandbox can actually start.
-    let scopedBackend (configured: SandboxBackend) (scope: SandboxScope) : SandboxBackend =
-        match scope with
-        | SessionOwned -> configured
-        | RepoOwned _ -> repoWorkBackend
+    /// descriptions) asks this, whether or not the sandbox can actually start. A repo's
+    /// sandbox that cannot start (no body, or a host body where the operator named no
+    /// backend for one, both refused by `backendFor`) is answered for as the container it
+    /// is not. That is the answer every repo sandbox had before one could name a host
+    /// body, and nothing reads it for a sandbox that never comes up.
+    let scopedBackend
+        (configured: SandboxBackend)
+        (repoHost: SandboxBackend option)
+        (scope: SandboxScope)
+        (runtime: SandboxRuntime)
+        : SandboxBackend =
+        match scope, runtime with
+        | SessionOwned, _ -> configured
+        | RepoOwned _, OnHost _ -> repoHost |> Option.defaultValue containerBackend
+        | RepoOwned _, Container _
+        | RepoOwned _, Confinement -> containerBackend
 
-    /// `scopedBackend`, plus the refusal only a start needs: a repo-owned declaration
-    /// with no container is refused HERE, where the rule lives and the cheap tier can
-    /// reach it — not defaulted to an image that builds nothing, which would turn a
-    /// missing declaration into a sandbox that looks fine and fails at the first
-    /// command.
+    /// `scopedBackend`, for a reader that holds a NAME and no request: the description of
+    /// a sandbox that is not up, the route a credential takes into one, where a share out
+    /// of one lands.
+    ///
+    /// By the body its declaration names. Where no file declares it any more and it is
+    /// still running, by the backend it was created under. A name that is neither is
+    /// nothing yet, and is answered for as a container, as `scopedBackend` answers for
+    /// what cannot start.
+    let namedBackend
+        (configured: SandboxBackend)
+        (repoHost: SandboxBackend option)
+        (scope: SandboxScope)
+        (declared: SandboxRuntime option)
+        (created: SandboxBackend option)
+        : SandboxBackend =
+        match scope, declared, created with
+        | SessionOwned, _, _ -> configured
+        | RepoOwned _, Some runtime, _ -> scopedBackend configured repoHost scope runtime
+        | RepoOwned _, None, Some backend -> backend
+        | RepoOwned _, None, None -> containerBackend
+
+    /// `scopedBackend`, plus the two refusals only a start needs, said HERE, where the rule
+    /// lives and the cheap tier can reach it.
+    ///
+    /// A repo's sandbox names its body. One that names none is not defaulted to an image
+    /// that builds nothing, or to a host its commands were never written for: either would
+    /// be a sandbox that looks fine and fails at the first command.
+    ///
+    /// And running a repository's commands on the host's own userland is the operator's to
+    /// allow. No file can ask its way into it: a container is the only body a host runs
+    /// without being told to.
     let backendFor
         (configured: SandboxBackend)
+        (repoHost: SandboxBackend option)
         (scope: SandboxScope)
         (runtime: SandboxRuntime)
         : Result<SandboxBackend, string> =
-        match scope, runtime with
-        | RepoOwned repo, Confinement ->
+        match scope, runtime, repoHost with
+        | RepoOwned repo, Confinement, _ ->
             Error (
                 sprintf
-                    "a repo's work sandbox is a container. %s declares no container. Add a `container:` block to its yession.yaml. The block holds an image or a build"
+                    "a repo's work sandbox names its body. %s declares none. Add a `container:` block to its yession.yaml, which holds an image or a build. Or add a `host:` block, which runs on this host's own userland where its operator allows that"
                     (RepoRef.value repo))
-        | scope, _ -> Ok (scopedBackend configured scope)
+        | RepoOwned repo, OnHost _, None ->
+            Error (
+                sprintf
+                    "%s declares a `host:` sandbox. This host runs no repository's sandbox on its own userland. Its operator allows one by naming a backend in YESSION_SESSION_REPO_BACKEND. A `container:` sandbox needs nothing set"
+                    (RepoRef.value repo))
+        | scope, runtime, repoHost -> Ok (scopedBackend configured repoHost scope runtime)
 
 /// Where a seeded file goes: a path inside the sandbox's OWN home, and nowhere else.
 ///
@@ -678,7 +748,8 @@ module SandboxRequest =
 
     let private mountsOf (runtime: SandboxRuntime) =
         match runtime with
-        | Confinement -> []
+        | Confinement
+        | OnHost _ -> []
         | Container container -> container.Mounts |> List.map (fun mount -> mount.Target)
 
     /// Every way what is RUNNING differs from what was asked for, each phrased as one

@@ -424,18 +424,18 @@ let artifactsVisibleAt (backend: SandboxBackend) (hostArtifactsDir: string) : st
 ///
 /// A share is copied in by the sandbox, so the path it is told to write to has to be the store
 /// as THAT sandbox sees it — and which backend a sandbox runs on is not the one the session was
-/// configured with: a repo-owned sandbox is work, and work runs in a container whatever
-/// `default` runs under (`SandboxRuntime.scopedBackend`). Taking the sandbox rather than a
-/// backend is what makes that unforgettable, because the composition root has no backend left
-/// to get wrong.
+/// configured with: a repo's sandbox runs under the backend its body names, whatever
+/// `default` runs under (`SandboxRuntime.namedBackend`). Taking the sandbox, and a way to ask
+/// which backend is its, is what makes that unforgettable, because the composition root has
+/// no backend of its own left to get wrong.
 ///
 /// It is the fault this exists to prevent, and it shipped: the root answered with the SESSION's
 /// backend for every sandbox, so a share out of a repo container was told to write to a
 /// host-shaped path. Inside a container that path is writable, so `mkdir -p` and `cp` both
 /// succeeded and the bytes landed in the container's own filesystem — a copy that reported
 /// success, with nothing in the mount the store reads.
-let artifactsVisibleTo (configured: SandboxBackend) (hostArtifactsDir: string) (sandbox: SandboxRef) : string =
-    artifactsVisibleAt (SandboxRuntime.scopedBackend configured (SandboxRef.scope sandbox)) hostArtifactsDir
+let artifactsVisibleTo (backendOf: SandboxRef -> SandboxBackend) (hostArtifactsDir: string) (sandbox: SandboxRef) : string =
+    artifactsVisibleAt (backendOf sandbox) hostArtifactsDir
 
 /// What the SESSION adds to whatever was asked for. The checkouts are the session's,
 /// shared by every sandbox in it, so they are not part of anybody's ask: a repo that
@@ -466,7 +466,11 @@ let withSessionShares
         let container =
             match requested.Runtime with
             | Container container -> container
-            | Confinement -> ContainerSpec.defaults
+            // No container was asked for, under a backend that is one: its defaults. A
+            // host body gets here only for a session sandbox on a docker session, where
+            // `forBackend` refuses it before anything is mounted.
+            | Confinement
+            | OnHost _ -> ContainerSpec.defaults
         { requested with
             Runtime =
                 Container
@@ -1043,7 +1047,8 @@ let summaryFor (backend: SandboxBackend) (spec: EnvironmentSpec) : string =
     match spec.Runtime with
     | Container { Image = Some image } -> sprintf "docker:%s" (ContainerImage.render image)
     | Container _
-    | Confinement -> SandboxBackend.describe backend
+    | Confinement
+    | OnHost _ -> SandboxBackend.describe backend
 
 /// Name by name through the binding, which answers nothing for a variable that is not there
 /// — the same reading the `typeof v === 'string'` filter this replaced was making of the
@@ -1366,6 +1371,20 @@ module private Pty =
                       Exited = exited.Await }
             with ex -> Error ex.Message
 
+// --- The host's own userland: what a process there is started as -------------------------
+
+/// The argv a process runs as on the host's own userland (`ProcessEntry`): work behind the
+/// entrypoint its sandbox declared, and the session's housekeeping bare. One rule for the
+/// three backends that run there, so a `host:` sandbox means the same thing under each. A
+/// container has a rule of its own (`DockerSandbox.argvFor`), because its work also sets
+/// what it runs with.
+let entered (host: HostSpec) (exec: SandboxExec) : string * string list =
+    match exec.Via, host.Entrypoint with
+    | Entrypoint, Some (first :: rest) -> first, rest @ exec.Executable :: exec.Arguments
+    | Entrypoint, Some []
+    | Entrypoint, None
+    | Direct, _ -> exec.Executable, exec.Arguments
+
 // --- Host: explicitly unsandboxed --------------------------------------------------------
 
 /// Plain child processes of the Session. No confinement — chosen deliberately
@@ -1373,7 +1392,7 @@ module private Pty =
 /// exactly the policy env plus the request's, never the parent's.
 module HostSandbox =
 
-    let create () : CreateSandbox =
+    let create (host: HostSpec) : CreateSandbox =
         fun policy ->
             async {
                 policy.WorkingDirectory |> Option.iter Fs.ensureDir
@@ -1384,7 +1403,8 @@ module HostSandbox =
                         let cwd =
                             SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
                             |> Option.toObj
-                        return Ok (children.Spawn (exec.Executable, exec.Arguments, cwd, env) onChunk)
+                        let executable, arguments = entered host exec
+                        return Ok (children.Spawn (executable, arguments, cwd, env) onChunk)
                     }
                 return
                     Ok
@@ -1399,7 +1419,8 @@ module HostSandbox =
                                         let cwd =
                                             SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
                                             |> Option.toObj
-                                        return Pty.spawn exec.Executable exec.Arguments cwd env cols rows onOutput
+                                        let executable, arguments = entered host exec
+                                        return Pty.spawn executable arguments cwd env cols rows onOutput
                                     })
                           Shell = None
                           Dispose = fun () -> async { children.KillAll () } }
@@ -3084,7 +3105,7 @@ module SrtSandbox =
                     return Error "srt's manager started no filtering proxy. A sandbox with no proxy has no egress to filter."
         }
 
-    let create (tools: SrtTools) : CreateSandbox =
+    let create (tools: SrtTools) (host: HostSpec) : CreateSandbox =
         fun policy ->
             async {
                 try
@@ -3105,7 +3126,9 @@ module SrtSandbox =
                                 let! wrapped = confiner.Wrap line (startIn cwd)
                                 return wrapped |> Result.map (fun argv -> argv, cwd, env)
                             }
-                        let confined (exec: SandboxExec) = confinedAs (commandLine exec.Executable exec.Arguments) exec
+                        let confined (exec: SandboxExec) =
+                            let executable, arguments = entered host exec
+                            confinedAs (commandLine executable arguments) exec
                         let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
                             async {
                                 try
@@ -3139,10 +3162,11 @@ module SrtSandbox =
                                         Some (fun exec cols rows onOutput ->
                                             async {
                                                 try
+                                                    let entry, rest = entered host exec
                                                     let line =
                                                         match tools.Setsid with
-                                                        | Some setsid -> adoptingLine setsid exec.Executable exec.Arguments
-                                                        | None -> commandLine exec.Executable exec.Arguments
+                                                        | Some setsid -> adoptingLine setsid entry rest
+                                                        | None -> commandLine entry rest
                                                     match! confinedAs line exec with
                                                     | Error reason -> return Error reason
                                                     | Ok ([], _, _) -> return Error "srt returned an empty argv"
@@ -3231,8 +3255,12 @@ module SeatbeltSandbox =
     /// The profile is an ARGUMENT, never a file. A file would have to live somewhere, the
     /// only places a session writes are places its sandboxes write too, and a profile a
     /// confined process can edit confines the next spawn to whatever that process chose.
-    let argvFor (profile: string) (exec: SandboxExec) : string * string list =
-        sandboxExec, [ "-p"; profile; exec.Executable ] @ exec.Arguments
+    ///
+    /// Work stands behind the entrypoint its sandbox declared (`entered`), inside the
+    /// profile like everything else it starts.
+    let argvFor (profile: string) (host: HostSpec) (exec: SandboxExec) : string * string list =
+        let executable, arguments = entered host exec
+        sandboxExec, [ "-p"; profile; executable ] @ arguments
 
     /// A spawn's environment: the policy's, then the request's, then the proxy's, so that
     /// nothing a repo or a command sets can point a client past the filter. git is told to
@@ -3248,7 +3276,7 @@ module SeatbeltSandbox =
     /// Naming `/dev/ttys*` (srt's `allowPty`) admits every terminal the user has open along
     /// with this one. Naming the one needs the pty opened before the profile is written.
     /// Until that is done a terminal here runs each block as its own spawn.
-    let create (tools: SrtTools) : CreateSandbox =
+    let create (tools: SrtTools) (host: HostSpec) : CreateSandbox =
         fun policy ->
             async {
                 try
@@ -3257,11 +3285,22 @@ module SeatbeltSandbox =
                     match! SrtSandbox.egressFor tools policy with
                     | Error reason -> return Error (sprintf "seatbelt sandbox failed: %s" reason)
                     | Ok egress ->
-                        let host =
-                            { RuntimePaths = tools.Runtime
-                              Tmp = SessionLayout.tmpDir ()
+                        // The path the kernel will check. Seatbelt matches a file's own
+                        // path, never a spelling that reaches it through a symlink, and
+                        // srt resolved a policy's paths for the profile it wrote. A path
+                        // that is not there yet stays as it was written: a cache
+                        // directory a tool has yet to make is ordinary.
+                        let real (path: string) = Fs.canonical path |> Option.defaultValue path
+                        let onThisHost =
+                            { RuntimePaths = tools.Runtime |> List.map real
+                              Tmp = real (SessionLayout.tmpDir ())
                               ProxyPort = Some egress.Proxy.Port }
-                        match SeatbeltProfile.forPolicy host policy with
+                        let asTheKernelSeesIt =
+                            { policy with
+                                ReadPaths = policy.ReadPaths |> List.map real
+                                WritePaths = policy.WritePaths |> List.map real
+                                Sockets = policy.Sockets |> List.map real }
+                        match SeatbeltProfile.forPolicy onThisHost asTheKernelSeesIt with
                         | Error refusal ->
                             egress.Close ()
                             return Error (sprintf "seatbelt sandbox failed: %s" refusal)
@@ -3276,7 +3315,7 @@ module SeatbeltSandbox =
                                         let cwd =
                                             SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
                                             |> Option.toObj
-                                        let executable, arguments = argvFor text exec
+                                        let executable, arguments = argvFor text host exec
                                         return
                                             Ok (
                                                 children.Spawn
@@ -3581,6 +3620,12 @@ module AgentSandbox =
 /// at boot — fail closed, never a silent fallback to a weaker backend.
 let forBackend (backend: SandboxBackend) (network: DockerSandbox.Network) (name: string) (spec: EnvironmentSpec) : Result<CreateSandbox, string> =
     let ambient = ambientEnv ()
+    // The tools are srt's record, read the same way: what stays readable on this host, and
+    // where the package is whose proxy this backend starts.
+    let seatbelt (host: HostSpec) =
+        SeatbeltSandbox.hostedHere ()
+        |> Result.bind (fun () -> SrtSandbox.toolsFrom ambient)
+        |> Result.map (fun tools -> SeatbeltSandbox.create tools host)
     match backend, spec.Runtime with
     // The one question the union cannot settle: whether this BACKEND hosts containers. The
     // backend is the operator's and the spec is partly the repo's, so they are authored by
@@ -3594,16 +3639,20 @@ let forBackend (backend: SandboxBackend) (network: DockerSandbox.Network) (name:
                 (match container.Command with
                  | Some command -> sprintf " It thus has nothing to run '%s' as." command
                  | None -> ""))
-    | HostBackend, Confinement -> Ok (HostSandbox.create ())
+    | HostBackend, Confinement -> Ok (HostSandbox.create HostSpec.none)
+    | HostBackend, OnHost host -> Ok (HostSandbox.create host)
     // Docker always IS a container; a spec that asked for nothing in particular gets the
     // defaults rather than a second, container-less docker path.
     | DockerBackend, Container container -> Ok (DockerSandbox.create network name spec container)
     | DockerBackend, Confinement -> Ok (DockerSandbox.create network name spec ContainerSpec.defaults)
+    // The same question the other way round: a body that is the host's own userland, under
+    // a backend that only runs containers. Only a session sandbox can get here, on a
+    // session whose operator chose docker for its own.
+    | DockerBackend, OnHost _ ->
+        Error "this session's work sandbox is docker. It runs a container, and this sandbox declares the host's own userland (`host:`). A host sandbox needs the srt, seatbelt or host backend."
     | SrtBackend, Confinement ->
-        SrtSandbox.toolsFrom ambient |> Result.map SrtSandbox.create
-    // The tools are srt's record, read the same way: what stays readable on this host, and
-    // where the package is whose proxy this backend starts.
-    | SeatbeltBackend, Confinement ->
-        SeatbeltSandbox.hostedHere ()
-        |> Result.bind (fun () -> SrtSandbox.toolsFrom ambient)
-        |> Result.map SeatbeltSandbox.create
+        SrtSandbox.toolsFrom ambient |> Result.map (fun tools -> SrtSandbox.create tools HostSpec.none)
+    | SrtBackend, OnHost host ->
+        SrtSandbox.toolsFrom ambient |> Result.map (fun tools -> SrtSandbox.create tools host)
+    | SeatbeltBackend, Confinement -> seatbelt HostSpec.none
+    | SeatbeltBackend, OnHost host -> seatbelt host

@@ -1276,47 +1276,109 @@ let private timelineTests =
     ]
 
 let private backendTests =
-    // The scope decides the backend (`SandboxRuntime.backendFor`): the session's own
-    // sandboxes keep whatever light confinement the operator configured; a repo's are
-    // WORK, and work runs in a container. Pinned here because everything downstream —
-    // the registry's describe, the composition's create — only ASKS.
+    // The scope and the body decide the backend (`SandboxRuntime.backendFor`): the session's
+    // own sandboxes keep whatever backend the operator configured, and a repo's run under
+    // the one their body names. Pinned here because everything downstream — the registry's
+    // describe, the composition's create — only ASKS.
     let repo = RepoRef.create "octo/hello" |> expect
     let container = Container { ContainerSpec.defaults with Image = Some { Name = "nixos/nix"; Tag = None } }
+    let onHost = OnHost { HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }
     testList "the backend a scope gets" [
         testCase "the session's own sandbox keeps the configured backend" (fun () ->
             Expect.equal
-                (SandboxRuntime.backendFor SrtBackend SessionOwned Confinement)
+                (SandboxRuntime.backendFor SrtBackend None SessionOwned Confinement)
                 (Ok SrtBackend)
-                "the default sandbox is the operator's light confinement"
-            Expect.equal
-                (SandboxRuntime.backendFor HostBackend SessionOwned container)
-                (Ok HostBackend)
-                "scope decides; the runtime is reconciled downstream")
+                "the default sandbox is the operator's light confinement")
 
-        testCase "a repo's sandbox is a container, whatever the session runs" (fun () ->
+        testCase "the session's own sandbox keeps the configured backend whatever body it names" (fun () ->
             Expect.equal
-                (SandboxRuntime.backendFor SrtBackend (RepoOwned repo) container)
+                ([ container; onHost ] |> List.map (SandboxRuntime.backendFor HostBackend (Some SeatbeltBackend) SessionOwned))
+                [ Ok HostBackend; Ok HostBackend ]
+                "scope decides for the session's own; the body is reconciled downstream")
+
+        testCase "a repo's container is docker's, whatever the session runs" (fun () ->
+            Expect.equal
+                (SandboxRuntime.backendFor SrtBackend None (RepoOwned repo) container)
                 (Ok DockerBackend)
-                "repo-owned work runs under docker")
+                "a repo's container runs under docker")
 
-        testCase "a repo's sandbox with no container is refused, naming the fix" (fun () ->
-            match SandboxRuntime.backendFor SrtBackend (RepoOwned repo) Confinement with
+        testCase "a repo's host sandbox runs under the backend the operator named for one" (fun () ->
+            Expect.equal
+                (SandboxRuntime.backendFor SrtBackend (Some SeatbeltBackend) (RepoOwned repo) onHost)
+                (Ok SeatbeltBackend)
+                "the body is the repo's to say, and the backend under it the operator's")
+
+        testCase "the backend an operator names for a repo's host sandbox does not move its containers" (fun () ->
+            Expect.equal
+                (SandboxRuntime.backendFor SrtBackend (Some SeatbeltBackend) (RepoOwned repo) container)
+                (Ok DockerBackend)
+                "a container is a container on every host")
+
+        testCase "a repo's host sandbox is refused where the operator named no backend for one" (fun () ->
+            match SandboxRuntime.backendFor SrtBackend None (RepoOwned repo) onHost with
             | Ok backend -> failwithf "started under %A instead of refusing" backend
             | Error reason ->
-                Expect.isTrue (reason.Contains "octo/hello") "the refusal names the repo"
-                Expect.isTrue (reason.Contains "container") "and says what to declare")
+                Expect.isTrue
+                    (reason.Contains "octo/hello" && reason.Contains "YESSION_SESSION_REPO_BACKEND")
+                    (sprintf "the refusal names the repo and what its operator sets, said: %s" reason))
+
+        testCase "a repo's sandbox that names no body is refused, naming both" (fun () ->
+            match SandboxRuntime.backendFor SrtBackend (Some SeatbeltBackend) (RepoOwned repo) Confinement with
+            | Ok backend -> failwithf "started under %A instead of refusing" backend
+            | Error reason ->
+                Expect.isTrue
+                    (reason.Contains "octo/hello" && reason.Contains "`container:`" && reason.Contains "`host:`")
+                    (sprintf "the refusal names the repo and the two bodies, said: %s" reason))
 
         // The total half on its own, because everything that is not a start asks it: the
         // registry's describe, the workspace, the limits a repo's ask is judged against.
-        testCase "the scope's backend needs no runtime to answer" (fun () ->
+        testCase "a repo's sandbox that cannot start is answered for as a container" (fun () ->
             Expect.equal
-                (SandboxRuntime.scopedBackend SrtBackend SessionOwned)
+                ([ SandboxRuntime.scopedBackend SrtBackend None (RepoOwned repo) onHost
+                   SandboxRuntime.scopedBackend SrtBackend (Some SeatbeltBackend) (RepoOwned repo) Confinement ])
+                [ SandboxRuntime.containerBackend; SandboxRuntime.containerBackend ]
+                "what every repo sandbox was before one could name a host body")
+
+        // The same question for whoever holds a name and no request.
+        testCase "a name is answered for by the body its declaration names" (fun () ->
+            Expect.equal
+                (SandboxRuntime.namedBackend SrtBackend (Some SeatbeltBackend) (RepoOwned repo) (Some onHost) (Some DockerBackend))
+                SeatbeltBackend
+                "the file is asked first: a stopped sandbox whose body changed starts as the file says")
+
+        testCase "a sandbox no file declares any more is answered for by what it was created under" (fun () ->
+            Expect.equal
+                (SandboxRuntime.namedBackend SrtBackend None (RepoOwned repo) None (Some SeatbeltBackend))
+                SeatbeltBackend
+                "it is still running, and under that")
+
+        testCase "a repo's name that is neither declared nor running is answered for as a container" (fun () ->
+            Expect.equal
+                (SandboxRuntime.namedBackend SrtBackend (Some SeatbeltBackend) (RepoOwned repo) None None)
+                SandboxRuntime.containerBackend
+                "nothing is known of it yet")
+
+        testCase "the session's own name is the configured backend, whatever is known of it" (fun () ->
+            Expect.equal
+                (SandboxRuntime.namedBackend SrtBackend (Some SeatbeltBackend) SessionOwned (Some container) (Some DockerBackend))
                 SrtBackend
-                "session-owned keeps the configured confinement"
+                "scope decides for the session's own")
+
+        // What an operator may name for a repo's host sandbox.
+        testCase "no backend is named for a repo's host sandbox unless the operator names one" (fun () ->
+            Expect.equal (SandboxBackend.parseRepo None) (Ok None) "unset is none, and none refuses")
+
+        testCase "seatbelt and srt are the backends an operator can name for a repo's host sandbox" (fun () ->
             Expect.equal
-                (SandboxRuntime.scopedBackend SrtBackend (RepoOwned repo))
-                SandboxRuntime.repoWorkBackend
-                "repo-owned is the repo work backend, whatever the session runs")
+                ([ "seatbelt"; "srt" ] |> List.map (Some >> SandboxBackend.parseRepo))
+                [ Ok (Some SeatbeltBackend); Ok (Some SrtBackend) ]
+                "the two that confine a process on the host's own userland")
+
+        testCase "host is not a backend for a repo's sandbox" (fun () ->
+            Expect.isError (SandboxBackend.parseRepo (Some "host")) "it confines nothing")
+
+        testCase "docker is not a backend for a repo's host sandbox" (fun () ->
+            Expect.isError (SandboxBackend.parseRepo (Some "docker")) "a host body has no image to give it")
 
         // A checkout has ONE address. A container used to see it at /repos while every
         // other view saw the host's path, so anything written into a checkout as an
@@ -1330,7 +1392,8 @@ let private backendTests =
                 match spec.Runtime with
                 | Container container ->
                     container.Mounts |> List.tryPick (fun m -> if m.Source = HostPath reposDir then Some m.Target else None)
-                | Confinement -> None
+                | Confinement
+                | OnHost _ -> None
             Expect.equal target (Some reposDir) "the bind's target is its source")
     ]
 

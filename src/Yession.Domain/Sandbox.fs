@@ -84,6 +84,27 @@ module SandboxBackend =
                 | HostBackend
                 | SrtBackend -> Ok backend)
 
+    /// The backend a REPO's sandbox runs under when it declares the host's own userland
+    /// (`host:`), from `YESSION_SESSION_REPO_BACKEND` as read (`None` = unset).
+    ///
+    /// Unset is none, and none refuses such a sandbox: running a repository's commands on
+    /// this host and not in a container is the operator's to allow, by naming what confines
+    /// them. `host` confines nothing, so it is not a name for that. Docker is not one
+    /// either: it runs a repo's containers already, and a host body has no image to give it.
+    let parseRepo (raw: string option) : Result<SandboxBackend option, string> =
+        match raw |> Option.map (fun r -> r.Trim ()) with
+        | None | Some "" -> Ok None
+        | Some value ->
+            parse value
+            |> Result.bind (fun backend ->
+                match backend with
+                | SrtBackend
+                | SeatbeltBackend -> Ok (Some backend)
+                | HostBackend ->
+                    Error "host confines nothing. It would run a repository's commands as you. A repo's host sandbox is seatbelt or srt"
+                | DockerBackend ->
+                    Error "docker runs a repo's `container:` sandboxes already. A repo's host sandbox is seatbelt or srt")
+
 /// Whether a sandbox confines the FILESYSTEM at all. Egress, env and process
 /// confinement are unaffected either way — this is only about paths.
 ///

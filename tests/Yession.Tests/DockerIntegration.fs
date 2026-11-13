@@ -48,7 +48,8 @@ let private withContainer (f: ContainerSpec -> ContainerSpec) (spec: Environment
         Runtime =
             match spec.Runtime with
             | Container c -> Container (f c)
-            | Confinement -> Container (f ContainerSpec.defaults) }
+            | Confinement
+            | OnHost _ -> Container (f ContainerSpec.defaults) }
 
 let private alpineSpec =
     { EnvironmentSpec.defaults with Runtime = Container { ContainerSpec.defaults with Image = Some { Name = "alpine"; Tag = Some "3" } } }

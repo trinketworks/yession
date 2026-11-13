@@ -457,6 +457,10 @@ sandboxes:
       PATH: ${env.PATH}:/opt/tools       # composed over what lies beneath; `$${` is a literal `${`
     uses: [ npm-cache ]
     wants: [ github ]                     # the operator's `{ connection: { github: [git, api] } }`, where offered
+  mac:
+    host:                                 # the other body: the userland of the host itself
+      entrypoint: devenv shell --         # what every piece of WORK runs behind
+    uses: [ nix ]
 ```
 
 The `container:` block is a compose service fragment: compose's keys, with compose's
@@ -465,6 +469,16 @@ config` can lint it once the file it is pasted into declares `workspace` under a
 `volumes:`, because compose refuses a volume source that no top-level entry declares. The
 decoder refuses, by name, each key that it does not take, and says what this file offers
 instead.
+
+A sandbox has one body. `container:` brings a userland. `host:` uses the userland of the host
+that runs the session, and holds only `entrypoint`. A repo's sandbox must name one of the
+two. The session refuses a sandbox that names both, and a repo's sandbox that names none.
+
+A file does not name what confines a `host:` sandbox. The operator names that backend
+(`YESSION_SESSION_REPO_BACKEND`, [deployment.md](deployment.md)). Seatbelt on a Mac and
+bubblewrap on Linux are mechanism. A file that named one would work on one kind of host
+only. A host whose operator named no backend refuses a repo's `host:` sandbox. `SandboxBody`
+in `src/Yession.Domain/Config.fs` holds the rule for a third body.
 
 ### Connections and references
 
@@ -540,6 +554,9 @@ every piece of **work** (a terminal's shell, a block, `setup:`) run behind it. T
 housekeeping (start-up checks, `git` by path, the probe behind `set_shell_profile`) runs bare,
 as `docker exec` does. `ProcessEntry` in `src/Yession.Domain/Sandbox.fs` says why.
 
+The session reads the `entrypoint` of a `host:` sandbox in the same way. Work runs behind it
+under each backend that runs on the host, and housekeeping runs bare (`Sandboxes.entered`).
+
 The backend finds the shell that a terminal opens. At start it runs one `command -v` behind
 the entrypoint for the dialects a terminal can instrument, most capable first (`bash`, `zsh`,
 `sh`), and a terminal opens the first one found. This also warms a devshell, once, off the
@@ -603,7 +620,7 @@ Three properties make the file safe to read from code a session just cloned:
   nor anybody in the session. So the file's acts are `ActorRef.Configured`, and it owns no
   credential. The schema refuses what a repo may not name: the whole `YESSION_` prefix in
   `env:`, a host path as a volume source, a `workdir` outside the checkout, and a
-  `cgroup_parent`. So the session
+  `cgroup_parent`. It has no key for the backend that confines a sandbox. So the session
   reads the file from the checkout's `HEAD`, out of git's object store, and never from the
   working tree. An edit in the working tree declares nothing until somebody commits it. A
   `yession.yaml` that `HEAD` commits as a symlink is no file (rule 20).
@@ -677,6 +694,9 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     user is not asked about it.
 26. A repository's container limits narrow the operator's, and only the operator names a
     cgroup (`ContainerSpec.forDaemon`, `ContainerCeiling`).
+27. A repository's sandbox names its body, and only the operator names the backend that runs
+    it (`SandboxRuntime.backendFor`). A repository's commands run on the host's own userland
+    only where the operator named a backend for that (`SandboxBackend.parseRepo`).
 
 Rule 2 has one named exception. Message bodies and terminal command lines are top-level Yjs
 roots, keyed by `BodyKey`, that the app co-manages outside the encoded tree, and the structural

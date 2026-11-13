@@ -232,6 +232,34 @@ let capabilitiesOn
                 |> List.distinct
                 |> List.sort })
 
+/// What a repo's declarations ask for together, each sandbox judged on the backend its own
+/// body runs under.
+///
+/// A repo may declare a container beside a sandbox on the host's own userland, and the two
+/// backends do not scope the same things: one line for both would show a person a grant as
+/// one of them holds it, and be wrong about the other. So the declarations are taken a
+/// backend at a time (`limitsOf` says which limits a body is judged on), and what is shown
+/// is every line any of them comes to. Where every sandbox has one backend, which is the
+/// usual repo, this is `capabilitiesOn` for the repo's whole selection.
+let capabilitiesOf
+    (limitsOf: SandboxBody option -> HostLimits)
+    (github: ConnectionName)
+    (resolve: ResourceName list -> ResourceName list -> Result<ResourceClosure, string>)
+    (declared: SandboxDecl list)
+    : Result<RepoCapabilities, string> =
+    declared
+    |> List.groupBy (fun decl -> limitsOf decl.Body)
+    |> List.fold
+        (fun acc (limits, sharing) ->
+            match acc, capabilitiesOn limits github resolve (SandboxDecl.selectionOf sharing) with
+            | Error refusal, _
+            | Ok _, Error refusal -> Error refusal
+            | Ok held, Ok more ->
+                Ok
+                    { Granted = held.Granted @ more.Granted |> List.distinct |> List.sort
+                      GitHubRoutes = held.GitHubRoutes @ more.GitHubRoutes |> List.distinct |> List.sort })
+        (Ok { Granted = []; GitHubRoutes = [] })
+
 let create
     (repos: unit -> Repos.ReposService option)
     // Everybody's trust, read from their own records: what decides whether a repo that forwards
@@ -255,7 +283,11 @@ let create
     // Whether it asks is REPORTED rather than inferred from the words: reading it back out of
     // a rendered description would make the prompt depend on the wording of a sentence, and
     // the wording is a design that will move.
-    (capabilitiesOf: ResourceName list * ResourceName list -> Result<RepoCapabilities, string>)
+    //
+    // Asked with the repo and its declarations, not with the names they select: which
+    // backend a sandbox runs under is its body's to decide, and the backends do not scope
+    // the same things (`capabilitiesOf`).
+    (capabilitiesOf: RepoRef -> SandboxDecl list -> Result<RepoCapabilities, string>)
     : RepoSandboxes =
 
     let mintMessageId () : MessageId =
@@ -424,8 +456,7 @@ let create
                         |> List.groupBy (fun (repo, _) -> RepoRef.value repo)
                     for _, entries in byRepo do
                         let repo = entries |> List.head |> fst
-                        let asked = entries |> List.map snd |> SandboxDecl.selectionOf
-                        match capabilitiesOf asked with
+                        match capabilitiesOf repo (entries |> List.map snd) with
                         // A selection that does not resolve is already a refusal further
                         // down, said per declaration and with the reason. Saying it twice
                         // here, in different words, would be two accounts of one fault.
@@ -499,7 +530,7 @@ let create
                             for _, entries in byRepo do
                                 let repo = entries |> List.head |> fst
                                 let asked =
-                                    match capabilitiesOf (entries |> List.map snd |> SandboxDecl.selectionOf) with
+                                    match capabilitiesOf repo (entries |> List.map snd) with
                                     | Ok capabilities -> Set.ofList capabilities.GitHubRoutes
                                     // Refused per declaration below, with the reason; nothing
                                     // here starts it, so there is nothing to trust.

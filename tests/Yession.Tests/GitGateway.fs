@@ -1159,7 +1159,7 @@ let private srtTests =
                               WorkingDirectory = Some workspace
                               Filesystem = Confined
                               Derived = Map.empty }
-                        match! Sandboxes.SrtSandbox.create (srtTools ()) policy with
+                        match! Sandboxes.SrtSandbox.create (srtTools ()) HostSpec.none policy with
                         | Error reason -> failwithf "srt sandbox failed: %s" reason
                         | Ok confined ->
                             let! run, out, err =
