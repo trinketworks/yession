@@ -198,7 +198,7 @@ in
   # Where devenv keeps its own state — the task cache (`tasks.db`, a SQLite database in WAL
   # mode), the profile link, `state/` — when the environment asks for it elsewhere. By default
   # it is `.devenv` in the checkout, and every container sandbox in a session bind-mounts the
-  # SAME checkout: `dev` and `gate` assembling their devshells at once opened one database
+  # SAME checkout: two containers assembling their devshells at once opened one database
   # from two containers across the host's file share, where SQLite's shared-memory locking does
   # not hold, and one of them died with "Failed to initialize task cache: database is locked"
   # — a sandbox that would not start. yession.yaml names a directory on each container's own

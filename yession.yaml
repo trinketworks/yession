@@ -31,10 +31,8 @@ session:
 
 sandboxes:
   dev:
-    # Which of the two to reach for, in the words a person would use. Both declare the same
-    # container on the same image and differ only in what they are FOR, so a name is the one
-    # thing that cannot tell them apart: shown both and asked to run tests, an agent picked
-    # `gate`, which is the one that holds a terminal for minutes.
+    # What this sandbox is for, in the words a person would use, so that whoever chooses
+    # between it and the session's own `default` chooses on the reason, not the spelling.
     description: day-to-day work — the toolchain, and where `check`, `build` and `lint`
       run; also where `gh` runs, for anything GitHub the first-party tools do not cover
       (Actions runs and their logs, workflows, releases, issues), already pointed at this
@@ -44,7 +42,7 @@ sandboxes:
     container:
       image: nixos/nix
       # compose's `entrypoint`: what every piece of work in this container runs behind —
-      # a terminal's shell, every block, the gate's `verify`. The devshell is assembled
+      # a terminal's shell, every block, a `verify`. The devshell is assembled
       # ONCE, when a terminal's shell starts, and the shell then has the toolchain for as
       # long as it lives: no `nix develop --command` in front of every command, no
       # devenv prelude in every block's output (it prints before the shell's first
@@ -111,7 +109,7 @@ sandboxes:
         sandbox = false
       # devenv's own state — its task cache is a SQLite database — on this container's
       # disk rather than in the checkout every sandbox in the session shares. With it in
-      # the checkout, `dev` and `gate` entering their devshells at once raced for one
+      # the checkout, two containers entering their devshells at once raced for one
       # database across the host's file share and one sandbox failed to start, "database
       # is locked". devenv.nix reads this; see `devenv.dotfile` there.
       CONTAINER_DEVENV_DOTFILE: /root/.devenv
@@ -129,26 +127,3 @@ sandboxes:
       # is on the shared `/nix` volume, so it does nothing where the operator offers no
       # `nix-container-store`. See `withBuildSlot` in tasks.fsx.
       TASKS_BUILD_SLOTS: "1"
-
-  # `verify` is minutes long. A second sandbox on the same configuration means the gate
-  # runs beside interactive work instead of holding the shell.
-  gate:
-    description: the long `verify`, so it runs beside interactive work instead of holding
-      it; not the one to reach for to run tests
-    workdir: .
-    container:
-      image: nixos/nix
-      entrypoint: nix develop --impure --command
-      mem_limit: 5g   # as in `dev`
-    wants: [ github, nix-container-store ]
-
-    # The same reasons as `dev`; `like:` does not exist yet, so both are written twice.
-    env:
-      NIX_CONFIG: |
-        experimental-features = nix-command flakes
-        extra-substituters = https://yession.cachix.org
-        extra-trusted-public-keys = yession.cachix.org-1:Dj6jHWpEaqcGyrEEC3/qy/D3UQN8sZW1RXUOCRJ41oI=
-        build-users-group =
-        sandbox = false
-      CONTAINER_DEVENV_DOTFILE: /root/.devenv   # as in `dev`: one per container
-      TASKS_BUILD_SLOTS: "1"                    # as in `dev`: the same slots, shared

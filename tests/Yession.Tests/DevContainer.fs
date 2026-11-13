@@ -354,7 +354,7 @@ let dogfood =
 
             // Every container sandbox in a session binds the SAME checkout. devenv's state —
             // its task cache is a SQLite database — lived in that checkout's `.devenv`, so
-            // `dev` and `gate` assembling their devshells at once raced for one database
+            // two containers assembling their devshells at once raced for one database
             // across the host's file share, and a session's `dev` failed to start: "database
             // is locked". The file now puts it on each container's own disk; this is the
             // devshell actually honouring that, not the file merely saying it.
