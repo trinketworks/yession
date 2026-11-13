@@ -278,7 +278,8 @@ The last section holds trust boundaries as sharp as the first section's.
       worked, and we retired it: the next wall was Fable enumerating `/Users` for path casing,
       which no grant allows without exposing dirent names all the way up. A build wants a
       machine, not a syscall filter. Work that builds runs in a CONTAINER, and srt confines the
-      light default sandbox (checkout, small edits). The
+      light default sandbox (checkout, small edits). A repo that cannot build in a container
+      declares a `host:` sandbox, where its operator allows one. The
       [2026-08-28 ADR](decisions/2026-08-28-no-srt-fork-for-symlink-metadata.md) argues this,
       and its argument stands.
     - **A `Socket` grant is path-scoped on macOS and widens to every socket on Linux.** #335
@@ -356,9 +357,17 @@ The last section holds trust boundaries as sharp as the first section's.
   - **It opens no terminal.** `SpawnPty` is `None`, so a terminal there runs each block as a
     separate process. `SeatbeltSandbox.create` in `app/Sandboxes.fs` says what a terminal
     needs first.
-  - **Only the work sandbox can use it.** The agent CLI and the git verbs refuse it
+  - **Only work sandboxes can use it.** These are the session's own work sandbox
+    (`YESSION_SESSION_WORK_BACKEND`) and a repo's `host:` sandbox
+    (`YESSION_SESSION_REPO_BACKEND`). The agent CLI and the git verbs refuse it
     (`SandboxBackend.parseAgent`, `parseGit`). No test runs either of them under this
-    profile. A repo's own sandbox is still a container.
+    profile.
+  - **A repo's `host:` sandbox has no memory limit and no process limit.** No backend on the
+    host's own userland has one. A build there can use all of the host's memory.
+  - **When a file changes the body of a running sandbox, a reader gets the new body.** A
+    reader that has only the sandbox's name asks the last fold
+    (`SandboxRuntime.namedBackend`). Until somebody stops the sandbox, a share out of it can
+    go to the path of the other body.
   - **A JVM does not use the proxy.** `SeatbeltProxy.environment` sets the variables that
     curl, git, Node, Python and Go read. srt's wrapper also loads a Java agent. This backend
     does not. A Gradle or a Maven that needs the network has no route.

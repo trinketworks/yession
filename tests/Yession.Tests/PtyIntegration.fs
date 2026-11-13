@@ -42,7 +42,7 @@ let private runOnPty (executable: string) (arguments: string list) : Async<Resul
               WorkingDirectory = None
               Filesystem = Confined
               Derived = Map.empty }
-        match! Sandboxes.HostSandbox.create () policy with
+        match! Sandboxes.HostSandbox.create HostSpec.none policy with
         | Error e -> return Error e
         | Ok sandbox ->
             match sandbox.SpawnPty with
@@ -110,7 +110,7 @@ let private withTappedShellTerminal
               WorkingDirectory = None
               Filesystem = Confined
               Derived = Map.empty }
-        match! Sandboxes.HostSandbox.create () policy with
+        match! Sandboxes.HostSandbox.create HostSpec.none policy with
         | Error e -> failwith e
         | Ok sandbox ->
             let environment : SessionEnvironment.SessionEnvironment =
@@ -984,7 +984,7 @@ let private throughTheHostTests =
                 let policy =
                     { emptyPolicy with
                         Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ()) }
-                let! host = hostOver (Sandboxes.HostSandbox.create ()) policy "host-shell"
+                let! host = hostOver (Sandboxes.HostSandbox.create HostSpec.none) policy "host-shell"
                 let agent = Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))
                 let dir = TestFiles.tempDir "yession-pty-"
                 match! host.TerminalCommands.Execute (CommandRequest.ofCommand ("cd " + dir)) agent with
@@ -1315,7 +1315,7 @@ let private keyboardTests =
             testCaseAsync "a child this process starts holds no terminal's master" <|
                 async {
                     let policy = { emptyPolicy with Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ()) }
-                    match! Sandboxes.HostSandbox.create () policy with
+                    match! Sandboxes.HostSandbox.create HostSpec.none policy with
                     | Error e -> failwith e
                     | Ok sandbox ->
                         let! first = holdTerminal sandbox
@@ -1333,7 +1333,7 @@ let private keyboardTests =
             testCaseAsync "a terminal's program holds no other terminal's master" <|
                 async {
                     let policy = { emptyPolicy with Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ()) }
-                    match! Sandboxes.HostSandbox.create () policy with
+                    match! Sandboxes.HostSandbox.create HostSpec.none policy with
                     | Error e -> failwith e
                     | Ok sandbox ->
                         let! other = holdTerminal sandbox
@@ -1368,7 +1368,7 @@ let tests =
                       WorkingDirectory = None
                       Filesystem = Confined
                       Derived = Map.empty }
-                match! Sandboxes.HostSandbox.create () policy with
+                match! Sandboxes.HostSandbox.create HostSpec.none policy with
                 | Error e -> failwith e
                 | Ok sandbox ->
                     Expect.isTrue (Option.isSome sandbox.SpawnPty) "SpawnPty is Some where the addon is present"
@@ -1422,7 +1422,7 @@ let tests =
                       WorkingDirectory = None
                       Filesystem = Confined
                       Derived = Map.empty }
-                match! Sandboxes.HostSandbox.create () policy with
+                match! Sandboxes.HostSandbox.create HostSpec.none policy with
                 | Error e -> failwith e
                 | Ok sandbox ->
                     let spawnPty = Option.get sandbox.SpawnPty
@@ -1461,7 +1461,7 @@ let tests =
                       WorkingDirectory = None
                       Filesystem = Confined
                       Derived = Map.empty }
-                match! Sandboxes.HostSandbox.create () policy with
+                match! Sandboxes.HostSandbox.create HostSpec.none policy with
                 | Error e -> failwith e
                 | Ok sandbox ->
                     let spawnPty = Option.get sandbox.SpawnPty
@@ -1508,7 +1508,7 @@ let tests =
                       WorkingDirectory = None
                       Filesystem = Confined
                       Derived = Map.empty }
-                match! Sandboxes.HostSandbox.create () policy with
+                match! Sandboxes.HostSandbox.create HostSpec.none policy with
                 | Error e -> failwith e
                 | Ok sandbox ->
                     let spawnPty = Option.get sandbox.SpawnPty
@@ -1695,7 +1695,7 @@ let tests =
                       WorkingDirectory = None
                       Filesystem = Confined
                       Derived = Map.empty }
-                match! Sandboxes.HostSandbox.create () policy with
+                match! Sandboxes.HostSandbox.create HostSpec.none policy with
                 | Error e -> failwith e
                 | Ok sandbox ->
                     let spawnPty = Option.get sandbox.SpawnPty

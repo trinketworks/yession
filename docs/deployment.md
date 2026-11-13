@@ -82,19 +82,28 @@ examples use the prefix too (`YESSION_PROXY_PORT`, `YESSION_SERIAL_PORT`).
 The Manager **refuses** a variable that moved onto the command line. The boot stops and names
 the option to write instead. `app/Retirements.fs` lists the retired names and says why.
 
-A session runs three sandbox families, and each has its own backend variable. Each is parsed
-at boot and fails closed: a value it does not know stops the session.
+A session runs three sandbox families, and each has its own backend variable. A fourth
+variable names the backend for a repo's `host:` sandbox. The session parses each at boot and
+fails closed: a value that it does not know stops the session.
 
 | variable | runs | values | default |
 |---|---|---|---|
 | `YESSION_SESSION_WORK_BACKEND` | the agent's terminals, blocks and `setup:` | `host`, `srt`, `seatbelt`, `docker` | `srt` |
 | `YESSION_SESSION_AGENT_BACKEND` | the `claude` CLI | `host`, `srt` | `host` |
 | `YESSION_SESSION_GIT_BACKEND` | the session's own git verbs: clone, fetch, switch, status, log, diff | `host`, `srt` | `srt` |
+| `YESSION_SESSION_REPO_BACKEND` | a repo's `host:` sandbox | `seatbelt`, `srt` | none |
 
 `seatbelt` is a Mac's backend. It confines with macOS's Seatbelt under a profile that Yession
 writes, and keeps srt only as the proxy that filters egress. It opens no terminal yet, so a
 terminal there runs each block as its own process (docs/GAPS.md lists the rest). A session on
 any other platform refuses to start with it.
+
+`YESSION_SESSION_REPO_BACKEND` lets a repository run a sandbox on this host's own userland.
+A repo's `yession.yaml` asks for that with a `host:` block. When you do not set the variable,
+the session refuses such a sandbox, and each repo's sandbox must be a container. Set it to
+`seatbelt` on a Mac, or to `srt` on Linux. `host` and `docker` are not values for it. A
+`host:` sandbox has no memory limit and no process limit, so it is less than a container.
+Select it for a repository that cannot build in a Linux container.
 
 The git verbs work on checkouts that every work sandbox can write, `.git/config` included. Under
 `srt` a program that config names runs with the git sandbox's reach: the repos directory, and

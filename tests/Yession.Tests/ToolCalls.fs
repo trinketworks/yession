@@ -257,7 +257,7 @@ let private declaringDev (record: SandboxRequest -> unit) : Commands.CommandServ
     let dev = SandboxRef.parse "octo/hello:dev" |> expect
     let declared : SandboxDecl =
         { SandboxDecl.empty with
-            Container = Some { ContainerSpec.defaults with Image = Some { Name = "ghcr.io/octo/dev"; Tag = Some "3" } }
+            Body = Some (ContainerBody { ContainerSpec.defaults with Image = Some { Name = "ghcr.io/octo/dev"; Tag = Some "3" } })
             Setup = Some "make deps"
             Uses = [ ResourceName.create "github" |> expect ] }
     { servicesOver (reposAnswering (fun repo -> async { return Ok { Repo = repo; Branch = "main"; Dirty = false; Path = "/repos"; Checkout = RootPath.stored ("/repos") } })) with
@@ -1124,9 +1124,14 @@ let private artifactTests =
     /// mount the sandbox is given, and the path it is told to write to — are judged against.
     let store = "/data/s/workspace/artifacts"
 
-    /// A repo's own work sandbox, which is a container whatever the session runs under.
+    /// A repo's own work sandbox. Its container is one whatever the session runs under.
     let repoSandbox =
         SandboxRef.inScope (RepoRef.create "octo/hello" |> expect) (SandboxName.create "dev" |> expect)
+
+    /// The backend of a name on a session that runs srt and whose operator named no backend
+    /// for a repo's host sandbox: the session's own are srt's, and a repo's is a container.
+    let underSrt (sandbox: SandboxRef) : SandboxBackend =
+        SandboxRuntime.namedBackend SrtBackend None (SandboxRef.scope sandbox) None None
 
     /// Where a spec puts the session's store, read back OFF the spec rather than assumed: this
     /// is the half the sandbox actually gets, so a test that restated it would be comparing two
@@ -1136,7 +1141,8 @@ let private artifactTests =
         | Container container ->
             container.Mounts
             |> List.tryPick (fun mount -> if mount.Source = HostPath store then Some mount.Target else None)
-        | Confinement -> None
+        | Confinement
+        | OnHost _ -> None
 
     testList
         "artifacts"
@@ -1223,9 +1229,23 @@ let private artifactTests =
           // store stays empty.
           testList
               "where the store is, from inside a sandbox"
-              [ test "a session's own sandbox is given the directory the store already is" {
+              [ test "a repo's sandbox on the host is given the directory the store already is" {
+                    let onHost (sandbox: SandboxRef) =
+                        SandboxRuntime.namedBackend
+                            SrtBackend
+                            (Some SeatbeltBackend)
+                            (SandboxRef.scope sandbox)
+                            (Some (OnHost HostSpec.none))
+                            None
                     Expect.equal
-                        (Sandboxes.artifactsVisibleTo SrtBackend store SandboxRef.defaultRef)
+                        (Sandboxes.artifactsVisibleTo onHost store repoSandbox)
+                        store
+                        "it runs on this filesystem, so the store is where it is"
+                }
+
+                test "a session's own sandbox is given the directory the store already is" {
+                    Expect.equal
+                        (Sandboxes.artifactsVisibleTo underSrt store SandboxRef.defaultRef)
                         store
                         "confinement shares the host's own paths, so there is nothing to translate"
                 }
@@ -1238,11 +1258,11 @@ let private artifactTests =
                 test "a repo's sandbox is given the mount, whatever the session runs under" {
                     let asked = { EnvironmentSpec.defaults with Runtime = Container ContainerSpec.defaults }
                     Expect.equal
-                        (Some (Sandboxes.artifactsVisibleTo SrtBackend store repoSandbox))
+                        (Some (Sandboxes.artifactsVisibleTo underSrt store repoSandbox))
                         (mountedStore (Sandboxes.withSessionShares "/data/s/workspace/repos" store DockerBackend asked))
                         "a share writes where the session mounted the store, or the bytes land nowhere"
                     Expect.notEqual
-                        (Sandboxes.artifactsVisibleTo SrtBackend store repoSandbox)
+                        (Sandboxes.artifactsVisibleTo underSrt store repoSandbox)
                         store
                         "and never this filesystem's own path, which a container can write and nothing reads"
                 } ]

@@ -1093,6 +1093,47 @@ let tests =
         // A repo that selects nothing has nothing to consent to, whatever the host is — and
         // is never put through a resolver, which on a host declaring no profile at all would
         // turn that silence into a refusal.
+        // A repo may declare a container beside a sandbox on the host's own userland, and the
+        // two backends do not scope the same things. One line for both would be wrong about
+        // one of them.
+        testCase "a repo's asks are shown as the backend of each sandbox will grant them" <| fun () ->
+            let profile =
+                OperatorProfile.parse """{ "version": 1, "resources": { "cache": { "endpoint": "cache.example.com" } } }"""
+                |> expect
+            let cache = ResourceName.create "cache" |> expect
+            let limitsOf (body: SandboxBody option) =
+                match body with
+                | Some (HostBody _) -> Sandboxes.limitsFor SeatbeltBackend Node.Base.Platform.Darwin
+                | Some (ContainerBody _)
+                | None -> Sandboxes.limitsFor DockerBackend Node.Base.Platform.Darwin
+            let asked =
+                RepoSandboxes.capabilitiesOf
+                    limitsOf
+                    github
+                    (fun uses wants -> ResourceProfile.resolve profile.Resources (uses @ wants))
+                    [ { SandboxDecl.empty with Body = Some (ContainerBody ContainerSpec.defaults); Uses = [ cache ] }
+                      { SandboxDecl.empty with Body = Some (HostBody HostSpec.none); Uses = [ cache ] } ]
+                |> expect
+            Expect.equal
+                asked.Granted
+                [ "net:cache.example.com"; "net:cache.example.com ~> net:*" ]
+                "the host sandbox holds the one host, and the container holds every host"
+
+        testCase "a repo whose sandboxes share a backend is shown each grant once" <| fun () ->
+            let profile =
+                OperatorProfile.parse """{ "version": 1, "resources": { "cache": { "endpoint": "cache.example.com" } } }"""
+                |> expect
+            let cache = ResourceName.create "cache" |> expect
+            let onHost = { SandboxDecl.empty with Body = Some (HostBody HostSpec.none); Uses = [ cache ] }
+            let asked =
+                RepoSandboxes.capabilitiesOf
+                    (fun _ -> Sandboxes.limitsFor SeatbeltBackend Node.Base.Platform.Darwin)
+                    github
+                    (fun uses wants -> ResourceProfile.resolve profile.Resources (uses @ wants))
+                    [ onHost; onHost ]
+                |> expect
+            Expect.equal asked.Granted [ "net:cache.example.com" ] "two sandboxes that ask for one thing ask for it once"
+
         testCase "a repo that selects nothing asks for nothing, without resolving anything" <| fun () ->
             let asked =
                 RepoSandboxes.capabilitiesOn

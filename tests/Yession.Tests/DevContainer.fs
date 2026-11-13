@@ -88,7 +88,8 @@ let private declaredDev (reposDir: string) : EnvironmentSpec =
     let request = SandboxDecl.toRequest (Some (Sandboxes.checkoutAt reposDir repoRef)) decl |> expect
     match request.Spec.Runtime with
     | Container _ -> ()
-    | Confinement -> failwith "yession.yaml declares no container, and a repo work sandbox is one"
+    | Confinement
+    | OnHost _ -> failwith "yession.yaml declares no container for `dev`, and the dev-container suite runs one"
     Sandboxes.withSessionShares reposDir artifactsDir DockerBackend request.Spec
 
 /// The same, minus the entrypoint. The file's entrypoint assembles the devshell from the
@@ -103,7 +104,8 @@ let private declaredDevBare (reposDir: string) : EnvironmentSpec =
         Runtime =
             match spec.Runtime with
             | Container c -> Container { c with Entrypoint = None }
-            | Confinement -> Confinement }
+            | Confinement -> Confinement
+            | OnHost host -> OnHost host }
 
 /// Start the declared container through the production composition, with `granted` as what
 /// the operator's profile came to (empty = a host offering nothing, so the file's `wants:`

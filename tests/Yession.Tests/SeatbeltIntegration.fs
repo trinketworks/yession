@@ -40,11 +40,35 @@ let private policyIn (workspace: string) : SandboxPolicy =
         Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
         WorkingDirectory = Some workspace }
 
-let private startSandbox (policy: SandboxPolicy) : Async<Sandbox> =
+let private startSandboxBehind (host: HostSpec) (policy: SandboxPolicy) : Async<Sandbox> =
     async {
-        match! Sandboxes.SeatbeltSandbox.create (tools ()) policy with
+        match! Sandboxes.SeatbeltSandbox.create (tools ()) host policy with
         | Error reason -> return failwithf "seatbelt sandbox failed: %s" reason
         | Ok sandbox -> return sandbox
+    }
+
+let private startSandbox (policy: SandboxPolicy) : Async<Sandbox> = startSandboxBehind HostSpec.none policy
+
+/// An entrypoint a case can see from inside: it puts one variable in front of the work.
+let private marking : HostSpec = { HostSpec.Entrypoint = Some [ "/usr/bin/env"; "BEHIND=entrypoint" ] }
+
+/// What `sh -c script` printed when the session ran it as housekeeping, bare.
+let private housekeeping (sandbox: Sandbox) (script: string) : Async<string> =
+    async {
+        let out = System.Text.StringBuilder ()
+        let! spawned =
+            sandbox.Spawn
+                { Executable = "/bin/sh"
+                  Arguments = [ "-c"; script ]
+                  Env = Map.empty
+                  WorkingDirectory = None
+                  Via = Direct }
+                (fun (stream, text) -> if stream = Stdout then out.Append text |> ignore)
+        match spawned with
+        | Error reason -> return failwithf "the sandboxed process did not run: %s" reason
+        | Ok handle ->
+            let! _ = handle.Exited
+            return out.ToString ()
     }
 
 /// `sh -c` inside the sandbox, answering what it printed and how it ended.
@@ -173,7 +197,7 @@ let private macCases () =
                       [ SeatbeltAsk.Dial otherPort ]
                       (sprintf "/usr/bin/nc -z 127.0.0.1 %d" otherPort) ]
             let! host =
-                Sandboxes.HostSandbox.create ()
+                Sandboxes.HostSandbox.create HostSpec.none
                     { emptyPolicy with Env = Map.ofList [ "PATH", "/usr/bin:/bin"; "TMPDIR", at "tmp" ] }
             let host = host |> expect
             let disagreements = ResizeArray<string> ()
@@ -230,6 +254,31 @@ let private macCases () =
             let! _, out, _ = runInSandbox sandbox Node.Api.``process``.execPath [ "--version" ] Map.empty None
             do! sandbox.Dispose ()
             Expect.isTrue (out.StartsWith "v") "the interpreter this very process runs on answers from inside"
+        })
+
+        testCaseAsync "work runs behind the entrypoint that its sandbox declares" (async {
+            let! sandbox = startSandboxBehind marking (policyIn (freshDir ()))
+            let! _, out, _ = shell sandbox "echo \"$BEHIND\""
+            do! sandbox.Dispose ()
+            Expect.equal (out.Trim ()) "entrypoint" "the entrypoint started the work"
+        })
+
+        testCaseAsync "housekeeping runs bare, whatever entrypoint its sandbox declares" (async {
+            let! sandbox = startSandboxBehind marking (policyIn (freshDir ()))
+            let! out = housekeeping sandbox "echo \"bare:$BEHIND\""
+            do! sandbox.Dispose ()
+            Expect.equal (out.Trim ()) "bare:" "nothing stood in front of it"
+        })
+
+        // The OS temp directory on a Mac is reached through the symlink /var, and a profile
+        // names a file's own path. A policy written with the spelling a person would use has
+        // to hold all the same.
+        testCaseAsync "a path that is granted through a symlink is held by the path it leads to" (async {
+            let spelled = TestFiles.tempDir "yession-seatbelt-"
+            let! sandbox = startSandbox (policyIn spelled)
+            let! _ = shell sandbox "echo kept > marker"
+            do! sandbox.Dispose ()
+            Expect.isTrue (TestFiles.exists (spelled + "/marker")) "the write landed, by either spelling"
         })
 
         testCaseAsync "a connection that goes round the proxy is refused" (async {

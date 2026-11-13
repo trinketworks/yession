@@ -1,8 +1,9 @@
 # yession.yaml — what a session working on Yession selects.
 #
-# A repo's work sandbox is a CONTAINER (a repo-owned declaration without a `container:`
-# block is refused): work runs in a full Linux userland, the same environment a person
-# gets locally from this repo's flake. The TOOLCHAIN is devenv.nix's business (Node 24,
+# This repo's work sandboxes are CONTAINERS. A repo's sandbox names its body, `container:`
+# or `host:`, and this file names no `host:` sandbox. Work runs in a full Linux userland,
+# the same environment a person gets locally from this repo's flake.
+# The TOOLCHAIN is devenv.nix's business (Node 24,
 # .NET 10, Chromium, uv); the container brings only nix, and the ENTRYPOINT assembles the
 # devshell from the checkout — one source of truth, no second copy of the toolchain here.
 #

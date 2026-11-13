@@ -198,7 +198,7 @@ let tests =
             let dir = checkout r (Some devWithNet)
             let file = (readIn dir r |> expect |> Option.get).File
             let dev = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
-            Expect.equal (dev.Container |> Option.get).Image (Some { Name = "node"; Tag = Some "24" })
+            Expect.equal ((SandboxDecl.container dev) |> Option.get).Image (Some { Name = "node"; Tag = Some "24" })
                 "the image survived the round trip"
             Expect.equal (dev.Uses |> List.map ResourceName.value) [ "npm" ] "so did the resources it selects"
 
@@ -215,7 +215,7 @@ let tests =
             // A repo's work sandbox is a container; a declaration without one is refused
             // at start. What the container needs is exactly what a person needs locally:
             // nix, and the checkout — the devshell does the rest.
-            match dev.Container with
+            match SandboxDecl.container dev with
             | None -> failwith "dev declares no container, and a repo work sandbox is one"
             | Some container ->
                 Expect.equal
@@ -257,7 +257,7 @@ let tests =
             let containers =
                 file.Sandboxes
                 |> Map.toList
-                |> List.choose (fun (name, decl) -> decl.Container |> Option.map (fun c -> SandboxName.value name, c))
+                |> List.choose (fun (name, decl) -> (SandboxDecl.container decl) |> Option.map (fun c -> SandboxName.value name, c))
             Expect.isNonEmpty containers "this repo declares containers"
             for name, container in containers do
                 for driver in [ "cgroupfs"; "systemd" ] do
@@ -619,17 +619,17 @@ let private cell (value: 'a) = fun () -> value
 
 /// A session whose host declares no resources: every selection comes to nothing. The
 /// capability notes have their own cases, where a real vocabulary is worth the setup.
-let private noCapabilities : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
-    fun _ -> Ok { RepoSandboxes.Granted = []; RepoSandboxes.GitHubRoutes = [] }
+let private noCapabilities : RepoRef -> SandboxDecl list -> Result<RepoSandboxes.RepoCapabilities, string> =
+    fun _ _ -> Ok { RepoSandboxes.Granted = []; RepoSandboxes.GitHubRoutes = [] }
 
 /// A vocabulary that grants exactly these lines and forwards nobody's GitHub, so the fold asks
 /// nobody to trust anything in cases about something else.
-let private granting (lines: string list) : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
-    fun _ -> Ok { RepoSandboxes.Granted = lines; RepoSandboxes.GitHubRoutes = [] }
+let private granting (lines: string list) : RepoRef -> SandboxDecl list -> Result<RepoSandboxes.RepoCapabilities, string> =
+    fun _ _ -> Ok { RepoSandboxes.Granted = lines; RepoSandboxes.GitHubRoutes = [] }
 
 /// A vocabulary that forwards GitHub by these routes: what a repo asks people to trust it with.
-let private forwardingGitHub (routes: ConnectionRoute list) : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
-    fun _ ->
+let private forwardingGitHub (routes: ConnectionRoute list) : RepoRef -> SandboxDecl list -> Result<RepoSandboxes.RepoCapabilities, string> =
+    fun _ _ ->
         Ok
             { RepoSandboxes.Granted = routes |> List.map (fun route -> sprintf "conn:github/%s" (ConnectionRoute.name route))
               RepoSandboxes.GitHubRoutes = routes }
