@@ -212,31 +212,28 @@ let tests =
             TestFiles.write (pathIn dir r) (TestFiles.read "yession.yaml")
             let file = (readIn dir r |> expect |> Option.get).File
             let dev = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
-            let gate = file.Sandboxes |> Map.find (SandboxName.create "gate" |> expect)
             // A repo's work sandbox is a container; a declaration without one is refused
             // at start. What the container needs is exactly what a person needs locally:
             // nix, and the checkout — the devshell does the rest.
-            for name, decl in [ "dev", dev; "gate", gate ] do
-                match decl.Container with
-                | None -> failwithf "%s declares no container, and a repo work sandbox is one" name
-                | Some container ->
-                    Expect.equal
-                        (container.Image |> Option.map (fun i -> i.Name))
-                        (Some "nixos/nix")
-                        (sprintf "%s runs the nix base image" name)
-                // The whole nix configuration the devshell sees, features and substituters
-                // both — in a container there is no /etc/nix/nix.conf story to inherit.
-                Expect.isTrue
-                    (decl.EnvironmentVariables |> Map.containsKey "NIX_CONFIG")
-                    (sprintf "%s carries the nix settings its build needs" name)
-            for name, decl in [ "dev", dev; "gate", gate ] do
-                // WANTS, not uses: the same file has to work on hosts that offer no warm
-                // store and no GitHub connection, and a `uses:` there would refuse the
-                // sandbox outright. Where the operator offers `github`, `git push` works.
+            match dev.Container with
+            | None -> failwith "dev declares no container, and a repo work sandbox is one"
+            | Some container ->
                 Expect.equal
-                    (decl.Wants |> List.map ResourceName.value)
-                    [ "github"; "nix-container-store" ]
-                    (sprintf "%s wishes for the GitHub connection and the warm store where an operator offers them" name)
+                    (container.Image |> Option.map (fun i -> i.Name))
+                    (Some "nixos/nix")
+                    "dev runs the nix base image"
+            // The whole nix configuration the devshell sees, features and substituters
+            // both — in a container there is no /etc/nix/nix.conf story to inherit.
+            Expect.isTrue
+                (dev.EnvironmentVariables |> Map.containsKey "NIX_CONFIG")
+                "dev carries the nix settings its build needs"
+            // WANTS, not uses: the same file has to work on hosts that offer no warm
+            // store and no GitHub connection, and a `uses:` there would refuse the
+            // sandbox outright. Where the operator offers `github`, `git push` works.
+            Expect.equal
+                (dev.Wants |> List.map ResourceName.value)
+                [ "github"; "nix-container-store" ]
+                "dev wishes for the GitHub connection and the warm store where an operator offers them"
             // `gh` finds its repo from the checkout's remotes, and behind the git gateway's
             // `insteadOf` it finds none it recognises — so `dev`, where gh runs, names it.
             Expect.equal

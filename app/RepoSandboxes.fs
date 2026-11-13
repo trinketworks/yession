@@ -599,8 +599,8 @@ let create
                                         return Some { Repo = repo; Sandbox = Some ref; Problem = problem; Detail = None; Awaited = false }
                             })
                         // In PARALLEL, so a repo's sandboxes come up at once rather than one
-                        // waiting for the one before it to finish — the `dev` and `gate` of a
-                        // checkout no longer queue behind each other. Safe because each
+                        // waiting for the one before it to finish — two sandboxes of one
+                        // checkout do not queue behind each other. Safe because each
                         // declaration is a DISTINCT sandbox ref: `WorkSandboxes.ensure`'s
                         // find-then-start cannot collide across two names, this host is
                         // single-threaded (Fable/JS — asyncs interleave only at I/O awaits, so

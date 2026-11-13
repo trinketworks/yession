@@ -80,7 +80,7 @@ type SandboxDecl =
       /// What this sandbox is FOR, in the repo's own words — the one thing here that is not
       /// a name, a path or a command, and is not addressed to the session at all.
       ///
-      /// A name cannot carry it. This repository declares `dev` and `gate`, identical on
+      /// A name cannot carry it. This repository once declared `dev` and `gate`, identical on
       /// every field a machine reads and different only in what a person meant; asked to run
       /// tests and shown both names, an agent picked `gate`, which is the one that holds a
       /// terminal for minutes. The repo knows why it declared two and had nowhere to say so.
