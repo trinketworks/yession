@@ -469,7 +469,9 @@ let private outputLimit = 20000
 let stagingDirName = "staging~"
 
 let create (config: ReposConfig) : Result<ReposService, string> =
-    Sandboxes.forBackend config.Backend config.Network "git" EnvironmentSpec.defaults
+    // No directory of Yession's own to name: the git verbs never run under the backend
+    // that reads one (`SandboxBackend.parseGit`).
+    Sandboxes.forBackend None config.Backend config.Network "git" EnvironmentSpec.defaults
     |> Result.map (fun createSandbox ->
 
         /// The repos directory as an ABSOLUTE path, resolved once here and used for every

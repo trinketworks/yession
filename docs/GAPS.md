@@ -368,6 +368,21 @@ The last section holds trust boundaries as sharp as the first section's.
     reader that has only the sandbox's name asks the last fold
     (`SandboxRuntime.namedBackend`). Until somebody stops the sandbox, a share out of it can
     go to the path of the other body.
+  - **A sandbox sees the names above its trees.** It lists each directory above the
+    directory where it works, and above each path that the session gave it (`SeatbeltAbove`
+    in `src/Yession.Domain/Seatbelt.fs`). In the data directory these names are the ids of
+    the other sessions, the names of the Manager's files, and the names of the other
+    sandboxes of its session. The sandbox reads none of them. Above the data directory, it
+    lists only a directory that every account can list.
+  - **A path that an operator grants brings no listing.** A tool that looks above a mount in
+    a different place on the host stops at the first directory that no rule names. An
+    operator can name a directory that does not change in a Seatbelt rule (`seatbelt:`).
+  - **The test for an open directory is its mode.** `Fs.everyAccountLists` reads the mode. An
+    access control list can close a directory whose mode is open, and the rule does not
+    read the list.
+  - **Nothing closes a data directory that is out of a home.** The Manager writes its files
+    with the default mode. [deployment.md](deployment.md) tells the operator to close the
+    directory (mode 700). No check does it.
   - **The model does not read a rule that an operator wrote.** A resource can hold Seatbelt
     rules as text (`seatbelt:`, [deployment.md](deployment.md)). `SeatbeltProfile.allows`
     answers for the rules that a policy decides, and the kernel tier compares only those

@@ -66,14 +66,17 @@ let private proxy = 3128
 let private genHost : Gen<SeatbeltHost> =
     gen {
         let! proxied = Gen.bool
+        let! above = Gen.item [ []; [ "/data" ]; [ "/data/sessions"; "/data" ] ]
         return
             { RuntimePaths = [ "/usr"; "/nix/store" ]
               Tmp = "/session/tmp"
-              ProxyPort = (if proxied then Some proxy else None) }
+              ProxyPort = (if proxied then Some proxy else None)
+              Above = above }
     }
 
 /// A host with nothing a case has to think about: one runtime tree, no proxy.
-let private plainHost : SeatbeltHost = { RuntimePaths = [ "/usr" ]; Tmp = "/session/tmp"; ProxyPort = None }
+let private plainHost : SeatbeltHost =
+    { RuntimePaths = [ "/usr" ]; Tmp = "/session/tmp"; ProxyPort = None; Above = [] }
 
 let private profileOf (host: SeatbeltHost) (policy: SandboxPolicy) : SeatbeltProfile =
     SeatbeltProfile.forPolicy host policy |> expect
@@ -374,6 +377,124 @@ let tests =
                 (rulesOf plainHost { emptyPolicy with ReadPaths = [ "/data/work/" ] })
                 (rulesOf plainHost { emptyPolicy with ReadPaths = [ "/data/work" ] })
                 "Seatbelt compares paths, and /data/work/ is not a path it would ever be asked about"
+
+        // --- the directories above a sandbox --------------------------------------------
+
+        testCase "the directories above a path are each of its parents, the nearest first, without the root" <| fun () ->
+            Expect.equal
+                (SeatbeltAbove.directories "/data/sessions/s1/workspace")
+                [ "/data/sessions/s1"; "/data/sessions"; "/data" ]
+                "three parents"
+            Expect.equal (SeatbeltAbove.directories "/data/") [] "a trailing slash names the same directory"
+            Expect.equal (SeatbeltAbove.directories "/data") [] "only the root is above it, and every profile lists the root"
+            Expect.equal (SeatbeltAbove.directories "/") [] "nothing is above the root"
+
+        testCase "a sandbox lists Yession's own directories and the host's open ones" <| fun () ->
+            // The home here is the only closed directory, and it is not above the tree.
+            let everyAccountLists (directory: string) = directory <> "/Users/operator"
+            Expect.equal
+                (SeatbeltAbove.listed (Some "/Users/Shared/yession") everyAccountLists (Some "/Users/Shared/yession/sessions/s1/workspace") [])
+                (Ok [ "/Users"; "/Users/Shared"; "/Users/Shared/yession"; "/Users/Shared/yession/sessions"; "/Users/Shared/yession/sessions/s1" ])
+                "each directory above the tree"
+
+        // Measured: nix opened each directory above the HOME of a sandbox. The home is
+        // beside the checkout, so the directories above it are not above the checkout.
+        testCase "a sandbox lists the directories above each path that the session gave it" <| fun () ->
+            let session = "/data/sessions/s1"
+            Expect.equal
+                (SeatbeltAbove.listed
+                    (Some "/data")
+                    (fun _ -> true)
+                    (Some (session + "/workspace/repos/octo/hello"))
+                    [ session + "/sandboxes/mac/home"; session + "/tmp"; session + "/workspace/repos" ])
+                (Ok
+                    [ "/data"
+                      "/data/sessions"
+                      session
+                      session + "/sandboxes"
+                      session + "/sandboxes/mac"
+                      session + "/workspace"
+                      session + "/workspace/repos"
+                      session + "/workspace/repos/octo" ])
+                "the parents of the checkout, of the home and of the temporary directory, each one time"
+
+        testCase "a path that an operator granted in another place on the host brings no listing" <| fun () ->
+            Expect.equal
+                (SeatbeltAbove.listed
+                    (Some "/data")
+                    (fun directory -> directory <> "/Users/operator")
+                    (Some "/data/sessions/s1/workspace")
+                    [ "/Users/operator/.nuget/packages"; "/nix"; "/private/etc/ssl/cert.pem" ])
+                (Ok [ "/data"; "/data/sessions"; "/data/sessions/s1" ])
+                "the home of the operator is not listed, and it does not refuse the sandbox"
+
+        testCase "a closed directory from Yession's own directory down does not refuse the sandbox" <| fun () ->
+            // The operator keeps the data directory for one account. It is still Yession's.
+            let everyAccountLists (directory: string) = not (directory.StartsWith "/Users/Shared/yession")
+            Expect.isOk
+                (SeatbeltAbove.listed (Some "/Users/Shared/yession") everyAccountLists (Some "/Users/Shared/yession/sessions/s1/workspace") [])
+                "no account's mode is asked from the data directory down"
+
+        testCase "a closed directory of the host above the tree refuses the sandbox, by its name" <| fun () ->
+            let everyAccountLists (directory: string) = directory <> "/Users/operator"
+            match
+                SeatbeltAbove.listed
+                    (Some "/Users/operator/.yession")
+                    everyAccountLists
+                    (Some "/Users/operator/.yession/sessions/s1/workspace")
+                    []
+            with
+            | Ok listed -> failwithf "the sandbox would list %A" listed
+            | Error refusal ->
+                Expect.isTrue (refusal.Contains "cannot list /Users/operator,") (sprintf "names the directory, said: %s" refusal)
+                Expect.isTrue (refusal.Contains "--data-dir") (sprintf "names what the operator moves, said: %s" refusal)
+
+        testCase "a directory that only begins like Yession's own is the host's" <| fun () ->
+            let everyAccountLists (directory: string) = directory <> "/srv/yession-2"
+            Expect.isError
+                (SeatbeltAbove.listed (Some "/srv/yession") everyAccountLists (Some "/srv/yession-2/sessions/s1") [])
+                "/srv/yession-2 is not beneath /srv/yession"
+
+        testCase "a caller with no directory of its own has each directory judged as the host's" <| fun () ->
+            Expect.isError
+                (SeatbeltAbove.listed None (fun directory -> directory <> "/data/sessions") (Some "/data/sessions/s1") [])
+                "nothing is Yession's own, so the closed one refuses"
+            Expect.equal
+                (SeatbeltAbove.listed None (fun _ -> true) (Some "/data/sessions/s1") [ "/data/sessions/s1/home" ])
+                (Ok [ "/data"; "/data/sessions" ])
+                "the open ones above where it works are listed, and no other path counts"
+
+        testCase "a sandbox that works in no directory lists nothing" <| fun () ->
+            Expect.equal (SeatbeltAbove.listed None (fun _ -> false) None [ "/data/home" ]) (Ok []) "nothing to look above"
+
+        check "a refusal comes exactly when a directory of the host above the tree is closed" <| fun () ->
+            property {
+                let! depth = Gen.int32 (Range.linear 1 6)
+                let! ownDepth = Gen.int32 (Range.linear 0 6)
+                let! closedAt = Gen.int32 (Range.linear 0 6)
+                let path (levels: int) = [ 1 .. levels ] |> List.map (sprintf "/d%d") |> String.concat ""
+                let tree = path (depth + 1)
+                let own = if ownDepth = 0 then None else Some (path ownDepth)
+                let closed = path (closedAt + 1)
+                let above = SeatbeltAbove.directories tree
+                let hostsClosed =
+                    List.contains closed above
+                    && (match own with
+                        | Some own -> not (closed = own || closed.StartsWith (own + "/"))
+                        | None -> true)
+                match SeatbeltAbove.listed own (fun directory -> directory <> closed) (Some tree) [] with
+                | Ok listed ->
+                    Expect.isFalse hostsClosed "a closed directory of the host was listed"
+                    Expect.equal (List.sort listed) (List.sort above) "every directory above the tree, and no other"
+                | Error _ -> Expect.isTrue hostsClosed "the sandbox was refused with nothing closed above it"
+            }
+
+        testCase "a directory above the sandbox is one node: its names, and nothing that is in it" <| fun () ->
+            let profile = profileOf { plainHost with Above = [ "/data/sessions"; "/data" ] } emptyPolicy
+            Expect.isTrue (SeatbeltProfile.allows profile (SeatbeltAsk.Read "/data/sessions")) "the names of the directory"
+            Expect.isFalse (SeatbeltProfile.allows profile (SeatbeltAsk.Read "/data/sessions/s2")) "not a directory in it"
+            Expect.isFalse (SeatbeltProfile.allows profile (SeatbeltAsk.Read "/data/secrets.json")) "not a file in it"
+            Expect.isFalse (SeatbeltProfile.allows profile (SeatbeltAsk.Write "/data/sessions")) "and it is not written"
 
         // --- a rule that an operator wrote ----------------------------------------------
 

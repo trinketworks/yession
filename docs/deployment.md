@@ -105,6 +105,25 @@ the session refuses such a sandbox, and each repo's sandbox must be a container.
 `host:` sandbox has no memory limit and no process limit, so it is less than a container.
 Select it for a repository that cannot build in a Linux container.
 
+Under `seatbelt`, a sandbox lists each directory above the directory where it works, and
+above each directory that the session gave it (its home, for example). Tools such as nix and
+Fable list them. The sandbox gets the entry names of each one, and nothing that is in one. From `--data-dir` down, a directory is Yession's own. Above `--data-dir`, the sandbox
+lists a directory only when every account on the host can list it. When one of them is
+closed to some accounts, the sandbox does not start, and the refusal names the directory
+([the decision record](decisions/2026-11-14-a-sandbox-lists-the-directories-above-its-tree.md)).
+
+A home on macOS is closed to other accounts. So keep `--data-dir` out of a home on a host
+that runs a sandbox under `seatbelt`: `/Users/Shared/yession`, for example. Then do these:
+
+- Close the data directory to other accounts (mode 700). The Manager writes its files with
+  the default mode. In a home, the home kept them private.
+- Restart the Manager on a build that has this rule before you close the directory. A
+  session learns the data directory from its Manager, and a session under an older Manager
+  judges the data directory as one of the host's.
+- Add the new place to the mounts of a docker daemon that runs in a VM. Colima mounts the
+  home by default, and a `--mount` flag replaces that default. So name the home and the new
+  place (`colima start --mount`). Without the mount, a container finds its checkout empty.
+
 The git verbs work on checkouts that every work sandbox can write, `.git/config` included. Under
 `srt` a program that config names runs with the git sandbox's reach: the repos directory, and
 the git gateway as its only egress. `YESSION_SESSION_GIT_BACKEND=host` runs the verbs as you,

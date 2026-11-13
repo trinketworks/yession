@@ -1357,7 +1357,8 @@ let createWithUi
                             DataDir = sprintf "%s/%s" options.DataDir record.DataDir
                             Port = 0
                             Control = control
-                            ParentGuard = true } ]
+                            ParentGuard = true
+                            ManagerDataDir = Some options.DataDir } ]
                     @ telemetryIdentityEnv
                 let revokeSecret () =
                     (match control |> Option.map (fun c -> c.Secret) with

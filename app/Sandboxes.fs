@@ -3288,25 +3288,40 @@ module SeatbeltSandbox =
     /// Naming `/dev/ttys*` (srt's `allowPty`) admits every terminal the user has open along
     /// with this one. Naming the one needs the pty opened before the profile is written.
     /// Until that is done a terminal here runs each block as its own spawn.
-    let create (tools: SrtTools) (host: HostSpec) : CreateSandbox =
+    ///
+    /// `own` is the directory from which down each directory is Yession's own. The
+    /// sandbox lists the directories above its trees, and `SeatbeltAbove` says which
+    /// trees count and which directories it may list. The check runs before the proxy
+    /// starts, so a sandbox that the layout refuses starts nothing.
+    let create (tools: SrtTools) (host: HostSpec) (own: string option) : CreateSandbox =
         fun policy ->
             async {
                 try
                     policy.WorkingDirectory |> Option.iter Fs.ensureDir
                     Fs.ensureDir (SessionLayout.tmpDir ())
+                    // The path the kernel will check. Seatbelt matches a file's own
+                    // path, never a spelling that reaches it through a symlink, and
+                    // srt resolved a policy's paths for the profile it wrote. A path
+                    // that is not there yet stays as it was written: a cache
+                    // directory a tool has yet to make is ordinary.
+                    let real (path: string) = Fs.canonical path |> Option.defaultValue path
+                    let above =
+                        SeatbeltAbove.listed
+                            (own |> Option.map real)
+                            Fs.everyAccountLists
+                            (policy.WorkingDirectory |> Option.map real)
+                            (policy.ReadPaths @ policy.WritePaths @ [ SessionLayout.tmpDir () ] |> List.map real)
+                    match above with
+                    | Error refusal -> return Error (sprintf "seatbelt sandbox failed: %s" refusal)
+                    | Ok above ->
                     match! SrtSandbox.egressFor tools policy with
                     | Error reason -> return Error (sprintf "seatbelt sandbox failed: %s" reason)
                     | Ok egress ->
-                        // The path the kernel will check. Seatbelt matches a file's own
-                        // path, never a spelling that reaches it through a symlink, and
-                        // srt resolved a policy's paths for the profile it wrote. A path
-                        // that is not there yet stays as it was written: a cache
-                        // directory a tool has yet to make is ordinary.
-                        let real (path: string) = Fs.canonical path |> Option.defaultValue path
                         let onThisHost =
                             { RuntimePaths = tools.Runtime |> List.map real
                               Tmp = real (SessionLayout.tmpDir ())
-                              ProxyPort = Some egress.Proxy.Port }
+                              ProxyPort = Some egress.Proxy.Port
+                              Above = above }
                         let asTheKernelSeesIt =
                             { policy with
                                 ReadPaths = policy.ReadPaths |> List.map real
@@ -3631,14 +3646,24 @@ module AgentSandbox =
 
 /// The session's `CreateSandbox` for its configured backend. `Error` fails the session
 /// at boot — fail closed, never a silent fallback to a weaker backend.
-let forBackend (backend: SandboxBackend) (network: DockerSandbox.Network) (name: string) (spec: EnvironmentSpec) : Result<CreateSandbox, string> =
+///
+/// `own` is the directory from which down each directory is Yession's own: the Manager's
+/// data directory. Only the seatbelt backend reads it (`SeatbeltAbove`). `None` is a
+/// caller that has no such directory.
+let forBackend
+    (own: string option)
+    (backend: SandboxBackend)
+    (network: DockerSandbox.Network)
+    (name: string)
+    (spec: EnvironmentSpec)
+    : Result<CreateSandbox, string> =
     let ambient = ambientEnv ()
     // The tools are srt's record, read the same way: what stays readable on this host, and
     // where the package is whose proxy this backend starts.
     let seatbelt (host: HostSpec) =
         SeatbeltSandbox.hostedHere ()
         |> Result.bind (fun () -> SrtSandbox.toolsFrom ambient)
-        |> Result.map (fun tools -> SeatbeltSandbox.create tools host)
+        |> Result.map (fun tools -> SeatbeltSandbox.create tools host own)
     match backend, spec.Runtime with
     // The one question the union cannot settle: whether this BACKEND hosts containers. The
     // backend is the operator's and the spec is partly the repo's, so they are authored by
