@@ -639,7 +639,7 @@ type Sandbox =
       /// An OPTION because pty support is genuinely per-backend, not because it is
       /// optional to care about. docker has it free (exec with `Tty: true`, plus the
       /// exec-resize endpoint); the host needs a native addon that may not be installed;
-      /// srt wraps the host spawn and so inherits whatever the host answered; seatbelt
+      /// srt wraps the host spawn and so inherits whatever the host answered. seatbelt
       /// opens none until a profile can name the one terminal it is for. `None` is a
       /// backend saying it cannot host a live terminal — declared up front rather than
       /// discovered when someone runs `vim`, which is the same declare-and-skip honesty the

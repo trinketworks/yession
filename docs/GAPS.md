@@ -348,23 +348,26 @@ The last section holds trust boundaries as sharp as the first section's.
     stand-in process whose streams are live at once, and joins the real child to them when the
     wrap resolves. The `Srt` suite drives it end to end (stdin in, stdout out, exit code).
 - **`seatbelt` is a second confining backend for the WorkSandbox on a Mac, and it does less than
-  srt so far.** `YESSION_SESSION_WORK_BACKEND=seatbelt` confines with macOS's Seatbelt under a
+  srt.** `YESSION_SESSION_WORK_BACKEND=seatbelt` confines with macOS's Seatbelt, under a
   profile that this code writes (`SeatbeltProfile` in `src/Yession.Domain/Seatbelt.fs`). srt
   stays as the filtering proxy only. The
   [ADR](decisions/2026-11-13-yession-writes-the-seatbelt-profile.md) says why. `srt` is still
   the default.
-  - **It opens no terminal.** `SpawnPty` is `None`, so a terminal there runs each block as its
-    own spawn. `SeatbeltSandbox.create` in `app/Sandboxes.fs` says what a terminal needs first.
-  - **It is the work sandbox's only.** The agent CLI and the git verbs refuse it
-    (`SandboxBackend.parseAgent`, `parseGit`): neither has run under this profile. A repo's own
-    sandbox is still a container.
-  - **A JVM is not sent to the proxy.** `SeatbeltProxy.environment` sets the variables that
-    curl, git, Node, Python and Go read. srt's wrapper also loads a Java agent, and this
-    backend does not. A Gradle or Maven that needs the network has no route.
-  - **It takes a connection by `git` alone**, as an srt sandbox does (`CredentialProxy.forwardApi`).
-  - **The baseline is transcribed, not derived.** `SeatbeltProfile.essentials` is the fixed
-    part of what srt 0.0.81 generates. A tool that needs a rule it lacks fails with a refusal
-    in the system log (`log stream --predicate 'eventMessage CONTAINS "Sandbox: "'`).
+  - **It opens no terminal.** `SpawnPty` is `None`, so a terminal there runs each block as a
+    separate process. `SeatbeltSandbox.create` in `app/Sandboxes.fs` says what a terminal
+    needs first.
+  - **Only the work sandbox can use it.** The agent CLI and the git verbs refuse it
+    (`SandboxBackend.parseAgent`, `parseGit`). No test runs either of them under this
+    profile. A repo's own sandbox is still a container.
+  - **A JVM does not use the proxy.** `SeatbeltProxy.environment` sets the variables that
+    curl, git, Node, Python and Go read. srt's wrapper also loads a Java agent. This backend
+    does not. A Gradle or a Maven that needs the network has no route.
+  - **It takes a connection by `git` alone**, as an srt sandbox does
+    (`CredentialProxy.forwardApi`).
+  - **We transcribed the baseline. We did not derive it.** `SeatbeltProfile.essentials` is
+    the fixed part of the profile that srt 0.0.81 generates. A tool that needs a rule it
+    does not have fails, and the system log shows the refusal
+    (`log stream --predicate 'eventMessage CONTAINS "Sandbox: "'`).
   - **Only the macOS job runs its tier.** `pr.yaml` runs `check Srt --only "Seatbelt"` on
     darwin. `verify` runs on Linux, where the suite is one pending case.
 - **The strict confinement profile mounts a fresh `/proc`, which a container can refuse.**

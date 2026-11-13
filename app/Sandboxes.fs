@@ -2938,8 +2938,8 @@ module SrtSandbox =
                         match! Interop.awaitPromise started with
                         | Ok (srt, _) ->
                             // Read after `initialize` resolved, which is when the proxy
-                            // listens. Every sandbox is told; only one whose profile is
-                            // written here (`SeatbeltSandbox`) has a use for it.
+                            // listens. Every sandbox is told. Only a sandbox whose profile
+                            // is written here (`SeatbeltSandbox`) uses the answer.
                             let proxy =
                                 match srt.getProxyPort (), srt.getProxyAuthToken () with
                                 | Some port, Some token -> Some { SeatbeltProxy.Port = port; SeatbeltProxy.Token = token }
@@ -3246,7 +3246,7 @@ module SeatbeltSandbox =
     /// built, not about Seatbelt. A shell with job control opens `/dev/tty`, which the
     /// kernel judges as the terminal's own device, so the profile has to name that device.
     /// Naming `/dev/ttys*` (srt's `allowPty`) admits every terminal the user has open along
-    /// with this one; naming the one needs the pty opened before the profile is written.
+    /// with this one. Naming the one needs the pty opened before the profile is written.
     /// Until that is done a terminal here runs each block as its own spawn.
     let create (tools: SrtTools) : CreateSandbox =
         fun policy ->
