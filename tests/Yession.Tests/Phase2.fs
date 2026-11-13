@@ -328,16 +328,16 @@ let private sandboxPolicyTests =
             let asContainer =
                 { EnvironmentSpec.defaults with
                     Runtime = Container { ContainerSpec.defaults with Command = Some "postgres -c fsync=off" } }
-            Expect.isError (Sandboxes.forBackend HostBackend (DockerFixture.quietNetwork ()) "s" asContainer) "the host backend runs no container"
-            Expect.isError (Sandboxes.forBackend SrtBackend (DockerFixture.quietNetwork ()) "s" asContainer) "nor does srt"
-            Expect.isOk (Sandboxes.forBackend DockerBackend (DockerFixture.quietNetwork ()) "s" asContainer) "docker does"
+            Expect.isError (Sandboxes.forBackend None HostBackend (DockerFixture.quietNetwork ()) "s" asContainer) "the host backend runs no container"
+            Expect.isError (Sandboxes.forBackend None SrtBackend (DockerFixture.quietNetwork ()) "s" asContainer) "nor does srt"
+            Expect.isOk (Sandboxes.forBackend None DockerBackend (DockerFixture.quietNetwork ()) "s" asContainer) "docker does"
 
         testCase "the refusal says what was asked for and what would host it" <| fun () ->
             // A refusal nobody can act on gets worked around instead of fixed.
             let asContainer =
                 { EnvironmentSpec.defaults with
                     Runtime = Container { ContainerSpec.defaults with Command = Some "npm start" } }
-            match Sandboxes.forBackend HostBackend (DockerFixture.quietNetwork ()) "s" asContainer with
+            match Sandboxes.forBackend None HostBackend (DockerFixture.quietNetwork ()) "s" asContainer with
             | Ok _ -> failwith "expected a refusal"
             | Error e ->
                 Expect.isTrue (e.Contains "npm start") "it quotes the command"
@@ -345,10 +345,10 @@ let private sandboxPolicyTests =
 
         testCase "a sandbox with no command is unaffected on every backend" <| fun () ->
             // The guard above must not have cost the ordinary sandbox anything.
-            Expect.isOk (Sandboxes.forBackend HostBackend (DockerFixture.quietNetwork ()) "s" EnvironmentSpec.defaults) "host still works"
+            Expect.isOk (Sandboxes.forBackend None HostBackend (DockerFixture.quietNetwork ()) "s" EnvironmentSpec.defaults) "host still works"
             // Docker always IS a container: a spec that asked for nothing gets the defaults
             // rather than a second, container-less docker path.
-            Expect.isOk (Sandboxes.forBackend DockerBackend (DockerFixture.quietNetwork ()) "s" EnvironmentSpec.defaults) "so does docker"
+            Expect.isOk (Sandboxes.forBackend None DockerBackend (DockerFixture.quietNetwork ()) "s" EnvironmentSpec.defaults) "so does docker"
 
         testCase "the srt config denies every read, and the policy's paths are the holes in it" <| fun () ->
             // Denying only the operator's home left everything nobody thought to name —
@@ -1911,7 +1911,7 @@ let private lazyLifecycleTests =
 /// A real host-backend WorkSandbox composition over the given log — exactly what
 /// SessionMain wires, minus the control channel (no secret refs here).
 let private hostEnvironment (log: Yession.Session.EventLog<SessionEvent>) (name: string) =
-    let createSandbox = Sandboxes.forBackend HostBackend (DockerFixture.quietNetwork ()) name EnvironmentSpec.defaults |> expect
+    let createSandbox = Sandboxes.forBackend None HostBackend (DockerFixture.quietNetwork ()) name EnvironmentSpec.defaults |> expect
     let noSecrets = fun (n: SecretName) -> async { return Error (sprintf "no secrets: %s" (SecretName.value n)) }
     Yession.Session.SessionEnvironment.create
         log
@@ -1922,7 +1922,7 @@ let private hostEnvironment (log: Yession.Session.EventLog<SessionEvent>) (name:
 
 /// The per-session host sandbox for the in-process Manager compositions below.
 let private hostSandboxFor (sessionId: SessionId) : CreateSandbox =
-    Sandboxes.forBackend HostBackend (DockerFixture.quietNetwork ()) (SessionId.value sessionId) EnvironmentSpec.defaults |> expect
+    Sandboxes.forBackend None HostBackend (DockerFixture.quietNetwork ()) (SessionId.value sessionId) EnvironmentSpec.defaults |> expect
 
 // The properties of the retired `Execute` path that OUTLIVE it (Plan 13, stage 3b).
 //
@@ -2329,7 +2329,7 @@ let private acceptanceE2eTests =
             testCaseAsync "real container create/spawn/dispose" (async {
                 let name = DockerFixture.name ()
                 let spec = { EnvironmentSpec.defaults with Runtime = Container { ContainerSpec.defaults with Image = Some { Name = "alpine"; Tag = Some "3" } } }
-                let createSandbox = Sandboxes.forBackend DockerBackend (DockerFixture.quietNetwork ()) name spec |> expect
+                let createSandbox = Sandboxes.forBackend None DockerBackend (DockerFixture.quietNetwork ()) name spec |> expect
                 match! createSandbox ((Sandboxes.policyFor DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) Map.empty Map.empty None None None [] Set.empty EnvironmentSpec.defaults |> expect)) with
                 | Error reason -> failwithf "docker sandbox failed: %s" reason
                 | Ok sandbox ->

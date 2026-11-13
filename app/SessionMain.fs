@@ -54,6 +54,12 @@ let private port = launch.Port
 // relative path becomes a wrong answer rather than the place it is born.
 let private dataDir = Fs.absolute launch.DataDir
 
+/// The directory from which down each directory is Yession's own: the Manager's data
+/// directory, which holds this session's. A sandbox on the host's userland lists the
+/// directories above its tree, and this is where the host's directories start
+/// (`SeatbeltAbove`). A session that no Manager told uses its own data directory.
+let private ownRoot = launch.ManagerDataDir |> Option.map Fs.absolute |> Option.defaultValue dataDir
+
 // The control channel to the Manager (Step 24): supervision reports, secrets custody,
 // AND this launch's OAuth client registration all authenticate with the same
 // per-launch secret. Absent (a bare `yession-session` run), the session runs
@@ -331,7 +337,7 @@ let private makeSandboxes
             // of them under docker would fight over one container name — and now that a repo
             // can declare its own, two REPOS' same-named sandboxes would too. The rule lives
             // on `SandboxRef`, where a cheap test reaches it; this composition only asks.
-            match Sandboxes.forBackend backend dockerNetwork (SandboxRef.objectName sessionId sandbox) workSpec with
+            match Sandboxes.forBackend (Some ownRoot) backend dockerNetwork (SandboxRef.objectName sessionId sandbox) workSpec with
             | Error e -> Error e
             | Ok createSandbox ->
                 // What this session gives the sandbox: its workspace, its home, and whether

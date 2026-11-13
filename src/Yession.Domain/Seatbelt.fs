@@ -100,7 +100,82 @@ type SeatbeltHost =
       /// The sandbox's temporary directory. Written and read like a granted path.
       Tmp : string
       /// The loopback port of the filtering proxy. `None` is a sandbox with no route out.
-      ProxyPort : int option }
+      ProxyPort : int option
+      /// The directories above the sandbox's tree that it may list: the entry names of
+      /// each one, and nothing that is in one (`SeatbeltAbove`).
+      Above : string list }
+
+/// The directories above a sandbox's tree, and which of them the sandbox lists.
+///
+/// Some tools list each directory above the one that they work in: the nix that devenv
+/// runs does, and Fable does. In a container those directories are the container's. On
+/// the host's own userland they are the host's, and a profile that names only the tree
+/// stops such a tool at the first of them.
+///
+/// So a sandbox lists them, each as one node. Two kinds of directory are above a sandbox.
+/// From the Manager's data directory down, a directory is Yession's own, and the sandbox
+/// lists it. Above the data directory, a directory belongs to the host, and the sandbox
+/// lists it only when every account on the host can. A home is not such a directory, and
+/// the names in it are private. The decision record of 2026-11-14 in docs/decisions, "a
+/// sandbox lists the directories above its tree", gives the reasons and the alternatives.
+[<RequireQualifiedAccess>]
+module SeatbeltAbove =
+
+    /// Each directory above `path`, the nearest first. `/` is not one of them, because
+    /// every profile lists it (`SeatbeltProfile.baseline`).
+    let directories (path: string) : string list =
+        let rec up (current: string) (found: string list) : string list =
+            match current.LastIndexOf '/' with
+            | index when index > 0 ->
+                let parent = current.Substring (0, index)
+                up parent (parent :: found)
+            | _ -> List.rev found
+        up (path.TrimEnd '/') []
+
+    /// Whether `directory` is `own`, or is beneath it.
+    let private within (own: string) (directory: string) : bool =
+        let root = own.TrimEnd '/'
+        directory = root || directory.StartsWith (root + "/")
+
+    /// The directories above the trees of a sandbox that it lists, or why the sandbox
+    /// does not start.
+    ///
+    /// `working` is the directory where the sandbox works. `held` is each other path
+    /// that its policy names. A path of `held` counts only from Yession's own directory
+    /// down: the session made those paths (a home, a workspace, a temporary directory),
+    /// and a tool looks above each of them. Measured: nix opened each directory above
+    /// the home of a sandbox, and the home was not above its checkout. A path that an
+    /// operator granted in a different place on the host brings no listing with it.
+    ///
+    /// `own` is the directory from which down each directory is Yession's own: the
+    /// Manager's data directory. `None` is a caller that has none, and each directory is
+    /// then the host's. `everyAccountLists` says whether every account on the host can
+    /// list a directory. It is an argument, so a test on one machine can ask about a
+    /// host that is not that machine.
+    ///
+    /// The refusal names the directory nearest to `/` that is closed, because that is
+    /// the one an operator moves the data directory out of.
+    let listed
+        (own: string option)
+        (everyAccountLists: string -> bool)
+        (working: string option)
+        (held: string list)
+        : Result<string list, string> =
+        let ours (directory: string) =
+            match own with
+            | Some own -> within own directory
+            | None -> false
+        let trees = Option.toList working @ (held |> List.filter ours)
+        // Sorted, so the longest path of one branch comes last and the answer does not
+        // depend on the order that a policy names its paths in.
+        let above = trees |> List.collect directories |> List.distinct |> List.sort
+        match above |> List.tryFind (fun directory -> not (ours directory) && not (everyAccountLists directory)) with
+        | None -> Ok above
+        | Some closed ->
+            Error (
+                sprintf
+                    "a sandbox on this host's own userland lists each directory above its tree, because tools there do. Some accounts on this host cannot list %s, so a sandbox does not list it. Move the Manager's --data-dir to a place below directories that every account can list, for example /Users/Shared/yession"
+                    closed)
 
 /// Where one sandbox's filtering proxy listens, and what admits a client to it.
 ///
@@ -371,7 +446,7 @@ module SeatbeltProfile =
     /// A policy as the rules a sandbox on this host holds.
     ///
     /// The baseline, the host's runtime to read, the temporary directory to read and
-    /// write, and then what the policy names: its read paths to read, its write paths to
+    /// write, the directories above the sandbox to list, and then what the policy names: its read paths to read, its write paths to
     /// write AND read (a workspace that can be written and not read is no workspace), its
     /// sockets, and its Seatbelt rules. Nothing else, so a policy that names nothing gets
     /// nothing more, and what two policies hold together is what each holds.
@@ -410,6 +485,9 @@ module SeatbeltProfile =
                                 let written = writable @ tmp
                                 trees SeatbeltRule.Read (runtime @ readable @ written)
                                 @ trees SeatbeltRule.Write written))))
+        let aboveRules =
+            allNamed "the directory above the sandbox" host.Above
+            |> Result.map (List.map (fun directory -> SeatbeltRule.Read (SeatbeltPath.Node directory)))
         let socketRules =
             allNamed "the socket" policy.Sockets
             |> Result.map (fun paths ->
@@ -421,9 +499,11 @@ module SeatbeltProfile =
             fileRules
             |> Result.bind (fun files ->
                 socketRules
-                |> Result.map (fun sockets ->
-                    let written = policy.SeatbeltRules |> List.map SeatbeltRule.Written
-                    { Held = Set.union baseline (Set.ofList (proxy @ files @ sockets @ written)) })))
+                |> Result.bind (fun sockets ->
+                    aboveRules
+                    |> Result.map (fun above ->
+                        let written = policy.SeatbeltRules |> List.map SeatbeltRule.Written
+                        { Held = Set.union baseline (Set.ofList (proxy @ files @ sockets @ above @ written)) }))))
 
     /// What the profile holds, each rule once.
     let rules (profile: SeatbeltProfile) : Set<SeatbeltRule> = profile.Held

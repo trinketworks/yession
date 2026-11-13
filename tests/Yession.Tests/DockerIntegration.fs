@@ -68,7 +68,7 @@ let private startOn
     : Async<Result<string * Sandbox, string>> =
     async {
         let name = DockerFixture.name ()
-        let createSandbox = Sandboxes.forBackend DockerBackend network name spec |> expect
+        let createSandbox = Sandboxes.forBackend None DockerBackend network name spec |> expect
         // Asked, not written: see the note in DevContainer.fs — a docker sandbox's
         // contribution is the product's answer, not this test's copy of it.
         let layout = Sandboxes.SessionLayout.forSandbox "/session" DockerBackend SandboxRef.defaultRef
@@ -359,7 +359,7 @@ let tests =
                     alpineSpec
                     |> withContainer (fun c -> { c with Entrypoint = Some [ "/usr/bin/env"; "BEHIND=entrypoint" ] })
                 let name = DockerFixture.name ()
-                let createSandbox = Sandboxes.forBackend DockerBackend (DockerFixture.quietNetwork ()) name spec |> expect
+                let createSandbox = Sandboxes.forBackend None DockerBackend (DockerFixture.quietNetwork ()) name spec |> expect
                 let layout = Sandboxes.SessionLayout.forSandbox "/session" DockerBackend SandboxRef.defaultRef
                 let! policy =
                     async {
@@ -465,7 +465,7 @@ let tests =
                 Expect.equal w (SandboxExited 0) "write into the workspace succeeds"
                 do! first.Dispose ()
                 // A fresh sandbox under the SAME name re-attaches the same volume.
-                let createSandbox = Sandboxes.forBackend DockerBackend (DockerFixture.quietNetwork ()) name alpineSpec |> expect
+                let createSandbox = Sandboxes.forBackend None DockerBackend (DockerFixture.quietNetwork ()) name alpineSpec |> expect
                 match! createSandbox ((Sandboxes.policyFor DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) Map.empty Map.empty None None None [] Set.empty EnvironmentSpec.defaults |> expect)) with
                 | Error reason -> failwithf "recreate failed: %s" reason
                 | Ok second ->

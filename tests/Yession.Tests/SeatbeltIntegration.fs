@@ -40,9 +40,15 @@ let private policyIn (workspace: string) : SandboxPolicy =
         Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
         WorkingDirectory = Some workspace }
 
+/// The directory that stands for Yession's own in these cases: the OS temp directory, by
+/// the path the kernel checks. Each case's tree is beneath it. A user's temp directory on
+/// a Mac is closed to other accounts, and with it as Yession's own no case is refused for
+/// that.
+let private ownRoot () : string = TestFiles.canonical (Node.Api.os.tmpdir ())
+
 let private startSandboxBehind (host: HostSpec) (policy: SandboxPolicy) : Async<Sandbox> =
     async {
-        match! Sandboxes.SeatbeltSandbox.create (tools ()) host policy with
+        match! Sandboxes.SeatbeltSandbox.create (tools ()) host (Some (ownRoot ())) policy with
         | Error reason -> return failwithf "seatbelt sandbox failed: %s" reason
         | Ok sandbox -> return sandbox
     }
@@ -134,9 +140,9 @@ let private macCases () =
             let root = freshDir ()
             let at (name: string) = root + "/" + name
             let awkward = "we\"ird\\dir (x)"
-            for directory in [ "ro"; "rw"; "un"; "tmp"; "work"; "work-2"; awkward; "s" ] do
+            for directory in [ "ro"; "rw"; "un"; "tmp"; "work"; "work-2"; awkward; "s"; "up" ] do
                 TestFiles.makeDir (at directory)
-            for directory in [ "ro"; "rw"; "un"; "work"; "work-2"; awkward ] do
+            for directory in [ "ro"; "rw"; "un"; "work"; "work-2"; awkward; "up" ] do
                 TestFiles.write (at directory + "/f") "x"
             let granted, ungranted = at "s/g.sock", at "s/o.sock"
             let closeGranted, closeUngranted = listenOn granted, listenOn ungranted
@@ -150,7 +156,7 @@ let private macCases () =
                     Sockets = [ granted ] }
             let profile =
                 SeatbeltProfile.forPolicy
-                    { RuntimePaths = (tools ()).Runtime; Tmp = at "tmp"; ProxyPort = Some proxyPort }
+                    { RuntimePaths = (tools ()).Runtime; Tmp = at "tmp"; ProxyPort = Some proxyPort; Above = [ at "up" ] }
                     policy
                 |> expect
             let asks =
@@ -168,6 +174,11 @@ let private macCases () =
                       [ SeatbeltAsk.Read (at awkward + "/f") ]
                       ("cat " + quoted (at awkward + "/f"))
                   trying "list the directory above the grants" [ SeatbeltAsk.Read root ] ("ls " + quoted root)
+                  trying "list a directory above the sandbox" [ SeatbeltAsk.Read (at "up") ] ("ls " + quoted (at "up"))
+                  trying
+                      "read a file in a directory above the sandbox"
+                      [ SeatbeltAsk.Read (at "up/f") ]
+                      ("cat " + quoted (at "up/f"))
                   trying "list /" [ SeatbeltAsk.Read "/" ] "ls /"
                   trying "list /Users" [ SeatbeltAsk.Read "/Users" ] "ls /Users"
                   trying "read the link /tmp" [ SeatbeltAsk.Read "/tmp" ] "readlink /tmp"
@@ -288,6 +299,55 @@ let private macCases () =
             do! sandbox.Dispose ()
             close ()
             Expect.notEqual (exitCode run) 0 "a listener on this host is not reached by dialling it"
+        })
+
+        // The directories above a sandbox's tree. The tree here is three levels beneath a
+        // fresh directory, and the fresh directory stands for the Manager's data directory.
+        testCaseAsync "a sandbox lists each directory above its tree, and reads nothing in one" (async {
+            let data = freshDir ()
+            let workspace = data + "/sessions/s1/workspace"
+            TestFiles.ensureDir workspace
+            TestFiles.ensureDir (data + "/sessions/s2")
+            TestFiles.write (data + "/secrets.json") "not-yours"
+            let! sandbox = startSandbox (policyIn workspace)
+            let! _, names, _ = shell sandbox (sprintf "ls %s" (quoted (data + "/sessions")))
+            let! _, secret, _ = shell sandbox (sprintf "cat %s" (quoted (data + "/secrets.json")))
+            let! other, _, _ = shell sandbox (sprintf "ls %s" (quoted (data + "/sessions/s2")))
+            do! sandbox.Dispose ()
+            Expect.isTrue (names.Contains "s1" && names.Contains "s2") (sprintf "the names in a directory above the tree, said: %s" names)
+            Expect.isFalse (secret.Contains "not-yours") "a file beside the tree stays unread"
+            Expect.notEqual (exitCode other) 0 "and so does the directory of another session"
+        })
+
+        // What nix does with the home of a sandbox: it opens each directory above it. The
+        // home here is beside the workspace, so its parents are not the workspace's.
+        testCaseAsync "a sandbox lists the directories above a path that its policy names beside its workspace" (async {
+            let data = freshDir ()
+            let workspace = data + "/sessions/s1/workspace"
+            let home = data + "/sessions/s1/sandboxes/mac/home"
+            TestFiles.ensureDir workspace
+            TestFiles.ensureDir home
+            TestFiles.ensureDir (data + "/sessions/s1/sandboxes/other")
+            let policy = policyIn workspace
+            let! sandbox = startSandbox { policy with WritePaths = home :: policy.WritePaths }
+            let! _, names, _ = shell sandbox (sprintf "ls %s" (quoted (data + "/sessions/s1/sandboxes")))
+            let! other, _, _ = shell sandbox (sprintf "ls %s" (quoted (data + "/sessions/s1/sandboxes/other")))
+            do! sandbox.Dispose ()
+            Expect.isTrue (names.Contains "mac" && names.Contains "other") (sprintf "the names above the home, said: %s" names)
+            Expect.notEqual (exitCode other) 0 "and nothing in the directory of another sandbox"
+        })
+
+        // The fresh directory is in the user's temp directory, which other accounts cannot
+        // list. With only the workspace as Yession's own, that directory is the host's.
+        testCaseAsync "a sandbox does not start beneath a directory that some accounts cannot list" (async {
+            let workspace = freshDir () + "/sessions/s1/workspace"
+            TestFiles.ensureDir workspace
+            let! refused = Sandboxes.SeatbeltSandbox.create (tools ()) HostSpec.none (Some workspace) (policyIn workspace)
+            match refused with
+            | Ok sandbox ->
+                do! sandbox.Dispose ()
+                failwith "the sandbox started, and would list a closed directory"
+            | Error refusal -> Expect.isTrue (refusal.Contains "--data-dir") (sprintf "said: %s" refusal)
         })
 
         // The two cases above, each with one rule that an operator wrote. The kernel
