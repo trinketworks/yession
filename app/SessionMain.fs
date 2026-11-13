@@ -176,9 +176,17 @@ let private gitBackend =
 // where the sandbox is created: for the WorkSandbox that is the agent's first
 // `ensure_environment`, minutes into a session, which is no place to discover a typo.
 do
-    if agentBackend = SrtBackend || workBackend = SrtBackend || gitBackend = SrtBackend then
+    // The seatbelt backend reads the same record: what stays readable on this host, and
+    // where srt's package is, whose proxy it starts.
+    if agentBackend = SrtBackend || workBackend = SrtBackend || workBackend = SeatbeltBackend || gitBackend = SrtBackend then
         match Sandboxes.SrtSandbox.toolsFrom (Sandboxes.ambientEnv ()) with
         | Ok _ -> ()
+        | Error e -> failwithf "sandbox: %s" e
+    // A backend only a Mac has is refused here too, for the same reason: at boot, in
+    // words, and not at the first sandbox somebody asks for.
+    if workBackend = SeatbeltBackend then
+        match Sandboxes.SeatbeltSandbox.hostedHere () with
+        | Ok () -> ()
         | Error e -> failwithf "sandbox: %s" e
 
 // Secret references in the sandbox spec resolve over the control channel at sandbox

@@ -132,6 +132,7 @@
     <Compile Include="DockerIntegration.fs" />
     <Compile Include="DevContainer.fs" />
     <Compile Include="SrtIntegration.fs" />
+    <Compile Include="SeatbeltIntegration.fs" />
     <Compile Include="GitIntegration.fs" />
     <Compile Include="GitGateway.fs" />
     <Compile Include="CredentialProxy.fs" />

@@ -90,6 +90,48 @@ type SeatbeltHost =
       /// The loopback port of the filtering proxy. `None` is a sandbox with no route out.
       ProxyPort : int option }
 
+/// Where one sandbox's filtering proxy listens, and what admits a client to it.
+///
+/// Qualified, because `Port` is a label half the records about a listener carry, and a bare
+/// `{ Port = …; Token = … }` must not come to mean this one somewhere it was never meant.
+[<RequireQualifiedAccess>]
+type SeatbeltProxy =
+    { Port : int
+      /// The proxy answers only a client that presents this. Without it, any process on the
+      /// host that found the port could use one sandbox's allowlist as its own.
+      Token : string }
+
+module SeatbeltProxy =
+
+    /// What a client is told to dial directly, past the proxy: the loopback and the private
+    /// ranges. Directly is into the profile's deny, so nothing here is a route. It is the
+    /// list `@anthropic-ai/sandbox-runtime`'s own wrapper gives, and `Sandboxes.hostAddressFrom`
+    /// and `hostRouteFrom` are written against a client that has it.
+    let private direct : string =
+        "localhost,127.0.0.1,::1,169.254.0.0/16,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+    /// The variables that send a sandbox's clients to its proxy.
+    ///
+    /// The proxy is named by ADDRESS, `127.0.0.1`, and not as `localhost`: a name has to be
+    /// resolved, a confined process on macOS has no resolver to ask (the profile admits
+    /// neither mDNSResponder's socket nor its Mach service), and Node gives up there where
+    /// libc falls back to `/etc/hosts`. The profile's own rule says `localhost`, which is
+    /// Seatbelt's word for that address.
+    ///
+    /// Only what the common clients read: curl, git, Node, Python and Go take one of these
+    /// six. A JVM reads none of them, and is not sent to the proxy by this.
+    let environment (proxy: SeatbeltProxy) : Map<string, string> =
+        let url = sprintf "http://yession:%s@127.0.0.1:%d" (System.Uri.EscapeDataString proxy.Token) proxy.Port
+        Map.ofList
+            [ "HTTP_PROXY", url
+              "HTTPS_PROXY", url
+              "ALL_PROXY", url
+              "http_proxy", url
+              "https_proxy", url
+              "all_proxy", url
+              "NO_PROXY", direct
+              "no_proxy", direct ]
+
 /// A policy's rules, validated. Private, so `forPolicy` is the only way to hold one and
 /// `render` only ever writes paths that `forPolicy` accepted.
 type SeatbeltProfile = private { Held : Set<SeatbeltRule> }

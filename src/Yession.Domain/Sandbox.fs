@@ -20,6 +20,11 @@ type SandboxBackend =
     /// OS-level confinement via `@anthropic-ai/sandbox-runtime` (bubblewrap on Linux,
     /// Seatbelt on macOS): wrapped spawn, millisecond start, enforced egress filtering.
     | SrtBackend
+    /// macOS's Seatbelt, under a profile this codebase writes (`SeatbeltProfile`): a spawn
+    /// through `sandbox-exec`, millisecond start. Egress is still filtered by
+    /// `@anthropic-ai/sandbox-runtime`'s proxy, and the profile names that proxy's port as
+    /// the only route out. A Mac's backend: no other platform has a Seatbelt.
+    | SeatbeltBackend
     /// A full isolated userland in a Docker container. Not the sub-second path; a
     /// hardened runtime (gVisor/Kata) is daemon configuration, invisible here.
     | DockerBackend
@@ -32,23 +37,31 @@ module SandboxBackend =
         match raw.Trim().ToLowerInvariant () with
         | "host" -> Ok HostBackend
         | "srt" -> Ok SrtBackend
+        | "seatbelt" -> Ok SeatbeltBackend
         | "docker" -> Ok DockerBackend
-        | other -> Error (sprintf "unknown sandbox backend '%s'. Expected host, srt or docker" other)
+        | other -> Error (sprintf "unknown sandbox backend '%s'. Expected host, srt, seatbelt or docker" other)
 
     let describe (backend: SandboxBackend) : string =
         match backend with
         | HostBackend -> "host"
         | SrtBackend -> "srt"
+        | SeatbeltBackend -> "seatbelt"
         | DockerBackend -> "docker"
 
     /// Parse the AgentSandbox backend: the agent CLI runs on host or under srt. Docker
     /// is BY DESIGN not an agent backend — a container per session boot is the
     /// opposite of the sub-second start the agent needs; the WorkSandbox keeps it.
+    ///
+    /// Seatbelt is not one either, and that is a matter of what has been measured: the
+    /// agent CLI has run under srt's profile and never under this codebase's own.
     let parseAgent (raw: string) : Result<SandboxBackend, string> =
         parse raw
-        |> Result.bind (function
+        |> Result.bind (fun backend ->
+            match backend with
             | DockerBackend -> Error "docker is a backend for the work sandbox only. The agent sandbox is host or srt"
-            | backend -> Ok backend)
+            | SeatbeltBackend -> Error "seatbelt is a backend for the work sandbox only. The agent sandbox is host or srt"
+            | HostBackend
+            | SrtBackend -> Ok backend)
 
     /// The git sandbox's backend, from `YESSION_SESSION_GIT_BACKEND` as read (`None` = unset).
     /// The git sandbox runs the session's own git verbs: clone, fetch, switch, status, log and
@@ -61,9 +74,15 @@ module SandboxBackend =
         | None | Some "" -> Ok SrtBackend
         | Some value ->
             parse value
-            |> Result.bind (function
+            |> Result.bind (fun backend ->
+                match backend with
                 | DockerBackend -> Error "docker is a backend for the work sandbox only. The git sandbox is host or srt"
-                | backend -> Ok backend)
+                // The clone needs srt's whole-filesystem exemption (`FilesystemConfinement`)
+                // or a profile with no refusal it cannot outrank. Seatbelt's has none, and
+                // the git verbs have not been run under it.
+                | SeatbeltBackend -> Error "seatbelt is a backend for the work sandbox only. The git sandbox is host or srt"
+                | HostBackend
+                | SrtBackend -> Ok backend)
 
 /// Whether a sandbox confines the FILESYSTEM at all. Egress, env and process
 /// confinement are unaffected either way — this is only about paths.
@@ -620,15 +639,16 @@ type Sandbox =
       /// An OPTION because pty support is genuinely per-backend, not because it is
       /// optional to care about. docker has it free (exec with `Tty: true`, plus the
       /// exec-resize endpoint); the host needs a native addon that may not be installed;
-      /// srt wraps the host spawn and so inherits whatever the host answered. `None` is a
+      /// srt wraps the host spawn and so inherits whatever the host answered; seatbelt
+      /// opens none until a profile can name the one terminal it is for. `None` is a
       /// backend saying it cannot host a live terminal — declared up front rather than
       /// discovered when someone runs `vim`, which is the same declare-and-skip honesty the
       /// capability-tagged test tiers use.
       SpawnPty : (SandboxExec -> int -> int -> (string -> unit) -> Async<Result<PtyHandle, string>>) option
       /// The shell a terminal in this sandbox opens, when the backend knows better than the
       /// session's default: a container backend looks on the far side of the entrypoint
-      /// for the dialects it can instrument and says which it found. `None` is the host
-      /// and srt backends — the session's own `/bin/sh` is the right answer there.
+      /// for the dialects it can instrument and says which it found. `None` is the host,
+      /// srt and seatbelt backends — the session's own `/bin/sh` is the right answer there.
       Shell : TerminalShell option
       Dispose : unit -> Async<unit> }
 

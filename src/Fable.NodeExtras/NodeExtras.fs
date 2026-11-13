@@ -1762,6 +1762,12 @@ type NetConnection =
     [<Emit("$0.end($1)")>]
     abstract close : said: string -> unit
 
+    /// A far side that hung up before the answer was written raises here, and an `error`
+    /// that nobody listens for takes the PROCESS down, not the connection. A listener whose
+    /// clients may be scans, or programs their sandbox ends, listens before it answers.
+    [<Emit("$0.on('error', $1)")>]
+    abstract onError : handler: (StreamError -> unit) -> unit
+
 [<AllowNullLiteral>]
 type NetServer =
     inherit Listening

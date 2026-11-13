@@ -15,7 +15,9 @@ module Yession.Tests.Seatbelt
 
 open Fable.Pyxpecto
 open Hedgehog
+open Yession.Domain
 open Yession.Domain.Sandboxes
+open Yession.Host
 open Yession.Tests.Support
 
 let private expect = function Ok v -> v | Error e -> failwithf "%A" e
@@ -362,3 +364,113 @@ let tests =
                 (rulesOf plainHost { emptyPolicy with ReadPaths = [ "/data/work" ] })
                 "Seatbelt compares paths, and /data/work/ is not a path it would ever be asked about"
     ]
+
+// The backend that spawns under these profiles, as far as it can be asked without a Mac:
+// its name, what it tells the algebra about itself, how it reaches this host, and what a
+// spawn under it is made of. Whether a command it starts is in fact confined is a question
+// for a box with a Seatbelt (`SeatbeltIntegration`).
+
+/// Every backend, proved total the way the resources suite proves its lists: a backend
+/// added to the union fails this file to compile until the list carries it.
+let private backends : SandboxBackend list =
+    let all = [ HostBackend; SrtBackend; SeatbeltBackend; DockerBackend ]
+    for backend in all do
+        match backend with
+        | HostBackend | SrtBackend | SeatbeltBackend | DockerBackend -> ()
+    all
+
+let private mac = Node.Base.Platform.Darwin
+
+let private proxyAt (port: int) (token: string) : SeatbeltProxy =
+    { SeatbeltProxy.Port = port; SeatbeltProxy.Token = token }
+
+let private execOf (executable: string) (arguments: string list) (env: Map<string, string>) : SandboxExec =
+    { Executable = executable
+      Arguments = arguments
+      Env = env
+      WorkingDirectory = None
+      Via = Entrypoint }
+
+let backendTests =
+    testList "the Seatbelt backend" [
+
+        testCase "every backend is named by a word that parses back to it" <| fun () ->
+            Expect.equal
+                (backends |> List.map (SandboxBackend.describe >> SandboxBackend.parse))
+                (backends |> List.map Ok)
+                "an operator writes the name a refusal showed them"
+
+        testCase "the agent sandbox refuses seatbelt" <| fun () ->
+            Expect.isError (SandboxBackend.parseAgent "seatbelt") "the agent CLI has never run under this profile"
+
+        testCase "the git sandbox refuses seatbelt" <| fun () ->
+            Expect.isError (SandboxBackend.parseGit (Some "seatbelt")) "the git verbs have never run under this profile"
+
+        testCase "a seatbelt sandbox holds a socket and a host exactly as they were granted" <| fun () ->
+            let asked = Set.ofList [ Socket "/run/daemon.sock"; Endpoint "cache.example.com" ]
+            Expect.equal
+                (RealisedClosure.of' (Sandboxes.limitsFor SeatbeltBackend mac) asked |> RealisedClosure.differences)
+                []
+                "a profile names a socket's path, and the proxy names a host"
+
+        testCase "a seatbelt sandbox dials this host by the name srt on a Mac dials" <| fun () ->
+            Expect.equal
+                (Sandboxes.hostAddressFrom "box.local" mac SeatbeltBackend)
+                (Sandboxes.hostAddressFrom "box.local" mac SrtBackend)
+                "one proxy, so one way to this host"
+
+        testCase "a seatbelt sandbox is allowed the route to this host that srt on a Mac is" <| fun () ->
+            let door : Sandboxes.HostDoor = { Host = "box.local"; Port = 4100 }
+            Expect.equal
+                (Sandboxes.hostRouteFrom [ "100.64.0.7" ] mac SeatbeltBackend door)
+                (Sandboxes.hostRouteFrom [ "100.64.0.7" ] mac SrtBackend door)
+                "the proxy re-judges a name by what it resolves to, whoever wrote the profile"
+
+        testCase "the seatbelt backend refuses a host that is not a Mac" <| fun () ->
+            Expect.isError
+                (Sandboxes.SeatbeltSandbox.hostedOn Node.Base.Platform.Linux)
+                "no other platform has a Seatbelt to confine with"
+
+        testCase "the seatbelt backend is hosted on a Mac" <| fun () ->
+            Expect.equal (Sandboxes.SeatbeltSandbox.hostedOn mac) (Ok ()) "Seatbelt ships with the OS"
+
+        testCase "a client is sent to the proxy by address, with its token" <| fun () ->
+            Expect.equal
+                (SeatbeltProxy.environment (proxyAt 3128 "abc123") |> Map.tryFind "HTTPS_PROXY")
+                (Some "http://yession:abc123@127.0.0.1:3128")
+                "an address needs no resolver, and a confined process has none"
+
+        testCase "a token is written so that nothing in it changes the proxy's address" <| fun () ->
+            Expect.equal
+                (SeatbeltProxy.environment (proxyAt 3128 "a@b:c/d") |> Map.tryFind "HTTPS_PROXY")
+                (Some "http://yession:a%40b%3Ac%2Fd@127.0.0.1:3128")
+                "the token stays the password, whatever it holds"
+
+        testCase "nothing a command sets points a client past the proxy" <| fun () ->
+            let exec = execOf "curl" [ "https://example.com" ] (Map.ofList [ "HTTPS_PROXY", "http://elsewhere:1" ])
+            Expect.equal
+                (Sandboxes.SeatbeltSandbox.environmentFor (proxyAt 3128 "abc123") emptyPolicy exec |> Map.tryFind "HTTPS_PROXY")
+                (Some "http://yession:abc123@127.0.0.1:3128")
+                "the proxy's variables are laid over the command's own"
+
+        testCase "a spawn is the command as it was given, behind sandbox-exec and the profile" <| fun () ->
+            Expect.equal
+                (Sandboxes.SeatbeltSandbox.argvFor "(version 1)" (execOf "git" [ "log"; "--format=%s two words" ] Map.empty))
+                ("/usr/bin/sandbox-exec", [ "-p"; "(version 1)"; "git"; "log"; "--format=%s two words" ])
+                "no shell stands between an argv and its program"
+
+        testCase "a host that is ready says where its proxy listens" <| fun () ->
+            let sent = Sandboxes.SrtSandbox.HostWire.Ready (Some (proxyAt 52950 "abc123"))
+            Expect.equal
+                (Sandboxes.SrtSandbox.HostWire.parseReply (Sandboxes.SrtSandbox.HostWire.reply sent))
+                (Some sent)
+                "the port and the token cross the wire as they were"
+
+        testCase "a host whose manager started no proxy says so" <| fun () ->
+            let sent = Sandboxes.SrtSandbox.HostWire.Ready None
+            Expect.equal
+                (Sandboxes.SrtSandbox.HostWire.parseReply (Sandboxes.SrtSandbox.HostWire.reply sent))
+                (Some sent)
+                "no proxy is an answer, and not a line the session cannot read"
+    ]
+

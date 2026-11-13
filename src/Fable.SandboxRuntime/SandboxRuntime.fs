@@ -95,6 +95,11 @@ type [<AllowNullLiteral>] SandboxManager =
     /// connects to. Both are absent off Linux, where Seatbelt needs no such bridge.
     abstract getLinuxHttpSocketPath : unit -> string option
     abstract getLinuxSocksSocketPath : unit -> string option
+    /// The loopback port of the filtering HTTP proxy. It listens by the time `initialize`
+    /// resolves, and this is absent before that.
+    abstract getProxyPort : unit -> int option
+    /// What the proxy asks of a client, as the password of the proxy URL.
+    abstract getProxyAuthToken : unit -> string option
 
 /// What the package exports, as much of it as is used.
 type [<AllowNullLiteral>] Exports =

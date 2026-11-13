@@ -135,6 +135,9 @@ let all =
         Tag.needs "Srt sandboxes side by side" [ Tag.Srt; Tag.Ports ] (fun () -> SrtIntegration.siblings)
         Tag.needs "Srt terminals" [ Tag.Srt; Tag.Pty ] (fun () -> SrtIntegration.terminals)
         Tag.needs "The file tools' operands" [ Tag.Sandbox ] (fun () -> SrtIntegration.fileOperands)
+        // The backend whose profile is written here, where there is a Seatbelt to ask: the same
+        // capability as srt's probes, because confinement is what is under test.
+        Tag.needs "Seatbelt integration" [ Tag.Srt ] (fun () -> SeatbeltIntegration.tests)
         Tag.needs "Git integration" [] (fun () -> GitIntegration.tests)
         // The route a sandbox's git takes to github.com without holding a credential. Its
         // git-driven half asks for `Ports` inside.
@@ -153,6 +156,7 @@ let all =
         Tag.needs "Phase4" [] (fun () -> Phase4.tests)
         Tag.needs "the resources algebra" [] (fun () -> Resources.tests)
         Tag.needs "the Seatbelt profile" [] (fun () -> Seatbelt.tests)
+        Tag.needs "the Seatbelt backend" [] (fun () -> Seatbelt.backendTests)
         Tag.needs "Volume leases" [] (fun () -> VolumeLeases.tests)
         Tag.needs "seeded files" [] (fun () -> SeededFiles.tests)
         Tag.needs "Properties" [] (fun () -> Properties.tests)

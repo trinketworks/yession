@@ -36,6 +36,8 @@ in `tasks.fsx` probes each one and holds the refusal text. Read those, not a cop
   session here.
 - On a Mac, `vm-check <caps>` runs under STRICT nesting in the Colima VM, in seconds:
   `vm-check Srt --only "<text>"`.
+- The `seatbelt` backend's cases need a Mac and nothing else: `check Srt --only "Seatbelt"`.
+  On any other platform the suite is one pending case.
 
 ## Running a tier this box cannot host
 
