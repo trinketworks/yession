@@ -172,18 +172,6 @@ let private rejectedPromise (message: string) : JS.Promise<unit> =
 let private rejectedWithNothing () : JS.Promise<unit> =
     JS.Constructors.Promise.reject (box ())
 
-/// Count Node's unhandled-rejection reports, until the returned stop is called. Registering
-/// a listener is also what stops Node from killing the process over one, so the count is
-/// observable rather than fatal. The count is per-watch rather than a module-level tally:
-/// the cases below are two, and Expecto is free to run them at once.
-let private watchUnhandledRejections () : (unit -> int) * (unit -> unit) =
-    let mutable reported = 0
-    // One closure, registered and removed by reference: `removeListener` only removes the
-    // very function `on` was given.
-    let listener = fun () -> reported <- reported + 1
-    Node.Api.``process``.on ("unhandledRejection", listener) |> ignore
-    (fun () -> reported), (fun () -> Node.Api.``process``.removeListener ("unhandledRejection", listener) |> ignore)
-
 let private promiseAwaitTests =
     testList "Awaiting a promise (Node interop)" [
         testCaseAsync "a rejection is handled at the call, so reaching it late is caught, not fatal" <|

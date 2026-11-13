@@ -623,6 +623,18 @@ let quietFor (ms: int) : Async<unit> = Async.Sleep ms
 [<Waits>]
 let nextTurn () : Async<unit> = Async.Sleep 0
 
+/// Count Node's unhandled-rejection reports, until the returned stop is called. Registering
+/// a listener is also what stops Node from killing the process over one, so the count is
+/// observable rather than fatal. The count is per-watch rather than a module-level tally:
+/// the cases that watch are several, and Expecto is free to run them at once.
+let watchUnhandledRejections () : (unit -> int) * (unit -> unit) =
+    let mutable reported = 0
+    // One closure, registered and removed by reference: `removeListener` only removes the
+    // very function `on` was given.
+    let listener = fun () -> reported <- reported + 1
+    Node.Api.``process``.on ("unhandledRejection", listener) |> ignore
+    (fun () -> reported), (fun () -> Node.Api.``process``.removeListener ("unhandledRejection", listener) |> ignore)
+
 /// Poll until the condition holds, failing loudly with `label` if it never does.
 let waitUntilWithin (timeoutMs: int) (label: string) (condition: unit -> bool) : Async<unit> =
     async {

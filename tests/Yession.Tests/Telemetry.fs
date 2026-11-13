@@ -8,6 +8,7 @@ module Yession.Tests.Telemetry
 // Every process is a direct emitter now (no Manager-side collector); the stub stands in for a
 // real OpenTelemetry Collector.
 
+open Fable.Core
 open Fable.Core.JsInterop
 open Fable.Pyxpecto
 open Fable.OpenTelemetry
@@ -457,6 +458,37 @@ let private spanTests =
                 | Choice1Of2 () -> failwith "the throw was swallowed"
                 | Choice2Of2 e -> Expect.stringContains e.Message "kaboom" "the caller sees the throw"
                 Expect.equal (shapeOf (exporter.getFinishedSpans ())) [ "boom", None, true ] "and the span ended, failed"
+            }
+
+        // `spanWith` starts the work as a promise, and then awaits the promise. Fable's
+        // trampoline moves a workflow to a timer after 2000 steps. When it moved the
+        // workflow between the start and the await, work that threw at once had a
+        // rejection with no handler for one turn, and Node ends a process for that. Where
+        // the trampoline is depends on how many steps ran before, so this case runs the
+        // span after each number of steps in one full cycle.
+        testCaseAsync "a throw has a handler at each step where the trampoline can move the workflow" <|
+            async {
+                let unhandledSoFar, stopWatching = Support.watchUnhandledRejections ()
+                let tracer = Telemetry.tracerTo (inMemorySpanExporter ())
+                let rec steps (count: int) : Async<unit> = async { if count > 0 then return! steps (count - 1) }
+                let swallowed = ResizeArray<int> ()
+                for before in 0 .. 2100 do
+                    // Started on its own, so its trampoline counts from zero.
+                    let! caught =
+                        async {
+                            do! steps before
+                            return! Telemetry.span tracer "boom" [] (async { return failwith "kaboom" }) |> Async.Catch
+                        }
+                        |> Async.StartAsPromise
+                        |> Interop.awaitPromise
+                    match caught with
+                    | Choice1Of2 () -> swallowed.Add before
+                    | Choice2Of2 _ -> ()
+                do! Support.nextTurn ()
+                let unhandled = unhandledSoFar ()
+                stopWatching ()
+                Expect.equal (List.ofSeq swallowed) [] "the caller sees each throw"
+                Expect.equal unhandled 0 "and Node reports no rejection as unhandled, which would end the process"
             }
 
         testCaseAsync "with the tracer off the work runs as written" <|
