@@ -497,6 +497,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
               Sockets = []
               Binds = []
               Volumes = []
+              SeatbeltRules = []
               Realisation = []
               Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
               WorkingDirectory = Some reposDir

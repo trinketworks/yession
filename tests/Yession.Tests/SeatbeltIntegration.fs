@@ -290,6 +290,41 @@ let private macCases () =
             Expect.notEqual (exitCode run) 0 "a listener on this host is not reached by dialling it"
         })
 
+        // The two cases above, each with one rule that an operator wrote. The kernel
+        // reads the rule. `SeatbeltProfile.allows` does not, and the cheap tier says so.
+        testCaseAsync "a rule that an operator wrote opens what it names, and the kernel agrees" (async {
+            let outside = freshDir ()
+            TestFiles.write (outside + "/shared") "now-yours"
+            let rule = SeatbeltAllow.parse (sprintf "(allow file-read* (subpath \"%s\"))" outside) |> expect
+            let! sandbox = startSandbox { policyIn (freshDir ()) with SeatbeltRules = [ rule ] }
+            let! _, out, _ = shell sandbox (sprintf "cat %s" (quoted (outside + "/shared")))
+            do! sandbox.Dispose ()
+            Expect.isTrue (out.Contains "now-yours") "the rule is in the profile that confined the command"
+        })
+
+        testCaseAsync "a rule for the loopback lets a command dial a listener on this host" (async {
+            let! port, close = listenOnLoopback ()
+            let rule = SeatbeltAllow.parse """(allow network-outbound (remote ip "localhost:*"))""" |> expect
+            let! sandbox = startSandbox { policyIn (freshDir ()) with SeatbeltRules = [ rule ] }
+            let! run, _, _ = shell sandbox (sprintf "/usr/bin/nc -z 127.0.0.1 %d" port)
+            do! sandbox.Dispose ()
+            close ()
+            Expect.equal (exitCode run) 0 "what the profile refused is what this rule allows"
+        })
+
+        // `SeatbeltAllow.parse` checks the shape of a rule and not its words. A word that
+        // Seatbelt does not know stops every command, and `sandbox-exec` says which word.
+        // The start-up check of a sandbox runs a command, so it refuses such a sandbox.
+        testCaseAsync "a rule that Seatbelt cannot read stops the command, and sandbox-exec names the word" (async {
+            let rule = SeatbeltAllow.parse "(allow no-such-operation)" |> expect
+            let! sandbox = startSandbox { policyIn (freshDir ()) with SeatbeltRules = [ rule ] }
+            let! run, out, err = shell sandbox "echo ran"
+            do! sandbox.Dispose ()
+            Expect.notEqual (exitCode run) 0 "no command runs under a profile that does not compile"
+            Expect.isFalse (out.Contains "ran") "and this one did not"
+            Expect.isTrue (err.Contains "no-such-operation") (sprintf "said: %s" err)
+        })
+
         testCaseAsync "a client is handed the proxy, and the proxy refuses a host nobody named" (async {
             let! sandbox = startSandbox (policyIn (freshDir ()))
             // curl reads the proxy from the environment the backend gave it. The proxy answers

@@ -1149,6 +1149,7 @@ let private srtTests =
                               Sockets = []
                               Binds = []
                               Volumes = []
+                              SeatbeltRules = []
                               Realisation = []
                               // A home of its own, as a session gives every sandbox: git
                               // reads `$HOME`'s config, and the operator's is denied.

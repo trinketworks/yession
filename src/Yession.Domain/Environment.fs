@@ -99,7 +99,8 @@ module SelectionGrant =
             | Endpoint _
             | Exec _
             | Volume _
-            | Connection _ -> None
+            | Connection _
+            | Seatbelt _ -> None
         { SelectionGrant.Connections = ForwardedConnections.ofGrant (leaves, wantedOnly)
           SelectionGrant.Bound = leaves |> List.choose bound |> Map.ofList
           SelectionGrant.WantedOnly = wantedOnly |> Set.toList |> List.choose bound |> List.map fst |> Set.ofList }

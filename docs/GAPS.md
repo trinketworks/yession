@@ -368,6 +368,12 @@ The last section holds trust boundaries as sharp as the first section's.
     reader that has only the sandbox's name asks the last fold
     (`SandboxRuntime.namedBackend`). Until somebody stops the sandbox, a share out of it can
     go to the path of the other body.
+  - **The model does not read a rule that an operator wrote.** A resource can hold Seatbelt
+    rules as text (`seatbelt:`, [deployment.md](deployment.md)). `SeatbeltProfile.allows`
+    answers for the rules that a policy decides, and the kernel tier compares only those
+    with the kernel. With a written rule, the kernel allows what the model says and also
+    what the rule says. `SeatbeltAllow.parse` checks the shape of a rule. It stops a
+    mistake, and it does not prove what Seatbelt's Scheme does with the text.
   - **A JVM does not use the proxy.** `SeatbeltProxy.environment` sets the variables that
     curl, git, Node, Python and Go read. srt's wrapper also loads a Java agent. This backend
     does not. A Gradle or a Maven that needs the network has no route.

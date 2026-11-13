@@ -121,6 +121,34 @@ declared. `resources:` is what the host can offer. `always:` is what every sandb
 without asking: no repo has to name it and none can decline it. A resource that the profile
 declares, and does not list under `always:`, is available and not granted.
 
+A resource can hold rules for a Seatbelt profile, under `seatbelt:`:
+
+```yaml
+resources:
+  process-list:
+    seatbelt:
+      - (allow mach-lookup (global-name "com.apple.sysmond"))
+  loopback:
+    seatbelt:
+      - (allow network-bind (local ip "localhost:*"))
+      - (allow network-inbound (local ip "localhost:*"))
+      - (allow network-outbound (remote ip "localhost:*"))
+```
+
+Each entry is one `(allow ...)` form in Seatbelt's own language, on one line. Yession checks
+the shape of an entry (`SeatbeltAllow.parse` in `src/Yession.Domain/Resources.fs`). It does
+not read what the rule allows, so a rule can open more than its resource's name tells a
+reader. The loopback of a Mac is the host's own: a sandbox that holds the third `loopback`
+rule can dial each service that listens there. Write a path in a rule as the kernel sees it
+(`/private/tmp`, not `/tmp`).
+
+Only a sandbox under the `seatbelt` backend takes a rule. Each other confining backend
+withholds it. A sandbox that `uses:` the resource then refuses to start, and a sandbox that
+`wants:` it starts without the rule. So do not list such a resource under `always:` on a host
+that also runs sandboxes under `srt` or `docker`. A rule with a word that Seatbelt does not
+know stops each command of its sandbox, and the start-up check shows what `sandbox-exec`
+said.
+
 The same file may declare `sandboxes:` in the form a repo's `yession.yaml` uses
 (`ConfigFile.parseSandboxes` in `src/Yession.Domain/Config.fs`). Boot prints the notes of
 `ConfigAnalysis.fs` on what is legal but likely unmeant.
