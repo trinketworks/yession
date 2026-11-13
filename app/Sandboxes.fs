@@ -526,15 +526,20 @@ let limitsFor (backend: SandboxBackend) (platform: Node.Base.Platform) : HostLim
     // equally something to provide, not something to permit: claimed here, an overlay
     // grant realised as-asked and died downstream with an internal-bug sentence, where
     // unclaimed it is withheld with the one that tells the operator what to write.
+    //
+    // A Seatbelt rule is in: a rule only allows, and this backend allows everything.
     | HostBackend ->
-        HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.EgressByHost ]
+        HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.EgressByHost; HostDistinction.SeatbeltRules ]
     | SrtBackend ->
         if platform = Node.Base.Platform.Darwin then
             HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.EgressByHost ]
         else HostLimits.of' [ HostDistinction.EgressByHost ]
     // Seatbelt names a socket's path in a rule of its own, and its egress is the same
     // filtering proxy srt's is. A Mac's backend only, so there is no platform to split on.
-    | SeatbeltBackend -> HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.EgressByHost ]
+    // It is the one backend that writes a Seatbelt profile, so it is the one that takes a
+    // rule for it. srt on a Mac writes a profile of its own, and takes none.
+    | SeatbeltBackend ->
+        HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.EgressByHost; HostDistinction.SeatbeltRules ]
     | DockerBackend -> HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.NamedVolumes ]
 
 /// What a backend can distinguish on the host this process is running on.
@@ -689,7 +694,9 @@ type GrantedLeaves =
       Sockets : string list
       Env : Map<string, string>
       Binds : ResourceMount list
-      Volumes : (string * string * ResourceMountMode) list }
+      Volumes : (string * string * ResourceMountMode) list
+      /// Seatbelt rules, each as the operator wrote it. The seatbelt backend reads them.
+      Rules : SeatbeltAllow list }
 
 let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
     let rec fold (acc: GrantedLeaves) remaining =
@@ -702,7 +709,8 @@ let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
                     Domains = List.rev acc.Domains
                     Sockets = List.rev acc.Sockets
                     Binds = List.rev acc.Binds
-                    Volumes = List.rev acc.Volumes }
+                    Volumes = List.rev acc.Volumes
+                    Rules = List.rev acc.Rules }
         | leaf :: rest ->
             match leaf with
             | Mount mount ->
@@ -751,8 +759,11 @@ let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
             // route and a per-block loan (`WorkSandboxes`) — and puts nothing into the
             // policy of its own.
             | Connection _ -> fold acc rest
+            // Only the seatbelt backend takes one. The realisation withheld it from every
+            // other backend before this fold ran, as for a volume.
+            | Seatbelt rule -> fold { acc with Rules = rule :: acc.Rules } rest
     fold
-        { Reads = []; Writes = []; Domains = []; Sockets = []; Env = Map.empty; Binds = []; Volumes = [] }
+        { Reads = []; Writes = []; Domains = []; Sockets = []; Env = Map.empty; Binds = []; Volumes = []; Rules = [] }
         leaves
 
 /// The directories of granted executables, for PATH.
@@ -1010,6 +1021,7 @@ let policyFor
           // empty (the leaf is withheld by realisation) and `Binds` is unread.
           Binds = granted'.Binds
           Volumes = granted'.Volumes
+          SeatbeltRules = granted'.Rules
           Realisation = differences
           Env = env
           // What the sandbox ASKED to start in, RESOLVED — the workspace when it asked
@@ -3401,6 +3413,7 @@ module AgentSandbox =
           Sockets = []
           Binds = []
           Volumes = []
+          SeatbeltRules = []
           Realisation = []
           Env = env
           WorkingDirectory = None

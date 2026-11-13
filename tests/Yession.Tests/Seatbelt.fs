@@ -44,12 +44,20 @@ let private genTreesWithout (i: int) : Gen<string list> =
 let private genSockets : Gen<string list> =
     Gen.list (Range.linear 0 2) (Gen.int32 (Range.linear 0 3)) |> Gen.map (List.map socketAt)
 
+/// Rule `i` of the pool of rules that an operator could write.
+let private ruleAt (i: int) : SeatbeltAllow =
+    SeatbeltAllow.parse (sprintf "(allow mach-lookup (global-name \"com.example.s%d\"))" i) |> expect
+
+let private genRules : Gen<SeatbeltAllow list> =
+    Gen.list (Range.linear 0 2) (Gen.int32 (Range.linear 0 3)) |> Gen.map (List.map ruleAt)
+
 let private genPolicy : Gen<SandboxPolicy> =
     gen {
         let! reads = genTrees
         let! writes = genTrees
         let! sockets = genSockets
-        return { emptyPolicy with ReadPaths = reads; WritePaths = writes; Sockets = sockets }
+        let! rules = genRules
+        return { emptyPolicy with ReadPaths = reads; WritePaths = writes; Sockets = sockets; SeatbeltRules = rules }
     }
 
 /// The proxy's port in every case that has one.
@@ -78,7 +86,8 @@ let private together (left: SandboxPolicy) (right: SandboxPolicy) : SandboxPolic
     { emptyPolicy with
         ReadPaths = left.ReadPaths @ right.ReadPaths
         WritePaths = left.WritePaths @ right.WritePaths
-        Sockets = left.Sockets @ right.Sockets }
+        Sockets = left.Sockets @ right.Sockets
+        SeatbeltRules = left.SeatbeltRules @ right.SeatbeltRules }
 
 /// One line of a profile as what stands OUTSIDE its strings, each string left as `""`, and
 /// the strings themselves read back. A reader written here, not the module's own escaping
@@ -141,7 +150,8 @@ let tests =
                     { policy with
                         ReadPaths = List.rev policy.ReadPaths
                         WritePaths = List.rev policy.WritePaths
-                        Sockets = List.rev policy.Sockets }
+                        Sockets = List.rev policy.Sockets
+                        SeatbeltRules = List.rev policy.SeatbeltRules }
                 Expect.equal
                     (SeatbeltProfile.render (profileOf host reversed))
                     (SeatbeltProfile.render (profileOf host policy))
@@ -161,6 +171,7 @@ let tests =
                     | SeatbeltRule.Write (SeatbeltPath.Tree path) -> List.contains path policy.WritePaths
                     | SeatbeltRule.Socket path -> List.contains path policy.Sockets
                     | SeatbeltRule.UnixSockets -> not (List.isEmpty policy.Sockets)
+                    | SeatbeltRule.Written rule -> List.contains rule policy.SeatbeltRules
                     | SeatbeltRule.Read (SeatbeltPath.Node _)
                     | SeatbeltRule.Write (SeatbeltPath.Node _)
                     | SeatbeltRule.DirectoryMetadata
@@ -363,6 +374,73 @@ let tests =
                 (rulesOf plainHost { emptyPolicy with ReadPaths = [ "/data/work/" ] })
                 (rulesOf plainHost { emptyPolicy with ReadPaths = [ "/data/work" ] })
                 "Seatbelt compares paths, and /data/work/ is not a path it would ever be asked about"
+
+        // --- a rule that an operator wrote ----------------------------------------------
+
+        testCase "one allow form is a rule, whatever is nested in it" <| fun () ->
+            for text in
+                [ """(allow mach-lookup (global-name "com.apple.sysmond"))"""
+                  """(allow network-bind (local ip "localhost:*"))"""
+                  """(allow process-info*)"""
+                  """(allow file-read* (require-all (subpath "/data") (require-not (literal "/data/secret"))))"""
+                  """(allow file-read* (regex #"^/private/var/folders/[^/]+/T$"))"""
+                  // What a string holds is not read: a parenthesis, a `;`, a quote, a deny.
+                  """(allow file-read* (literal "/odd/a)b;c\"d(deny"))""" ] do
+                match SeatbeltAllow.parse text with
+                | Ok rule -> Expect.equal (SeatbeltAllow.text rule) text "held as it was written"
+                | Error refusal -> failwithf "refused %s: %s" text refusal
+
+        testCase "the space around a rule is not part of it" <| fun () ->
+            Expect.equal
+                (SeatbeltAllow.parse "  (allow process-info*)\n" |> expect)
+                (SeatbeltAllow.parse "(allow process-info*)" |> expect)
+                "one rule has one spelling, so a set holds it once"
+
+        testCase "text that is not one allow form is refused, and the refusal says why" <| fun () ->
+            for text, because in
+                [ "", "This one is empty"
+                  "   ", "This one is empty"
+                  """(deny file-read* (subpath "/"))""", "does not start with `(allow `"
+                  "(version 1)", "does not start with `(allow `"
+                  "allow process-fork", "does not start with `(allow `"
+                  "(allow)", "does not start with `(allow `"
+                  "(allow process-fork) (allow process-exec)", "text after its last parenthesis"
+                  "(allow process-fork))", "text after its last parenthesis"
+                  """(allow mach-lookup (global-name "a")""", "a parenthesis that does not close"
+                  """(allow mach-lookup (global-name "a))""", "a string that does not end"
+                  """(allow file-read* (begin (deny default) (subpath "/")))""", "has a `(deny` in it"
+                  "(allow process-fork ; and the fork of its children)", "a `;` outside a string"
+                  "(allow file-read*\n  (subpath \"/data\"))", "a control character" ] do
+                match SeatbeltAllow.parse text with
+                | Ok rule -> failwithf "'%s' was taken as the rule %s" text (SeatbeltAllow.text rule)
+                | Error refusal -> Expect.isTrue (refusal.Contains because) (sprintf "'%s' was refused, and said: %s" text refusal)
+
+        testCase "a written rule is one line of the profile, as it was written" <| fun () ->
+            let text = """(allow mach-lookup (global-name "com.apple.sysmond"))"""
+            let rule = SeatbeltAllow.parse text |> expect
+            let lines = linesOf (profileOf plainHost { emptyPolicy with SeatbeltRules = [ rule; rule ] })
+            Expect.equal (lines |> List.filter ((=) text) |> List.length) 1 "once, however often the policy names it"
+
+        check "a written rule adds itself to a profile, and changes no other rule" <| fun () ->
+            property {
+                let! host = genHost
+                let! policy = genPolicy
+                let rule = SeatbeltAllow.parse """(allow network-bind (local ip "localhost:*"))""" |> expect
+                Expect.equal
+                    (rulesOf host { policy with SeatbeltRules = rule :: policy.SeatbeltRules })
+                    (Set.add (SeatbeltRule.Written rule) (rulesOf host policy))
+                    "the rules of the policy, and this one"
+            }
+
+        // The limit of the model, written down where a reader looks for it. The kernel
+        // allows what the rule says (`SeatbeltIntegration` asks it). `allows` reads only
+        // the rules that a policy decides, so here it says no.
+        testCase "the model does not read a written rule" <| fun () ->
+            let rule = SeatbeltAllow.parse """(allow file-read* (subpath "/elsewhere"))""" |> expect
+            let profile = profileOf plainHost { emptyPolicy with SeatbeltRules = [ rule ] }
+            Expect.isFalse
+                (SeatbeltProfile.allows profile (SeatbeltAsk.Read "/elsewhere/notes"))
+                "an operator who writes a rule says more than the model can repeat"
     ]
 
 // The backend that spawns under these profiles, as far as it can be asked without a Mac:
@@ -412,6 +490,66 @@ let backendTests =
                 (RealisedClosure.of' (Sandboxes.limitsFor SeatbeltBackend mac) asked |> RealisedClosure.differences)
                 []
                 "a profile names a socket's path, and the proxy names a host"
+
+        testCase "a seatbelt sandbox takes a Seatbelt rule as it was granted" <| fun () ->
+            Expect.equal
+                (RealisedClosure.of' (Sandboxes.limitsFor SeatbeltBackend mac) (Set.ofList [ Seatbelt (ruleAt 0) ])
+                 |> RealisedClosure.differences)
+                []
+                "the one backend that writes a Seatbelt profile"
+
+        // srt on a Mac confines with Seatbelt too. It writes that profile itself, and has
+        // no place for a rule from here.
+        testCase "no other confining backend takes a Seatbelt rule" <| fun () ->
+            for backend, platform in
+                [ SrtBackend, mac
+                  SrtBackend, Node.Base.Platform.Linux
+                  DockerBackend, Node.Base.Platform.Linux
+                  DockerBackend, mac ] do
+                match
+                    RealisedClosure.of' (Sandboxes.limitsFor backend platform) (Set.ofList [ Seatbelt (ruleAt 0) ])
+                    |> RealisedClosure.differences
+                with
+                | [ _, LeafRealisation.Withheld _ ] -> ()
+                | other -> failwithf "%s made this of a Seatbelt rule: %A" (SandboxBackend.describe backend) other
+
+        testCase "the backend that confines nothing holds a Seatbelt rule" <| fun () ->
+            Expect.equal
+                (RealisedClosure.of' (Sandboxes.limitsFor HostBackend mac) (Set.ofList [ Seatbelt (ruleAt 0) ])
+                 |> RealisedClosure.differences)
+                []
+                "a rule only allows, and this backend allows everything"
+
+        testCase "a granted Seatbelt rule reaches the policy of a seatbelt sandbox" <| fun () ->
+            let policy =
+                Sandboxes.policyFor
+                    SeatbeltBackend (Sandboxes.limitsFor SeatbeltBackend mac) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    [ Seatbelt (ruleAt 1); Seatbelt (ruleAt 0) ]
+                    Set.empty
+                    EnvironmentSpec.defaults
+                |> expect
+            Expect.equal (Set.ofList policy.SeatbeltRules) (Set.ofList [ ruleAt 0; ruleAt 1 ]) "each rule, as it was written"
+
+        testCase "a Seatbelt rule that a sandbox needs refuses the sandbox under another backend" <| fun () ->
+            match
+                Sandboxes.policyFor
+                    SrtBackend (Sandboxes.limitsFor SrtBackend mac) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    [ Seatbelt (ruleAt 0) ]
+                    Set.empty
+                    EnvironmentSpec.defaults
+            with
+            | Ok _ -> failwith "srt was given a rule that it cannot hold"
+            | Error refusal -> Expect.isTrue (refusal.Contains "seatbelt backend") (sprintf "said: %s" refusal)
+
+        testCase "a Seatbelt rule that a sandbox only wants is absent under another backend" <| fun () ->
+            let policy =
+                Sandboxes.policyFor
+                    SrtBackend (Sandboxes.limitsFor SrtBackend mac) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    [ Seatbelt (ruleAt 0) ]
+                    (Set.ofList [ Seatbelt (ruleAt 0) ])
+                    EnvironmentSpec.defaults
+                |> expect
+            Expect.equal policy.SeatbeltRules [] "a want is absent where the host cannot give it"
 
         testCase "a seatbelt sandbox dials this host by the name srt on a Mac dials" <| fun () ->
             Expect.equal

@@ -15,6 +15,15 @@ namespace Yession.Domain.Sandboxes
 // decides: which files, which sockets, which port. Only the second kind names a file to
 // read or to write, so `allows` answers for a whole profile from the rules alone.
 //
+// One kind of rule is not read: a rule that an operator wrote in Seatbelt's own language
+// (`SeatbeltRule.Written`). `render` writes its text as it is, and `allows` does not look
+// inside it. So `allows` is exact for a profile that holds no such rule. With one, the
+// kernel allows what `allows` says and also what that rule says.
+//
+// `SeatbeltAllow.parse` checks the shape of such a rule: one form that opens with
+// `(allow ` and holds no `(deny`. The check stops a mistake. It does not prove what
+// Seatbelt's Scheme does with the text, and the operator who wrote the rule answers for it.
+//
 // Why not `@anthropic-ai/sandbox-runtime`, which wrote these profiles first. Measured on
 // 0.0.81: its configuration cannot name ONE node (a .NET build stats `/tmp/`, a symlink
 // whose own node must be readable while `/private/tmp` is not), it cannot add a sysctl (the
@@ -63,6 +72,9 @@ type SeatbeltRule =
     /// there, and it is the only route out of a sandbox that a profile from a policy
     /// names.
     | LoopbackPort of port: int
+    /// A rule that an operator wrote in Seatbelt's own language. The profile holds its
+    /// text as it is, and `allows` does not read it (`SeatbeltAllow` says what its check covers).
+    | Written of SeatbeltAllow
 
 /// One thing a process might try, as a question a profile answers (`SeatbeltProfile.allows`).
 ///
@@ -360,9 +372,9 @@ module SeatbeltProfile =
     ///
     /// The baseline, the host's runtime to read, the temporary directory to read and
     /// write, and then what the policy names: its read paths to read, its write paths to
-    /// write AND read (a workspace that can be written and not read is no workspace), and
-    /// its sockets. Nothing else, so a policy that names nothing gets nothing more, and
-    /// what two policies hold together is what each holds.
+    /// write AND read (a workspace that can be written and not read is no workspace), its
+    /// sockets, and its Seatbelt rules. Nothing else, so a policy that names nothing gets
+    /// nothing more, and what two policies hold together is what each holds.
     ///
     /// `AllowedDomains` is not read. Which hosts may be reached is the proxy's to enforce,
     /// and all a profile says about the network is the proxy's port.
@@ -410,7 +422,8 @@ module SeatbeltProfile =
             |> Result.bind (fun files ->
                 socketRules
                 |> Result.map (fun sockets ->
-                    { Held = Set.union baseline (Set.ofList (proxy @ files @ sockets)) })))
+                    let written = policy.SeatbeltRules |> List.map SeatbeltRule.Written
+                    { Held = Set.union baseline (Set.ofList (proxy @ files @ sockets @ written)) })))
 
     /// What the profile holds, each rule once.
     let rules (profile: SeatbeltProfile) : Set<SeatbeltRule> = profile.Held
@@ -431,6 +444,9 @@ module SeatbeltProfile =
     /// kernel says of the text, as far as `literal` and `subpath` mean what Seatbelt's
     /// documentation says they mean. A path is asked about in its canonical spelling,
     /// the one the kernel would check.
+    ///
+    /// A `Written` rule answers no ask here. The kernel reads it and this model does not,
+    /// so a profile that holds one may allow more than this says, and never less.
     let allows (profile: SeatbeltProfile) (ask: SeatbeltAsk) : bool =
         let some (matches: SeatbeltRule -> bool) = profile.Held |> Set.exists matches
         match ask with
@@ -471,6 +487,7 @@ module SeatbeltProfile =
             [ sprintf "(allow network-bind (local unix-socket (subpath %s)))" (quoted path)
               sprintf "(allow network-outbound (remote unix-socket (subpath %s)))" (quoted path) ]
         | SeatbeltRule.LoopbackPort port -> [ sprintf "(allow network-outbound (remote ip \"localhost:%d\"))" port ]
+        | SeatbeltRule.Written rule -> [ SeatbeltAllow.text rule ]
 
     /// The profile as the text `sandbox-exec` reads: the one deny, the essentials, and
     /// then one allow for each rule. The rules are written in the order a set keeps them,

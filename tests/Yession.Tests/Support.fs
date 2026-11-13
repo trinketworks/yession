@@ -105,6 +105,7 @@ let emptyPolicy : SandboxPolicy =
       Sockets = []
       Binds = []
       Volumes = []
+      SeatbeltRules = []
       Realisation = []
       Env = Map.empty
       WorkingDirectory = None

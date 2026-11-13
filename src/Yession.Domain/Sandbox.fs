@@ -172,6 +172,10 @@ type SandboxPolicy =
       /// that ignores this field is a backend that never receives it filled. The mode is
       /// `Read` or `Write`, never `Overlay` (the profile refuses one on a volume).
       Volumes : (string * string * ResourceMountMode) list
+      /// Granted Seatbelt rules, each as the operator wrote it. Only the seatbelt backend
+      /// takes one. Every other backend has the leaf withheld before a policy exists, as
+      /// for `Volumes`.
+      SeatbeltRules : SeatbeltAllow list
       Env : Map<string, string>
       /// Where this sandbox stands: an ABSOLUTE directory, and the two things that
       /// depend on it are why it has to be.
