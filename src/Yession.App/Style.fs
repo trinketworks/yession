@@ -2963,8 +2963,8 @@ module Style =
     /// the glyph spanned 4 to 24 and was centred on neither of the head's two lines — a mark on
     /// no rail at all (docs/visual-design.md, Space: rows align on the text baseline).
     let askWay =
-        cls [ "w-5 h-[1lh] shrink-0 grid place-items-center bg-transparent border-0 cursor-pointer transition-colors"
-              "phone:w-11 phone:h-11 phone:-mx-3 phone:-my-3.5"
+        cls [ "w-5 h-[1lh] shrink-0 translate-x-1.5 grid place-items-center bg-transparent border-0 cursor-pointer transition-colors"
+              "phone:w-11 phone:h-11 phone:-mx-3 phone:-my-3.5 phone:translate-x-0"
               "text-ink-faint hover:text-ink"; focusRing ]
 
     /// The navigation voice: the wordmark's family, lowercased, at the heading step. Not
@@ -2982,7 +2982,7 @@ module Style =
               askColumn; askEdge; Stroke.dividerTop; "hover:bg-surface-2"; focusRingInset ]
     let askLineWords = cls [ askMeasure; "flex items-center gap-3 leading-4" ]
     /// In the gutter, where the card's way out stands: the way IN, pointing where it goes.
-    let askLineMark = "w-5 shrink-0 grid place-items-center text-ink-faint"
+    let askLineMark = "w-5 shrink-0 translate-x-1.5 phone:translate-x-0 grid place-items-center text-ink-faint"
     let askLineWho = cls [ askSubtitle; "shrink-0 max-w-[40%]" ]
     let askLineQuestion = "font-extralight text-body lowercase text-ink truncate min-w-0"
 
@@ -3057,7 +3057,14 @@ module Style =
     /// avatar's column and the name on the reading edge — one rail, named by the token that
     /// says where it is. Drawn on every row and filled only on the held one — a cell that
     /// appeared with the tick would move every name out from under the pointer that chose it.
-    let askRowMark = "-ml-rail w-5 shrink-0 self-center text-blue"
+    ///
+    /// A grid that centres, as `askWay` and `surfaceChoiceMark` are: the 14px tick left alone
+    /// in the 20px cell sat 3px left of the × above it, which is centred in the same column.
+    ///
+    /// `translate-x-1.5` on every gutter mark: a 20px box plus the `gap-3` is one 32px rail, so
+    /// the box alone sat 10px off the bar and 22px off the words. Six px right puts its centre
+    /// on the gutter's, equal either side. A phone keeps its own box (`askWay`).
+    let askRowMark = "-ml-rail w-5 shrink-0 translate-x-1.5 phone:translate-x-0 self-center grid place-items-center text-blue"
     /// A row whose name is WORDS rather than an identifier — a route on the trust card, "push
     /// and fetch". `askRowName`'s step and ink without its terminal face, which is for the
     /// repository and branch names that are ids.
@@ -4048,7 +4055,7 @@ module Style =
     /// The tick, in the gutter where the card hangs its own (`askRowMark`), on the label's
     /// FIRST line (`text-body` states the `1lh` it is one line of), so a two-line option keeps
     /// its tick by the line that starts it.
-    let surfaceChoiceMark = "-ml-rail w-5 h-[1lh] text-body shrink-0 grid place-items-center text-blue"
+    let surfaceChoiceMark = "-ml-rail w-5 h-[1lh] translate-x-1.5 phone:translate-x-0 text-body shrink-0 grid place-items-center text-blue"
     let surfaceChoiceLabel = cls [ "font-ui"; body; "min-w-0" ]
 
     /// A component this renderer does not draw yet, said rather than silently dropped.
