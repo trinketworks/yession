@@ -499,6 +499,33 @@ let tests =
                 (Map.ofList [ "A", "1"; "PATH", "/img:/x" ])
                 "the image's PATH extended; its HOME is the image's to set, not copied"
 
+        // What lies beneath a template is what the sandbox has without the template. On a
+        // backend with no image, the policy holds that: the baseline, and each granted value.
+        testCase "a variable composed over itself extends what the policy holds for it" <| fun () ->
+            let policy =
+                { Support.emptyPolicy with
+                    Env = Map.ofList [ "PATH", "/usr/bin:/bin" ]
+                    Derived =
+                        Map.ofList
+                            [ "PATH", [ Yession.Domain.Sandboxes.TemplatePart.Literal "/opt/tools:"; Yession.Domain.Sandboxes.TemplatePart.Beneath "PATH" ] ] }
+            Expect.equal
+                (Sandboxes.environment Map.empty policy)
+                (Map.ofList [ "PATH", "/opt/tools:/usr/bin:/bin" ])
+                "the PATH that the sandbox has without the template is still in it"
+
+        // A container has a granted value in place of its image's, with or without a template.
+        testCase "what the policy holds for a name lies over the image, beneath a template" <| fun () ->
+            let policy =
+                { Support.emptyPolicy with
+                    Env = Map.ofList [ "SSL_CERT_DIR", "/granted" ]
+                    Derived =
+                        Map.ofList
+                            [ "SSL_CERT_DIR", [ Yession.Domain.Sandboxes.TemplatePart.Beneath "SSL_CERT_DIR"; Yession.Domain.Sandboxes.TemplatePart.Literal ":/proxy" ] ] }
+            Expect.equal
+                (Sandboxes.environment (Map.ofList [ "SSL_CERT_DIR", "/image" ]) policy)
+                (Map.ofList [ "SSL_CERT_DIR", "/granted:/proxy" ])
+                "the template extends the granted value, which the container has without the template"
+
         // What the credential proxy's references are for, read against each other: a note for
         // each way a declaration can ask for the proxy and still not get through it.
         testCase "a proxy URL with nothing trusting the proxy is noted where it was written" <| fun () ->

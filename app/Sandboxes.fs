@@ -127,8 +127,15 @@ let resolveVariables
 /// carries resolved over what lies beneath it — `image` (a container image's own `ENV`,
 /// empty for a backend with no image) under everything the policy settled. The one place a
 /// template becomes a value, so the three backends cannot resolve one three ways.
+///
+/// What lies beneath a name is what the sandbox has for that name without the template.
+/// The policy can hold a value for the name of a template: the baseline's `PATH`, or a
+/// variable that a resource granted. That value is beneath the template, over the image's.
+/// This function once took each templated name out of the policy's side. On a backend
+/// with no image, `PATH: /opt/tools:${env.PATH}` then lost the `PATH` of the baseline and
+/// of each granted executable.
 let environment (image: Map<string, string>) (policy: SandboxPolicy) : Map<string, string> =
-    let beneath = mergeEnv image (policy.Env |> Map.filter (fun name _ -> not (Map.containsKey name policy.Derived)))
+    let beneath = mergeEnv image policy.Env
     mergeEnv policy.Env (EnvTemplate.resolveAll beneath policy.Derived)
 
 /// Assemble a sandbox policy for the configured backend. Host (and srt) sandboxes get

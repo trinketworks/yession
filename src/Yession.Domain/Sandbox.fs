@@ -194,8 +194,9 @@ type SandboxPolicy =
       Filesystem : FilesystemConfinement
       /// Variables composed over what lies beneath them (`EnvTemplate`), left for the
       /// backend: only it knows what lies beneath — for a container, the image's own `ENV`,
-      /// which exists only once the image has been pulled or built. `Env` never carries a
-      /// name that is here.
+      /// which exists only once the image has been pulled or built. `Env` holds no value
+      /// that a template here composed. It can hold the baseline's value or a granted value
+      /// for the same name, and that value lies beneath the template.
       Derived : Map<string, EnvTemplate> }
 
 /// Whether a process runs behind the sandbox's declared entrypoint, or bare.
