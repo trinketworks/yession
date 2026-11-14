@@ -198,7 +198,7 @@ let tests =
             let dir = checkout r (Some devWithNet)
             let file = (readIn dir r |> expect |> Option.get).File
             let dev = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
-            Expect.equal (dev.Container |> Option.get).Image (Some { Name = "node"; Tag = Some "24" })
+            Expect.equal ((SandboxDecl.container dev) |> Option.get).Image (Some { Name = "node"; Tag = Some "24" })
                 "the image survived the round trip"
             Expect.equal (dev.Uses |> List.map ResourceName.value) [ "npm" ] "so did the resources it selects"
 
@@ -212,31 +212,28 @@ let tests =
             TestFiles.write (pathIn dir r) (TestFiles.read "yession.yaml")
             let file = (readIn dir r |> expect |> Option.get).File
             let dev = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
-            let gate = file.Sandboxes |> Map.find (SandboxName.create "gate" |> expect)
             // A repo's work sandbox is a container; a declaration without one is refused
             // at start. What the container needs is exactly what a person needs locally:
             // nix, and the checkout — the devshell does the rest.
-            for name, decl in [ "dev", dev; "gate", gate ] do
-                match decl.Container with
-                | None -> failwithf "%s declares no container, and a repo work sandbox is one" name
-                | Some container ->
-                    Expect.equal
-                        (container.Image |> Option.map (fun i -> i.Name))
-                        (Some "nixos/nix")
-                        (sprintf "%s runs the nix base image" name)
-                // The whole nix configuration the devshell sees, features and substituters
-                // both — in a container there is no /etc/nix/nix.conf story to inherit.
-                Expect.isTrue
-                    (decl.EnvironmentVariables |> Map.containsKey "NIX_CONFIG")
-                    (sprintf "%s carries the nix settings its build needs" name)
-            for name, decl in [ "dev", dev; "gate", gate ] do
-                // WANTS, not uses: the same file has to work on hosts that offer no warm
-                // store and no GitHub connection, and a `uses:` there would refuse the
-                // sandbox outright. Where the operator offers `github`, `git push` works.
+            match SandboxDecl.container dev with
+            | None -> failwith "dev declares no container, and a repo work sandbox is one"
+            | Some container ->
                 Expect.equal
-                    (decl.Wants |> List.map ResourceName.value)
-                    [ "github"; "nix-container-store" ]
-                    (sprintf "%s wishes for the GitHub connection and the warm store where an operator offers them" name)
+                    (container.Image |> Option.map (fun i -> i.Name))
+                    (Some "nixos/nix")
+                    "dev runs the nix base image"
+            // The whole nix configuration the devshell sees, features and substituters
+            // both — in a container there is no /etc/nix/nix.conf story to inherit.
+            Expect.isTrue
+                (dev.EnvironmentVariables |> Map.containsKey "NIX_CONFIG")
+                "dev carries the nix settings its build needs"
+            // WANTS, not uses: the same file has to work on hosts that offer no warm
+            // store and no GitHub connection, and a `uses:` there would refuse the
+            // sandbox outright. Where the operator offers `github`, `git push` works.
+            Expect.equal
+                (dev.Wants |> List.map ResourceName.value)
+                [ "github"; "nix-container-store" ]
+                "dev wishes for the GitHub connection and the warm store where an operator offers them"
             // `gh` finds its repo from the checkout's remotes, and behind the git gateway's
             // `insteadOf` it finds none it recognises — so `dev`, where gh runs, names it.
             Expect.equal
@@ -260,7 +257,7 @@ let tests =
             let containers =
                 file.Sandboxes
                 |> Map.toList
-                |> List.choose (fun (name, decl) -> decl.Container |> Option.map (fun c -> SandboxName.value name, c))
+                |> List.choose (fun (name, decl) -> (SandboxDecl.container decl) |> Option.map (fun c -> SandboxName.value name, c))
             Expect.isNonEmpty containers "this repo declares containers"
             for name, container in containers do
                 for driver in [ "cgroupfs"; "systemd" ] do
@@ -502,6 +499,33 @@ let tests =
                 (Map.ofList [ "A", "1"; "PATH", "/img:/x" ])
                 "the image's PATH extended; its HOME is the image's to set, not copied"
 
+        // What lies beneath a template is what the sandbox has without the template. On a
+        // backend with no image, the policy holds that: the baseline, and each granted value.
+        testCase "a variable composed over itself extends what the policy holds for it" <| fun () ->
+            let policy =
+                { Support.emptyPolicy with
+                    Env = Map.ofList [ "PATH", "/usr/bin:/bin" ]
+                    Derived =
+                        Map.ofList
+                            [ "PATH", [ Yession.Domain.Sandboxes.TemplatePart.Literal "/opt/tools:"; Yession.Domain.Sandboxes.TemplatePart.Beneath "PATH" ] ] }
+            Expect.equal
+                (Sandboxes.environment Map.empty policy)
+                (Map.ofList [ "PATH", "/opt/tools:/usr/bin:/bin" ])
+                "the PATH that the sandbox has without the template is still in it"
+
+        // A container has a granted value in place of its image's, with or without a template.
+        testCase "what the policy holds for a name lies over the image, beneath a template" <| fun () ->
+            let policy =
+                { Support.emptyPolicy with
+                    Env = Map.ofList [ "SSL_CERT_DIR", "/granted" ]
+                    Derived =
+                        Map.ofList
+                            [ "SSL_CERT_DIR", [ Yession.Domain.Sandboxes.TemplatePart.Beneath "SSL_CERT_DIR"; Yession.Domain.Sandboxes.TemplatePart.Literal ":/proxy" ] ] }
+            Expect.equal
+                (Sandboxes.environment (Map.ofList [ "SSL_CERT_DIR", "/image" ]) policy)
+                (Map.ofList [ "SSL_CERT_DIR", "/granted:/proxy" ])
+                "the template extends the granted value, which the container has without the template"
+
         // What the credential proxy's references are for, read against each other: a note for
         // each way a declaration can ask for the proxy and still not get through it.
         testCase "a proxy URL with nothing trusting the proxy is noted where it was written" <| fun () ->
@@ -622,17 +646,17 @@ let private cell (value: 'a) = fun () -> value
 
 /// A session whose host declares no resources: every selection comes to nothing. The
 /// capability notes have their own cases, where a real vocabulary is worth the setup.
-let private noCapabilities : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
-    fun _ -> Ok { RepoSandboxes.Granted = []; RepoSandboxes.GitHubRoutes = [] }
+let private noCapabilities : RepoRef -> SandboxDecl list -> Result<RepoSandboxes.RepoCapabilities, string> =
+    fun _ _ -> Ok { RepoSandboxes.Granted = []; RepoSandboxes.GitHubRoutes = [] }
 
 /// A vocabulary that grants exactly these lines and forwards nobody's GitHub, so the fold asks
 /// nobody to trust anything in cases about something else.
-let private granting (lines: string list) : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
-    fun _ -> Ok { RepoSandboxes.Granted = lines; RepoSandboxes.GitHubRoutes = [] }
+let private granting (lines: string list) : RepoRef -> SandboxDecl list -> Result<RepoSandboxes.RepoCapabilities, string> =
+    fun _ _ -> Ok { RepoSandboxes.Granted = lines; RepoSandboxes.GitHubRoutes = [] }
 
 /// A vocabulary that forwards GitHub by these routes: what a repo asks people to trust it with.
-let private forwardingGitHub (routes: ConnectionRoute list) : ResourceName list * ResourceName list -> Result<RepoSandboxes.RepoCapabilities, string> =
-    fun _ ->
+let private forwardingGitHub (routes: ConnectionRoute list) : RepoRef -> SandboxDecl list -> Result<RepoSandboxes.RepoCapabilities, string> =
+    fun _ _ ->
         Ok
             { RepoSandboxes.Granted = routes |> List.map (fun route -> sprintf "conn:github/%s" (ConnectionRoute.name route))
               RepoSandboxes.GitHubRoutes = routes }

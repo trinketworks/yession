@@ -352,8 +352,22 @@ module ConfigFile =
                   OomScoreAdj = get.Optional.Field "oom_score_adj" (judgedInt OomScoreAdj.ofInt)
                   PidsLimit = get.Optional.Field "pids_limit" (judgedInt PidsLimit.ofInt) }))
 
+    let private hostKeys = [ "prepare"; "entrypoint" ]
+
+    /// The host block: what a sandbox on the host's own userland says about itself. That
+    /// is the command that makes it ready (`prepare`) and what its work runs behind
+    /// (`entrypoint`), each an argv, and nothing more. It has no `command`, no image and no
+    /// limits, because it has no container to give them to. What CONFINES it is not a key:
+    /// that is the operator's backend, and no file names it (`SandboxBody`).
+    let private host : Decoder<HostSpec> =
+        noUnknownKeys hostKeys
+        |> Decode.andThen (fun () ->
+            Decode.object (fun get ->
+                { HostSpec.Prepare = get.Optional.Field "prepare" (argv "prepare")
+                  HostSpec.Entrypoint = get.Optional.Field "entrypoint" (argv "entrypoint") }))
+
     let private sandboxKeys =
-        [ "container"; "dialect"; "workdir"; "env"; "uses"; "wants"; "files"; "setup"; "description" ]
+        [ "container"; "host"; "dialect"; "workdir"; "env"; "uses"; "wants"; "files"; "setup"; "description" ]
 
     /// `forward:` said which connections a sandbox forwarded, and a connection is a resource
     /// now: offered by the operator and selected like every other. Refused by name rather
@@ -418,8 +432,14 @@ module ConfigFile =
         |> Decode.andThen (fun () ->
             Decode.object (fun get ->
                 let container = get.Optional.Field "container" container
+                let host = get.Optional.Field "host" host
                 let dialect = get.Optional.Field "dialect" dialect
-                { Container = container |> Option.map (fun spec -> { spec with Dialect = dialect })
+                { Body =
+                    // Both blocks is refused below, so the order here decides nothing.
+                    match container, host with
+                    | Some spec, _ -> Some (ContainerBody { spec with Dialect = dialect })
+                    | None, Some spec -> Some (HostBody spec)
+                    | None, None -> None
                   WorkingDirectory = get.Optional.Field "workdir" (inCheckout "workdir")
                   EnvironmentVariables =
                     get.Optional.Field "env" environment |> Option.defaultValue Map.empty
@@ -431,14 +451,18 @@ module ConfigFile =
                     get.Optional.Field "description" Decode.string
                     |> Option.map (fun said -> said.Trim ())
                     |> Option.filter (fun said -> said <> "") },
-                (container, dialect)))
-        |> Decode.andThen (fun (decl, (container, dialect)) ->
+                (container, host, dialect)))
+        |> Decode.andThen (fun (decl, (container, host, dialect)) ->
             // A dialect names the shell a CONTAINER's terminal opens, chosen from what the
             // backend finds behind the entrypoint. A sandbox without a container has no
             // such choice — the session's own shell is what it gets — so the key is refused
             // there rather than read and ignored.
-            match dialect, container with
-            | Some _, None -> Decode.fail "`dialect` chooses a container's shell. This sandbox declares no `container`"
+            match container, host, dialect with
+            // One body. Two would be a sandbox that is a container on one reading and the
+            // host on the other, and whichever this picked, half the file would be ignored.
+            | Some _, Some _, _ ->
+                Decode.fail "a sandbox has one body. This one declares `container` and `host`. Keep the one its commands were written for"
+            | None, _, Some _ -> Decode.fail "`dialect` chooses a container's shell. This sandbox declares no `container`"
             | _ -> Decode.succeed decl)
 
     /// Sandbox names, refusing a clash INSIDE one file.
@@ -549,8 +573,21 @@ module ConfigFile =
     /// the file's own schema must be willing to read, so a gated call cannot smuggle a shape
     /// a `yession.yaml` would have been refused for.
     let encodeSandbox (decl: SandboxDecl) : string =
+        let declaredContainer = SandboxDecl.container decl
+        let host =
+            match decl.Body with
+            | Some (HostBody host) ->
+                Some (
+                    Encode.object
+                        [ if host.Prepare.IsSome then
+                            "prepare", Encode.list (host.Prepare.Value |> List.map Encode.string)
+                          if host.Entrypoint.IsSome then
+                            "entrypoint", Encode.list (host.Entrypoint.Value |> List.map Encode.string) ]
+                )
+            | Some (ContainerBody _)
+            | None -> None
         let container =
-            decl.Container
+            declaredContainer
             |> Option.map (fun container ->
                 Encode.object
                     [ if container.Image.IsSome then
@@ -604,7 +641,8 @@ module ConfigFile =
         Encode.toString 0 (
             Encode.object
                 [ if container.IsSome then "container", container.Value
-                  match decl.Container |> Option.bind (fun spec -> spec.Dialect) with
+                  if host.IsSome then "host", host.Value
+                  match declaredContainer |> Option.bind (fun spec -> spec.Dialect) with
                   | Some dialect -> "dialect", Encode.string dialect
                   | None -> ()
                   if decl.WorkingDirectory.IsSome then "workdir", Encode.string decl.WorkingDirectory.Value

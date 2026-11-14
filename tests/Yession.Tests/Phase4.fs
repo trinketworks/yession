@@ -2151,6 +2151,36 @@ let private openStoppedTests =
                 spawnedChildren ledger |> ignore
                 Expect.equal status ProcessManager.Launching "the new attempt, not the old failure"
             }
+
+        // A launch that missed its deadline used to be SIGKILLed with nothing recorded: the
+        // session had printed nothing, the Manager logged nothing, and the one process that
+        // knew what it was waiting on was the one just killed. The reason now names a
+        // directory, and the child's Node report is in it.
+        testCaseAsync "a launch that misses its deadline leaves a report of what it was waiting on" <|
+            async {
+                let! pm, ledger, sessionId, _ = stoppedBehindUi "timeout-report" 1_000 neverReady
+                pm.Start sessionId |> expect
+                let reason = ref ""
+                do! waitUntil "the launch to have timed out" (fun () ->
+                        match (pm.TryFind sessionId).Value.Status with
+                        | ProcessManager.LaunchFailed why ->
+                            reason.Value <- why
+                            true
+                        | _ -> false)
+                let marker = "diagnostics in "
+                let at = reason.Value.IndexOf marker
+                let directory = if at < 0 then "" else reason.Value.Substring (at + marker.Length)
+                let reported () =
+                    directory.Length > 0
+                    && Fs.exists directory
+                    && TestFiles.entries directory |> List.exists (fun name -> name.StartsWith "report.")
+                // The report needs a turn of the child's loop before the kill; give it that.
+                do! waitUntilWithin 10_000 "the report to land" reported |> Async.Catch |> Async.Ignore
+                let found = reported ()
+                do! pm.StopAll ()
+                spawnedChildren ledger |> ignore
+                Expect.isTrue found (sprintf "a Node report in the directory the reason names: %s" reason.Value)
+            }
     ]
 
 /// The floor under every address the Manager does not claim.

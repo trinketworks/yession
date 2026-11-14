@@ -167,12 +167,65 @@ module SessionEnvironment =
     let verify (policy: SandboxPolicy) (sandbox: Sandbox) : Async<Result<unit, string>> =
         verifyUnder (verificationPolicy Resilience.Policy.sleep) policy sandbox
 
+    /// The end of what a command printed, as a refusal quotes it: at most as much as a
+    /// fact quotes of what a shell said (`LineAnswer.cap`), a line for each line, and the
+    /// control bytes of each line escaped (`LineAnswer.legible`). The end, because a
+    /// command that fails says why last.
+    let private lastWords (printed: string) : string =
+        let cap = Yession.Domain.Terminals.LineAnswer.cap
+        let kept = if printed.Length > cap then printed.Substring (printed.Length - cap) else printed
+        kept.Replace("\r", "\n").Split '\n'
+        |> Array.map (fun line -> Yession.Domain.Terminals.LineAnswer.legible (line.TrimEnd ()))
+        |> Array.filter (fun line -> line <> "")
+        |> String.concat "\n"
+
+    /// Run the command that the sandbox's body declared to make itself ready (`prepare:`,
+    /// `SandboxRuntime.preparation`), in the sandbox, before anybody else can reach it.
+    ///
+    /// The session waits for the command to end, and sets no limit, as a container's
+    /// start waits for its image. A command that does not end with code 0 is a start that
+    /// failed. The answer quotes the end of what the command printed, because nothing
+    /// else records it.
+    let runPreparation (preparation: SandboxExec option) (sandbox: Sandbox) : Async<Result<unit, string>> =
+        async {
+            match preparation with
+            | None -> return Ok ()
+            | Some exec ->
+                // A refusal quotes only the end, so this keeps only the end. An install can
+                // print megabytes.
+                let keep = 16 * 1024
+                let printed = ref ""
+                let onChunk (_: OutputStream, chunk: string) =
+                    let all = printed.Value + chunk
+                    printed.Value <- if all.Length > keep then all.Substring (all.Length - keep) else all
+                let command = sprintf "this sandbox's `prepare` command (%s)" (String.concat " " (exec.Executable :: exec.Arguments))
+                // A command that ran and failed, with the end of what it printed.
+                let failed (how: string) =
+                    let said =
+                        match lastWords printed.Value with
+                        | "" -> "It printed nothing."
+                        | words -> sprintf "The end of what it printed:\n%s" words
+                    Error (sprintf "%s %s. %s" command how said)
+                match! sandbox.Spawn exec onChunk with
+                | Error reason -> return Error (sprintf "%s did not start: %s" command reason)
+                | Ok handle ->
+                    match! handle.Exited with
+                    | SandboxExited 0 -> return Ok ()
+                    | SandboxExited code -> return failed (sprintf "failed with exit code %d" code)
+                    | SandboxSignalled signal -> return failed (sprintf "was ended by %s" signal)
+                    | SandboxKilledForMemory kill -> return failed (sprintf "was %s" (MemoryKill.described kill))
+                    | SandboxRunFailed reason -> return Error (sprintf "%s could not run: %s" command reason)
+        }
+
     let create
         (log: EventLog<SessionEvent>)
         (createSandbox: CreateSandbox)
         // Assembled fresh at every (re)creation: this is where `SecretRef` env vars
         // resolve — at sandbox spawn, and nowhere else.
         (preparePolicy: unit -> Async<Result<SandboxPolicy, string>>)
+        // The command that makes the sandbox ready for its work, where its body declares
+        // one (`SandboxRuntime.preparation`).
+        (preparation: SandboxExec option)
         // A one-line description of the backend + spec for the start-requested event.
         (specSummary: string)
         (environmentId: string)
@@ -261,13 +314,27 @@ module SessionEnvironment =
                             match prepared with
                             | Error reason -> return Error reason
                             | Ok (policy, sandbox) ->
-                                match! verify policy sandbox with
+                                // The checks first, and then the command that the
+                                // body declared to make itself ready. A sandbox that
+                                // does not hold what its policy grants then says so in the
+                                // words of a check. A repository's command that ran
+                                // first would fail on it later, with an error about
+                                // something else.
+                                let! ready =
+                                    async {
+                                        match! verify policy sandbox with
+                                        | Error reason -> return Error reason
+                                        | Ok () -> return! runPreparation preparation sandbox
+                                    }
+                                match ready with
                                 | Ok () ->
                                     return Ok (sandbox, policy.Realisation |> List.map RealisedClosure.describeDifference)
                                 | Error reason ->
                                     // Disposed rather than left running. A sandbox that
                                     // failed its own checks is not a sandbox anybody should
                                     // be able to reach, and `running` is never set for it.
+                                    // The same holds for a sandbox that its own command
+                                    // did not make ready.
                                     do! sandbox.Dispose ()
                                     return Error reason
                         }

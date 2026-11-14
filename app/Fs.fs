@@ -38,6 +38,12 @@ let executable (path: string) : bool =
         true
     with _ -> false
 
+/// Can every account on this host list the directory at `path`? Its mode gives read and
+/// search to others. An access control list is not read, and a path that is not there
+/// answers no.
+let everyAccountLists (path: string) : bool =
+    try (int (fs.statSync (U2.Case1 path)).mode) &&& 0o005 = 0o005 with _ -> false
+
 /// Create a directory (and any missing parents); a no-op when it already exists.
 let ensureDir (path: string) : unit = Files.mkdirp path
 

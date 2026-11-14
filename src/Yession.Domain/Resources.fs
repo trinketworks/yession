@@ -69,7 +69,68 @@ module VariableValue =
         | VariableValue.Composed template -> EnvTemplate.render template
         | VariableValue.Token connection -> sprintf "${%s.token}" connection
 
-/// The seven primitives, and there is no eighth.
+/// One rule of a Seatbelt profile in the operator's own text: one `(allow ...)` form.
+///
+/// Private, so `parse` is the only way to hold one. A profile here is one `(deny default)`
+/// and then allows (`Seatbelt.fs`). A rule that could deny would make the order of the
+/// rules mean something.
+///
+/// `parse` checks the shape of the text and not its meaning. `sandbox-exec` says what an
+/// operation is, and which filter fits it, when it reads the profile.
+type SeatbeltAllow = private SeatbeltAllow of string
+
+module SeatbeltAllow =
+
+    /// The rule as its operator wrote it, without the space around it.
+    let text (SeatbeltAllow text) : string = text
+
+    /// One `(allow ...)` form, or why the text is not one.
+    ///
+    /// Each refusal is a way for one entry to become more than one rule, or to end the
+    /// profile early: text that does not open with `(allow `, a `(deny` inside it, a
+    /// comment, a control character, a string or a parenthesis that does not close, and
+    /// text after the form closes.
+    ///
+    /// A measurement is the reason for the `(deny` refusal. `sandbox-exec` evaluates a
+    /// form inside a filter, and it accepted `(allow file-read* (begin (deny default) ...))`.
+    let parse (raw: string) : Result<SeatbeltAllow, string> =
+        let text = raw.Trim ()
+        let refused (fault: string) : Result<SeatbeltAllow, string> =
+            Error (sprintf "the Seatbelt rule '%s' %s" text fault)
+        if text = "" then
+            Error "a Seatbelt rule is one `(allow ...)` form. This one is empty"
+        elif text |> Seq.exists (fun c -> c < ' ' || c = '\127') then
+            Error "a Seatbelt rule has a control character in it. Write each rule on one line"
+        elif not (text.StartsWith "(allow ") then
+            refused "does not start with `(allow `. A profile is one `(deny default)` and then allows only"
+        else
+            // `depth` counts the parentheses that are open. `quoted` is true inside a
+            // string, and `escaped` is true for the character after a backslash there.
+            let rec scan (index: int) (depth: int) (quoted: bool) (escaped: bool) : Result<SeatbeltAllow, string> =
+                if index = text.Length then
+                    if quoted then refused "has a string that does not end"
+                    else refused "has a parenthesis that does not close"
+                else
+                    let c = text.[index]
+                    if quoted then
+                        if escaped then scan (index + 1) depth true false
+                        elif c = '\\' then scan (index + 1) depth true true
+                        else scan (index + 1) depth (c <> '"') false
+                    else
+                        match c with
+                        | '"' -> scan (index + 1) depth true false
+                        | ';' ->
+                            refused "has a `;` outside a string. A `;` starts a comment, and a comment hides the end of the rule"
+                        | '(' when text.Substring(index).StartsWith "(deny" ->
+                            refused "has a `(deny` in it. A rule only allows"
+                        | '(' -> scan (index + 1) (depth + 1) false false
+                        | ')' when depth > 1 -> scan (index + 1) (depth - 1) false false
+                        | ')' when index = text.Length - 1 -> Ok (SeatbeltAllow text)
+                        | ')' -> refused "has text after its last parenthesis. One entry is one rule"
+                        | _ -> scan (index + 1) depth false false
+            scan 0 0 false false
+
+/// The eight primitives, and there is no ninth.
 type ResourceLeaf =
     | Mount of ResourceMount
     | Socket of path: string
@@ -108,6 +169,18 @@ type ResourceLeaf =
     /// leaf carrying a set of routes would be two different leaves on one target — a
     /// conflict, for asks that do not disagree.
     | Connection of name: string * route: ConnectionRoute
+    /// One rule of a Seatbelt profile, as the operator wrote it. Only a sandbox that
+    /// Seatbelt confines takes it. A host withholds it from every other sandbox.
+    ///
+    /// The one grant in a backend's own language, and that is deliberate. A Mac's kernel
+    /// allows things that a container host has no equal for: a Mach service, the loopback
+    /// of the host itself. One name for both would promise the same grant on two hosts
+    /// that cannot give the same thing. So the operator writes the rule, and a repository
+    /// selects it by name like every other grant.
+    ///
+    /// ONE rule, for the reason a variable is one leaf: a set of rule lists does not
+    /// deduplicate.
+    | Seatbelt of SeatbeltAllow
 
 /// One resource as the operator declared it: either a thing, or a name for several things.
 [<RequireQualifiedAccess>]
@@ -129,6 +202,9 @@ type ResourceTarget =
     | VariableTarget of name: string
     | ExecTarget of path: string
     | ConnectionTarget of name: string * route: ConnectionRoute
+    /// A rule occupies itself. A profile is the union of its allows, so two rules that
+    /// differ never collide.
+    | RuleTarget of SeatbeltAllow
 
 module ResourceLeaf =
 
@@ -143,6 +219,7 @@ module ResourceLeaf =
         | Variable (name, _) -> VariableTarget name
         | Exec path -> ExecTarget path
         | Connection (name, route) -> ConnectionTarget (name, route)
+        | Seatbelt rule -> RuleTarget rule
         // A volume occupies the same axis a mount does — a container path — so a volume
         // and a mount at one target collide like two mounts would.
         | Volume (_, at, _) -> MountTarget at
@@ -191,6 +268,9 @@ module ResourceLeaf =
         | Exec path -> sprintf "exec:%s" path
         | Volume (name, at, access) -> sprintf "vol:%s>%s:%s" name at (mode access)
         | Connection (name, route) -> sprintf "conn:%s/%s" name (ConnectionRoute.name route)
+        // The text of the rule, with no quotes around it. A rule opens with a
+        // parenthesis, and the parenthesis that closes it says where the grant ends.
+        | Seatbelt rule -> sprintf "sb:%s" (SeatbeltAllow.text rule)
 
     /// Every colliding pair in a set of leaves.
     ///
@@ -245,7 +325,8 @@ module ResourceClosure =
         | Mount _
         | Endpoint _
         | Variable _
-        | Exec _ -> false
+        | Exec _
+        | Seatbelt _ -> false
 
     /// Whether this selection waits for a person to approve it: exactly when it holds a
     /// connection.
@@ -318,6 +399,9 @@ type HostDistinction =
     /// confinement question, still does not claim it: allowing everything does not
     /// conjure a volume.
     | NamedVolumes
+    /// A rule in Seatbelt's own language, which a sandbox holds as the operator wrote it.
+    /// A backend that writes no Seatbelt profile has no place to put one.
+    | SeatbeltRules
 
 /// What this host can express. The THIRD author of a grant, after the operator who named it
 /// and the repo that selected it, and the only one that is not a person.
@@ -339,7 +423,8 @@ module HostLimits =
                 [ HostDistinction.SocketsByPath
                   HostDistinction.EgressByHost
                   HostDistinction.OverlayMounts
-                  HostDistinction.NamedVolumes ])
+                  HostDistinction.NamedVolumes
+                  HostDistinction.SeatbeltRules ])
 
     let of' (distinctions: HostDistinction list) : HostLimits = HostLimits (Set.ofList distinctions)
 
@@ -411,6 +496,11 @@ module RealisedClosure =
                 HostDistinction.NamedVolumes,
                 LeafRealisation.Withheld
                     "only a container backend has named volumes. Grant this where the sandbox is a container, not here")
+        | Seatbelt _ ->
+            Some (
+                HostDistinction.SeatbeltRules,
+                LeafRealisation.Withheld
+                    "only the seatbelt backend takes a Seatbelt rule. Grant this where Seatbelt confines the sandbox, not here")
         | Variable _
         | Exec _
         // Whether this backend can be reached by the connection's route is the credential
@@ -544,6 +634,10 @@ module GrantNotation =
             "a connection this session forwards by one route. git goes through the gateway. \
              api goes through the credential proxy. It is spent as whoever each command runs \
              for. It is never spent as its credential"
+        | Seatbelt _ ->
+            "sb:RULE",
+            "a rule of a Seatbelt profile, as the operator wrote it. Only a sandbox that \
+             Seatbelt confines holds it"
 
     /// One leaf per kind. What makes `kind` a total match over the vocabulary rather than a
     /// list somebody keeps in step with it.
@@ -554,7 +648,8 @@ module GrantNotation =
           Volume ("yession-nix", "/nix", ResourceMountMode.Write)
           Variable ("CI", VariableValue.Text "1")
           Exec "/usr/bin/git"
-          Connection ("github", ConnectionRoute.Git) ]
+          Connection ("github", ConnectionRoute.Git)
+          Seatbelt (SeatbeltAllow "(allow mach-lookup (global-name \"com.apple.sysmond\"))") ]
 
     /// Whether a written grant is of this kind, by the token the RENDERER emits for it —
     /// everything up to its first colon, read off `describe` rather than off the shape

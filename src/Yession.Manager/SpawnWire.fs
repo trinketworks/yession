@@ -72,7 +72,15 @@ type Launch =
       Control : LaunchControl option
       /// Watch stdin and exit when it closes. The Manager's death closes it — the kernel
       /// does this even on SIGKILL — which is how a session never outlives its Manager.
-      ParentGuard : bool }
+      ParentGuard : bool
+      /// The Manager's own data directory, which holds `DataDir` and the directory of
+      /// each other session. From there down a directory is Yession's own, and that is
+      /// what a sandbox on the host's userland may list above its tree (`SeatbeltAbove`).
+      ///
+      /// `None` from a Manager that is older than this field, and for a session that no
+      /// Manager started. An envelope without the field still decodes, so a new session
+      /// starts under an old Manager.
+      ManagerDataDir : string option }
 
 module Launch =
 
@@ -98,7 +106,8 @@ module Launch =
           DataDir = sprintf ".yession/sessions/%s" (SessionId.value SessionId.local)
           Port = 0
           Control = None
-          ParentGuard = false }
+          ParentGuard = false
+          ManagerDataDir = None }
 
     let private controlDecoder : Decoder<LaunchControl> =
         Decode.object (fun get ->
@@ -121,7 +130,8 @@ module Launch =
               DataDir = get.Required.Field "dataDir" Decode.string
               Port = get.Required.Field "port" Decode.int
               Control = get.Optional.Field "control" controlDecoder
-              ParentGuard = get.Optional.Field "parentGuard" Decode.bool |> Option.defaultValue false })
+              ParentGuard = get.Optional.Field "parentGuard" Decode.bool |> Option.defaultValue false
+              ManagerDataDir = get.Optional.Field "managerDataDir" Decode.string })
 
     let private encoder (launch: Launch) =
         let control =
@@ -138,6 +148,7 @@ module Launch =
                "dataDir", Encode.string launch.DataDir
                "port", Encode.int launch.Port
                "parentGuard", Encode.bool launch.ParentGuard ]
+             @ (launch.ManagerDataDir |> Option.map (fun dir -> "managerDataDir", Encode.string dir) |> Option.toList)
              @ control)
 
     /// What the Manager puts in the variable.

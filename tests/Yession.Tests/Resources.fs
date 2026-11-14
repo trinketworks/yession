@@ -58,10 +58,11 @@ let private leafShapesFor (i: int) (mode: ResourceMountMode) : ResourceLeaf list
           Variable (sprintf "V%d" i, VariableValue.Text (sprintf "value-%d" i))
           Volume (sprintf "vol%d" i, sprintf "/vol/%d" i, (if mode = ResourceMountMode.Read then mode else ResourceMountMode.Write))
           Exec (sprintf "/bin/tool%d" i)
-          Connection (sprintf "conn%d" i, ConnectionRoute.Git) ]
+          Connection (sprintf "conn%d" i, ConnectionRoute.Git)
+          Seatbelt (SeatbeltAllow.parse (sprintf "(allow mach-lookup (global-name \"svc%d\"))" i) |> expect) ]
     for shape in shapes do
         match shape with
-        | Mount _ | Socket _ | Endpoint _ | Variable _ | Volume _ | Exec _ | Connection _ -> ()
+        | Mount _ | Socket _ | Endpoint _ | Variable _ | Volume _ | Exec _ | Connection _ | Seatbelt _ -> ()
     shapes
 
 /// Every mount mode, proved total the same way.
@@ -85,13 +86,15 @@ let private distinctions : HostDistinction list =
         [ HostDistinction.SocketsByPath
           HostDistinction.EgressByHost
           HostDistinction.OverlayMounts
-          HostDistinction.NamedVolumes ]
+          HostDistinction.NamedVolumes
+          HostDistinction.SeatbeltRules ]
     for distinction in all do
         match distinction with
         | HostDistinction.SocketsByPath
         | HostDistinction.EgressByHost
         | HostDistinction.OverlayMounts
-        | HostDistinction.NamedVolumes -> ()
+        | HostDistinction.NamedVolumes
+        | HostDistinction.SeatbeltRules -> ()
     all
 
 /// A host that can express some arbitrary subset of the distinctions.
@@ -475,6 +478,35 @@ let tests =
                 Expect.equal at "/nix" "and where the operator says it belongs"
             | other -> failwithf "expected one volume, got %A" other
 
+        // A Seatbelt rule is the operator's own text, and each entry is one rule. The
+        // decoder refuses a rule that could deny, or that is more than one form, at the
+        // entry that holds it.
+        testCase "a seatbelt resource decodes to one leaf for each rule" <| fun () ->
+            let leaves =
+                resolved
+                    """{ "seatbelt": [ "(allow mach-lookup (global-name \"com.apple.sysmond\"))", "(allow network-bind (local ip \"localhost:*\"))" ] }"""
+                |> ResourceClosure.leaves
+                |> Set.toList
+                |> List.map ResourceLeaf.describe
+            Expect.equal
+                leaves
+                [ """sb:(allow mach-lookup (global-name "com.apple.sysmond"))"""
+                  """sb:(allow network-bind (local ip "localhost:*"))""" ]
+                "two rules, two grants"
+
+        testCase "one seatbelt rule may be written bare" <| fun () ->
+            Expect.equal
+                (resolved """{ "seatbelt": "(allow process-info*)" }""" |> ResourceClosure.describe)
+                [ "sb:(allow process-info*)" ]
+                "a list of one and a bare string mean the same"
+
+        testCase "a seatbelt entry that is not one allow form is refused at its address" <| fun () ->
+            match OperatorProfile.parse """{ "version": 1, "resources": { "wide": { "seatbelt": [ "(deny default)" ] } } }""" with
+            | Ok _ -> failwith "a deny was decoded as a grant"
+            | Error refusal ->
+                Expect.isTrue (refusal.Contains "(allow ") (sprintf "names the form to write, said: %s" refusal)
+                Expect.isTrue (refusal.Contains "wide") (sprintf "names the resource, said: %s" refusal)
+
         // Maintenance is a fact about the volume, not the grant: what a sandbox is told it
         // holds does not change, and the pin is looked up by the volume's name.
         testCase "a volume's maintain decodes onto the profile by volume name, leaving the leaf as it was" <| fun () ->
@@ -779,7 +811,8 @@ let tests =
                    Endpoint "registry.npmjs.org"
                    Volume ("yession-nix", "/nix", ResourceMountMode.Write)
                    Variable ("CI", VariableValue.Text "1")
-                   Exec "/usr/bin/git" ]
+                   Exec "/usr/bin/git"
+                   Seatbelt (SeatbeltAllow.parse """(allow mach-lookup (global-name "com.apple.sysmond"))""" |> expect) ]
                  |> List.map ResourceLeaf.describe)
                 [ "path:/nix:ro"
                   "path:/h/.npm>/root/.npm:ovl"
@@ -788,7 +821,8 @@ let tests =
                   "net:registry.npmjs.org"
                   "vol:yession-nix>/nix:rw"
                   "env:CI=1"
-                  "exec:/usr/bin/git" ]
+                  "exec:/usr/bin/git"
+                  """sb:(allow mach-lookup (global-name "com.apple.sysmond"))""" ]
                 "the notation"
 
         // A variable's value is the one part of a grant that is arbitrary text, so it is the
@@ -817,7 +851,8 @@ let tests =
                   Endpoint "registry.npmjs.org"
                   Volume ("yession-nix", "/nix", ResourceMountMode.Write)
                   Variable ("CI", VariableValue.Text "1")
-                  Exec "/usr/bin/git" ] do
+                  Exec "/usr/bin/git"
+                  Seatbelt (SeatbeltAllow.parse "(allow process-info*)" |> expect) ] do
                 let written = ResourceLeaf.describe leaf
                 let kind = written.Substring (0, written.IndexOf ':' + 1)
                 Expect.isTrue
@@ -901,7 +936,8 @@ let tests =
                             "only an overlay mount can, and only because no backend has a union mount"
                     | Socket _
                     | Endpoint _
-                    | Volume _ -> ()
+                    | Volume _
+                    | Seatbelt _ -> ()
             }
 
         // Every difference is one of the two directions, and which one is not a detail: a
@@ -1093,6 +1129,47 @@ let tests =
         // A repo that selects nothing has nothing to consent to, whatever the host is — and
         // is never put through a resolver, which on a host declaring no profile at all would
         // turn that silence into a refusal.
+        // A repo may declare a container beside a sandbox on the host's own userland, and the
+        // two backends do not scope the same things. One line for both would be wrong about
+        // one of them.
+        testCase "a repo's asks are shown as the backend of each sandbox will grant them" <| fun () ->
+            let profile =
+                OperatorProfile.parse """{ "version": 1, "resources": { "cache": { "endpoint": "cache.example.com" } } }"""
+                |> expect
+            let cache = ResourceName.create "cache" |> expect
+            let limitsOf (body: SandboxBody option) =
+                match body with
+                | Some (HostBody _) -> Sandboxes.limitsFor SeatbeltBackend Node.Base.Platform.Darwin
+                | Some (ContainerBody _)
+                | None -> Sandboxes.limitsFor DockerBackend Node.Base.Platform.Darwin
+            let asked =
+                RepoSandboxes.capabilitiesOf
+                    limitsOf
+                    github
+                    (fun uses wants -> ResourceProfile.resolve profile.Resources (uses @ wants))
+                    [ { SandboxDecl.empty with Body = Some (ContainerBody ContainerSpec.defaults); Uses = [ cache ] }
+                      { SandboxDecl.empty with Body = Some (HostBody HostSpec.none); Uses = [ cache ] } ]
+                |> expect
+            Expect.equal
+                asked.Granted
+                [ "net:cache.example.com"; "net:cache.example.com ~> net:*" ]
+                "the host sandbox holds the one host, and the container holds every host"
+
+        testCase "a repo whose sandboxes share a backend is shown each grant once" <| fun () ->
+            let profile =
+                OperatorProfile.parse """{ "version": 1, "resources": { "cache": { "endpoint": "cache.example.com" } } }"""
+                |> expect
+            let cache = ResourceName.create "cache" |> expect
+            let onHost = { SandboxDecl.empty with Body = Some (HostBody HostSpec.none); Uses = [ cache ] }
+            let asked =
+                RepoSandboxes.capabilitiesOf
+                    (fun _ -> Sandboxes.limitsFor SeatbeltBackend Node.Base.Platform.Darwin)
+                    github
+                    (fun uses wants -> ResourceProfile.resolve profile.Resources (uses @ wants))
+                    [ onHost; onHost ]
+                |> expect
+            Expect.equal asked.Granted [ "net:cache.example.com" ] "two sandboxes that ask for one thing ask for it once"
+
         testCase "a repo that selects nothing asks for nothing, without resolving anything" <| fun () ->
             let asked =
                 RepoSandboxes.capabilitiesOn

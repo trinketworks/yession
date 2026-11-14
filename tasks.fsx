@@ -910,7 +910,7 @@ let make (targets: Target list) =
 //
 // Opt-in through the environment, so a laptop and CI pay nothing:
 //   TASKS_BUILD_SLOTS          how many heavy builds may run at once. Unset: no limit, no lock
-//                                (yession.yaml sets it for `dev` and `gate`). `0`: no limit, for
+//                                (yession.yaml sets it for `dev`). `0`: no limit, for
 //                                one run that must not wait.
 //   TASKS_BUILD_SLOT_DIR       where the slot files are (default /nix/var/yession/build-slots).
 //   TASKS_BUILD_SLOT_TIMEOUT   minutes to wait before failing (default 60; 0 waits for ever).

@@ -73,13 +73,82 @@ type LaunchedSession =
       Port : int
       Build : string option }
 
+/// The signal that asks a session for a Node diagnostic report. Node's own default, named so
+/// that the flag handed to the child and the signal sent to it cannot drift apart.
+[<Literal>]
+let private ReportSignal = "SIGUSR2"
+
+/// macOS's stack sampler. Present on every macOS install and absent everywhere else, so its
+/// presence is the whole platform question this file needs answered.
+[<Literal>]
+let private Sampler = "/usr/bin/sample"
+
+/// `NODE_OPTIONS` for the child: whatever this process was given (the deployment's own
+/// `--import`, say), plus a report on `ReportSignal` written into `diagnosticsDir`.
+///
+/// Why this exists: a session that misses its readiness deadline has, so far, been killed
+/// without a word. It prints nothing, the Manager logged nothing, and by the time anyone
+/// looked the hang no longer reproduced — the process that knew why was the one the timeout
+/// had just SIGKILLed. A report asked for before the kill holds its JS stack and every
+/// handle and request libuv is waiting on, which is the question a hang asks.
+///
+/// Set by the Manager rather than by the session at boot, because a session that hangs
+/// before its own code runs never reaches the line that would have turned it on. The quotes
+/// are Node's own escaping for a path with a space in it.
+let private childNodeOptions (diagnosticsDir: string) : string =
+    let report =
+        sprintf "--report-on-signal --report-signal=%s --report-directory=\"%s\"" ReportSignal diagnosticsDir
+    match ProcessEnv.get "NODE_OPTIONS" with
+    | Some inherited when inherited.Trim().Length > 0 -> inherited + " " + report
+    | _ -> report
+
+/// Record what a session missing its readiness deadline is stuck on, then call `kill`.
+///
+/// Two views, because they answer for different hangs. The Node report (`ReportSignal`) is
+/// written when the child's event loop next turns, so it covers a session waiting on I/O — and
+/// says nothing for one blocked in a native call, which never turns it. `sample` reads the
+/// native stacks from outside, so it covers exactly that case; it exists on macOS only.
+/// Both are best effort: neither may stand between a hung child and its kill, so a sampler
+/// that fails to start or overruns its cap still ends in `kill`.
+let private captureThenKill (pid: int) (diagnosticsDir: string) (kill: unit -> unit) : unit =
+    let mutable killed = false
+    let killOnce () =
+        if not killed then
+            killed <- true
+            kill ()
+    try
+        Files.mkdirp diagnosticsDir
+        Processes.kill pid ReportSignal
+    with _ ->
+        ()
+    if Fs.exists Sampler then
+        let sampler =
+            ChildProcesses.spawn
+                Sampler
+                [ string pid; "2"; "-file"; sprintf "%s/sample-%d.txt" diagnosticsDir pid ]
+                { Cwd = None
+                  Env = ChildEnv.Adding Map.empty
+                  Streams = { Stdin = Stdio.Ignore; Stdout = Stdio.Ignore; Stderr = Stdio.Ignore }
+                  Detached = false }
+        ChildProcessStreams.onError sampler (fun _ -> killOnce ())
+        ChildProcessStreams.onExit sampler (fun _ -> killOnce ())
+        // Two seconds of sampling plus its own start-up; past this it is not coming back.
+        JS.setTimeout killOnce 5000 |> ignore
+    else
+        // Time for the report to be written: it needs one turn of the child's loop.
+        JS.setTimeout killOnce 1000 |> ignore
+
 /// Spawn `command args` with `env` merged over the parent environment, and resolve
 /// once the child prints its readiness line (or fails: early exit / timeout). The
 /// returned handle observes the child for the rest of its life.
+///
+/// `diagnosticsDir` is where a child that misses `timeoutMs` leaves its account of why
+/// (`captureThenKill`). Nothing is written there for a launch that succeeds.
 let launch
     (command: string)
     (args: string list)
     (env: (string * string) list)
+    (diagnosticsDir: string)
     (timeoutMs: int)
     : Async<Result<LaunchedSession, string>> =
     Async.FromContinuations (fun (cont, _, _) ->
@@ -97,7 +166,7 @@ let launch
                 command
                 args
                 { Cwd = None
-                  Env = ChildEnv.Adding (Map.ofList env)
+                  Env = ChildEnv.Adding (Map.ofList (("NODE_OPTIONS", childNodeOptions diagnosticsDir) :: env))
                   Streams = { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Inherit }
                   Detached = false }
 
@@ -136,8 +205,17 @@ let launch
         let timer =
             JS.setTimeout
                 (fun () ->
-                    running.Kill ()
-                    settle (Error (sprintf "session process not ready within %dms" timeoutMs)))
+                    // Settle first, as the skew refusal below does: the kill fires the exit
+                    // handler, whose "exited before ready" would otherwise bury the reason.
+                    settle (
+                        Error (
+                            sprintf
+                                "session process not ready within %dms; diagnostics in %s"
+                                timeoutMs
+                                diagnosticsDir
+                        )
+                    )
+                    captureThenKill pid diagnosticsDir running.Kill)
                 timeoutMs
 
         running.OnExit (fun code ->

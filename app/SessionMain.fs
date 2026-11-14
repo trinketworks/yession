@@ -54,6 +54,12 @@ let private port = launch.Port
 // relative path becomes a wrong answer rather than the place it is born.
 let private dataDir = Fs.absolute launch.DataDir
 
+/// The directory from which down each directory is Yession's own: the Manager's data
+/// directory, which holds this session's. A sandbox on the host's userland lists the
+/// directories above its tree, and this is where the host's directories start
+/// (`SeatbeltAbove`). A session that no Manager told uses its own data directory.
+let private ownRoot = launch.ManagerDataDir |> Option.map Fs.absolute |> Option.defaultValue dataDir
+
 // The control channel to the Manager (Step 24): supervision reports, secrets custody,
 // AND this launch's OAuth client registration all authenticate with the same
 // per-launch secret. Absent (a bare `yession-session` run), the session runs
@@ -81,6 +87,36 @@ let private workBackend =
     match SandboxBackend.parse (Interop.envOr "YESSION_SESSION_WORK_BACKEND" "srt") with
     | Ok backend -> backend
     | Error e -> failwith e
+
+// The backend a REPO's sandbox runs under when it declares the host's own userland
+// (`YESSION_SESSION_REPO_BACKEND`). Unset is none, and none refuses such a sandbox: a
+// repository's commands run on this host, and not in a container, only where its operator
+// named what confines them. Parsed at boot and fail-closed, like the three above.
+let private repoHostBackend : SandboxBackend option =
+    match SandboxBackend.parseRepo (match Interop.envOr "YESSION_SESSION_REPO_BACKEND" "" with "" -> None | raw -> Some raw) with
+    | Ok backend -> backend
+    | Error e -> failwithf "repo sandbox: %s" e
+
+/// The backend each repo's sandbox was last created under. Kept for one reader: a sandbox
+/// that is still running after its file stopped declaring it has no declaration to be
+/// answered from (`SandboxRuntime.namedBackend`).
+let private createdUnder = System.Collections.Generic.Dictionary<SandboxRef, SandboxBackend> ()
+
+/// The backend a sandbox runs under, for whoever holds its NAME and no request: by the
+/// body the last fold read for it. `SandboxRuntime.namedBackend` holds the rule. This
+/// only fetches what the rule asks about.
+let private backendOf (sandbox: SandboxRef) : SandboxBackend =
+    SandboxRuntime.namedBackend
+        workBackend
+        repoHostBackend
+        (SandboxRef.scope sandbox)
+        (repoSandboxes.Declared ()
+         |> Declarations.known
+         |> Map.tryFind sandbox
+         |> Option.map (fun declared -> SandboxBody.runtime declared.Body))
+        (match createdUnder.TryGetValue sandbox with
+         | true, backend -> Some backend
+         | _ -> None)
 
 // The operator's vocabulary (`YESSION_SESSION_RESOURCES`), read once at boot.
 //
@@ -176,9 +212,21 @@ let private gitBackend =
 // where the sandbox is created: for the WorkSandbox that is the agent's first
 // `ensure_environment`, minutes into a session, which is no place to discover a typo.
 do
-    if agentBackend = SrtBackend || workBackend = SrtBackend || gitBackend = SrtBackend then
+    // The seatbelt backend reads the same record: what stays readable on this host, and
+    // where srt's package is, whose proxy it starts.
+    if agentBackend = SrtBackend
+       || workBackend = SrtBackend
+       || workBackend = SeatbeltBackend
+       || gitBackend = SrtBackend
+       || Option.isSome repoHostBackend then
         match Sandboxes.SrtSandbox.toolsFrom (Sandboxes.ambientEnv ()) with
         | Ok _ -> ()
+        | Error e -> failwithf "sandbox: %s" e
+    // A backend only a Mac has is refused here too, for the same reason: at boot, in
+    // words, and not at the first sandbox somebody asks for.
+    if workBackend = SeatbeltBackend || repoHostBackend = Some SeatbeltBackend then
+        match Sandboxes.SeatbeltSandbox.hostedHere () with
+        | Ok () -> ()
         | Error e -> failwithf "sandbox: %s" e
 
 // Secret references in the sandbox spec resolve over the control channel at sandbox
@@ -239,21 +287,17 @@ let private tmpDir = Sandboxes.SessionLayout.prepareTmpDir dataDir
 /// Where a work sandbox works. Host-family sandboxes work under the session's own data
 /// directory; a docker sandbox's workspace is the image's, which nothing here composes.
 ///
-/// By the SANDBOX's backend (`SandboxRuntime.scopedBackend`), not the session's
-/// configured one: a repo-owned sandbox is a container whatever `default` runs under,
-/// and answering with the srt workspace for one gave every repo container a working
-/// directory shaped like a host path — an empty volume mounted where nothing would
-/// look, while the checkout sat under its bind.
+/// By the SANDBOX's backend (`backendOf`), not the session's configured one: a repo's
+/// container is a container whatever `default` runs under, and answering with the srt
+/// workspace for one gave every repo container a working directory shaped like a host
+/// path — an empty volume mounted where nothing would look, while the checkout sat under
+/// its bind.
 ///
 /// Module level because two things need it and they are not near each other: the sandboxes
 /// themselves, and the path a repo verb ANSWERS with — which is relative to the terminal's
 /// working directory or it is not relative to anything.
 let private workspaceFor (sandbox: SandboxRef) =
-    (Sandboxes.SessionLayout.forSandbox
-        dataDir
-        (SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox))
-        sandbox)
-        .Workspace
+    (Sandboxes.SessionLayout.forSandbox dataDir (backendOf sandbox) sandbox).Workspace
 
 /// Where this session's listeners (the git gateway, the credential proxy) also answer once a
 /// native daemon gives the host an address on the session's Docker network. Set at boot when
@@ -280,19 +324,20 @@ let private makeSandboxes
     let name = SessionId.value sessionId
     fun log ->
         let create (sandbox: SandboxRef) (requested: EnvironmentSpec) (provision: WorkSandboxes.Provision) =
-            // The scope decides the backend (`SandboxRuntime.backendFor`): the session's
-            // own sandboxes keep the operator's configured light confinement; a repo's
-            // are work, and work runs in a container.
-            match SandboxRuntime.backendFor workBackend (SandboxRef.scope sandbox) requested.Runtime with
+            // The scope and the body decide the backend (`SandboxRuntime.backendFor`): the
+            // session's own sandboxes keep the operator's configured backend, and a repo's
+            // run under the one its body names.
+            match SandboxRuntime.backendFor workBackend repoHostBackend (SandboxRef.scope sandbox) requested.Runtime with
             | Error e -> Error e
             | Ok backend ->
+            createdUnder.[sandbox] <- backend
 
             let workSpec = Sandboxes.withSessionShares reposDir artifactsDir backend requested
             // The backend's own container/volume namespace has to differ per sandbox, or two
             // of them under docker would fight over one container name — and now that a repo
             // can declare its own, two REPOS' same-named sandboxes would too. The rule lives
             // on `SandboxRef`, where a cheap test reaches it; this composition only asks.
-            match Sandboxes.forBackend backend dockerNetwork (SandboxRef.objectName sessionId sandbox) workSpec with
+            match Sandboxes.forBackend (Some ownRoot) backend dockerNetwork (SandboxRef.objectName sessionId sandbox) workSpec with
             | Error e -> Error e
             | Ok createSandbox ->
                 // What this session gives the sandbox: its workspace, its home, and whether
@@ -352,16 +397,16 @@ let private makeSandboxes
                                                 // proxy's trust mounted into a container.
                                                 Binds = List.distinct (policy.Binds @ provision.Binds) }
                             })
+                        (SandboxRuntime.preparation workSpec.Runtime)
                         (Sandboxes.summaryFor backend workSpec)
                         (sprintf "env-%s" (SandboxRef.objectName sessionId sandbox)))
         async {
             return! WorkSandboxes.create
                     { Backend =
-                        // Described by SCOPE — the same rule the start goes through, minus
-                        // its refusal: a repo-owned entry is docker whether or not it has
-                        // started yet.
-                        fun (ref: SandboxRef) ->
-                            SandboxBackend.describe (SandboxRuntime.scopedBackend workBackend (SandboxRef.scope ref))
+                        // Described by NAME — the same rule the start goes through, minus
+                        // its refusals: a repo's entry is the backend its declared body
+                        // names, whether or not it has started yet.
+                        fun (ref: SandboxRef) -> SandboxBackend.describe (backendOf ref)
                       // Asked of the fold rather than captured, because the sandbox manager is
                       // built before the first fold has run and a description arrives with it.
                       Describe = fun ref -> repoSandboxes.Described ref
@@ -1405,8 +1450,7 @@ Async.StartImmediate (
             }
         // Where THIS sandbox reaches a listener whose doors answer `portAt` — or none, for a
         // backend with no way to it, which is the one thing a start refuses over.
-        let sandboxBackend (sandbox: SandboxRef) : SandboxBackend =
-            SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
+        let sandboxBackend (sandbox: SandboxRef) : SandboxBackend = backendOf sandbox
         let doorFor (portAt: string -> int option) (sandbox: SandboxRef) : Sandboxes.HostDoor option =
             sandboxBackend sandbox |> Sandboxes.hostDoorHere (Interop.hostname ()) portAt
         let gatewayDoorFor (sandbox: SandboxRef) : Sandboxes.HostDoor option = doorFor gitGateway.PortAt sandbox
@@ -1440,7 +1484,7 @@ Async.StartImmediate (
                                 else
                                     match gatewayDoorFor sandbox with
                                     | None ->
-                                        let backend = SandboxRuntime.scopedBackend workBackend (SandboxRef.scope sandbox)
+                                        let backend = backendOf sandbox
                                         Error (
                                             sprintf
                                                 "github cannot be forwarded by git into a %s sandbox: its git would have no route to this session's gateway"
@@ -1578,10 +1622,10 @@ Async.StartImmediate (
                 // directory itself otherwise — the same answer `withSessionShares` mounts by,
                 // so what the copy writes to is where this side then looks. By the SANDBOX,
                 // whose own backend decides it (`artifactsVisibleTo`), and not by this
-                // module's configured one: a repo-owned sandbox is a container whatever
+                // module's configured one: a repo's container is a container whatever
                 // `default` runs under, and answering with the host path for one told it to
                 // copy the bytes somewhere only the container could see.
-                (Sandboxes.artifactsVisibleTo workBackend artifactsDir)
+                (Sandboxes.artifactsVisibleTo backendOf artifactsDir)
                 (fun sandbox ->
                     ShellProfileProjection.workingDirectory sandbox (terminals.Profiles ()) |> Option.map RootPath.value)
                 TerminalShell.posix
@@ -1596,27 +1640,31 @@ Async.StartImmediate (
                 host.RunGated
                 terminals.Declare
                 log
-                // What a checkout asks for, as the backend its sandboxes run on will actually
-                // grant it. That backend is `repoWorkBackend` — a repo's declarations
-                // become repo-owned sandboxes, which are containers whatever light
-                // confinement the session's own keep — and the backends do not scope the
-                // same things, so judging the ask against the configured one accepted
-                // asks docker cannot grant and refused ones it can.
+                // What a checkout asks for, as the backend each of its sandboxes runs on will
+                // actually grant it. That backend is the one its body names — a container is
+                // docker's, and a sandbox on the host's own userland is the operator's
+                // choice for one — and the backends do not scope the same things, so judging
+                // an ask against the session's configured one accepted asks docker cannot
+                // grant and refused ones it can.
                 //
                 // The no-profile case goes through `grantsFor` so the sentence a repo gets
                 // for selecting a name on a host that declares nothing is written once. It
                 // cannot succeed — a non-empty selection with no profile is exactly what that
                 // refusal is for — and `capabilitiesOn` has already answered the empty one.
-                (RepoSandboxes.capabilitiesOn
-                    (Sandboxes.limitsHere SandboxRuntime.repoWorkBackend)
-                    GitHubConnection.connectionName
-                    (fun uses wants ->
-                        match resourceProfile with
-                        | None -> grantsFor uses wants |> Result.map (fun _ -> ResourceClosure.empty)
-                        | Some file ->
-                            ResourceProfile.resolve
-                                file.Resources
-                                (ResourceProfile.selected file.Resources uses wants)))
+                (fun repo ->
+                    RepoSandboxes.capabilitiesOf
+                        (fun body ->
+                            Sandboxes.limitsHere (
+                                SandboxRuntime.scopedBackend workBackend repoHostBackend (RepoOwned repo) (SandboxBody.runtime body)
+                            ))
+                        GitHubConnection.connectionName
+                        (fun uses wants ->
+                            match resourceProfile with
+                            | None -> grantsFor uses wants |> Result.map (fun _ -> ResourceClosure.empty)
+                            | Some file ->
+                                ResourceProfile.resolve
+                                    file.Resources
+                                    (ResourceProfile.selected file.Resources uses wants)))
         // How each gated command is carried out, handed to the gate the Host owns. Here —
         // and not closed over a turn — because the table is built from the services, and the
         // services are composed here.

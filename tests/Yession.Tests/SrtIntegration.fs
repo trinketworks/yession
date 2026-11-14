@@ -64,6 +64,7 @@ let private policyIn (workspace: string) (domains: string list) : SandboxPolicy 
       Sockets = []
       Binds = []
       Volumes = []
+      SeatbeltRules = []
       Realisation = []
       Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
       WorkingDirectory = Some workspace
@@ -85,7 +86,7 @@ let private srtTools () =
 
 let private startSandbox (policy: SandboxPolicy) : Async<Sandbox> =
     async {
-        let create = Sandboxes.SrtSandbox.create (srtTools ())
+        let create = Sandboxes.SrtSandbox.create (srtTools ()) HostSpec.none
         match! create policy with
         | Error reason -> return failwithf "srt sandbox failed: %s" reason
         | Ok sandbox -> return sandbox
@@ -245,7 +246,7 @@ let tests =
                             policy.Env
                             |> Map.add "HOME" (workspace + "/home")
                             |> Map.add "TMPDIR" (workspace + "/tmp") }
-                let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ())) policy "srt-shell"
+                let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ()) HostSpec.none) policy "srt-shell"
                 let agent = Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))
                 // Somewhere the terminal does NOT start: a shell that is given up on runs
                 // each block as its own process in the sandbox's working directory, and a
@@ -283,7 +284,7 @@ let tests =
                             policy.Env
                             |> Map.add "HOME" (workspace + "/home")
                             |> Map.add "TMPDIR" (workspace + "/tmp") }
-                let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ())) policy "srt-files"
+                let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ()) HostSpec.none) policy "srt-files"
                 let sandbox = SandboxRef.defaultRef
                 let files = host.Files
                 // A new file in a new directory: the directories are made on the way.
@@ -473,7 +474,7 @@ let tests =
                 // and its probe is asked fresh.
                 let! refused =
                     Support.withEnv [ "PATH", Some "" ] (fun () ->
-                        Sandboxes.SrtSandbox.create (srtTools ()) (policyIn workspace []))
+                        Sandboxes.SrtSandbox.create (srtTools ()) HostSpec.none (policyIn workspace []))
                 match refused with
                 | Ok _ -> failwith "srt started with no `which` to probe with, which it cannot do"
                 | Error reason ->
@@ -596,7 +597,7 @@ let private withFiles (name: string) (arrange: string -> unit) (act: SessionFile
     async {
         let workspace = TestFiles.canonical (TestFiles.tempDir "yession-operands-")
         arrange workspace
-        let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ())) (policyIn workspace []) name
+        let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ()) HostSpec.none) (policyIn workspace []) name
         do! act host.Files workspace
         do! host.Stop ()
     }
@@ -695,7 +696,7 @@ let fileOperands =
             let workspace = TestFiles.canonical (TestFiles.tempDir "yession-operands-")
             let policy = policyIn workspace []
             let policy = { policy with Env = policy.Env |> Map.add "OLDPWD" workspace }
-            let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ())) policy "operands-cd-dash"
+            let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ()) HostSpec.none) policy "operands-cd-dash"
             let agent = Authority.agentFor (Principal.Peer (PeerId.create "ada" |> expect))
             let! set = host.Terminals.SetProfile agent SandboxRef.defaultRef (Some "-")
             do! host.Stop ()
@@ -711,7 +712,7 @@ let fileOperands =
             TestFiles.write (workspace + "/-") "dash\n"
             let artifactsDir = workspace + "/artifacts"
             TestFiles.ensureDir artifactsDir
-            let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ())) (policyIn workspace []) "operands-share-dash"
+            let! host = hostOver (Sandboxes.SrtSandbox.create (srtTools ()) HostSpec.none) (policyIn workspace []) "operands-share-dash"
             let artifacts =
                 Artifacts.create
                     host.Log

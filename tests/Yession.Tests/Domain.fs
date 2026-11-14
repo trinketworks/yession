@@ -2548,8 +2548,16 @@ let private launchTests =
                   DataDir = "/data/sess-1"
                   Port = 0
                   Control = Some { Endpoint = ControlEndpoint.Address "http://127.0.0.1:8321"; Secret = "s3cret" }
-                  ParentGuard = true }
+                  ParentGuard = true
+                  ManagerDataDir = Some "/data" }
             Expect.equal (Launch.parse (Launch.encode launch)) (Ok launch) "what the Manager mints is what the session reads"
+
+        // A Manager stays on its build while its sessions start on a newer one. The newer
+        // session reads an envelope that does not have the field.
+        testCase "a launch from a Manager older than its data directory field still decodes" <| fun () ->
+            match Launch.parse """{"session":"sess-1","dataDir":"/data/sessions/sess-1","port":0,"parentGuard":true}""" with
+            | Ok launch -> Expect.equal launch.ManagerDataDir None "no directory was named"
+            | Error refusal -> failwithf "the envelope was refused: %s" refusal
 
         testCase "a launch whose Manager listens on a socket round-trips with the path" <| fun () ->
             let launch =
@@ -2557,7 +2565,8 @@ let private launchTests =
                   DataDir = "/data/sess-1"
                   Port = 0
                   Control = Some { Endpoint = ControlEndpoint.Socket "/run/yession/manager.sock"; Secret = "s3cret" }
-                  ParentGuard = true }
+                  ParentGuard = true
+                  ManagerDataDir = None }
             Expect.equal (Launch.parse (Launch.encode launch)) (Ok launch) "the session dials the socket the Manager listens on"
 
         testCase "a launch with no Manager round-trips too" <| fun () ->
@@ -2624,7 +2633,7 @@ let private configTests =
                           "files": { ".config/tool/first-run": "" } } } }"""
                 |> expect
             let dev = file.Sandboxes |> Map.find (sandboxName "dev")
-            let container = dev.Container |> Option.get
+            let container = (SandboxDecl.container dev) |> Option.get
             Expect.equal container.Image (Some { Name = "node"; Tag = Some "24" }) "the image splits on its tag"
             Expect.equal dev.WorkingDirectory (Some "./app") "the workdir is the repo's own"
             Expect.equal container.Command (Some "npm start") "the sandbox's process"
@@ -2685,7 +2694,7 @@ let private configTests =
                         "quoted": { "container": { "image": "alpine", "entrypoint": "env 'A B=c d' \"E=f\\\"g\" h" } } } }"""
                 |> expect
             let entrypoint name =
-                (file.Sandboxes |> Map.find (sandboxName name)).Container |> Option.get |> fun c -> c.Entrypoint
+                (file.Sandboxes |> Map.find (sandboxName name)) |> SandboxDecl.container |> Option.get |> fun c -> c.Entrypoint
             Expect.equal (entrypoint "listed") (Some [ "nix"; "develop"; "--impure"; "--command" ]) "a list is the argv as written"
             Expect.equal (entrypoint "written") (Some [ "nix"; "develop"; "--impure"; "--command" ]) "a string is split on whitespace"
             Expect.equal (entrypoint "quoted") (Some [ "env"; "A B=c d"; "E=f\"g"; "h" ]) "with quotes grouping and a backslash escaping, as a shell reads them"
@@ -2706,7 +2715,7 @@ let private configTests =
                 ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "nixos/nix" }, "dialect": "bash" } } }"""
                 |> expect
             let dev = file.Sandboxes |> Map.find (sandboxName "dev")
-            Expect.equal (dev.Container |> Option.bind (fun c -> c.Dialect)) (Some "bash") "carried on the container, whose shell it chooses"
+            Expect.equal ((SandboxDecl.container dev) |> Option.bind (fun c -> c.Dialect)) (Some "bash") "carried on the container, whose shell it chooses"
             match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "nixos/nix" }, "dialect": "fish" } } }""" with
             | Ok _ -> failwith "fish is not a dialect a terminal can instrument"
             | Error reason -> Expect.stringContains reason "bash, zsh, sh" "the refusal names the three"
@@ -2720,7 +2729,99 @@ let private configTests =
                 |> expect
             let dev = file.Sandboxes |> Map.find (sandboxName "dev")
             let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
-            Expect.equal back.Container dev.Container "what `encode` writes, `parseSandbox` reads back whole"
+            Expect.equal (SandboxDecl.container back) (SandboxDecl.container dev) "what `encode` writes, `parseSandbox` reads back whole"
+
+        // The other body: the host's own userland. It brings no image, so all that it says is
+        // what its work runs behind.
+        testCase "a host sandbox says what its work runs behind, as an argv" <| fun () ->
+            let file =
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "mac": { "host": { "entrypoint": "devenv shell --" } } } }"""
+                |> expect
+            Expect.equal
+                (file.Sandboxes |> Map.find (sandboxName "mac")).Body
+                (Some (HostBody { HostSpec.Prepare = None; HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }))
+                "the words of the entrypoint, read as a container's are"
+
+        testCase "a host sandbox says what makes it ready, as an argv" <| fun () ->
+            let file =
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "mac": { "host": { "prepare": "./setup.sh --quiet" } } } }"""
+                |> expect
+            Expect.equal
+                (file.Sandboxes |> Map.find (sandboxName "mac")).Body
+                (Some (HostBody { HostSpec.Prepare = Some [ "./setup.sh"; "--quiet" ]; HostSpec.Entrypoint = None }))
+                "the words of the command, read as the words of an entrypoint are"
+
+        testCase "a host block that says nothing is still a body" <| fun () ->
+            let file = ConfigFile.parse """{ "version": 2, "sandboxes": { "mac": { "host": {} } } }""" |> expect
+            Expect.equal
+                (file.Sandboxes |> Map.find (sandboxName "mac")).Body
+                (Some (HostBody HostSpec.none))
+                "the block names the body, whatever it holds"
+
+        testCase "a sandbox that declares a container and a host is refused" <| fun () ->
+            match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine" }, "host": {} } } }""" with
+            | Ok _ -> failwith "a sandbox with two bodies was read as one of them"
+            | Error reason -> Expect.stringContains reason "one body" "the refusal says a sandbox has one"
+
+        testCase "a key that the host block does not take is refused, not skipped" <| fun () ->
+            match ConfigFile.parse """{ "version": 2, "sandboxes": { "mac": { "host": { "image": "alpine" } } } }""" with
+            | Ok _ -> failwith "a host sandbox was given an image"
+            | Error reason -> Expect.stringContains reason "image" "the refusal names the key"
+
+        testCase "a dialect on a host sandbox is refused" <| fun () ->
+            match ConfigFile.parse """{ "version": 2, "sandboxes": { "mac": { "host": {}, "dialect": "bash" } } }""" with
+            | Ok _ -> failwith "a host sandbox has no container whose shell a dialect could choose"
+            | Error reason -> Expect.stringContains reason "declares no `container`" "and says so"
+
+        testCase "a host body survives the round trip the command gate rides" <| fun () ->
+            let file =
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "mac": { "host": { "prepare": [ "./setup.sh" ], "entrypoint": [ "devenv", "shell", "--" ] }, "uses": [ "nix" ] } } }"""
+                |> expect
+            let mac = file.Sandboxes |> Map.find (sandboxName "mac")
+            let back = ConfigFile.encodeSandbox mac |> ConfigFile.parseSandbox |> expect
+            Expect.equal back.Body mac.Body "what `encode` writes, `parseSandbox` reads back whole"
+
+        testCase "a host body is asked for as the host's userland, with its entrypoint" <| fun () ->
+            let host = { HostSpec.Prepare = None; HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }
+            let decl = { SandboxDecl.empty with Body = Some (HostBody host) }
+            Expect.equal
+                (SandboxDecl.toRequest (checkout "/repos/octo/hello") decl |> expect).Spec.Runtime
+                (OnHost host)
+                "a start is given the body that the file names"
+
+        testCase "a host sandbox whose entrypoint changed is a different sandbox" <| fun () ->
+            let behind (words: string list) =
+                { Spec = { EnvironmentSpec.defaults with Runtime = OnHost { HostSpec.Prepare = None; HostSpec.Entrypoint = Some words } } }
+            Expect.isNonEmpty
+                (SandboxRequest.differences (behind [ "devenv"; "shell"; "--" ]) (behind [ "nix"; "develop"; "--command" ]))
+                "what the work runs behind is part of what the sandbox is"
+
+        testCase "a host sandbox whose `prepare` command changed is a different sandbox" <| fun () ->
+            let preparedBy (words: string list) =
+                { Spec = { EnvironmentSpec.defaults with Runtime = OnHost { HostSpec.Prepare = Some words; HostSpec.Entrypoint = None } } }
+            Expect.isNonEmpty
+                (SandboxRequest.differences (preparedBy [ "./setup.sh" ]) (preparedBy [ "./setup.sh"; "--offline" ]))
+                "what makes the sandbox ready is part of what the sandbox is"
+
+        // The entrypoint can be a tool that the command installs. So the command does not
+        // run behind the entrypoint.
+        testCase "the command that makes a host sandbox ready runs bare, where the sandbox puts a process" <| fun () ->
+            let host = { HostSpec.Prepare = Some [ "./setup.sh"; "--quiet" ]; HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }
+            Expect.equal
+                (SandboxRuntime.preparation (OnHost host))
+                (Some
+                    { Executable = "./setup.sh"
+                      Arguments = [ "--quiet" ]
+                      Env = Map.empty
+                      WorkingDirectory = None
+                      Via = Direct })
+                "the entrypoint is not in front of the command, and the command names no directory"
+
+        testCase "a sandbox whose body names no `prepare` command runs nothing before its work" <| fun () ->
+            Expect.equal
+                ([ Confinement; OnHost HostSpec.none; Container ContainerSpec.defaults ] |> List.map SandboxRuntime.preparation)
+                [ None; None; None ]
+                "only a host body that names a command has one"
 
         // compose's byte-value grammar, so a `4g` copied out of a compose file means the same
         // thing here; a number YAML read without a unit is bytes.
@@ -2728,7 +2829,7 @@ let private configTests =
             let memory (value: string) =
                 ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "mem_limit": %s } } } }""" value)
                 |> expect
-                |> fun file -> (file.Sandboxes |> Map.find (sandboxName "dev")).Container |> Option.get |> fun c -> c.Memory
+                |> fun file -> (file.Sandboxes |> Map.find (sandboxName "dev")) |> SandboxDecl.container |> Option.get |> fun c -> c.Memory
                 |> Option.map ContainerMemory.bytes
             let gib = 1024L * 1024L * 1024L
             Expect.equal (memory "\"4g\"") (Some (4L * gib)) "g is GiB"
@@ -2751,7 +2852,7 @@ let private configTests =
                 |> expect
                 |> fun file -> file.Sandboxes |> Map.find (sandboxName "dev")
             let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
-            Expect.equal back.Container dev.Container "what `encode` writes, `parseSandbox` reads back whole"
+            Expect.equal (SandboxDecl.container back) (SandboxDecl.container dev) "what `encode` writes, `parseSandbox` reads back whole"
 
         // The ceiling a container is created with, against what the daemon has: the docker
         // backend asks the daemon and hands the answer here (`ContainerMemory.forDaemon`).
@@ -2776,7 +2877,7 @@ let private configTests =
             let container =
                 ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "oom_score_adj": 800, "pids_limit": 512 } } } }"""
                 |> expect
-                |> fun file -> (file.Sandboxes |> Map.find (sandboxName "dev")).Container |> Option.get
+                |> fun file -> (file.Sandboxes |> Map.find (sandboxName "dev")) |> SandboxDecl.container |> Option.get
             Expect.equal (container.OomScoreAdj |> Option.map OomScoreAdj.value) (Some 800) "oom_score_adj as written"
             Expect.equal (container.PidsLimit |> Option.map PidsLimit.value) (Some 512) "pids_limit as written"
 
@@ -2801,13 +2902,13 @@ let private configTests =
                 |> expect
                 |> fun file -> file.Sandboxes |> Map.find (sandboxName "dev")
             let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
-            Expect.equal back.Container dev.Container "what `encode` writes, `parseSandbox` reads back whole"
+            Expect.equal (SandboxDecl.container back) (SandboxDecl.container dev) "what `encode` writes, `parseSandbox` reads back whole"
 
         // The container block is a compose service fragment: compose's names, and only those.
         testList "the container block reads compose's keys" [
             let containerOf (fields: string) : Result<ContainerSpec, string> =
                 ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", %s } } } }""" fields)
-                |> Result.map (fun file -> (file.Sandboxes |> Map.find (sandboxName "dev")).Container |> Option.get)
+                |> Result.map (fun file -> (file.Sandboxes |> Map.find (sandboxName "dev")) |> SandboxDecl.container |> Option.get)
             let refusal (fields: string) =
                 match containerOf fields with
                 | Ok _ -> failwithf "%s was accepted" fields
@@ -2852,7 +2953,7 @@ let private configTests =
         testList "a volume reads compose's short and long syntax" [
             let mountsOf (volumes: string) : Result<ContainerMount list, string> =
                 ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "volumes": %s } } } }""" volumes)
-                |> Result.map (fun file -> ((file.Sandboxes |> Map.find (sandboxName "dev")).Container |> Option.get).Mounts)
+                |> Result.map (fun file -> ((file.Sandboxes |> Map.find (sandboxName "dev")) |> SandboxDecl.container |> Option.get).Mounts)
 
             testCase "source:target and the long syntax are one read-write mount" <| fun () ->
                 Expect.equal
@@ -2880,7 +2981,7 @@ let private configTests =
                 |> expect
                 |> fun file -> file.Sandboxes |> Map.find (sandboxName "dev")
             let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
-            Expect.equal back.Container dev.Container "what `encode` writes, `parseSandbox` reads back whole"
+            Expect.equal (SandboxDecl.container back) (SandboxDecl.container dev) "what `encode` writes, `parseSandbox` reads back whole"
 
         // The operator's `container:` block is a ceiling: a repository narrows it, never
         // widens it, and never names a cgroup (invariant 26).
@@ -3096,7 +3197,7 @@ let private configTests =
             let mountsOf file =
                 (file |> expect : ConfigFile).Sandboxes
                 |> Map.find (sandboxName "dev")
-                |> fun decl -> (decl.Container |> Option.get).Mounts |> List.map (fun m -> m.Source)
+                |> fun decl -> ((SandboxDecl.container decl) |> Option.get).Mounts |> List.map (fun m -> m.Source)
             Expect.equal (mountsOf (volume "workspace")) [ SessionWorkspace ] "its own checkout, by name"
 
         // The two postures a selection has. `uses` is a need — a missing name refuses,
@@ -3378,8 +3479,8 @@ let private configTests =
         testCase "no build context can name a directory above its checkout" <| fun () ->
             let decl =
                 { SandboxDecl.empty with
-                    Container =
-                        Some { ContainerSpec.defaults with Build = Some { ContextPath = "../../../etc"; DockerfilePath = None } } }
+                    Body =
+                        Some (ContainerBody { ContainerSpec.defaults with Build = Some { ContextPath = "../../../etc"; DockerfilePath = None } }) }
             match (SandboxDecl.toRequest (checkout "/repos/octo/hello") decl |> expect).Spec.Runtime with
             | Container { Build = Some build } ->
                 Expect.equal build.ContextPath "/repos/octo/hello/etc" "climbing is clamped at the checkout"
@@ -3388,7 +3489,7 @@ let private configTests =
         testCase "a build on a sandbox no repo declared is refused" <| fun () ->
             let decl =
                 { SandboxDecl.empty with
-                    Container = Some { ContainerSpec.defaults with Build = Some { ContextPath = "."; DockerfilePath = None } } }
+                    Body = Some (ContainerBody { ContainerSpec.defaults with Build = Some { ContextPath = "."; DockerfilePath = None } }) }
             match SandboxDecl.toRequest None decl with
             | Ok _ -> failwith "expected a refusal"
             | Error e -> Expect.isTrue (e.Contains "checkout") (sprintf "it says what the context had nothing to be relative to, said: %s" e)
@@ -3438,10 +3539,12 @@ let private configTests =
         testCase "a host-path volume cannot be written back through the gate" <| fun () ->
             let smuggled =
                 { SandboxDecl.empty with
-                    Container =
-                        Some
-                            { ContainerSpec.defaults with
-                                Mounts = [ { Source = HostPath "/var/run/docker.sock"; Target = "/s"; Mode = ReadWrite } ] } }
+                    Body =
+                        Some (
+                            ContainerBody
+                                { ContainerSpec.defaults with
+                                    Mounts = [ { Source = HostPath "/var/run/docker.sock"; Target = "/s"; Mode = ReadWrite } ] }
+                        ) }
             Expect.isError
                 (ConfigFile.parseSandbox (ConfigFile.encodeSandbox smuggled))
                 "the schema refuses on the way back in, wherever the declaration came from"
@@ -3468,7 +3571,7 @@ let private configTests =
             // `None` is the repo saying nothing, not the repo asking to be confined — what
             // that means is the backend's answer, not this file's.
             let file = ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "uses": [ "npm" ] } } }""" |> expect
-            Expect.equal (file.Sandboxes |> Map.find (sandboxName "dev")).Container None "nothing was asked for"
+            Expect.equal (file.Sandboxes |> Map.find (sandboxName "dev")).Body None "nothing was asked for"
 
         testCase "a secret is named, never carried" <| fun () ->
             // The whole reason `env` has two forms. A file that could hold a value would be
