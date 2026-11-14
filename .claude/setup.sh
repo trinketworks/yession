@@ -191,7 +191,7 @@ materialize_nixpkgs() {
       q="list-type=2&prefix=nixos/unstable/&delimiter=/"
       [ -n "$tok" ] && q="$q&continuation-token=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$tok")"
       r="$(curl -fsS --max-time 60 "https://nix-releases.s3.amazonaws.com/?$q")" || break
-      hit="$(printf '%s' "$r" | grep -o "<Prefix>nixos/unstable/[^<]*\.$short/</Prefix>" | sed 's|<Prefix>||;s|/</Prefix>||' | head -1)"
+      hit="$(printf '%s' "$r" | grep -o "<Prefix>nixos/unstable/[^<]*\.$short/</Prefix>" | sed 's|<Prefix>||;s|/</Prefix>||' | head -1 || true)"
       [ -n "$hit" ] && break
       tok="$(printf '%s' "$r" | sed -n 's|.*<NextContinuationToken>\([^<]*\)</NextContinuationToken>.*|\1|p')"
       [ -n "$tok" ] || break
