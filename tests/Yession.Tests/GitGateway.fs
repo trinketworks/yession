@@ -1149,6 +1149,7 @@ let private srtTests =
                               Sockets = []
                               Binds = []
                               Volumes = []
+                              SeatbeltRules = []
                               Realisation = []
                               // A home of its own, as a session gives every sandbox: git
                               // reads `$HOME`'s config, and the operator's is denied.
@@ -1159,7 +1160,7 @@ let private srtTests =
                               WorkingDirectory = Some workspace
                               Filesystem = Confined
                               Derived = Map.empty }
-                        match! Sandboxes.SrtSandbox.create (srtTools ()) policy with
+                        match! Sandboxes.SrtSandbox.create (srtTools ()) HostSpec.none policy with
                         | Error reason -> failwithf "srt sandbox failed: %s" reason
                         | Ok confined ->
                             let! run, out, err =

@@ -695,6 +695,12 @@ let start
                                 "sandbox '%s' is confined by srt. Its egress is its policy. It reaches this proxy through srt's own proxy, for declared hosts only. The TCP door would tunnel it to any host."
                                 (SandboxRef.render sandbox)
                         )
+                    | SeatbeltBackend, _ ->
+                        Error (
+                            sprintf
+                                "sandbox '%s' is confined by seatbelt. Its egress is its policy. It reaches this proxy through its own filtering proxy, for declared hosts only. The TCP door would tunnel it to any host."
+                                (SandboxRef.render sandbox)
+                        )
                     | _, Some capability -> Ok capability
                     | _, None ->
                         let capability = randomSecret().Replace ("-", "")
@@ -734,6 +740,11 @@ let forwardApi (backend: SandboxBackend) : WorkSandboxes.CredentialForwarding =
     | SrtBackend ->
         WorkSandboxes.CredentialForwarding.Unforwardable
             "an srt sandbox takes a connection by git alone. The api route (gh, the credential proxy) is for a container sandbox. A container sandbox reaches the proxy by '${proxy.https}'."
+    // srt's answer, for srt's reasons until they are measured away: the same proxy, and a
+    // profile that admits no more of the Security framework than srt's does.
+    | SeatbeltBackend ->
+        WorkSandboxes.CredentialForwarding.Unforwardable
+            "a seatbelt sandbox takes a connection by git alone. The api route (gh, the credential proxy) is for a container sandbox. A container sandbox reaches the proxy by '${proxy.https}'."
     | HostBackend
     | DockerBackend -> WorkSandboxes.CredentialForwarding.Forwarded WorkSandboxes.Provision.empty
 
@@ -772,7 +783,8 @@ let provide
             { WorkSandboxes.Provision.empty with
                 Binds = [ { From = hostPath; At = containerPath; Mode = ResourceMountMode.Read } ] }
         | HostBackend
-        | SrtBackend -> hostPath, WorkSandboxes.Provision.empty
+        | SrtBackend
+        | SeatbeltBackend -> hostPath, WorkSandboxes.Provision.empty
     let one (value: ProxyValue) : Result<string * WorkSandboxes.Provision, string> =
         match value with
         | ProxyValue.CaFile -> Ok (seen proxy.TrustFile (inContainer + "/bundle.pem"))
@@ -790,6 +802,12 @@ let provide
         Error (
             sprintf
                 "sandbox '%s' is confined by srt. srt takes a connection by git alone. The credential proxy is for a container sandbox."
+                (SandboxRef.render sandbox)
+        )
+    | SeatbeltBackend ->
+        Error (
+            sprintf
+                "sandbox '%s' is confined by seatbelt. seatbelt takes a connection by git alone. The credential proxy is for a container sandbox."
                 (SandboxRef.render sandbox)
         )
     | HostBackend

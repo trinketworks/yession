@@ -302,3 +302,9 @@ jobs:
       # to hold on macOS, and a gate that is red for reasons nobody is fixing is not a gate.
       - name: A confined git reaches the gateway on darwin
         run: DEVENV_ROOT="$PWD" nix develop --impure --command check Srt --only "from an srt sandbox"
+      # The backend whose Seatbelt profile this repository writes (`SeatbeltSandbox`). Its
+      # cheap suites say what a profile holds from the rules alone, and trust
+      # `SeatbeltProfile.allows` to do it. This is the one place a kernel is asked whether
+      # that trust is earned: the same asks, put to `sandbox-exec`. No Linux job can run it.
+      - name: The kernel reads a Seatbelt profile as the model does
+        run: DEVENV_ROOT="$PWD" nix develop --impure --command check Srt --only "Seatbelt"

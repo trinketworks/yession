@@ -20,17 +20,53 @@ open Yession.Domain
 // This file is the MODEL: what a declaration is. Reading one from the file is the
 // Session's (`Yession.Session.ConfigFile`), because the Session is what reads a checkout.
 
+/// What a sandbox runs IN, as its declaration names it.
+///
+/// Two bodies, and the rule for a third: a body is a case when the DECLARATION owns
+/// different things for it. A container brings a userland, so it has an image, a process
+/// and limits to state. A sandbox on the host's own userland brings none. It states what
+/// makes that userland ready for it, and what its work runs behind.
+///
+/// What CONFINES a body is not a case, and no declaration names it. Seatbelt on a Mac,
+/// bubblewrap on Linux and docker under a container are mechanism, the mechanism is the
+/// operator's (`SandboxBackend`, chosen at boot), and a file that named one would be a file
+/// that works on one kind of host for no reason of its own. The same rule keeps a host path
+/// and a hostname out of this file (`SandboxDecl.Uses`).
+type SandboxBody =
+    /// `container:`.
+    | ContainerBody of ContainerSpec
+    /// `host:`.
+    | HostBody of HostSpec
+
+module SandboxBody =
+
+    /// The runtime a declared body is, before a checkout gives its paths a meaning. Enough
+    /// to say which BACKEND runs it (`SandboxRuntime.namedBackend`), which is all that a
+    /// reader holding a name and its declaration, and no request, has to know. What a start
+    /// is given is `SandboxDecl.toRequest`'s, which also resolves the paths.
+    let runtime (body: SandboxBody option) : SandboxRuntime =
+        match body with
+        | None -> Confinement
+        | Some (HostBody host) -> OnHost host
+        | Some (ContainerBody container) -> Container container
+
 /// One sandbox as a repo declares it. A serialization of `EnvironmentSpec` plus the three
 /// things `start_work_sandbox` already takes, so nothing here is a new concept — the file
 /// says what the commands could already be told.
 type SandboxDecl =
-    { /// What this sandbox runs IN, when the repo asked for a container at all.
+    { /// What this sandbox runs IN.
       ///
-      /// `None` is not "confined" — it is the repo saying nothing, and what that means is the
-      /// BACKEND's answer, not this file's. Nesting the container's own keys under one
-      /// optional block is what makes `command` unwritable on a sandbox that has no container to
-      /// run it: there is no flat `command` to mistype.
-      Container : ContainerSpec option
+      /// `None` is the declaration naming no body, and who wrote it decides what that
+      /// means. The session's own sandboxes may say nothing: they run on the host under
+      /// whatever the operator configured, which is the BACKEND's answer and not a file's.
+      /// A repo's may not (`SandboxRuntime.backendFor`): its sandbox is one body or the
+      /// other, and the repo is the only author who knows which its commands were written
+      /// for.
+      ///
+      /// Nesting each body's own keys under its block is what makes `command` unwritable
+      /// on a sandbox that has no container to run it: there is no flat `command` to
+      /// mistype.
+      Body : SandboxBody option
       /// Relative to THIS repo's checkout.
       WorkingDirectory : string option
       /// `SecretRef` values name a secret; they never carry one, and the type cannot.
@@ -80,7 +116,7 @@ type SandboxDecl =
       /// What this sandbox is FOR, in the repo's own words — the one thing here that is not
       /// a name, a path or a command, and is not addressed to the session at all.
       ///
-      /// A name cannot carry it. This repository declares `dev` and `gate`, identical on
+      /// A name cannot carry it. This repository once declared `dev` and `gate`, identical on
       /// every field a machine reads and different only in what a person meant; asked to run
       /// tests and shown both names, an agent picked `gate`, which is the one that holds a
       /// terminal for minutes. The repo knows why it declared two and had nowhere to say so.
@@ -92,7 +128,7 @@ type SandboxDecl =
 module SandboxDecl =
 
     let empty : SandboxDecl =
-        { Container = None
+        { Body = None
           WorkingDirectory = None
           EnvironmentVariables = Map.empty
           Uses = []
@@ -100,6 +136,13 @@ module SandboxDecl =
           Files = Map.empty
           Setup = None
           Description = None }
+
+    /// The container a declaration names, where its body is one.
+    let container (decl: SandboxDecl) : ContainerSpec option =
+        match decl.Body with
+        | Some (ContainerBody container) -> Some container
+        | Some (HostBody _)
+        | None -> None
 
     /// One declaration, written back as the file would have written it.
     ///
@@ -133,10 +176,11 @@ module SandboxDecl =
     /// resolved against something invented, and the refusal says which verb does move where
     /// a session sandbox's terminals start; a `build:` there is refused for the same reason.
     ///
-    /// `Container = None` becomes `Confinement`, and that is not the file saying "confine
-    /// me". It is the file saying nothing, and what nothing means is the BACKEND's answer:
-    /// docker starts its defaults, srt and host confine. `Sandboxes.forBackend` is where the
-    /// two authors meet.
+    /// A declaration that names no body becomes `Confinement`, and that is not the file
+    /// saying "confine me". It is the file saying nothing, and what nothing means is the
+    /// BACKEND's answer for the session's own sandboxes (docker starts its defaults, the
+    /// others run on the host) and a refusal for a repo's (`SandboxRuntime.backendFor`).
+    /// `Sandboxes.forBackend` is where the two authors meet.
     let toRequest (checkout: string option) (decl: SandboxDecl) : Result<SandboxRequest, string> =
         // Resolved rather than concatenated, and clamped at the checkout (`CheckoutPath`).
         let workingDirectory =
@@ -152,9 +196,10 @@ module SandboxDecl =
         // read — under the same clamp as `workdir`: nothing this arithmetic can produce
         // sits above the checkout, whatever reached it.
         let runtime =
-            match decl.Container with
-            | None -> Ok Confinement
-            | Some container ->
+            match decl.Body with
+            | None
+            | Some (HostBody _) -> Ok (SandboxBody.runtime decl.Body)
+            | Some (ContainerBody container) ->
                 match container.Build, checkout with
                 | None, _ -> Ok (Container container)
                 | Some build, Some checkout ->

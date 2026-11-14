@@ -71,6 +71,9 @@
     <Compile Include="EnvTemplate.fs" />
     <Compile Include="Resources.fs" />
     <Compile Include="Sandbox.fs" />
+    <!-- A policy as a Seatbelt profile, the text macOS confines a process with. After
+         Sandbox.fs, whose policy it reads. Pure, like Resources.fs: rules, not spawns. -->
+    <Compile Include="Seatbelt.fs" />
     <!-- Where a terminal's bytes come from (Plan 16, part D). Right after Sandbox.fs
          because it reuses `PtyHandle` rather than minting a parallel handle. -->
     <Compile Include="TerminalSource.fs" />

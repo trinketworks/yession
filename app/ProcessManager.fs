@@ -1357,7 +1357,8 @@ let createWithUi
                             DataDir = sprintf "%s/%s" options.DataDir record.DataDir
                             Port = 0
                             Control = control
-                            ParentGuard = true } ]
+                            ParentGuard = true
+                            ManagerDataDir = Some options.DataDir } ]
                     @ telemetryIdentityEnv
                 let revokeSecret () =
                     (match control |> Option.map (fun c -> c.Secret) with
@@ -1398,7 +1399,9 @@ let createWithUi
                         key
                         { SessionId = record.SessionId; LastBusyAt = clock (); EverReported = false }
                         activity
-                let! spawned = Spawn.launch options.SessionCommand options.SessionArgs env options.LaunchTimeoutMs
+                let diagnosticsDir = sprintf "%s/%s/launch-diagnostics" options.DataDir record.DataDir
+                let! spawned =
+                    Spawn.launch options.SessionCommand options.SessionArgs env diagnosticsDir options.LaunchTimeoutMs
                 // Everyone who joined, answered AFTER the bookkeeping below: a joiner that
                 // asks `TryFind` the moment it resumes must see what the launcher sees.
                 let joined = Map.tryFind key launching |> Option.defaultValue []
@@ -1406,6 +1409,12 @@ let createWithUi
                 let settle (outcome: Result<int, string>) = joined |> List.rev |> List.iter (fun answer -> answer outcome)
                 match spawned with
                 | Error reason ->
+                    // Said here as well as to whoever asked: the asker is a browser that shows
+                    // a status code, and a failed launch that left nothing in the Manager's own
+                    // log could not be told apart from one that was never attempted.
+                    options.OnEvent "session launch failed"
+                        [ "yession.session.id", Telemetry.AttributeValue.String key
+                          "yession.session.launch_error", Telemetry.AttributeValue.String reason ]
                     revokeSecret ()
                     activity <- Map.remove key activity
                     standings <- Map.remove key standings

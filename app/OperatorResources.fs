@@ -62,10 +62,13 @@ let private canonicalPaths (file: ProfileFile) : Result<ProfileFile, string> =
         | Exec path -> check "the executable" path
         // A volume's name is docker's, not a filesystem path; its `at` is a container
         // path, which no host symlink can reach through.
+        // A rule is the operator's own Seatbelt text. A path in it is theirs to write in
+        // the spelling the kernel checks, and nothing here reads the rule to find one.
         | Endpoint _
         | Variable _
         | Volume _
-        | Connection _ -> None)
+        | Connection _
+        | Seatbelt _ -> None)
     |> function
         | Some reason -> Error reason
         | None -> Ok file

@@ -641,7 +641,7 @@ let private liveTests =
                 let m =
                     InProcessManager.create
                         (Some (Agent.run Yession.Manager.Launch.unlaunched.DataDir HostBackend))
-                        (Some (fun sid -> Sandboxes.forBackend HostBackend { Name = "unused"; Reached = (fun _ -> async { return Ok () }); Ceiling = ContainerCeiling.none } (SessionId.value sid) EnvironmentSpec.defaults |> expect))
+                        (Some (fun sid -> Sandboxes.forBackend None HostBackend { Name = "unused"; Reached = (fun _ -> async { return Ok () }); Ceiling = ContainerCeiling.none } (SessionId.value sid) EnvironmentSpec.defaults |> expect))
                 let! _ =
                     m.StartSession
                         { SessionLaunchRequest.SessionId = SessionId.create "live-tools" |> expect }

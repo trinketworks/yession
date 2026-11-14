@@ -118,7 +118,7 @@ let hardenedEnv (backend: SandboxBackend) (allowProtocol: string) : (string * st
       "GIT_CONFIG_COUNT", string (List.length configs) ]
     @ (match backend with
        | HostBackend -> [ "NO_PROXY", "*" ]
-       | SrtBackend | DockerBackend -> [])
+       | SrtBackend | SeatbeltBackend | DockerBackend -> [])
     @ (configs
        |> List.mapi (fun i (key, value) ->
            [ sprintf "GIT_CONFIG_KEY_%d" i, key
@@ -469,7 +469,9 @@ let private outputLimit = 20000
 let stagingDirName = "staging~"
 
 let create (config: ReposConfig) : Result<ReposService, string> =
-    Sandboxes.forBackend config.Backend config.Network "git" EnvironmentSpec.defaults
+    // No directory of Yession's own to name: the git verbs never run under the backend
+    // that reads one (`SandboxBackend.parseGit`).
+    Sandboxes.forBackend None config.Backend config.Network "git" EnvironmentSpec.defaults
     |> Result.map (fun createSandbox ->
 
         /// The repos directory as an ABSOLUTE path, resolved once here and used for every
@@ -497,6 +499,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
               Sockets = []
               Binds = []
               Volumes = []
+              SeatbeltRules = []
               Realisation = []
               Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
               WorkingDirectory = Some reposDir

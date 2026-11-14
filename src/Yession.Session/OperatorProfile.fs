@@ -30,7 +30,7 @@ module OperatorProfile =
     let private fileKeys = [ "version"; "resources"; "always"; "agent"; "sandboxes"; "container" ]
     let private containerKeys = [ "mem_limit"; "pids_limit"; "cgroup_parent" ]
     let private agentKeys = [ "guidance"; "prompt" ]
-    let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "connection" ]
+    let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "connection"; "seatbelt" ]
     let private mountKeys = [ "from"; "at"; "mode" ]
     let private volumeKeys = [ "name"; "at"; "mode"; "maintain" ]
     let private maintainKeys = [ "pin"; "every" ]
@@ -205,6 +205,20 @@ module OperatorProfile =
                         "a connection names the routes that forward it. Write `connection: { %s }` with the routes this resource grants"
                         (names |> List.map (sprintf "%s: [git, api]") |> String.concat ", ")))
 
+    /// `seatbelt:` is one rule or a list of them, each one `(allow ...)` form in Seatbelt's
+    /// own language (`SeatbeltAllow.parse` says what it refuses). One leaf for each rule.
+    let private seatbeltRules : Decoder<ResourceLeaf list> =
+        stringList
+        |> Decode.andThen (fun raws ->
+            raws
+            |> List.fold
+                (fun acc raw ->
+                    acc |> Result.bind (fun taken -> SeatbeltAllow.parse raw |> Result.map (fun rule -> taken @ [ Seatbelt rule ])))
+                (Ok [])
+            |> function
+                | Ok leaves -> Decode.succeed leaves
+                | Error e -> Decode.fail e)
+
     /// `sensitive` marked a resource as one to ask about. Whether a grant asks is its kind's
     /// to say now (`ResourceClosure.asksItsUser`), so the key is refused whatever its value,
     /// and BY NAME rather than left to `noUnknownKeys`: a file carrying it says something
@@ -247,13 +261,14 @@ module OperatorProfile =
                 @ (variables |> List.map Variable)
                 @ (execs |> List.map Exec)
                 @ volumes
-                @ connections))
+                @ connections
+                @ (get.Optional.Field "seatbelt" seatbeltRules |> Option.defaultValue [])))
         |> Decode.andThen (fun leaves ->
             // A resource that grants nothing is a name that reads as configuration and is
             // none — the same failure an unknown key would be, arriving by a different route.
             failIf
                 (List.isEmpty leaves)
-                "this resource grants nothing. Name at least one of: mount, socket, endpoint, env, exec, volume or connection"
+                "this resource grants nothing. Name at least one of: mount, socket, endpoint, env, exec, volume, connection or seatbelt"
                 (Decode.succeed (ResourceDecl.Leaf leaves)))
 
     /// An ARRAY is a composition.

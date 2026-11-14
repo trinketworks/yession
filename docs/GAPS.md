@@ -278,7 +278,8 @@ The last section holds trust boundaries as sharp as the first section's.
       worked, and we retired it: the next wall was Fable enumerating `/Users` for path casing,
       which no grant allows without exposing dirent names all the way up. A build wants a
       machine, not a syscall filter. Work that builds runs in a CONTAINER, and srt confines the
-      light default sandbox (checkout, small edits). The
+      light default sandbox (checkout, small edits). A repo that cannot build in a container
+      declares a `host:` sandbox, where its operator allows one. The
       [2026-08-28 ADR](decisions/2026-08-28-no-srt-fork-for-symlink-metadata.md) argues this,
       and its argument stands.
     - **A `Socket` grant is path-scoped on macOS and widens to every socket on Linux.** #335
@@ -347,6 +348,63 @@ The last section holds trust boundaries as sharp as the first section's.
   - The SDK's spawn seam is SYNCHRONOUS and srt's wrap is not. So the srt tier gives the SDK a
     stand-in process whose streams are live at once, and joins the real child to them when the
     wrap resolves. The `Srt` suite drives it end to end (stdin in, stdout out, exit code).
+- **`seatbelt` is a second confining backend for the WorkSandbox on a Mac, and it does less than
+  srt.** `YESSION_SESSION_WORK_BACKEND=seatbelt` confines with macOS's Seatbelt, under a
+  profile that this code writes (`SeatbeltProfile` in `src/Yession.Domain/Seatbelt.fs`). srt
+  stays as the filtering proxy only. The
+  [ADR](decisions/2026-11-13-yession-writes-the-seatbelt-profile.md) says why. `srt` is still
+  the default.
+  - **It opens no terminal.** `SpawnPty` is `None`, so a terminal there runs each block as a
+    separate process. `SeatbeltSandbox.create` in `app/Sandboxes.fs` says what a terminal
+    needs first.
+  - **Only work sandboxes can use it.** These are the session's own work sandbox
+    (`YESSION_SESSION_WORK_BACKEND`) and a repo's `host:` sandbox
+    (`YESSION_SESSION_REPO_BACKEND`). The agent CLI and the git verbs refuse it
+    (`SandboxBackend.parseAgent`, `parseGit`). No test runs either of them under this
+    profile.
+  - **A repo's `host:` sandbox has no memory limit and no process limit.** No backend on the
+    host's own userland has one. A build there can use all of the host's memory.
+  - **A `prepare:` command has no time limit, and nothing records what it prints.** The
+    start of a `host:` sandbox waits for the command until it ends. A command that fails
+    refuses the start, and the refusal quotes the end of what the command printed
+    (`SessionEnvironment.runPreparation`). The rest is lost. The command runs at each start
+    of the sandbox, so a repository writes one that is safe to run again.
+  - **When a file changes the body of a running sandbox, a reader gets the new body.** A
+    reader that has only the sandbox's name asks the last fold
+    (`SandboxRuntime.namedBackend`). Until somebody stops the sandbox, a share out of it can
+    go to the path of the other body.
+  - **A sandbox sees the names above its trees.** It lists each directory above the
+    directory where it works, and above each path that the session gave it (`SeatbeltAbove`
+    in `src/Yession.Domain/Seatbelt.fs`). In the data directory these names are the ids of
+    the other sessions, the names of the Manager's files, and the names of the other
+    sandboxes of its session. The sandbox reads none of them. Above the data directory, it
+    lists only a directory that every account can list.
+  - **A path that an operator grants brings no listing.** A tool that looks above a mount in
+    a different place on the host stops at the first directory that no rule names. An
+    operator can name a directory that does not change in a Seatbelt rule (`seatbelt:`).
+  - **The test for an open directory is its mode.** `Fs.everyAccountLists` reads the mode. An
+    access control list can close a directory whose mode is open, and the rule does not
+    read the list.
+  - **Nothing closes a data directory that is out of a home.** The Manager writes its files
+    with the default mode. [deployment.md](deployment.md) tells the operator to close the
+    directory (mode 700). No check does it.
+  - **The model does not read a rule that an operator wrote.** A resource can hold Seatbelt
+    rules as text (`seatbelt:`, [deployment.md](deployment.md)). `SeatbeltProfile.allows`
+    answers for the rules that a policy decides, and the kernel tier compares only those
+    with the kernel. With a written rule, the kernel allows what the model says and also
+    what the rule says. `SeatbeltAllow.parse` checks the shape of a rule. It stops a
+    mistake, and it does not prove what Seatbelt's Scheme does with the text.
+  - **A JVM does not use the proxy.** `SeatbeltProxy.environment` sets the variables that
+    curl, git, Node, Python and Go read. srt's wrapper also loads a Java agent. This backend
+    does not. A Gradle or a Maven that needs the network has no route.
+  - **It takes a connection by `git` alone**, as an srt sandbox does
+    (`CredentialProxy.forwardApi`).
+  - **We transcribed the baseline. We did not derive it.** `SeatbeltProfile.essentials` is
+    the fixed part of the profile that srt 0.0.81 generates. A tool that needs a rule it
+    does not have fails, and the system log shows the refusal
+    (`log stream --predicate 'eventMessage CONTAINS "Sandbox: "'`).
+  - **Only the macOS job runs its tier.** `pr.yaml` runs `check Srt --only "Seatbelt"` on
+    darwin. `verify` runs on Linux, where the suite is one pending case.
 - **The strict confinement profile mounts a fresh `/proc`, which a container can refuse.**
   `SandboxNesting` in `app/Sandboxes.fs` states the two profiles and why an operator configures
   `weak` (`YESSION_NESTED_SANDBOX=weak`), never a fallback. An unset value means strict, and a
@@ -1064,11 +1122,11 @@ After the fixes land, one pass rewrites it to what still reproduces.
       when the clone lands. A symlink at `HEAD` is no file for any of the three (rule 20).
     - **No inter-sandbox networking.** A `db:` sandbox's process is reachable from inside that
       sandbox only. A compose-like shared network is a design of its own.
-    - **A `command`, an `entrypoint`, the limits (`mem_limit`, `oom_score_adj`,
-      `pids_limit`, `cgroup_parent`) and a `dialect` are docker-only.** They live in or beside
-      the `container:` block, so under `srt` or `host` there is nowhere to write one. The
+    - **A `command`, the limits (`mem_limit`, `oom_score_adj`, `pids_limit`,
+      `cgroup_parent`) and a `dialect` are docker-only.** They live in or beside the
+      `container:` block, so a sandbox with no container has nowhere to write one. The
       exception is `dialect`, which a sandbox with no container refuses because it reads as if
-      it would apply.
+      it would apply. A `host:` block takes `prepare` and `entrypoint`, and nothing else.
     - **Only a block that died from SIGKILL can say "killed: out of memory".** The Docker
       backend reads its container's `memory.events` around every process it starts
       (`MemoryWatch` in `src/Yession.Domain/Sandbox.fs`). When `oom_kill` went up and the

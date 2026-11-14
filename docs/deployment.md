@@ -82,14 +82,52 @@ examples use the prefix too (`YESSION_PROXY_PORT`, `YESSION_SERIAL_PORT`).
 The Manager **refuses** a variable that moved onto the command line. The boot stops and names
 the option to write instead. `app/Retirements.fs` lists the retired names and says why.
 
-A session runs three sandbox families, and each has its own backend variable. Each is parsed
-at boot and fails closed: a value it does not know stops the session.
+A session runs three sandbox families, and each has its own backend variable. A fourth
+variable names the backend for a repo's `host:` sandbox. The session parses each at boot and
+fails closed: a value that it does not know stops the session.
 
 | variable | runs | values | default |
 |---|---|---|---|
-| `YESSION_SESSION_WORK_BACKEND` | the agent's terminals, blocks and `setup:` | `host`, `srt`, `docker` | `srt` |
+| `YESSION_SESSION_WORK_BACKEND` | the agent's terminals, blocks and `setup:` | `host`, `srt`, `seatbelt`, `docker` | `srt` |
 | `YESSION_SESSION_AGENT_BACKEND` | the `claude` CLI | `host`, `srt` | `host` |
 | `YESSION_SESSION_GIT_BACKEND` | the session's own git verbs: clone, fetch, switch, status, log, diff | `host`, `srt` | `srt` |
+| `YESSION_SESSION_REPO_BACKEND` | a repo's `host:` sandbox | `seatbelt`, `srt` | none |
+
+`seatbelt` is a Mac's backend. It confines with macOS's Seatbelt under a profile that Yession
+writes, and keeps srt only as the proxy that filters egress. It opens no terminal yet, so a
+terminal there runs each block as its own process (docs/GAPS.md lists the rest). A session on
+any other platform refuses to start with it.
+
+`YESSION_SESSION_REPO_BACKEND` lets a repository run a sandbox on this host's own userland.
+A repo's `yession.yaml` asks for that with a `host:` block. When you do not set the variable,
+the session refuses such a sandbox, and each repo's sandbox must be a container. Set it to
+`seatbelt` on a Mac, or to `srt` on Linux. `host` and `docker` are not values for it. A
+`host:` sandbox has no memory limit and no process limit, so it is less than a container.
+Select it for a repository that cannot build in a Linux container.
+
+A `host:` block can name a `prepare:` command, for example the repository's `setup.sh`. The
+session runs that command in the sandbox each time the sandbox starts, before any work. The
+command holds what the sandbox's resources give it, and nothing more. So offer the resources
+that such a script needs: a nix on `PATH`, and the hosts that it fetches from, for example.
+
+Under `seatbelt`, a sandbox lists each directory above the directory where it works, and
+above each directory that the session gave it (its home, for example). Tools such as nix and
+Fable list them. The sandbox gets the entry names of each one, and nothing that is in one. From `--data-dir` down, a directory is Yession's own. Above `--data-dir`, the sandbox
+lists a directory only when every account on the host can list it. When one of them is
+closed to some accounts, the sandbox does not start, and the refusal names the directory
+([the decision record](decisions/2026-11-14-a-sandbox-lists-the-directories-above-its-tree.md)).
+
+A home on macOS is closed to other accounts. So keep `--data-dir` out of a home on a host
+that runs a sandbox under `seatbelt`: `/Users/Shared/yession`, for example. Then do these:
+
+- Close the data directory to other accounts (mode 700). The Manager writes its files with
+  the default mode. In a home, the home kept them private.
+- Restart the Manager on a build that has this rule before you close the directory. A
+  session learns the data directory from its Manager, and a session under an older Manager
+  judges the data directory as one of the host's.
+- Add the new place to the mounts of a docker daemon that runs in a VM. Colima mounts the
+  home by default, and a `--mount` flag replaces that default. So name the home and the new
+  place (`colima start --mount`). Without the mount, a container finds its checkout empty.
 
 The git verbs work on checkouts that every work sandbox can write, `.git/config` included. Under
 `srt` a program that config names runs with the git sandbox's reach: the repos directory, and
@@ -106,6 +144,34 @@ that a repo's `yession.yaml` selects by name, so a repo cannot exceed what the o
 declared. `resources:` is what the host can offer. `always:` is what every sandbox holds
 without asking: no repo has to name it and none can decline it. A resource that the profile
 declares, and does not list under `always:`, is available and not granted.
+
+A resource can hold rules for a Seatbelt profile, under `seatbelt:`:
+
+```yaml
+resources:
+  process-list:
+    seatbelt:
+      - (allow mach-lookup (global-name "com.apple.sysmond"))
+  loopback:
+    seatbelt:
+      - (allow network-bind (local ip "localhost:*"))
+      - (allow network-inbound (local ip "localhost:*"))
+      - (allow network-outbound (remote ip "localhost:*"))
+```
+
+Each entry is one `(allow ...)` form in Seatbelt's own language, on one line. Yession checks
+the shape of an entry (`SeatbeltAllow.parse` in `src/Yession.Domain/Resources.fs`). It does
+not read what the rule allows, so a rule can open more than its resource's name tells a
+reader. The loopback of a Mac is the host's own: a sandbox that holds the third `loopback`
+rule can dial each service that listens there. Write a path in a rule as the kernel sees it
+(`/private/tmp`, not `/tmp`).
+
+Only a sandbox under the `seatbelt` backend takes a rule. Each other confining backend
+withholds it. A sandbox that `uses:` the resource then refuses to start, and a sandbox that
+`wants:` it starts without the rule. So do not list such a resource under `always:` on a host
+that also runs sandboxes under `srt` or `docker`. A rule with a word that Seatbelt does not
+know stops each command of its sandbox, and the start-up check shows what `sandbox-exec`
+said.
 
 The same file may declare `sandboxes:` in the form a repo's `yession.yaml` uses
 (`ConfigFile.parseSandboxes` in `src/Yession.Domain/Config.fs`). Boot prints the notes of

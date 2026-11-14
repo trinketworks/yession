@@ -5623,6 +5623,30 @@ let private shellProfileTests =
             |> Seq.map (fun line -> line.Substring(" cd -- ".Length).Split(" || ").[0].Trim '\'')
             |> List.ofSeq
         spawnedIn, cdLines
+    /// The directory that a line enters first, where it starts with the profile's `cd`.
+    let entersFirst (line: string) : string option =
+        let first = line.Split('\n').[0]
+        if first.StartsWith " cd -- " then Some (first.Substring(" cd -- ".Length).Split(" || ").[0].Trim '\'')
+        else None
+    /// The process that a terminal with no shell started for one block. The profile of its
+    /// sandbox is the checkout. This sandbox has no pty, so the block is its own process.
+    let blockWithoutAShell () : Async<SandboxExec> =
+        async {
+            let log = newLog ()
+            // The profile probe asks the sandbox to `cd` there and say where it landed.
+            // Everything else that this fixture runs says nothing. The probe's argument is
+            // the checkout as a `PathOperand`.
+            let environment, spawned =
+                scriptedEnvironment (fun arg -> (if arg = PathOperand.value (PathOperand.ofPath checkout) then [ Stdout, probeAnswer checkoutAt ] else []), 0)
+            let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+            let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
+            let! set = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
+            Expect.isOk set "this fixture answers the probe with the directory it landed in"
+            let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+            let id = opened |> expect
+            do! terminals.RunBlock id (entry "a1" id byAda 1.0) "pwd" ignore
+            return spawned |> Seq.filter (fun e -> validatedPath e |> Option.isNone) |> Seq.exactlyOne
+        }
     testList "The shell profile" [
 
         // A terminal whose shell would not start says so in its own transcript, naming the
@@ -5758,26 +5782,22 @@ let private shellProfileTests =
                 // between them, so the profile is applied per block — the same promise, kept
                 // by the only means that path has. Wiring only the pty would make a degraded
                 // terminal silently ignore the profile.
-                let log = newLog ()
-                // The profile probe asks the sandbox to `cd` there and say where it landed;
-                // everything else this fixture runs says nothing. The probe's argument is
-                // the checkout as a `PathOperand`.
-                let environment, spawned =
-                    scriptedEnvironment (fun arg -> (if arg = PathOperand.value (PathOperand.ofPath checkout) then [ Stdout, probeAnswer checkoutAt ] else []), 0)
-                let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
-                let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
-                let! set = terminals.SetProfile agentForAda SandboxRef.defaultRef (Some checkout)
-                Expect.isOk set "this fixture answers the probe with the directory it landed in"
-                let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
-                let id = opened |> expect
-                do! terminals.RunBlock id (entry "a1" id byAda 1.0) "pwd" ignore
+                let! block = blockWithoutAShell ()
                 Expect.equal
-                    (spawned
-                     |> Seq.filter (fun e -> validatedPath e |> Option.isNone)
-                     |> Seq.map (fun e -> e.WorkingDirectory)
-                     |> List.ofSeq)
-                    [ Some checkout ]
-                    "the block's own process starts in the profile's directory"
+                    (entersFirst (block.Arguments |> List.last))
+                    (Some checkout)
+                    "the block's own process is told to cd to the profile's directory before its command"
+            }
+
+        testCaseAsync "a block that is its own process starts where the sandbox puts one" <|
+            async {
+                // The entrypoint of a sandbox finds its project from the directory where it
+                // starts (`nix develop`, `devenv shell`). A process that the sandbox started
+                // in the profile's directory would start that entrypoint in the wrong place.
+                // A terminal's shell has the same rule, in "a terminal opened afterwards
+                // starts its shell there".
+                let! block = blockWithoutAShell ()
+                Expect.equal block.WorkingDirectory None "the spawn names no directory, and the line's own `cd` enters the profile"
             }
 
         testCaseAsync "a directory the sandbox does not have is refused" <|

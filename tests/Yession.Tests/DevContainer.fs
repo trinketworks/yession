@@ -88,7 +88,8 @@ let private declaredDev (reposDir: string) : EnvironmentSpec =
     let request = SandboxDecl.toRequest (Some (Sandboxes.checkoutAt reposDir repoRef)) decl |> expect
     match request.Spec.Runtime with
     | Container _ -> ()
-    | Confinement -> failwith "yession.yaml declares no container, and a repo work sandbox is one"
+    | Confinement
+    | OnHost _ -> failwith "yession.yaml declares no container for `dev`, and the dev-container suite runs one"
     Sandboxes.withSessionShares reposDir artifactsDir DockerBackend request.Spec
 
 /// The same, minus the entrypoint. The file's entrypoint assembles the devshell from the
@@ -103,7 +104,8 @@ let private declaredDevBare (reposDir: string) : EnvironmentSpec =
         Runtime =
             match spec.Runtime with
             | Container c -> Container { c with Entrypoint = None }
-            | Confinement -> Confinement }
+            | Confinement -> Confinement
+            | OnHost host -> OnHost host }
 
 /// Start the declared container through the production composition, with `granted` as what
 /// the operator's profile came to (empty = a host offering nothing, so the file's `wants:`
@@ -111,7 +113,7 @@ let private declaredDevBare (reposDir: string) : EnvironmentSpec =
 let private startDev (granted: ResourceLeaf list) (spec: EnvironmentSpec) : Async<Sandbox> =
     async {
         let name = DockerFixture.name ()
-        let createSandbox = Sandboxes.forBackend DockerBackend (DockerFixture.quietNetwork ()) name spec |> expect
+        let createSandbox = Sandboxes.forBackend None DockerBackend (DockerFixture.quietNetwork ()) name spec |> expect
         let resolve = fun secret -> async { return Error (sprintf "no secrets here for '%s'" (SecretName.value secret)) }
         // What the session gives a docker sandbox, ASKED rather than written. This was
         // `None None None` — the flagship container test carrying its own copy of the
@@ -354,7 +356,7 @@ let dogfood =
 
             // Every container sandbox in a session binds the SAME checkout. devenv's state —
             // its task cache is a SQLite database — lived in that checkout's `.devenv`, so
-            // `dev` and `gate` assembling their devshells at once raced for one database
+            // two containers assembling their devshells at once raced for one database
             // across the host's file share, and a session's `dev` failed to start: "database
             // is locked". The file now puts it on each container's own disk; this is the
             // devshell actually honouring that, not the file merely saying it.
