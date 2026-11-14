@@ -1282,7 +1282,7 @@ let private backendTests =
     // describe, the composition's create — only ASKS.
     let repo = RepoRef.create "octo/hello" |> expect
     let container = Container { ContainerSpec.defaults with Image = Some { Name = "nixos/nix"; Tag = None } }
-    let onHost = OnHost { HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }
+    let onHost = OnHost { HostSpec.Prepare = None; HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }
     testList "the backend a scope gets" [
         testCase "the session's own sandbox keeps the configured backend" (fun () ->
             Expect.equal

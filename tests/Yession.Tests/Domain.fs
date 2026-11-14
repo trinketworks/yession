@@ -2739,8 +2739,17 @@ let private configTests =
                 |> expect
             Expect.equal
                 (file.Sandboxes |> Map.find (sandboxName "mac")).Body
-                (Some (HostBody { HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }))
+                (Some (HostBody { HostSpec.Prepare = None; HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }))
                 "the words of the entrypoint, read as a container's are"
+
+        testCase "a host sandbox says what makes it ready, as an argv" <| fun () ->
+            let file =
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "mac": { "host": { "prepare": "./setup.sh --quiet" } } } }"""
+                |> expect
+            Expect.equal
+                (file.Sandboxes |> Map.find (sandboxName "mac")).Body
+                (Some (HostBody { HostSpec.Prepare = Some [ "./setup.sh"; "--quiet" ]; HostSpec.Entrypoint = None }))
+                "the words of the command, read as the words of an entrypoint are"
 
         testCase "a host block that says nothing is still a body" <| fun () ->
             let file = ConfigFile.parse """{ "version": 2, "sandboxes": { "mac": { "host": {} } } }""" |> expect
@@ -2766,14 +2775,14 @@ let private configTests =
 
         testCase "a host body survives the round trip the command gate rides" <| fun () ->
             let file =
-                ConfigFile.parse """{ "version": 2, "sandboxes": { "mac": { "host": { "entrypoint": [ "devenv", "shell", "--" ] }, "uses": [ "nix" ] } } }"""
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "mac": { "host": { "prepare": [ "./setup.sh" ], "entrypoint": [ "devenv", "shell", "--" ] }, "uses": [ "nix" ] } } }"""
                 |> expect
             let mac = file.Sandboxes |> Map.find (sandboxName "mac")
             let back = ConfigFile.encodeSandbox mac |> ConfigFile.parseSandbox |> expect
             Expect.equal back.Body mac.Body "what `encode` writes, `parseSandbox` reads back whole"
 
         testCase "a host body is asked for as the host's userland, with its entrypoint" <| fun () ->
-            let host = { HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }
+            let host = { HostSpec.Prepare = None; HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }
             let decl = { SandboxDecl.empty with Body = Some (HostBody host) }
             Expect.equal
                 (SandboxDecl.toRequest (checkout "/repos/octo/hello") decl |> expect).Spec.Runtime
@@ -2782,10 +2791,37 @@ let private configTests =
 
         testCase "a host sandbox whose entrypoint changed is a different sandbox" <| fun () ->
             let behind (words: string list) =
-                { Spec = { EnvironmentSpec.defaults with Runtime = OnHost { HostSpec.Entrypoint = Some words } } }
+                { Spec = { EnvironmentSpec.defaults with Runtime = OnHost { HostSpec.Prepare = None; HostSpec.Entrypoint = Some words } } }
             Expect.isNonEmpty
                 (SandboxRequest.differences (behind [ "devenv"; "shell"; "--" ]) (behind [ "nix"; "develop"; "--command" ]))
                 "what the work runs behind is part of what the sandbox is"
+
+        testCase "a host sandbox whose `prepare` command changed is a different sandbox" <| fun () ->
+            let preparedBy (words: string list) =
+                { Spec = { EnvironmentSpec.defaults with Runtime = OnHost { HostSpec.Prepare = Some words; HostSpec.Entrypoint = None } } }
+            Expect.isNonEmpty
+                (SandboxRequest.differences (preparedBy [ "./setup.sh" ]) (preparedBy [ "./setup.sh"; "--offline" ]))
+                "what makes the sandbox ready is part of what the sandbox is"
+
+        // The entrypoint can be a tool that the command installs. So the command does not
+        // run behind the entrypoint.
+        testCase "the command that makes a host sandbox ready runs bare, where the sandbox puts a process" <| fun () ->
+            let host = { HostSpec.Prepare = Some [ "./setup.sh"; "--quiet" ]; HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }
+            Expect.equal
+                (SandboxRuntime.preparation (OnHost host))
+                (Some
+                    { Executable = "./setup.sh"
+                      Arguments = [ "--quiet" ]
+                      Env = Map.empty
+                      WorkingDirectory = None
+                      Via = Direct })
+                "the entrypoint is not in front of the command, and the command names no directory"
+
+        testCase "a sandbox whose body names no `prepare` command runs nothing before its work" <| fun () ->
+            Expect.equal
+                ([ Confinement; OnHost HostSpec.none; Container ContainerSpec.defaults ] |> List.map SandboxRuntime.preparation)
+                [ None; None; None ]
+                "only a host body that names a command has one"
 
         // compose's byte-value grammar, so a `4g` copied out of a compose file means the same
         // thing here; a number YAML read without a unit is bytes.

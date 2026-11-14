@@ -397,6 +397,7 @@ let private makeSandboxes
                                                 // proxy's trust mounted into a container.
                                                 Binds = List.distinct (policy.Binds @ provision.Binds) }
                             })
+                        (SandboxRuntime.preparation workSpec.Runtime)
                         (Sandboxes.summaryFor backend workSpec)
                         (sprintf "env-%s" (SandboxRef.objectName sessionId sandbox)))
         async {

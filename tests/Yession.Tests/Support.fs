@@ -137,6 +137,7 @@ let hostOver
                     log
                     createSandbox
                     (fun () -> async { return Ok policy })
+                    None
                     name
                     name
                 |> WorkSandboxes.singleton name

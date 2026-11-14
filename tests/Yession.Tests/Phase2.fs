@@ -76,6 +76,29 @@ let private passesEveryCheck : Sandbox =
                         Kill = ignore
                         Exited = async { return SandboxExited 0 } }
         })
+
+/// The command that a host body declares to make itself ready, as a start gets it.
+let private setupScript : SandboxExec option =
+    SandboxRuntime.preparation
+        (OnHost { HostSpec.Prepare = Some [ "./setup.sh" ]; HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] })
+
+/// A sandbox that passes its checks, and whose `prepare` command (`./setup.sh`) prints
+/// `said` and ends as `ending` says. `started` gets each executable that the sandbox
+/// starts, in order.
+let private preparing (started: ResizeArray<string>) (said: string) (ending: Async<SandboxRun>) : Sandbox =
+    { passesEveryCheck with
+        Spawn =
+            fun exec onChunk ->
+                async {
+                    started.Add exec.Executable
+                    let isSetup = exec.Executable = "./setup.sh"
+                    if isSetup && said <> "" then onChunk (Stderr, said)
+                    return
+                        Ok { WriteStdin = ignore
+                             CloseStdin = ignore
+                             Kill = ignore
+                             Exited = if isSetup then ending else async { return SandboxExited 0 } }
+                } }
 open Yession.Host
 open Yession.Tests.Support
 
@@ -1562,7 +1585,7 @@ let private environmentRecordingTests =
                 let creating : CreateSandbox = fun _ -> async { return Ok (failingAt 0) }
                 let environment =
                     Yession.Session.SessionEnvironment.create
-                        log creating policyWithAHome "scripted" "env-unverified-1"
+                        log creating policyWithAHome None "scripted" "env-unverified-1"
 
                 match! environment.Ensure None "the fold asked" with
                 | EnvironmentAvailable -> failwith "a sandbox that failed its checks must not be available"
@@ -1589,7 +1612,7 @@ let private environmentRecordingTests =
                 let creating : CreateSandbox = fun _ -> async { return Ok passesEveryCheck }
                 let environment =
                     Yession.Session.SessionEnvironment.create
-                        log creating policyOnACoarserHost "scripted" "env-realised-1"
+                        log creating policyOnACoarserHost None "scripted" "env-realised-1"
 
                 let! outcome = environment.Ensure None "the fold asked"
                 Expect.equal outcome EnvironmentAvailable "a coarsening is a sandbox that works differently, not one that fails"
@@ -1611,7 +1634,7 @@ let private environmentRecordingTests =
                 let creating : CreateSandbox = fun _ -> async { return Ok passesEveryCheck }
                 let environment =
                     Yession.Session.SessionEnvironment.create
-                        log creating policyOnACoarserHost "scripted" "env-realised-2"
+                        log creating policyOnACoarserHost None "scripted" "env-realised-2"
                 Expect.equal (environment.Realisation ()) [] "nothing runs, nothing is claimed"
             }
 
@@ -1626,7 +1649,7 @@ let private environmentRecordingTests =
                 let creating : CreateSandbox = fun _ -> async { return Ok passesEveryCheck }
                 let environment =
                     Yession.Session.SessionEnvironment.create
-                        log creating policyOnACoarserHost "scripted" "env-realised-3"
+                        log creating policyOnACoarserHost None "scripted" "env-realised-3"
                 let! _ = environment.Ensure None "the fold asked"
                 do! environment.Stop ()
                 Expect.equal (environment.Realisation ()) [] "the sandbox is gone, and so is what it held"
@@ -1650,7 +1673,7 @@ let private environmentRecordingTests =
                         }
                 let environment =
                     Yession.Session.SessionEnvironment.create
-                        log creating policyWithAHome "scripted" "env-unverified-2"
+                        log creating policyWithAHome None "scripted" "env-unverified-2"
 
                 let! _ = environment.Ensure None "the fold asked"
                 let! _ = environment.Ensure None "the fold asked again"
@@ -1679,10 +1702,167 @@ let private environmentRecordingTests =
                         }
                 let environment =
                     Yession.Session.SessionEnvironment.create
-                        log creating policyWithAHome "scripted" "env-unverified-3"
+                        log creating policyWithAHome None "scripted" "env-unverified-3"
 
                 let! _ = environment.Ensure None "the fold asked"
                 Expect.equal disposed 1 "the sandbox it could not vouch for was torn down"
+            }
+
+        // --- a sandbox whose body declares a command that makes it ready (`prepare:`) -----
+
+        testCaseAsync "the `prepare` command of a sandbox runs when the sandbox starts" <|
+            async {
+                let sessionId = SessionId.create "prepared-1" |> expect
+                let log =
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                let started = ResizeArray<string> ()
+                let creating : CreateSandbox =
+                    fun _ -> async { return Ok (preparing started "" (async { return SandboxExited 0 })) }
+                let environment =
+                    Yession.Session.SessionEnvironment.create
+                        log creating policyWithAHome setupScript "scripted" "env-prepared-1"
+
+                let! _ = environment.Ensure None "the fold asked"
+                Expect.isTrue (started.Contains "./setup.sh") "the start ran the command that the body declared"
+            }
+
+        // A sandbox that does not hold what its policy grants says so in the words of a check.
+        // A repository's command that ran in it would fail later, with an error about
+        // something else.
+        testCaseAsync "a `prepare` command does not run in a sandbox that failed its checks" <|
+            async {
+                let sessionId = SessionId.create "prepared-2" |> expect
+                let log =
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                let started = ResizeArray<string> ()
+                let creating : CreateSandbox =
+                    fun _ ->
+                        async {
+                            let failing = failingAt 0
+                            return
+                                Ok
+                                    { failing with
+                                        Spawn =
+                                            fun exec onChunk ->
+                                                started.Add exec.Executable
+                                                failing.Spawn exec onChunk }
+                        }
+                let environment =
+                    Yession.Session.SessionEnvironment.create
+                        log creating policyWithAHome setupScript "scripted" "env-prepared-2"
+
+                let! _ = environment.Ensure None "the fold asked"
+                Expect.isFalse (started.Contains "./setup.sh") "the checks stopped the start before the command"
+            }
+
+        testCaseAsync "a sandbox whose `prepare` command fails does not start, and the refusal names the command" <|
+            async {
+                let sessionId = SessionId.create "prepared-3" |> expect
+                let log =
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                let creating : CreateSandbox =
+                    fun _ -> async { return Ok (preparing (ResizeArray ()) "" (async { return SandboxExited 3 })) }
+                let environment =
+                    Yession.Session.SessionEnvironment.create
+                        log creating policyWithAHome setupScript "scripted" "env-prepared-3"
+
+                match! environment.Ensure None "the fold asked" with
+                | EnvironmentAvailable -> failwith "a sandbox that its own command did not make ready must not be available"
+                | EnvironmentUnavailable reason ->
+                    Expect.stringContains reason "`prepare` command (./setup.sh) failed with exit code 3" "the refusal says which command failed, and how"
+            }
+
+        // Nothing else records what the command printed, and a command that fails says why
+        // last.
+        testCaseAsync "the refusal of a failed `prepare` command quotes the end of what the command printed" <|
+            async {
+                let sessionId = SessionId.create "prepared-4" |> expect
+                let log =
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                let creating : CreateSandbox =
+                    fun _ ->
+                        async {
+                            return
+                                Ok (
+                                    preparing
+                                        (ResizeArray ())
+                                        "fetching the tools\nerror: unable to download the tools\n"
+                                        (async { return SandboxExited 1 })
+                                )
+                        }
+                let environment =
+                    Yession.Session.SessionEnvironment.create
+                        log creating policyWithAHome setupScript "scripted" "env-prepared-4"
+
+                match! environment.Ensure None "the fold asked" with
+                | EnvironmentAvailable -> failwith "a sandbox that its own command did not make ready must not be available"
+                | EnvironmentUnavailable reason ->
+                    Expect.stringContains reason "error: unable to download the tools" "the last line of the command is in the refusal"
+            }
+
+        testCaseAsync "a sandbox whose `prepare` command fails is disposed" <|
+            async {
+                let sessionId = SessionId.create "prepared-5" |> expect
+                let log =
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                let mutable disposed = 0
+                let creating : CreateSandbox =
+                    fun _ ->
+                        async {
+                            return
+                                Ok
+                                    { preparing (ResizeArray ()) "" (async { return SandboxExited 1 }) with
+                                        Dispose = fun () -> async { disposed <- disposed + 1 } }
+                        }
+                let environment =
+                    Yession.Session.SessionEnvironment.create
+                        log creating policyWithAHome setupScript "scripted" "env-prepared-5"
+
+                let! _ = environment.Ensure None "the fold asked"
+                Expect.equal disposed 1 "the session closed the sandbox that the command did not make ready"
+            }
+
+        // The entrypoint of the sandbox can be a tool that the command installs. Work that
+        // started before the command ended would start behind an entrypoint that is not there.
+        testCaseAsync "nothing runs in a sandbox before its `prepare` command ends" <|
+            async {
+                let sessionId = SessionId.create "prepared-6" |> expect
+                let log =
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                let finish, finished = latch ()
+                let reach, reached = latch ()
+                let creating : CreateSandbox =
+                    fun _ ->
+                        async {
+                            let sandbox =
+                                preparing
+                                    (ResizeArray ())
+                                    ""
+                                    (async {
+                                        do! finished
+                                        return SandboxExited 0
+                                    })
+                            return
+                                Ok
+                                    { sandbox with
+                                        Spawn =
+                                            fun exec onChunk ->
+                                                if exec.Executable = "./setup.sh" then reach ()
+                                                sandbox.Spawn exec onChunk }
+                        }
+                let environment =
+                    Yession.Session.SessionEnvironment.create
+                        log creating policyWithAHome setupScript "scripted" "env-prepared-6"
+
+                let! ensuring = Async.StartChild (environment.Ensure None "the fold asked")
+                do! reached
+                let! early =
+                    environment.Spawn
+                        { Executable = "make"; Arguments = []; Env = Map.empty; WorkingDirectory = None; Via = Entrypoint }
+                        ignore
+                finish ()
+                let! _ = ensuring
+                Expect.isError early "a spawn while the command runs finds no sandbox to run in"
             }
 
         // The fold that asks for a repo's sandboxes re-runs after every repo verb, so a
@@ -1697,7 +1877,7 @@ let private environmentRecordingTests =
                 let refusing : CreateSandbox = fun _ -> async { return Error "the ceiling is closed" }
                 let environment =
                     Yession.Session.SessionEnvironment.create
-                        log refusing preparedEmptyPolicy "scripted" "env-refused-1"
+                        log refusing preparedEmptyPolicy None "scripted" "env-refused-1"
 
                 let! first = environment.Ensure None "the fold asked"
                 Expect.equal first (EnvironmentUnavailable "the ceiling is closed") "it cannot start"
@@ -1726,7 +1906,7 @@ let private environmentRecordingTests =
                 let refusing : CreateSandbox = fun _ -> async { return Error said }
                 let environment =
                     Yession.Session.SessionEnvironment.create
-                        log refusing preparedEmptyPolicy "scripted" "env-refused-2"
+                        log refusing preparedEmptyPolicy None "scripted" "env-refused-2"
 
                 let! _ = environment.Ensure None "the fold asked"
                 said <- "no credential to forward"
@@ -1757,7 +1937,7 @@ let private environmentRecordingTests =
                         else async { return Error "not yet" }
                 let environment =
                     Yession.Session.SessionEnvironment.create
-                        log flaky preparedEmptyPolicy "scripted" "env-refused-3"
+                        log flaky preparedEmptyPolicy None "scripted" "env-refused-3"
 
                 let! _ = environment.Ensure None "too early"
                 up <- true
@@ -1873,7 +2053,7 @@ let private lazyLifecycleTests =
                     Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                 let environment =
                     Yession.Session.SessionEnvironment.create
-                        log (scriptedSandbox recorder echoSandboxScript) preparedEmptyPolicy "scripted" "env-lazy-3"
+                        log (scriptedSandbox recorder echoSandboxScript) preparedEmptyPolicy None "scripted" "env-lazy-3"
 
                 let! first = environment.Ensure None "initial task"
                 Expect.equal first EnvironmentAvailable "first ensure starts"
@@ -1917,6 +2097,7 @@ let private hostEnvironment (log: Yession.Session.EventLog<SessionEvent>) (name:
         log
         createSandbox
         (Sandboxes.preparePolicy HostBackend noSecrets (Sandboxes.SessionLayout.nothing SandboxRef.defaultRef) (fun _ _ -> Ok ([], Set.empty)) EnvironmentSpec.defaults)
+        (SandboxRuntime.preparation EnvironmentSpec.defaults.Runtime)
         (Sandboxes.summaryFor HostBackend EnvironmentSpec.defaults)
         (sprintf "env-%s" name)
 

@@ -352,16 +352,19 @@ module ConfigFile =
                   OomScoreAdj = get.Optional.Field "oom_score_adj" (judgedInt OomScoreAdj.ofInt)
                   PidsLimit = get.Optional.Field "pids_limit" (judgedInt PidsLimit.ofInt) }))
 
-    let private hostKeys = [ "entrypoint" ]
+    let private hostKeys = [ "prepare"; "entrypoint" ]
 
-    /// The host block: what a sandbox on the host's own userland says about itself, which
-    /// is what its work runs behind and nothing more. It has no `command`, no image and no
+    /// The host block: what a sandbox on the host's own userland says about itself. That
+    /// is the command that makes it ready (`prepare`) and what its work runs behind
+    /// (`entrypoint`), each an argv, and nothing more. It has no `command`, no image and no
     /// limits, because it has no container to give them to. What CONFINES it is not a key:
     /// that is the operator's backend, and no file names it (`SandboxBody`).
     let private host : Decoder<HostSpec> =
         noUnknownKeys hostKeys
         |> Decode.andThen (fun () ->
-            Decode.object (fun get -> { HostSpec.Entrypoint = get.Optional.Field "entrypoint" (argv "entrypoint") }))
+            Decode.object (fun get ->
+                { HostSpec.Prepare = get.Optional.Field "prepare" (argv "prepare")
+                  HostSpec.Entrypoint = get.Optional.Field "entrypoint" (argv "entrypoint") }))
 
     let private sandboxKeys =
         [ "container"; "host"; "dialect"; "workdir"; "env"; "uses"; "wants"; "files"; "setup"; "description" ]
@@ -576,7 +579,9 @@ module ConfigFile =
             | Some (HostBody host) ->
                 Some (
                     Encode.object
-                        [ if host.Entrypoint.IsSome then
+                        [ if host.Prepare.IsSome then
+                            "prepare", Encode.list (host.Prepare.Value |> List.map Encode.string)
+                          if host.Entrypoint.IsSome then
                             "entrypoint", Encode.list (host.Entrypoint.Value |> List.map Encode.string) ]
                 )
             | Some (ContainerBody _)
