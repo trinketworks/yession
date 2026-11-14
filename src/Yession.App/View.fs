@@ -1741,7 +1741,9 @@ module View =
                       <button type="button" class="{Style.trayJump}" aria-label="{Dom.Text.jumpToLatest}"
                               @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.JumpToLatest TailSurface.Conversation)))}>latest{Icon.down}</button>
                     </div>"""
-        html $"""<div class="{Style.composerTray}" data-composer-tray>{leading}{jump}</div>"""
+        let filled = away || model.Agent.ActiveTurn.IsSome || running.IsSome
+        let tone = if filled then Style.cls [ Style.composerTray; Style.composerTrayFilled ] else Style.composerTray
+        html $"""<div class="{tone}" data-composer-tray>{leading}{jump}</div>"""
 
     /// The composer: ONE draft open, everyone else's as a line you can open.
     ///

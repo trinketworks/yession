@@ -3771,9 +3771,14 @@ module Style =
     /// already the ground's edge a message stands on, so the gutter there is no padding at all: the mark
     /// takes the avatars' column at the edge and the word lands on the rail after it.
     let composerTray =
-        cls [ "shrink-0 flex items-center h-8 phone:h-touch pl-8 pr-4 max-md:pl-4 wide:pl-0 wide:pr-rail bg-panel"
+        cls [ "shrink-0 flex items-center h-8 phone:h-touch pl-8 pr-4 max-md:pl-4 wide:pl-0 wide:pr-rail"
               askColumn
               "transition-[translate,opacity] starting:translate-y-1 starting:opacity-0"; Motion.pace ]
+
+    /// The panel tone the strip wears only while it holds a control (`composerTray`). Empty,
+    /// it keeps its height but has no ground of its own, so the page shows through; the
+    /// height is the same either way, so the strip's content arriving moves nothing.
+    let composerTrayFilled = "bg-panel"
 
     /// The label voice (`caps`), not Send's step up: these are controls for the timeline
     /// above, and at Send's size they stood level with the verb the composer is for.
