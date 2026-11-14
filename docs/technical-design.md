@@ -459,6 +459,7 @@ sandboxes:
     wants: [ github ]                     # the operator's `{ connection: { github: [git, api] } }`, where offered
   mac:
     host:                                 # the other body: the userland of the host itself
+      prepare: ./setup.sh                 # optional: what makes it ready, before any work
       entrypoint: devenv shell --         # what every piece of WORK runs behind
     uses: [ nix ]
 ```
@@ -556,6 +557,19 @@ as `docker exec` does. `ProcessEntry` in `src/Yession.Domain/Sandbox.fs` says wh
 
 The session reads the `entrypoint` of a `host:` sandbox in the same way. Work runs behind it
 under each backend that runs on the host, and housekeeping runs bare (`Sandboxes.entered`).
+
+A `host:` sandbox can also name `prepare:`, one command as an argv. A container has an image
+that holds its tools. A sandbox on the host has no image, so this command is the step that
+installs them: a repository's `setup.sh`, for example. The session runs it each time it
+starts the sandbox, after the start-up checks and before any work. It runs bare, because the
+entrypoint can be a tool that it installs. It runs in the sandbox, so it holds what the
+sandbox holds and nothing more. It is not a block, so the session lends it no credential.
+A command that fails refuses the start, and the refusal quotes the end of what the command
+printed. `SessionEnvironment.runPreparation` in `src/Yession.Session/Environment.fs` holds
+the rule, and the
+[ADR](decisions/2026-11-14-a-sandbox-on-the-host-prepares-what-its-entrypoint-needs.md) says
+why this is not `setup:`. `setup:` stays a block behind the entrypoint, in a sandbox that
+started.
 
 The backend finds the shell that a terminal opens. At start it runs one `command -v` behind
 the entrypoint for the dialects a terminal can instrument, most capable first (`bash`, `zsh`,

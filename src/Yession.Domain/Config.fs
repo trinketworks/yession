@@ -24,8 +24,8 @@ open Yession.Domain
 ///
 /// Two bodies, and the rule for a third: a body is a case when the DECLARATION owns
 /// different things for it. A container brings a userland, so it has an image, a process
-/// and limits to state. A sandbox on the host's own userland brings none, and states only
-/// what its work runs behind.
+/// and limits to state. A sandbox on the host's own userland brings none. It states what
+/// makes that userland ready for it, and what its work runs behind.
 ///
 /// What CONFINES a body is not a case, and no declaration names it. Seatbelt on a Mac,
 /// bubblewrap on Linux and docker under a container are mechanism, the mechanism is the

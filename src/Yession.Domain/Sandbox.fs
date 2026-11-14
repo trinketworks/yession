@@ -211,6 +211,11 @@ type SandboxPolicy =
 /// above the container's (`OomScoreAdj`), so a kill for memory takes work, not the
 /// processes that keep the container up. Carried on the exec rather than decided by the
 /// backend, because the exec is the only thing that knows which it is.
+///
+/// One more process runs bare: the command that a sandbox on the host declares to make
+/// itself ready (`SandboxRuntime.preparation`). It is a repository's code and not the
+/// session's housekeeping. It runs bare because the entrypoint can be a tool that it
+/// installs.
 type ProcessEntry =
     /// Behind the entrypoint when one is declared; bare when none is.
     | Entrypoint

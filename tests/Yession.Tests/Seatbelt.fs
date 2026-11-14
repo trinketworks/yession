@@ -719,7 +719,7 @@ let backendTests =
                 "no shell stands between an argv and its program"
 
         testCase "work under seatbelt stands behind its sandbox's entrypoint, inside the profile" <| fun () ->
-            let host = { HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }
+            let host = { HostSpec.Prepare = None; HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }
             Expect.equal
                 (Sandboxes.SeatbeltSandbox.argvFor "(version 1)" host (execOf "dotnet" [ "build" ] Map.empty))
                 ("/usr/bin/sandbox-exec", [ "-p"; "(version 1)"; "devenv"; "shell"; "--"; "dotnet"; "build" ])
@@ -727,14 +727,14 @@ let backendTests =
 
         // One rule for the three backends that run on the host's own userland.
         testCase "work on the host stands behind the entrypoint its sandbox declares" <| fun () ->
-            let host = { HostSpec.Entrypoint = Some [ "nix"; "develop"; "--command" ] }
+            let host = { HostSpec.Prepare = None; HostSpec.Entrypoint = Some [ "nix"; "develop"; "--command" ] }
             Expect.equal
                 (Sandboxes.entered host (execOf "make" [ "test" ] Map.empty))
                 ("nix", [ "develop"; "--command"; "make"; "test" ])
                 "the first word is what is started, and the command follows the rest"
 
         testCase "housekeeping on the host runs bare, whatever entrypoint its sandbox declares" <| fun () ->
-            let host = { HostSpec.Entrypoint = Some [ "nix"; "develop"; "--command" ] }
+            let host = { HostSpec.Prepare = None; HostSpec.Entrypoint = Some [ "nix"; "develop"; "--command" ] }
             Expect.equal
                 (Sandboxes.entered host { execOf "git" [ "status" ] Map.empty with Via = Direct })
                 ("git", [ "status" ])

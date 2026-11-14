@@ -108,6 +108,7 @@ module InProcessManager =
                                                                         policy.AllowedDomains
                                                                         |> Option.map (fun domains -> List.distinct (domains @ provision.Domains)) }
                                                 })
+                                            (SandboxRuntime.preparation spec.Runtime)
                                             (Sandboxes.summaryFor HostBackend spec)
                                             (sprintf "env-%s-%s" (SessionId.value request.SessionId) (SandboxRef.render name)))
                                 async {

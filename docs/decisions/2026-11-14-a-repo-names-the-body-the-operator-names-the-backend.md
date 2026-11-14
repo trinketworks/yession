@@ -4,6 +4,9 @@
 > [technical-design.md §5](../technical-design.md#5-architectural-invariants),
 > `SandboxBody` in `src/Yession.Domain/Config.fs`,
 > [2026-11-13-yession-writes-the-seatbelt-profile.md](2026-11-13-yession-writes-the-seatbelt-profile.md)
+>
+> A later decision gives the `host:` body a second key, `prepare:`:
+> [2026-11-14-a-sandbox-on-the-host-prepares-what-its-entrypoint-needs.md](2026-11-14-a-sandbox-on-the-host-prepares-what-its-entrypoint-needs.md)
 
 ## Context
 

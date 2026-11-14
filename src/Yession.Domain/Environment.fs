@@ -469,14 +469,31 @@ module ContainerSpec =
                 CgroupParent.forDriver ceiling.CgroupParent cgroupDriver
                 |> Result.map (fun parent -> { ContainerLimits.Memory = memory; PidsLimit = pids; CgroupParent = parent })))
 
-/// What a sandbox on the host's own userland declares about itself: what its work runs
-/// behind. It brings no image, so it has nothing else to say that a container says.
+/// What a sandbox on the host's own userland declares about itself: what makes it ready,
+/// and what its work runs behind. It brings no image, so it has nothing else to say that a
+/// container says.
 ///
 /// Qualified, because `Entrypoint` is `ContainerSpec`'s label too, and a bare
 /// `{ Entrypoint = … }` must not come to mean this record where a container's was meant.
 [<RequireQualifiedAccess>]
 type HostSpec =
-    { /// What every piece of WORK here runs behind, as an argv (`ProcessEntry`): a devshell
+    { /// What makes this sandbox ready for its work, as an argv (`prepare:`).
+      ///
+      /// A container has an image that holds its tools. A sandbox on the host has the
+      /// userland of the host and a home of its own, and a repository's tools are in
+      /// neither before a command installs them. This is that command: a repository's
+      /// `setup.sh`, for example.
+      ///
+      /// The session runs it each time it starts the sandbox, before any work
+      /// (`SessionEnvironment.runPreparation`). It runs bare (`SandboxRuntime.preparation`),
+      /// because the entrypoint can be a tool that this command installs. It runs in the
+      /// sandbox, so it holds what the sandbox holds and nothing more. `None` prepares
+      /// nothing.
+      ///
+      /// Not `setup:` (`SandboxDecl.Setup`). That one is work: a block behind the
+      /// entrypoint, in a sandbox that started.
+      Prepare : string list option
+      /// What every piece of WORK here runs behind, as an argv (`ProcessEntry`): a devshell
       /// that assembles the toolchain, on a host that offers a repository none of its own.
       /// The session's housekeeping runs bare, as it does in a container. `None` runs
       /// everything as it stands.
@@ -486,7 +503,7 @@ module HostSpec =
 
     /// A sandbox on the host that declares nothing about itself, which is what the
     /// session's own `default` is.
-    let none : HostSpec = { HostSpec.Entrypoint = None }
+    let none : HostSpec = { HostSpec.Prepare = None; HostSpec.Entrypoint = None }
 
 /// What the sandbox IS, and the distinction is load-bearing rather than descriptive.
 ///
@@ -526,9 +543,13 @@ module SandboxRuntime =
     let describe (runtime: SandboxRuntime) : string =
         match runtime with
         | Confinement -> "no container"
-        | OnHost { HostSpec.Entrypoint = None } -> "the host's userland"
-        | OnHost { HostSpec.Entrypoint = Some entrypoint } ->
-            sprintf "the host's userland, behind '%s'" (String.concat " " entrypoint)
+        | OnHost host ->
+            let words (argv: string list) = String.concat " " argv
+            [ Some "the host's userland"
+              host.Prepare |> Option.map (fun prepare -> sprintf "prepared by '%s'" (words prepare))
+              host.Entrypoint |> Option.map (fun entrypoint -> sprintf "behind '%s'" (words entrypoint)) ]
+            |> List.choose id
+            |> String.concat ", "
         | Container container ->
             let what =
                 match container.Image, container.Build with
@@ -538,6 +559,27 @@ module SandboxRuntime =
             match container.Command with
             | Some command -> sprintf "%s running '%s'" what command
             | None -> what
+
+    /// The process that makes this runtime ready for its work, where its body declares one
+    /// (`HostSpec.Prepare`).
+    ///
+    /// Bare (`Direct`), because the entrypoint can be a tool that this process installs,
+    /// and work cannot stand behind an entrypoint that is not there. It starts where the
+    /// sandbox puts a process, and with the environment of the sandbox's policy.
+    ///
+    /// A container declares none. Its image is what makes it ready.
+    let preparation (runtime: SandboxRuntime) : SandboxExec option =
+        match runtime with
+        | OnHost { HostSpec.Prepare = Some (executable :: arguments) } ->
+            Some
+                { Executable = executable
+                  Arguments = arguments
+                  Env = Map.empty
+                  WorkingDirectory = None
+                  Via = Direct }
+        | OnHost _
+        | Confinement
+        | Container _ -> None
 
     /// The backend a repo's CONTAINER runs under. Named once, HERE, because it is one fact
     /// with several readers, and each re-encoding "a repo's container means docker" by hand

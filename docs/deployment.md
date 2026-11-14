@@ -105,6 +105,11 @@ the session refuses such a sandbox, and each repo's sandbox must be a container.
 `host:` sandbox has no memory limit and no process limit, so it is less than a container.
 Select it for a repository that cannot build in a Linux container.
 
+A `host:` block can name a `prepare:` command, for example the repository's `setup.sh`. The
+session runs that command in the sandbox each time the sandbox starts, before any work. The
+command holds what the sandbox's resources give it, and nothing more. So offer the resources
+that such a script needs: a nix on `PATH`, and the hosts that it fetches from, for example.
+
 Under `seatbelt`, a sandbox lists each directory above the directory where it works, and
 above each directory that the session gave it (its home, for example). Tools such as nix and
 Fable list them. The sandbox gets the entry names of each one, and nothing that is in one. From `--data-dir` down, a directory is Yession's own. Above `--data-dir`, the sandbox

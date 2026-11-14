@@ -364,6 +364,11 @@ The last section holds trust boundaries as sharp as the first section's.
     profile.
   - **A repo's `host:` sandbox has no memory limit and no process limit.** No backend on the
     host's own userland has one. A build there can use all of the host's memory.
+  - **A `prepare:` command has no time limit, and nothing records what it prints.** The
+    start of a `host:` sandbox waits for the command until it ends. A command that fails
+    refuses the start, and the refusal quotes the end of what the command printed
+    (`SessionEnvironment.runPreparation`). The rest is lost. The command runs at each start
+    of the sandbox, so a repository writes one that is safe to run again.
   - **When a file changes the body of a running sandbox, a reader gets the new body.** A
     reader that has only the sandbox's name asks the last fold
     (`SandboxRuntime.namedBackend`). Until somebody stops the sandbox, a share out of it can
@@ -1117,11 +1122,11 @@ After the fixes land, one pass rewrites it to what still reproduces.
       when the clone lands. A symlink at `HEAD` is no file for any of the three (rule 20).
     - **No inter-sandbox networking.** A `db:` sandbox's process is reachable from inside that
       sandbox only. A compose-like shared network is a design of its own.
-    - **A `command`, an `entrypoint`, the limits (`mem_limit`, `oom_score_adj`,
-      `pids_limit`, `cgroup_parent`) and a `dialect` are docker-only.** They live in or beside
-      the `container:` block, so under `srt` or `host` there is nowhere to write one. The
+    - **A `command`, the limits (`mem_limit`, `oom_score_adj`, `pids_limit`,
+      `cgroup_parent`) and a `dialect` are docker-only.** They live in or beside the
+      `container:` block, so a sandbox with no container has nowhere to write one. The
       exception is `dialect`, which a sandbox with no container refuses because it reads as if
-      it would apply.
+      it would apply. A `host:` block takes `prepare` and `entrypoint`, and nothing else.
     - **Only a block that died from SIGKILL can say "killed: out of memory".** The Docker
       backend reads its container's `memory.events` around every process it starts
       (`MemoryWatch` in `src/Yession.Domain/Sandbox.fs`). When `oom_kill` went up and the

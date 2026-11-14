@@ -56,7 +56,7 @@ let private startSandboxBehind (host: HostSpec) (policy: SandboxPolicy) : Async<
 let private startSandbox (policy: SandboxPolicy) : Async<Sandbox> = startSandboxBehind HostSpec.none policy
 
 /// An entrypoint a case can see from inside: it puts one variable in front of the work.
-let private marking : HostSpec = { HostSpec.Entrypoint = Some [ "/usr/bin/env"; "BEHIND=entrypoint" ] }
+let private marking : HostSpec = { HostSpec.Prepare = None; HostSpec.Entrypoint = Some [ "/usr/bin/env"; "BEHIND=entrypoint" ] }
 
 /// What `sh -c script` printed when the session ran it as housekeeping, bare.
 let private housekeeping (sandbox: Sandbox) (script: string) : Async<string> =
@@ -279,6 +279,34 @@ let private macCases () =
             let! out = housekeeping sandbox "echo \"bare:$BEHIND\""
             do! sandbox.Dispose ()
             Expect.equal (out.Trim ()) "bare:" "nothing stood in front of it"
+        })
+
+        // The command that a host body declares to make itself ready (`prepare:`). Here it
+        // writes a tool into the workspace, and the entrypoint of the sandbox is that tool.
+        testCaseAsync "work runs behind an entrypoint that the `prepare` command of its sandbox made" (async {
+            let host =
+                { HostSpec.Prepare =
+                    Some
+                        [ "/bin/sh"
+                          "-c"
+                          "printf '#!/bin/sh\\nexec /usr/bin/env BEHIND=prepared \"$@\"\\n' > enter && chmod +x enter" ]
+                  HostSpec.Entrypoint = Some [ "./enter" ] }
+            let! sandbox = startSandboxBehind host (policyIn (freshDir ()))
+            let! _ = Yession.Session.SessionEnvironment.runPreparation (SandboxRuntime.preparation (OnHost host)) sandbox
+            let! _, out, _ = shell sandbox "echo \"$BEHIND\""
+            do! sandbox.Dispose ()
+            Expect.equal (out.Trim ()) "prepared" "the command ran bare, when the entrypoint that it wrote was not there yet"
+        })
+
+        testCaseAsync "a `prepare` command holds what its sandbox holds, and nothing more" (async {
+            let outside = freshDir ()
+            let host =
+                { HostSpec.Prepare = Some [ "/bin/sh"; "-c"; sprintf "echo taken > %s" (quoted (outside + "/taken")) ]
+                  HostSpec.Entrypoint = None }
+            let! sandbox = startSandboxBehind host (policyIn (freshDir ()))
+            let! _ = Yession.Session.SessionEnvironment.runPreparation (SandboxRuntime.preparation (OnHost host)) sandbox
+            do! sandbox.Dispose ()
+            Expect.isFalse (TestFiles.exists (outside + "/taken")) "the profile of the sandbox refused a write outside its workspace"
         })
 
         // The OS temp directory on a Mac is reached through the symlink /var, and a profile
