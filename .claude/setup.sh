@@ -180,8 +180,16 @@ grep -q 'yession.cachix.org' "$HOME/.config/nix/nix.conf" 2>/dev/null || {
 materialize_nixpkgs() {
   nixpkgs_src=""
   local lock="$1" node rev narhash expected short tok q r hit tmp got
-  node="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); n=d["nodes"][d["nodes"]["root"]["inputs"]["nixpkgs"]]["locked"]; print(n["type"], n.get("rev",""), n.get("narHash",""))' "$lock" 2>/dev/null)" || return 0
+  node="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); n=d["nodes"][d["nodes"]["root"]["inputs"]["nixpkgs"]]["locked"]; print(n["type"], n.get("rev") or n.get("path",""), n.get("narHash",""))' "$lock" 2>/dev/null)" || return 0
   set -- $node
+  # devenv rewrites devenv.lock's node to the `path:` this function gave it (see the clean
+  # filter below), so a second run (the hook on a resume) reads its own answer back. It is
+  # still the answer while the path is in the store; dropping it wrote a devenv.local.yaml
+  # with no nixpkgs line, and devenv went to github for the input.
+  if [ "${1:-}" = path ]; then
+    if nix path-info "${2:-}" >/dev/null 2>&1; then nixpkgs_src="$2"; fi
+    return 0
+  fi
   [ "${1:-}" = github ] || return 0
   rev="$2" narhash="$3"
   expected="$(nix-store --print-fixed-path --recursive sha256 "$narhash" source)"
