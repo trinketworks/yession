@@ -1335,6 +1335,19 @@ module SessionTerminals =
         /// inside closed, escaped and reopened — nothing else is read inside single quotes.
         let quotedPath (path: string) : string = "'" + path.Replace ("'", "'\\''") + "'"
 
+        /// How a shell ends when it cannot enter the directory of its profile: a code that
+        /// nothing else here uses.
+        let profileExit = 97
+
+        /// The line that takes a shell to the directory of its profile, as the shell's own
+        /// `cd`. Its process starts where the sandbox puts one, and this line moves it. An
+        /// entrypoint (`nix develop`, `devenv shell`) finds its project from the directory
+        /// where it starts, so a process that started in the profile's directory would
+        /// start its entrypoint in the wrong place. A terminal's shell and a block that is
+        /// its own process both start with this line.
+        let enterProfile (path: string) : string =
+            " cd -- " + quotedPath path + " || exit " + string profileExit
+
         /// A lost terminal's marks are back: the queue is released, every client is told, and
         /// the block the loss left open is settled. ONE path for both ways back, because what
         /// a terminal owes on its return does not depend on who noticed.
@@ -1642,10 +1655,9 @@ module SessionTerminals =
                     // person's to fix, not ours to guess at.
                     let profileCwd =
                         ShellProfileProjection.workingDirectory sandbox profiles |> Option.map RootPath.value
-                    let profileExit = 97
                     let rcWith (cwd: string option) =
                         match cwd with
-                        | Some path -> " cd -- " + quotedPath path + " || exit " + string profileExit + "\n" + rc
+                        | Some path -> enterProfile path + "\n" + rc
                         | None -> rc
                     let spawnPty () =
                         (environmentFor sandbox).SpawnPty
@@ -2342,30 +2354,41 @@ module SessionTerminals =
                                             written <- written + kept.Length
                                             let kind = match stream with Stdout -> TranscriptOutput | Stderr -> TranscriptStderr
                                             emit terminalId terminal kind kept
+                                    // The profile applies here TOO (Plan 25). This path
+                                    // gets a fresh process per block and carries nothing
+                                    // between them, so it is applied per block — the same
+                                    // promise, kept by the only means this path has. Wiring
+                                    // only the pty would make a degraded terminal silently
+                                    // ignore the profile, and the difference between the two
+                                    // would surface as "the same command answers differently
+                                    // in two terminals".
+                                    //
+                                    // The same `cd` that a shell gets (`enterProfile`),
+                                    // and not the directory of the spawn. The process starts
+                                    // where the sandbox puts one, because the entrypoint of
+                                    // the sandbox starts there too. A directory that is gone
+                                    // ends the block with what `cd` said about it.
+                                    let profile =
+                                        terminal.Sandbox
+                                        |> Option.bind (fun sandbox ->
+                                            ShellProfileProjection.workingDirectory sandbox profiles
+                                            |> Option.map RootPath.value)
+                                    let line = Marks.spawnLineFor stdin lent command
                                     let! spawned =
                                         (environmentOf terminalId).Spawn
                                             { Executable = terminal.Spec.Executable
                                               // No shell to render a line and nothing to mark
                                               // its start: the loan, the wrapper, and every
                                               // byte the process prints is the block's.
-                                              Arguments = terminal.Spec.Arguments @ [ Marks.spawnLineFor stdin lent command ]
+                                              Arguments =
+                                                terminal.Spec.Arguments
+                                                @ [ match profile with
+                                                    | Some path -> enterProfile path + "\n" + line
+                                                    | None -> line ]
                                               Env = Map.empty
                                               // A block is work, entrypoint or no shell.
                                               Via = Entrypoint
-                                              // The profile applies here TOO (Plan 25). This
-                                              // path gets a fresh process per block and carries
-                                              // nothing between them, so it is applied per
-                                              // block — the same promise, kept by the only
-                                              // means this path has. Wiring only the pty would
-                                              // make a degraded terminal silently ignore the
-                                              // profile, and the difference between the two
-                                              // would surface as "the same command answers
-                                              // differently in two terminals".
-                                              WorkingDirectory =
-                                                terminal.Sandbox
-                                                |> Option.bind (fun sandbox ->
-                                                    ShellProfileProjection.workingDirectory sandbox profiles
-                                                    |> Option.map RootPath.value) }
+                                              WorkingDirectory = None }
                                             onChunk
                                     match spawned with
                                     | Error reason -> return CommandExecutionFailed reason
