@@ -558,4 +558,44 @@ let private timingTests =
             }
     ]
 
-let tests = testList "Telemetry" [ bindingTests; emitterTests; forwardingTests; auditTests; spanTests; timingTests ]
+let private shutdownTests =
+    let start = System.DateTimeOffset (2026, 1, 1, 0, 0, 0, System.TimeSpan.Zero)
+    let deadline = System.TimeSpan.FromSeconds 5.0
+    let shuttingDownAs (shutdown: unit -> Fable.Core.JS.Promise<unit>) : Telemetry.Emitter =
+        { Telemetry.disabled with Shutdown = shutdown }
+    testList "shutdown before a process ends (app/Telemetry.fs)" [
+        testCaseAsync "a shutdown that answers is over without the deadline" <|
+            async {
+                let clock = Support.virtualClock start
+                do! Telemetry.shutdownWithin clock.Clock deadline Telemetry.disabled
+            }
+
+        testCaseAsync "a shutdown that fails is over at once, and the failure stays here" <|
+            async {
+                let clock = Support.virtualClock start
+                let failing = shuttingDownAs (fun () -> Fable.Core.JS.Constructors.Promise.reject (exn "collector gone"))
+                do! Telemetry.shutdownWithin clock.Clock deadline failing
+            }
+
+        // The collector that accepts a connection and never answers: the process must still
+        // end, and no sooner than it said it would wait.
+        testCaseAsync "a shutdown that never answers is over at the deadline, not before" <|
+            async {
+                let clock = Support.virtualClock start
+                let never = shuttingDownAs (fun () -> Fable.Core.JS.Constructors.Promise.Create (fun _ _ -> ()))
+                let mutable over = false
+                Async.StartImmediate (
+                    async {
+                        do! Telemetry.shutdownWithin clock.Clock deadline never
+                        over <- true
+                    })
+                do! clock.Armed ()
+                clock.Advance (deadline - System.TimeSpan.FromMilliseconds 1.0)
+                Expect.isFalse over "still waiting a moment before the deadline"
+                clock.Advance (System.TimeSpan.FromMilliseconds 1.0)
+                Expect.isTrue over "and over at it"
+            }
+    ]
+
+let tests =
+    testList "Telemetry" [ bindingTests; emitterTests; forwardingTests; auditTests; spanTests; timingTests; shutdownTests ]

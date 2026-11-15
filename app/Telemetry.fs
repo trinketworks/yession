@@ -226,6 +226,37 @@ let emitTo (logger: OpenTelemetry.Logger) (sessionId: SessionId) (turnId: AgentT
            "yession.agent.turn.id", OpenTelemetry.AttributeValue.String (AgentTurnId.value turnId) ]
          @ modelAttributes usage.Models)
 
+/// How long a process waits for its telemetry to ship before it ends anyway. Shorter than
+/// the ten seconds a container runtime gives a stop before it kills, and long enough for one
+/// export to a collector that answers.
+let shutdownDeadline = System.TimeSpan.FromSeconds 5.0
+
+/// The emitter's shutdown, for a process that is ending: over when everything buffered has
+/// shipped, when the shutdown fails, or when `deadline` has passed, whichever is first.
+///
+/// It never throws and never outlasts the deadline, because the caller's next act is to end
+/// the process, and telemetry must not decide whether or when that happens. A collector
+/// that does not answer costs the deadline and what was buffered, nothing more.
+let shutdownWithin (clock: Clock) (deadline: System.TimeSpan) (emitter: Emitter) : Async<unit> =
+    Async.FromContinuations (fun (resolve, _, _) ->
+        let mutable settled = false
+        let settle () =
+            if not settled then
+                settled <- true
+                resolve ()
+        Async.StartImmediate (
+            async {
+                try
+                    do! Interop.awaitPromise (emitter.Shutdown ())
+                with _ -> ()
+                settle ()
+            })
+        Async.StartImmediate (
+            async {
+                do! clock.After deadline
+                settle ()
+            }))
+
 // --- Resource identity (code default, overridable by the standard env vars) --------------
 
 /// The operator's own `OTEL_RESOURCE_ATTRIBUTES`, as written. Read HERE rather than wherever

@@ -2792,6 +2792,47 @@ let private telemetryTests =
                 stub.Close ()
                 do! pm.StopAll ()
             }
+
+        // The Manager exports its metrics once a minute, so a launch it timed in its last
+        // minute reaches a collector only if the stop itself ships it. This case stops a
+        // real Manager seconds after its first launch: nothing but the stop can have sent
+        // what the collector then holds.
+        testCaseAsync "a Manager that SIGTERM stops ships the launch it timed, and still ends by the signal" <|
+            async {
+                let dataDir =
+                    sprintf "tests/Yession.Tests/out/.data/tel-stop-%d" (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+                let! stub = OtlpStub.start ()
+                let child =
+                    spawnBundle
+                        "app/out/Main.js"
+                        // No credential manager: this case is about a stop, and must run
+                        // on a box that has none.
+                        [ "--secrets"; "ephemeral"; "--data-dir"; dataDir; "--port"; "0" ]
+                        [ "OTEL_METRICS_EXPORTER", "otlp"
+                          "OTEL_EXPORTER_OTLP_ENDPOINT", stub.Url ]
+                        "app/SessionMain.js"
+                let mutable output = ""
+                let mutable ended : int option option = None
+                Readables.text (ChildProcessStreams.stdout child) (fun chunk -> output <- output + chunk)
+                ChildProcessStreams.onExit child (fun code -> ended <- Some code)
+                // Its boot ends with the default session launched: the launch is timed by now.
+                do! waitUntilWithin 30_000 "the Manager to finish its boot" (fun () ->
+                        output.Contains "management UI at" || ended.IsSome)
+                Expect.isNone ended (sprintf "the Manager is up, not gone: %s" output)
+
+                child.kill "SIGTERM" |> ignore
+                do! waitUntilWithin 15_000 "the Manager to end" (fun () -> ended.IsSome)
+                stub.Close ()
+
+                Expect.equal ended (Some None) "a signal ended it, as a supervisor that sent one expects, and no exit code"
+                let launches =
+                    stub.Posted ()
+                    |> List.filter (fun (path, body) ->
+                        path.EndsWith "/v1/metrics"
+                        && body.Contains "yession.session.launch.duration"
+                        && body.Contains "yession-manager")
+                Expect.isFalse (List.isEmpty launches) (sprintf "the launch's duration reached the collector: %A" (stub.Posted () |> List.map fst))
+            }
     ]
 
 // -----------------------------------------------------------------------------
