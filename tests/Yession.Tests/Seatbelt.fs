@@ -712,18 +712,90 @@ let backendTests =
                 (Some "http://yession:abc123@127.0.0.1:3128")
                 "the proxy's variables are laid over the command's own"
 
-        testCase "a spawn is the command as it was given, behind sandbox-exec and the profile" <| fun () ->
+        testCase "a sandbox is its supervisor, behind sandbox-exec and the profile" <| fun () ->
             Expect.equal
-                (Sandboxes.SeatbeltSandbox.argvFor "(version 1)" HostSpec.none (execOf "git" [ "log"; "--format=%s two words" ] Map.empty))
-                ("/usr/bin/sandbox-exec", [ "-p"; "(version 1)"; "git"; "log"; "--format=%s two words" ])
-                "no shell stands between an argv and its program"
+                (Sandboxes.SeatbeltSandbox.argvFor "(version 1)" "/opt/node" "/opt/yession/SandboxSupervisor.js")
+                ("/usr/bin/sandbox-exec", [ "-p"; "(version 1)"; "/opt/node"; "/opt/yession/SandboxSupervisor.js" ])
+                "one sandbox-exec holds the sandbox, and the supervisor is the first process in it"
+
+        testCase "the manifest of the supervisor is the nearest package.json above its entry" <| fun () ->
+            let there = Set.ofList [ "/opt/yession/package.json"; "/opt/package.json" ]
+            Expect.equal
+                (Sandboxes.SeatbeltSandbox.manifestAbove (fun path -> Set.contains path there) "/opt/yession/out/app/SandboxSupervisor.js")
+                (Some "/opt/yession/package.json")
+                "Node reads the first one that it finds on the way up"
+
+        testCase "a sandbox reads the tree that the supervisor is installed in, and its manifest" <| fun () ->
+            let reads =
+                Sandboxes.SeatbeltSandbox.supervisorReads
+                    (Map.ofList [ "HOME", "/Users/ada" ])
+                    (fun path -> path = "/opt/yession/package.json")
+                    "/opt/yession/out/app/SandboxSupervisor.js"
+            let wanted = [ "/opt/yession/out"; "/opt/yession/package.json" ]
+            Expect.equal (wanted |> List.filter (fun path -> List.contains path reads)) wanted "the output that holds the entry, and the one file above it"
+
+        testCase "a supervisor that a signal ended leaves processes that can still run, and the sandbox says so" <| fun () ->
+            Expect.stringContains
+                (Sandboxes.SeatbeltSandbox.afterReady (SandboxExited -1))
+                "Processes of the sandbox can still run"
+                "nothing made the stop, so each later command answers with these words"
+
+        testCase "a supervisor that made its stop and left leaves no process" <| fun () ->
+            Expect.equal
+                (Sandboxes.SeatbeltSandbox.leftBehind (SandboxExited Supervisor.ExitCode.ended))
+                None
+                "its stop ended each process before it left"
+
+        testCase "a supervisor whose stop gave up leaves processes" <| fun () ->
+            Expect.isSome
+                (Sandboxes.SeatbeltSandbox.leftBehind (SandboxExited Supervisor.ExitCode.left))
+                "some processes still took the ending signal"
+
+        testCase "a supervisor whose stop had no proof leaves processes" <| fun () ->
+            Expect.isSome
+                (Sandboxes.SeatbeltSandbox.leftBehind (SandboxExited Supervisor.ExitCode.unproven))
+                "the stop made no pass"
+
+        testCase "a command that is longer than a supervisor reads is refused in words" <| fun () ->
+            let long = Supervisor.Wire.Run (1, "/bin/echo", [ String.replicate Supervisor.Wire.lineLimit "x" ], None, Map.empty)
+            Expect.isError (Sandboxes.SeatbeltSandbox.lineFor long) "a supervisor would drop the line, and the command would get no answer"
+
+        testCase "a command goes to the supervisor as one line" <| fun () ->
+            let request = Supervisor.Wire.Run (1, "/bin/echo", [ "two words" ], None, Map.empty)
+            Expect.equal (Sandboxes.SeatbeltSandbox.lineFor request) (Ok (Supervisor.Wire.request request)) "the line that the wire makes of it"
+
+        testCase "a command goes to the supervisor as the argv that it was given" <| fun () ->
+            let request =
+                Sandboxes.SeatbeltSandbox.requestFor
+                    (proxyAt 3128 "abc123")
+                    emptyPolicy
+                    HostSpec.none
+                    4
+                    (execOf "git" [ "log"; "--format=%s two words" ] Map.empty)
+            let started =
+                match request with
+                | Supervisor.Wire.Run (id, executable, arguments, _, _) -> Some (id, executable, arguments)
+                | _ -> None
+            Expect.equal started (Some (4, "git", [ "log"; "--format=%s two words" ])) "no shell stands between an argv and its program"
 
         testCase "work under seatbelt stands behind its sandbox's entrypoint, inside the profile" <| fun () ->
             let host = { HostSpec.Prepare = None; HostSpec.Entrypoint = Some [ "devenv"; "shell"; "--" ] }
-            Expect.equal
-                (Sandboxes.SeatbeltSandbox.argvFor "(version 1)" host (execOf "dotnet" [ "build" ] Map.empty))
-                ("/usr/bin/sandbox-exec", [ "-p"; "(version 1)"; "devenv"; "shell"; "--"; "dotnet"; "build" ])
-                "the entrypoint is confined as the work it starts is"
+            let request =
+                Sandboxes.SeatbeltSandbox.requestFor (proxyAt 3128 "abc123") emptyPolicy host 4 (execOf "dotnet" [ "build" ] Map.empty)
+            let started =
+                match request with
+                | Supervisor.Wire.Run (_, executable, arguments, _, _) -> Some (executable, arguments)
+                | _ -> None
+            Expect.equal started (Some ("devenv", [ "shell"; "--"; "dotnet"; "build" ])) "the supervisor starts the entrypoint, so the profile confines it as it confines the work"
+
+        testCase "a command takes its own environment to the supervisor, with the proxy's variables over it" <| fun () ->
+            let exec = execOf "git" [ "push" ] (Map.ofList [ "LOAN", "of-this-command"; "HTTPS_PROXY", "http://elsewhere:1" ])
+            let request = Sandboxes.SeatbeltSandbox.requestFor (proxyAt 3128 "abc123") emptyPolicy HostSpec.none 4 exec
+            let carried =
+                match request with
+                | Supervisor.Wire.Run (_, _, _, _, environment) -> Map.tryFind "LOAN" environment, Map.tryFind "HTTPS_PROXY" environment
+                | _ -> None, None
+            Expect.equal carried (Some "of-this-command", Some "http://yession:abc123@127.0.0.1:3128") "what the command was given, and the route out that it cannot change"
 
         // One rule for the three backends that run on the host's own userland.
         testCase "work on the host stands behind the entrypoint its sandbox declares" <| fun () ->

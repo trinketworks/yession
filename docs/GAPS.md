@@ -364,25 +364,47 @@ The last section holds trust boundaries as sharp as the first section's.
     profile.
   - **A repo's `host:` sandbox has no memory limit and no process limit.** No backend on the
     host's own userland has one. A build there can use all of the host's memory.
-  - **A process that leaves its group stays when its sandbox stops.** The backend starts each
-    command as the leader of a process group. When the sandbox stops, the backend ends the
-    groups that still run (`Children.Registry` in `app/Sandboxes.fs`). A process that makes a
-    session of its own (`setsid`, a daemon) is in no group that the backend knows. An Android
-    emulator that a command started in that way ran on after its sandbox stopped, and kept
-    its memory. We measured two ways to find such a process on macOS 26.5. Each one fails:
-    - A second `sandbox-exec` with the same profile cannot end the process. To Seatbelt,
-      each `sandbox-exec` is a sandbox of its own, and the profile lets a process signal
-      only its sandbox (`same-sandbox`).
-    - A variable that marks the sandbox does not find each process. `ps -E` shows no
-      environment for a program that Apple signed.
-
-    Inside one `sandbox-exec`, a process does signal a child that made a session of its own.
-    So the fix is one `sandbox-exec` for each sandbox, with a process inside it that starts
-    each command and ends the others when the sandbox stops. Then the kernel decides which
-    processes are the sandbox's.
-  - **A command signals only what it started.** Each command is its own `sandbox-exec`, so
-    each command is a sandbox of its own to Seatbelt. `kill` in one block does not reach a
-    server that an earlier block started.
+  - **A command can end the supervisor of its sandbox.** One `sandbox-exec` holds a sandbox,
+    and a supervisor inside it starts each command and ends each process when the sandbox
+    stops (`app/Supervisor.fs`, and the
+    [ADR](decisions/2026-11-15-a-seatbelt-sandbox-is-one-sandbox-exec.md)). Each process of a
+    sandbox can signal each other one, and the supervisor is one of them. A command that
+    signals each process (`kill -9 -1`) ends the supervisor too, and so does the system when
+    memory is short. A supervisor that something ends from outside makes no stop. The
+    processes of the sandbox can still run, and the session cannot end them. The sandbox
+    then answers each command with that reason, until somebody stops it and starts it
+    again. `pkill node` does not match the supervisor, because its process has the title
+    `yession-supervisor`. A fault inside the supervisor is a different case: the supervisor
+    makes its stop before it leaves.
+  - **A block reads the environment of each other block of its sandbox, and the loan in
+    it.** One `sandbox-exec` holds each command of a sandbox, and a profile lets a process
+    read the arguments and the environment of the processes of its own sandbox (the sysctl
+    `kern.procargs2`). A block holds the loan of a person in its environment. So a second
+    block of the same sandbox reads a live loan, whoever wrote that block. While each
+    command was its own `sandbox-exec`, a profile that refuses that read between two
+    sandboxes kept the blocks apart. This is the boundary that the header of
+    `app/GitGateway.fs` states for a sandbox: one sandbox is one place of trust, and a
+    container has the same boundary. A loan still answers only on the route of the sandbox
+    that it was lent in. A case pins the read as a known limit.
+  - **A stop finds the processes of a sandbox by pid number.** The supervisor sends the
+    ending signal to each pid from 2 to 99999, and the kernel refuses it outside the
+    sandbox. Two passes in a row that find nothing end the stop, so the stop finds a child
+    that a process starts before it ends itself. A stop does not end each process of a set
+    that forks faster than the passes end them. Measured: a stop ended ten processes that
+    forked with no pause, in less than a second. The stop gives up after ten seconds, and
+    the session's log names the pids that still took the signal. Before each pass the
+    supervisor asks the kernel one question, which starts a process. A question that takes
+    more than two seconds is no answer, and then the stop makes no pass and the session
+    says so.
+  - **A cancel ends the process group of a command only while the first process of the
+    command runs.** After that, the system can give the number of the group to a different
+    process, so a cancel sends nothing. The command ends when the processes that it left
+    close its output, or when the sandbox stops.
+  - **A process that leaves its group stays when a sandbox of the `host` backend stops, or
+    of srt on a Mac.** Each command there is a child of the session, in a process group of
+    its own, and a stop ends the groups (`Children.Registry` in `app/Sandboxes.fs`). A
+    process that makes a session of its own is in no group that the backend knows. Only
+    the seatbelt backend has a supervisor.
   - **A `prepare:` command has no time limit, and nothing records what it prints.** The
     start of a `host:` sandbox waits for the command until it ends. A command that fails
     refuses the start, and the refusal quotes the end of what the command printed
