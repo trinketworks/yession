@@ -122,27 +122,49 @@ let spanResult
 /// metric names and their attribute values is this type: a case carries only what has a few
 /// possible values. A session's id is never one of them, because every value of an attribute
 /// is a time series at the backend, and the resource already says which process recorded it.
+/// The two parts of a session process's boot, which do not overlap and together are the
+/// whole of it.
+[<RequireQualifiedAccess>]
+type BootPhase =
+    /// From the system starting the process to the session's own code running: Node coming
+    /// up and every module of the session being read and evaluated.
+    | Load
+    /// From there to the readiness line: the stores opened, the log read, the Host
+    /// listening, the Manager told.
+    | Start
+
 [<RequireQualifiedAccess>]
 type Timing =
     /// One session launch, as the Manager waits for it: from spawning the process to its
     /// readiness line (`ready`), or to the launch failing (a timeout, an early exit, a build
     /// the Manager refuses).
     | SessionLaunch of ready: bool
+    /// One part of a session's boot, as the session itself measures it. Recorded only by a
+    /// boot that reached its readiness line.
+    | SessionBoot of BootPhase
 
 module Timing =
     /// The metric's name. Ours, under `yession.`: the conventions name no such duration.
     let name (timing: Timing) : string =
         match timing with
         | Timing.SessionLaunch _ -> "yession.session.launch.duration"
+        | Timing.SessionBoot _ -> "yession.session.boot.duration"
 
     let description (timing: Timing) : string =
         match timing with
         | Timing.SessionLaunch _ -> "From spawning a session process to its readiness line, or to the launch failing."
+        | Timing.SessionBoot _ -> "One part of a session process's boot: loading its code, then starting the session."
 
     let attributes (timing: Timing) : (string * AttributeValue) list =
         match timing with
         | Timing.SessionLaunch ready ->
             [ "yession.session.launch.outcome", AttributeValue.String (if ready then "ready" else "failed") ]
+        | Timing.SessionBoot phase ->
+            [ "yession.session.boot.phase",
+              AttributeValue.String (
+                  match phase with
+                  | BootPhase.Load -> "load"
+                  | BootPhase.Start -> "start") ]
 
     /// The bucket edges, in seconds, for every duration here: a launch is under a second on a
     /// warm machine and is given up on after fifteen (`LaunchTimeoutMs`), and the steps that
@@ -256,6 +278,24 @@ let shutdownWithin (clock: Clock) (deadline: System.TimeSpan) (emitter: Emitter)
                 do! clock.After deadline
                 settle ()
             }))
+
+/// From now on, a signal that stops this process ships its telemetry first.
+///
+/// On SIGTERM or SIGINT the emitter is shut down, within `shutdownDeadline`, and the process
+/// then sends itself the same signal with nothing listening for it. So it ends the way the
+/// signal would have ended it, and whoever sent the signal reads a process that the signal
+/// stopped. A second signal during the wait ends the process at once (`onceSignalled`).
+///
+/// For a process whose only work at a stop is this. One that has more to do at a stop owns
+/// its own ending and calls `shutdownWithin` from it.
+let endOnSignal (clock: Clock) (emitter: Emitter) : unit =
+    for signal in [ "SIGTERM"; "SIGINT" ] do
+        Fable.NodeExtras.Processes.onceSignalled signal (fun () ->
+            Async.StartImmediate (
+                async {
+                    do! shutdownWithin clock shutdownDeadline emitter
+                    Fable.NodeExtras.Processes.signalSelf signal
+                }))
 
 // --- Resource identity (code default, overridable by the standard env vars) --------------
 

@@ -18,7 +18,6 @@ module Yession.Host.Main
 // launching, resuming, and stopping further sessions arrives with the management UI
 // (Step 25).
 
-open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Link
 open Yession.Host
@@ -188,18 +187,9 @@ Async.StartImmediate(
         // OTEL_* env — stdout, a collector, or both; see app/Telemetry.fs). It emits its own
         // session-lifecycle signals and passes its OTEL_* environment through to each child.
         let telemetry = Telemetry.managerFromEnv ()
-        // A stop ships what the Manager has buffered, then ends the way the signal would
-        // have ended it: the signal is sent again with nothing listening, so a supervisor
-        // still reads a process that SIGTERM stopped. Its sessions end as they did before,
-        // when this process is gone and their stdin closes. A second signal during the wait
-        // ends the Manager at once (`onceSignalled`).
-        for signal in [ "SIGTERM"; "SIGINT" ] do
-            Processes.onceSignalled signal (fun () ->
-                Async.StartImmediate (
-                    async {
-                        do! Telemetry.shutdownWithin Clock.system Telemetry.shutdownDeadline telemetry
-                        Processes.signalSelf signal
-                    }))
+        // A stop ships what the Manager has buffered first (`endOnSignal`). Its sessions end
+        // as they did before, when this process is gone and their stdin closes.
+        Telemetry.endOnSignal Clock.system telemetry
         telemetry.Log "manager started" [ "yession.manager.data_dir", Telemetry.AttributeValue.String dataDir ]
         // Secrets (Plan 06): the OS credential manager keys the durable store; a host
         // without one runs in-memory only (loud at boot) — never a plaintext key file.

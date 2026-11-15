@@ -2793,6 +2793,42 @@ let private telemetryTests =
                 do! pm.StopAll ()
             }
 
+        // A session records its boot once, at its readiness line, and a reader exports once a
+        // minute. This session is stopped seconds after it booted, the way the Manager stops
+        // any session, so only the stop can have shipped what the collector then holds.
+        testCaseAsync "a session the Manager stops ships the boot it timed, in both its parts" <|
+            async {
+                let dataDir =
+                    sprintf "tests/Yession.Tests/out/.data/tel-boot-%d" (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+                let! stub = OtlpStub.start ()
+                let! pm =
+                    ProcessManager.create
+                        { ProcessManager.Options.defaults dataDir nodePath [ "app/SessionMain.js" ] with
+                            Strategy = Some Strategy.localhost }
+                let record = pm.CreateSession "tel-boot" "Tel boot" |> expect
+                let! launched =
+                    Support.withEnv
+                        [ "OTEL_METRICS_EXPORTER", Some "otlp"
+                          "OTEL_EXPORTER_OTLP_ENDPOINT", Some stub.Url ]
+                        (fun () -> pm.Launch record.SessionId)
+                launched |> expect |> ignore
+                let! stopped = pm.Stop record.SessionId
+                stopped |> expect
+                do! pm.StopAll ()
+                stub.Close ()
+
+                let boots =
+                    stub.Posted ()
+                    |> List.filter (fun (path, body) ->
+                        path.EndsWith "/v1/metrics"
+                        && body.Contains "yession.session.boot.duration"
+                        && body.Contains "yession-session")
+                    |> List.map snd
+                Expect.isFalse (List.isEmpty boots) (sprintf "the boot's duration reached the collector: %A" (stub.Posted () |> List.map fst))
+                let body = String.concat "" boots
+                Expect.isTrue (body.Contains "\"load\"" && body.Contains "\"start\"") "as the load and the start"
+            }
+
         // The Manager exports its metrics once a minute, so a launch it timed in its last
         // minute reaches a collector only if the stop itself ships it. This case stops a
         // real Manager seconds after its first launch: nothing but the stop can have sent
