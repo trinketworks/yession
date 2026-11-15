@@ -1219,21 +1219,18 @@ module private Children =
     let private endStdin (child: ChildProcess) : unit =
         try child.stdin.``end`` () with _ -> ()
 
-    /// The whole tree at once: the child is a group leader (`detached`), so its NEGATED pid
-    /// names the group.
-    let private killGroup (child: ChildProcess) : unit = Processes.kill (-(int child.pid)) "SIGKILL"
-
-    let private killChild (child: ChildProcess) : unit = child.kill "SIGKILL"
-
     /// The group first — `detached: true` made the child its own leader, so one signal to
-    /// `-pid` takes the whole tree. A child that never became a leader (a spawn that failed
-    /// before exec) has no group to signal, so the process itself is the fallback, and a
-    /// child that is already gone is what the outer ignore is for.
+    /// its group takes the whole tree. Where the kernel does not take that signal, the child
+    /// itself is the fallback, and a child that is already gone is what the outer ignore is
+    /// for.
+    ///
+    /// A child that did not start gets neither signal. It has no pid, and thus no group and
+    /// no process to end, and each of the two signals can reach the process group of this
+    /// session in its place. So the two verbs send nothing for such a child
+    /// (`ChildProcesses.signalGroup`, `signal`).
     let private killTree (child: ChildProcess) : unit =
-        try
-            killGroup child
-        with _ ->
-            try killChild child with _ -> ()
+        if not (ChildProcesses.signalGroup child "SIGKILL") then
+            try ChildProcesses.signal child "SIGKILL" |> ignore with _ -> ()
 
     /// A live registry of the children a sandbox spawned, so `Dispose` can take down
     /// whatever is still running when the session's environment stops.
@@ -1421,7 +1418,8 @@ module private Pty =
                             if not released then
                                 try m.native.resize (pty.master, cols, rows) with _ -> ()
                       // SIGHUP, as a terminal closing sends and as node-pty's own `kill` does.
-                      Kill = fun () -> try child.kill "SIGHUP" |> ignore with _ -> ()
+                      // A child that did not start gets none (`ChildProcesses.signal`).
+                      Kill = fun () -> try ChildProcesses.signal child "SIGHUP" |> ignore with _ -> ()
                       Exited = exited.Await }
             with ex -> Error ex.Message
 
@@ -3832,9 +3830,13 @@ module AgentSandbox =
     ///
     /// Every failure is swallowed on purpose — this is asked while something is being torn
     /// down, and a process that is already gone is the answer that was wanted.
+    ///
+    /// A child that did not start gets neither signal, and Node's `killed` stays `false` for
+    /// it. It has no group and no process, and Node's own `kill` of it can reach the process
+    /// group of this session (`ChildProcesses.signalGroup`, `signal`).
     let private killTree (child: ChildProcess) (signal: string) : unit =
-        try Node.Api.``process``.kill (-child.pid, !^signal) with _ -> ()
-        try child.kill signal with _ -> ()
+        ChildProcesses.signalGroup child signal |> ignore
+        try ChildProcesses.signal child signal |> ignore with _ -> ()
 
     // The SDK's `spawnClaudeCodeProcess` seam. The env arriving in `options.env` IS the
     // policy env (it flows from the query's `env` option), so the spawner passes it

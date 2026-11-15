@@ -130,6 +130,11 @@
     <!-- What a Docker case leaves on the daemon: nothing. Before the three suites that
          make docker objects. -->
     <Compile Include="DockerFixture.fs" />
+    <!-- A kill of a child that did not start, in a process that a wrong kill can end: what a
+         case and that program share, and then the program. The program is one of its own, as
+         StandInMain.fs is: its top level runs only in a child started on it. -->
+    <Compile Include="KillRehearsal.fs" />
+    <Compile Include="KillRehearsalMain.fs" />
     <Compile Include="Phase2.fs" />
     <Compile Include="DockerIntegration.fs" />
     <Compile Include="DevContainer.fs" />

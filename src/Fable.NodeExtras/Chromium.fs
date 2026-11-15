@@ -68,7 +68,7 @@ module Chromium =
     let private abandon (launched: Launched) : unit =
         // The child's own `kill`, not a signal to its pid: it does nothing to a child already
         // reaped, where a pid may since have been handed to somebody else's process.
-        launched.Process.kill "SIGKILL" |> ignore
+        ChildProcesses.signal launched.Process "SIGKILL" |> ignore
         Files.removeTreeRetrying 10 50 launched.Profile
 
     /// Stop the browser, wait until it and every helper it started have ended (`Gone`), and
@@ -88,7 +88,7 @@ module Chromium =
         promise {
             let child = launched.Process
             if not (ended child) then
-                child.kill "SIGKILL" |> ignore
+                ChildProcesses.signal child "SIGKILL" |> ignore
             do! launched.Gone
             try
                 Files.removeTree launched.Profile

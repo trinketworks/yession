@@ -187,8 +187,9 @@ let launch
 
         let running =
             { Pid = pid
-              Terminate = fun () -> child.kill "SIGTERM"
-              Kill = fun () -> child.kill "SIGKILL"
+              // Through `ChildProcesses.signal`: a session that did not start gets no signal.
+              Terminate = fun () -> ChildProcesses.signal child "SIGTERM" |> ignore
+              Kill = fun () -> ChildProcesses.signal child "SIGKILL" |> ignore
               OnExit =
                 fun waiter ->
                     match exited with

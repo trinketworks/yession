@@ -272,6 +272,21 @@ let private bare =
 let private standIn (act: StandIn.Act) (options: SpawnOptions) =
     spawn ``process``.execPath (StandIn.command act) options
 
+/// A child that did not start: no file system has its program. Node reports the failed spawn
+/// later, as `error`, and that event ends a process that does not listen for it.
+let private notStarted () =
+    let child = spawn "/yession-no-such-program" [] { bare with Detached = true }
+    ChildProcessStreams.onError child ignore
+    child
+
+/// `kill` reads this number as more than one process or one process group, so the binding
+/// asks the kernel nothing about it. SIGURG is the signal here because a process ignores it:
+/// a binding that did ask ends nothing. Not a case for -1: a binding that asked about that
+/// number would send the signal to each process of the user.
+let private refused (pid: int) (reading: string) =
+    testCase (sprintf "no signal goes to pid %d, which is %s" pid reading) <| fun () ->
+        Expect.equal (Processes.trySignal pid "SIGURG") (Some "ERR_OUT_OF_RANGE") "the binding refuses the number"
+
 let portsTests =
     testList "Node platform bindings, spawning (Fable.NodeExtras)" [
 
@@ -302,6 +317,52 @@ let portsTests =
 
         testCase "the process that started this one has a pid" <| fun () ->
             Expect.isTrue (Processes.parent () >= 1) "a process, or launchd when that process has gone"
+
+        // A pid that is not there. `int child.pid` reads it as 0, and `kill` reads 0 as the
+        // process group of the caller, so each verb that turns a child into a signal asks for
+        // the pid first. The signal is SIGURG, which a process ignores.
+        testCase "a child that did not start has no pid" <| fun () ->
+            Expect.equal (pid (notStarted ())) None "Node left the pid undefined"
+
+        testCaseAsync "a child that started has a pid" <| async {
+            let child = standIn (StandIn.Exit 0) bare
+            let! _ = until (fun () -> (exitCode child).IsSome)
+            Expect.isTrue (pid child |> Option.exists (fun number -> number >= 2)) "the pid that the system gave it"
+        }
+
+        testCase "a signal to a child that did not start goes to nobody" <| fun () ->
+            Expect.isFalse (ChildProcesses.signal (notStarted ()) "SIGURG") "no signal, in the turn of the failed spawn"
+
+        testCase "a signal to the group of a child that did not start goes to nobody" <| fun () ->
+            Expect.isFalse (signalGroup (notStarted ()) "SIGURG") "no signal, in the turn of the failed spawn"
+
+        testCaseAsync "a signal to a child that runs ends it" <| async {
+            let child = standIn StandIn.Linger bare
+            ChildProcesses.signal child "SIGKILL" |> ignore
+            let! _ = until (fun () -> (signalCode child).IsSome)
+            Expect.equal (signalCode child) (Some "SIGKILL") "the signal that the child got"
+        }
+
+        testCaseAsync "a signal to the group of a child that runs ends it" <| async {
+            let child = standIn StandIn.Linger { bare with Detached = true }
+            signalGroup child "SIGKILL" |> ignore
+            let! _ = until (fun () -> (signalCode child).IsSome)
+            Expect.equal (signalCode child) (Some "SIGKILL") "the signal that the leader of the group got"
+        }
+
+        refused 0 "the process group of the caller"
+        refused 1 "the first process of the system"
+
+        // The rule itself, with no signal and no kernel. The two cases above show that a verb
+        // asks the rule before it asks the kernel.
+        testCase "pid -1, which is each process that the caller may signal, names no one process" <| fun () ->
+            Expect.isFalse (Processes.namesOne (-1)) "the rule refuses the number"
+
+        testCase "pid 2 names one process, and -2 the process group of one" <| fun () ->
+            Expect.equal (Processes.namesOne 2, Processes.namesOne (-2)) (true, true) "the first numbers that `kill` reads as one target"
+
+        testCase "the verb that answers nothing throws for pid 0" <| fun () ->
+            Expect.throws (fun () -> Processes.kill 0 "SIGURG") "the binding refuses the number"
 
         // The options record is the whole reason this binding exists — Fable.Node types them
         // `obj` — so what is pinned is that each field arrives under the name Node reads it by.
