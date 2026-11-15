@@ -30,8 +30,8 @@ ADR above describes the first. A narrowed fork followed it.
 
 ## Decision
 
-Yession writes the profile. `SeatbeltProfile` builds it from a `SandboxPolicy` as data: one
-`(deny default)`, and then allows only. `SeatbeltSandbox` starts each command under it with
+Yession writes the profile. `SeatbeltProfile` builds it from a `SandboxPolicy` as data: the
+denies at its head, and then allows only. `SeatbeltSandbox` starts each command under it with
 `/usr/bin/sandbox-exec`.
 
 srt keeps the one thing that a profile cannot do. Seatbelt matches an address and a port. It
@@ -43,8 +43,8 @@ The backend is `seatbelt`. An operator selects it for the work sandbox
 (`YESSION_SESSION_WORK_BACKEND`). `srt` stays the default. `srt` also stays the confinement
 on Linux.
 
-The profile has allows only, because that lets a test check it. With no deny after the
-first line, a sandbox holds the union of its rules. `SeatbeltProfile.allows` answers from the
+The profile has allows only after its head, because that lets a test check it. With no deny
+after the head, a sandbox holds the union of its rules. `SeatbeltProfile.allows` answers from the
 rules alone. The cheap tier pins what a policy can and cannot put in a profile. The macOS job
 compares those answers with the kernel's answers.
 
@@ -78,6 +78,12 @@ and `getProxyAuthToken`. The proxy admits a client that has the token, with any 
   profile that srt 0.0.81 generates, transcribed. When a macOS release or a tool needs
   another rule, the system log shows the refusal. Add the rule there, and say what you
   measured.
+- **The profile is version 3 since 2026-11-16.** `(deny default)` of version 1 leaves the
+  arguments and the environment of each process of the user readable
+  (anthropics/sandbox-runtime#160). We measured that on 2026-11-15, after we wrote the
+  module. The profile is now version 3, and its fixed text is no longer a transcript of
+  srt's: it allows by name what version 3 refuses and a process needs
+  ([ADR](2026-11-16-a-seatbelt-profile-is-version-3.md)).
 - **Yession builds the proxy's environment** (`SeatbeltProxy.environment`). It sets eight
   variables. srt's wrapper sets twenty-six. A client that reads none of the eight does not
   use the proxy.

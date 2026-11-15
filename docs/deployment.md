@@ -174,6 +174,68 @@ reader. The loopback of a Mac is the host's own: a sandbox that holds the third 
 rule can dial each service that listens there. Write a path in a rule as the kernel sees it
 (`/private/tmp`, not `/tmp`).
 
+Each profile denies the arguments and the environment of a process outside the sandbox
+(`SeatbeltProfile.head` in `src/Yession.Domain/Seatbelt.fs`). A command holds the loan of a
+person in its environment, so that deny keeps a loan in its sandbox. A rule of yours comes
+after those denies. Seatbelt chooses between two rules for one operation in this order:
+
+1. A rule that names the operation wins over a rule that names a family with `*`.
+2. Between two rules for one name, a rule with a filter wins over a rule without one.
+3. In each other case, the later rule wins.
+
+So two kinds of rule open the arguments and the environment again for each process of your
+user:
+
+- a rule that allows `process-info*`, or one of its operations, with no filter.
+  `(allow process-info-pidinfo)` is enough. With the filter `(target pgrp)`, the rule opens
+  each process in the process group of a command, and a process outside the sandbox can be
+  one of them. The filters `(target self)`, `(target children)`, `(target same-sandbox)` and
+  `(target others)` opened no process outside the sandbox when we measured them.
+- a rule that allows `sysctl-read` with a filter that covers the names `kern.procargs`,
+  for example `(sysctl-name-prefix "kern.proc")`
+
+`(allow sysctl-read)` with no filter does not open them. The `process-list` rule above
+gives a sandbox the arguments of each process of the host: `pgrep -f` shows them.
+
+A profile is version 3 of Seatbelt's language, and `sandbox-exec` reads each rule of yours
+as version 3. It stops at a word that only version 1 knows. The sandbox then does not start,
+and the refusal shows the word. These are the words that we found, each with what to write
+in its place:
+
+| version 1 | version 3 |
+|---|---|
+| `ipc-posix-shm` | `ipc-posix-shm*` |
+| `ipc-posix-sem` | `ipc-posix-sem*` |
+| `iokit-open` | `iokit-open-user-client` |
+| `file-unlink` | `file-write-unlink` |
+| `file-issue-extension*` | `file-issue-extension` |
+| `(local unix-socket (subpath "/p"))` | `(subpath "/p")` |
+| `(remote unix-socket (subpath "/p"))` | `(subpath "/p")` |
+| `ipc-posix-shm-read-metadata` | nothing: the word allowed no operation |
+| `mach-per-user-lookup` | nothing: the word allowed no operation |
+
+Each form in the right column also compiles in version 1.
+
+Version 3 refuses more than version 1 did. A profile allows by name what each process needs
+(`SeatbeltProfile.essentials` gives each line and its reason). A sandbox had these
+operations under version 1, and no profile allows them now, because no workload that we
+measured needs one: `darwin-notification-post`, `fs-quota*`, `fs-snapshot-mount`,
+`iokit-get-properties`, `iokit-open-service`, `mach-bootstrap`, `mach-cross-domain-lookup`,
+`necp-client-open`, `nvram*`, `socket-ioctl`, `system-memorystatus-control` and
+`system-necp-client-action`. A profile also allows a call to a policy of the kernel
+(`system-mac-syscall`) for three policies only: `AMFI`, `Sandbox` and `Quarantine`. When a
+tool needs one of these, the system log names the operation that the kernel refused
+(`log stream --predicate 'sender == "Sandbox"'`), and a rule of yours can allow it, for
+example `(allow iokit-get-properties)`.
+
+We measured a profile on macOS 26.5.2 only. Nobody measured macOS 13, 14 or 15, where
+`(deny default)` can leave a different set of operations open. Each word that version 3
+added to a profile is in Apple's own profiles of macOS 12, or stands behind a guard that
+leaves it out where macOS does not know it (`SeatbeltProfile.head`). When `sandbox-exec`
+cannot read a profile, the sandbox does not start, and its refusal ends with the words of
+`sandbox-exec`: `seatbelt sandbox failed: the supervisor of this sandbox ended with code 65
+before it was ready. It said: sandbox-exec: ...`.
+
 Only a sandbox under the `seatbelt` backend takes a rule. Each other confining backend
 withholds it. A sandbox that `uses:` the resource then refuses to start, and a sandbox that
 `wants:` it starts without the rule. So do not list such a resource under `always:` on a host

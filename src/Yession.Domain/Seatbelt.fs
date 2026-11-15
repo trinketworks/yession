@@ -3,11 +3,63 @@ namespace Yession.Domain.Sandboxes
 // A sandbox policy as a Seatbelt profile: the text that macOS's `sandbox-exec` confines a
 // process with. Written here, as data, and not by a library.
 //
-// A profile is `(deny default)` and then ALLOWS, and nothing else. That one constraint is
-// what makes it checkable. With no deny after the first line there is no carve-out, so what
-// a sandbox holds is the union of its rules, the order they are written in means nothing,
+// A profile is its head and then ALLOWS, and nothing else. The head is the denies of
+// `SeatbeltProfile.head`. That one constraint is what makes a profile checkable. With no
+// deny after the head there is no carve-out among the allows, so what a sandbox holds of
+// files, sockets and ports is the union of its rules, the order of the rules means nothing,
 // and one rule can be read on its own. Every property of this module follows from that, and
-// `render` has no way to write a second deny.
+// `render` has no way to write a deny after the head.
+//
+// The profile is version 3 of Seatbelt's language, because of what `(deny default)` refuses
+// in each version. Measured on macOS 26.5.2, with the kernel's answer for each operation
+// (`sandbox_check`), and with real processes as witnesses:
+//
+// - In version 1, `(deny default)` leaves 55 operations open. A process then reads the
+//   arguments and the environment of each process of its user, in its sandbox and outside
+//   it (the sysctl `kern.procargs2`, `proc_pidinfo`, `proc_pidpath`). A command holds a
+//   credential in its environment while it has a loan (`app/GitGateway.fs`). So each sandbox
+//   on the host could read the loans of each other sandbox, and the environment of the
+//   process that started it.
+// - In version 3, `(deny default)` leaves 15 operations open, and it refuses each system
+//   call. So a profile allows by name what a process needs. `essentials` holds those allows,
+//   and says for each one why it is there. `head` says what a profile does with each of the
+//   15. The decision record of 2026-11-16 in docs/decisions, "a Seatbelt profile is
+//   version 3", gives the alternatives.
+// - The head denies `process-info*` by name, although the default of version 3 refuses those
+//   operations on the macOS that we measured. The line holds on a macOS whose default is
+//   different. The deny has no filter. A report says that with the filter `(target others)`
+//   a process in the process group of the sandbox stays readable
+//   (anthropics/sandbox-runtime#160). With no filter, the kernel refuses the process that
+//   started the sandbox, in the same process group and in a different session. The
+//   essentials allow the operations again for the processes of the same sandbox.
+// - The kernel gives `kern.procargs2` when one of two checks allows it:
+//   `process-info-pidinfo` or `sysctl-read`. A rule of an operator that allows each sysctl
+//   thus opened the environment of an outside process again. So the head also denies
+//   `sysctl-read` for the names that start with `kern.procargs`.
+//
+// Which rule wins when two rules cover one operation. Measured, and the same in version 1
+// and in version 3:
+//
+// 1. A rule that names the operation wins over a rule that names a family with `*`. The
+//    order of the two does not change that, and their filters do not.
+// 2. Between two rules for one name, a rule with a filter wins over a rule without one, in
+//    either order. That is why the allow for the same sandbox holds against the deny of
+//    `process-info*`, and why the deny of `kern.procargs` holds against an allow of each
+//    sysctl.
+// 3. In each other case, the later rule wins.
+//
+// A rule of an operator comes after the head. So two kinds of rule open the environment of
+// an outside process again. The first is an allow of `process-info*`, or of one of its
+// operations, with no filter: `(allow process-info-pidinfo)` is enough. With the filter
+// `(target pgrp)`, such a rule opens each process in the process group of the command, and
+// a process outside the sandbox can be one of them. The second is an allow of `sysctl-read`
+// with a filter that covers `kern.procargs`. The operator answers for such a rule, as for
+// each rule that it writes, and docs/deployment.md names these two.
+//
+// An operator writes a rule in version 3 too, because one profile has one version.
+// `sandbox-exec` does not know some words of version 1: the operations `ipc-posix-shm`,
+// `ipc-posix-sem` and `iokit-open`, and the filter `unix-socket`. A rule with such a word
+// stops the start of its sandbox. docs/deployment.md gives the word of version 3 for each.
 //
 // The rules come from two places, and the two stay apart. `essentials` is what any process
 // needs before it can run at all (fork, a few Mach services, the sysctls a runtime reads at
@@ -238,13 +290,83 @@ module SeatbeltProfile =
     /// and the library lists only `hw.cachelinesize_compat`. Its rule for reading and
     /// writing `/dev/null` is not here, because a file to read or write is a
     /// `SeatbeltRule` (`baseline`), never a line of this text.
+    ///
+    /// That source is version 1. Version 3 changes the text in four ways:
+    ///
+    /// - It refuses eleven operations that version 1 leaves open and a process needs. Two
+    ///   of them are the families of system calls. The second block of the text allows the
+    ///   eleven. For ten of them, the line says what stops without it. We measured each of
+    ///   those lines: a workload ran with each other line, and without that one.
+    /// - The eleventh is a call to a policy of the kernel (`system-mac-syscall`). The text
+    ///   allows it by the name of the policy, for three policies, and a workload asks no
+    ///   other policy. Without the line for `AMFI` or for `Quarantine`, something stops,
+    ///   and the line says what. Without the line for `Sandbox`, nothing that we measured
+    ///   stops: sh and `whoami` ran. Each process asks that policy about its own sandbox
+    ///   when it starts, and a refusal there changes what each process does. Nobody
+    ///   measured where that shows. So the line stays, for the reason that `sandbox-check`
+    ///   stays open (`head`).
+    /// - It does not know three names of version 1. `ipc-posix-shm` and `ipc-posix-sem` are
+    ///   now the families `ipc-posix-shm*` and `ipc-posix-sem*`. `iokit-open` is now
+    ///   `iokit-open-user-client`, which is the one operation that the old name allowed.
+    /// - It refuses `iokit-get-properties`, which that source allows by name. The line is
+    ///   not here, because no workload needs it: the Android emulator asks for two
+    ///   properties of the graphics driver, and runs without them.
+    ///
+    /// Version 3 also refuses these operations, which version 1 leaves open, and no line
+    /// here allows them, because no workload that we measured needs one:
+    /// `darwin-notification-post`, `fs-quota*`, `fs-snapshot-mount`, `iokit-open-service`,
+    /// `mach-bootstrap`, `mach-cross-domain-lookup`, `necp-client-open`, `nvram*`,
+    /// `socket-ioctl`, `system-memorystatus-control` and `system-necp-client-action`. The
+    /// emulator attempts four of them, and runs without them. An operator can allow one for
+    /// a sandbox with a rule (`SeatbeltRule.Written`).
     let essentials : string =
-        """; Processes: run and fork, and see and signal only the processes of this sandbox.
+        """; Processes: run and fork. Signal only the processes of this sandbox. Read the
+; arguments and the environment of only those: the head denies process-info* and the
+; sysctls kern.procargs*, and the rule below allows process-info* for this sandbox.
+; The kern.proc sysctls further down still give the pid and the name of each process
+; of the host.
 (allow process-exec)
 (allow process-fork)
 (allow process-info* (target same-sandbox))
 (allow signal (target same-sandbox))
 (allow mach-priv-task-port (target same-sandbox))
+
+; What version 3 refuses until a rule allows it. Each line but one says what stops
+; without it. The line for the policy Sandbox is that one, and it gives its own reason.
+;
+; System calls, each family whole. No rule here names a call by its number.
+; Without the first, sandbox-exec cannot start a program. Without the second, each
+; program ends with a segmentation fault.
+(allow syscall-unix)
+(allow syscall-mach)
+; fcntl. Without it sh, git and node abort at start.
+(allow system-fcntl)
+; Calls to a policy of the kernel, by the name of the policy.
+; AMFI: the loader asks it at start. Without it the loader ignores each DYLD variable.
+(allow system-mac-syscall (mac-policy-name "AMFI"))
+; Sandbox: each process asks it about its own sandbox at start. Nothing that we
+; measured stops without this line. It is here because a refusal at the start of each
+; process changes what each process does, and nobody measured where that shows.
+(allow system-mac-syscall (mac-policy-name "Sandbox"))
+; Quarantine: cp and tar ask it when they copy a file. Without it the copy of a file
+; that has the quarantine mark has no mark.
+(allow system-mac-syscall (mac-policy-name "Quarantine"))
+; The lookup of a path. Without it no program starts. The rule has no filter: a filter
+; by path refuses each path through the links /etc, /tmp and /var, and ls of /.
+(allow file-test-existence)
+; A program maps its libraries. Without it git and node abort.
+(allow file-map-executable)
+; Without the first, a copy that shares its blocks fails (cp -c). Without the second,
+; a hard link fails (ln). The kernel still asks the rules about files: neither brings
+; in a file that the sandbox cannot read.
+(allow file-clone)
+(allow file-link)
+; Code that a runtime makes while it runs. Without it Node cannot reserve memory for
+; its code, and ends.
+(allow dynamic-code-generation)
+; The options of a socket. Without them Node cannot make a TCP listener or a client.
+(allow socket-option-get)
+(allow socket-option-set)
 
 (allow user-preference-read)
 
@@ -268,15 +390,14 @@ module SeatbeltProfile =
 )
 
 ; POSIX shared memory and semaphores.
-(allow ipc-posix-shm)
-(allow ipc-posix-sem)
+(allow ipc-posix-shm*)
+(allow ipc-posix-sem*)
 
-(allow iokit-open
+(allow iokit-open-user-client
   (iokit-registry-entry-class "IOSurfaceRootUserClient")
   (iokit-registry-entry-class "RootDomainUserClient")
   (iokit-user-client-class "IOSurfaceSendRight")
 )
-(allow iokit-get-properties)
 
 ; A system socket that carries no network traffic.
 (allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))
@@ -563,16 +684,78 @@ module SeatbeltProfile =
         | SeatbeltRule.Write where -> [ sprintf "(allow file-write* %s)" (filter where) ]
         | SeatbeltRule.DirectoryMetadata -> [ "(allow file-read-metadata (vnode-type DIRECTORY))" ]
         | SeatbeltRule.UnixSockets -> [ "(allow system-socket (socket-domain AF_UNIX))" ]
+        // Version 3 has no word `unix-socket`. A filter by path on a network operation is
+        // a unix socket: measured, the rule opens a socket at the path, no socket at
+        // another path, and no TCP listener.
         | SeatbeltRule.Socket path ->
-            [ sprintf "(allow network-bind (local unix-socket (subpath %s)))" (quoted path)
-              sprintf "(allow network-outbound (remote unix-socket (subpath %s)))" (quoted path) ]
+            [ sprintf "(allow network-bind (subpath %s))" (quoted path)
+              sprintf "(allow network-outbound (subpath %s))" (quoted path) ]
         | SeatbeltRule.LoopbackPort port -> [ sprintf "(allow network-outbound (remote ip \"localhost:%d\"))" port ]
         | SeatbeltRule.Written rule -> [ SeatbeltAllow.text rule ]
 
-    /// The profile as the text `sandbox-exec` reads: the one deny, the essentials, and
-    /// then one allow for each rule. The rules are written in the order a set keeps them,
-    /// so one profile is one text on both runtimes.
+    /// The first lines of each profile: the version, and the only denies.
+    ///
+    /// `(deny default)` of version 3 refuses each operation but 15 (macOS 26.5.2). The lines
+    /// after it are denies by name:
+    ///
+    /// - `process-info*` and the sysctls `kern.procargs`: the arguments and the environment
+    ///   of a process. The header of this file gives the measurements, and says why the
+    ///   first of the two has no filter.
+    /// - Eight of the 15 operations that the default leaves open. No workload attempts one
+    ///   of them. With each of the eight denied, the kernel reported no refusal of one in
+    ///   these runs: a shell with the usual tools, `pgrep`, git, Node, the setup of a
+    ///   `devenv` shell, a .NET build with its tests, the Android emulator with its tests,
+    ///   and the Mac cases of this repository.
+    ///
+    /// Each of the eight stands behind `(when (defined? 'name) ...)`. `sandbox-exec` stops at
+    /// a name that it does not know, and six of the eight names are newer than the oldest
+    /// macOS that runs a session. Public lists say what each release changed in the Sandbox
+    /// kernel extension. The list for macOS 15.4 adds `process-info-sandbox-container`. For
+    /// the other five names, the lists that we found are of iOS, which has the same
+    /// extension: iOS 26.0 adds `consume-extension`, `process-iopolicy-get` and
+    /// `process-iopolicy-set`, and iOS 26.4 adds `file-graft` and `file-ungraft`. We found no
+    /// list for the macOS of those two numbers. With the guard, a macOS that does not know a
+    /// name does not read its deny. Apple's own base profile (`system.sb`) guards a name in
+    /// the same way. A Mac case asks the macOS that runs it about each of the eight names.
+    ///
+    /// The other seven stay open, because a workload attempts each one. This is what a deny
+    /// of each one does:
+    ///
+    /// - `syscall-mig`: each program ends at start.
+    /// - `mach-derive-port`: a program cannot ask for the name of its user. `whoami` prints
+    ///   the number.
+    /// - `process-codesigning`: `/bin/sh` cannot read its own code signature, and says so
+    ///   each time that it starts.
+    /// - `file-lock`: devenv cannot lock its files, and does not start a shell.
+    /// - `mach-task-exception-port-set`: the .NET runtime does not start, and the Android
+    ///   emulator finds no hypervisor.
+    /// - `sandbox-check`: each process asks about its own sandbox when it starts. The
+    ///   kernel refused 1475 such questions in the first seven runs of the list above.
+    /// - `mach-task-special-port-set`: each process sets its debug control port when it
+    ///   starts. The kernel refused 1164 of those calls in the same seven runs.
+    ///
+    /// For the last two, no workload failed with the deny. They stay open because a deny
+    /// that makes a refusal in a workload changes what that workload does, and nobody
+    /// measured where that shows.
+    ///
+    /// Each line of a profile after the head is an allow.
+    let head : string list =
+        [ "(version 3)"
+          "(deny default)"
+          "(deny process-info*)"
+          "(deny sysctl-read (sysctl-name-prefix \"kern.procargs\"))"
+          "(when (defined? 'consume-extension) (deny consume-extension))"
+          "(when (defined? 'file-graft) (deny file-graft))"
+          "(when (defined? 'file-ungraft) (deny file-ungraft))"
+          "(when (defined? 'mach-task-special-port-get) (deny mach-task-special-port-get))"
+          "(when (defined? 'process-info-sandbox-container) (deny process-info-sandbox-container))"
+          "(when (defined? 'process-iopolicy-get) (deny process-iopolicy-get))"
+          "(when (defined? 'process-iopolicy-set) (deny process-iopolicy-set))"
+          "(when (defined? 'system-privilege) (deny system-privilege))" ]
+
+    /// The profile as the text `sandbox-exec` reads: the head, the essentials, and then
+    /// one allow for each rule. It writes the rules in the order that a set keeps them, so
+    /// one profile is one text on both runtimes.
     let render (profile: SeatbeltProfile) : string =
-        [ "(version 1)"; "(deny default)"; essentials ]
-        @ (profile.Held |> Set.toList |> List.collect written)
+        head @ [ essentials ] @ (profile.Held |> Set.toList |> List.collect written)
         |> String.concat "\n"

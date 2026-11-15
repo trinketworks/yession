@@ -2,8 +2,8 @@ module Yession.Tests.Seatbelt
 
 // A policy as a Seatbelt profile, under Hedgehog.
 //
-// A profile is one deny and then allows, so what it holds is a set of rules and every
-// question about it is decidable from that set: no filesystem, no `sandbox-exec`, no Mac.
+// A profile is the denies at its head and then allows, so what it holds is a set of rules and
+// every question about it is decidable from that set: no filesystem, no `sandbox-exec`, no Mac.
 // So this suite needs no capability and runs on both runtimes. What it cannot say is that
 // the kernel reads the text the way `SeatbeltProfile.allows` reads the rules. That is a
 // question for a box with a kernel to ask, and it belongs to the backend that spawns
@@ -325,8 +325,12 @@ let tests =
                 "the one policy that asks for no confinement of files gets none"
 
         // --- the text -------------------------------------------------------------------
+        //
+        // No Mac runs the cheap tier, and no pull request runs the cases that ask a kernel. So
+        // the cases below hold the text of a profile line by line. A line that changes here is
+        // a line that somebody must measure again on a Mac (`check Srt --only Seatbelt`).
 
-        check "a profile denies once, at its head" <| fun () ->
+        check "a profile denies at its head, and nowhere after it" <| fun () ->
             property {
                 let! host = genHost
                 let! policy = genPolicy
@@ -335,8 +339,162 @@ let tests =
                     |> List.indexed
                     |> List.filter (fun (_, line) -> line.Contains "(deny")
                     |> List.map fst
-                Expect.equal denies [ 1 ] "the second line, and no line after it"
+                Expect.equal
+                    denies
+                    [ 1 .. List.length SeatbeltProfile.head - 1 ]
+                    "each line of the head after the version, and no line after the head"
             }
+
+        // The version decides what `(deny default)` refuses. Version 1 leaves open each system
+        // call, and the operations that read the arguments and the environment of a process.
+        // The header of `Seatbelt.fs` gives the measurements.
+        check "a profile is in version 3 of Seatbelt's language, and denies by default" <| fun () ->
+            property {
+                let! host = genHost
+                let! policy = genPolicy
+                Expect.equal
+                    (linesOf (profileOf host policy) |> List.truncate 2)
+                    [ "(version 3)"; "(deny default)" ]
+                    "the version, and then the default"
+            }
+
+        // `sandbox-exec` reads the whole profile as version 3, and it stops at a word that
+        // only version 1 knows. These are the words that we measured: three operations, and
+        // two words of a filter.
+        check "a profile holds no word that only version 1 of the language knows" <| fun () ->
+            property {
+                let! host = genHost
+                let! policy = genPolicy
+                let old = Set.ofList [ "ipc-posix-shm"; "ipc-posix-sem"; "iokit-open"; "unix-socket"; "unix" ]
+                let words =
+                    linesOf (profileOf host policy)
+                    |> List.filter (fun line -> not (line.TrimStart().StartsWith ";"))
+                    |> List.collect (fun line -> (fst (read line)).Split ([| ' '; '('; ')' |]) |> List.ofArray)
+                    |> Set.ofList
+                Expect.equal (Set.intersect words old) Set.empty "each word is one that version 3 knows"
+            }
+
+        // The default of version 3 refuses these operations on the macOS that we measured.
+        // The lines hold on a macOS whose default is different, and against a rule of an
+        // operator that allows each sysctl. They are in the form that we measured: the first
+        // deny has no filter, the allow is for the same sandbox, and the second deny names
+        // the sysctls.
+        check "a profile refuses the arguments and the environment of a process, and allows those of its own sandbox" <| fun () ->
+            property {
+                let! host = genHost
+                let! policy = genPolicy
+                let lines = linesOf (profileOf host policy)
+                let missing =
+                    [ "(deny process-info*)"
+                      "(allow process-info* (target same-sandbox))"
+                      "(deny sysctl-read (sysctl-name-prefix \"kern.procargs\"))" ]
+                    |> List.filter (fun line -> not (List.contains line lines))
+                Expect.equal missing [] "each of the three lines is one line of the profile"
+            }
+
+        // `(deny default)` of version 3 leaves 15 operations open. No workload attempts these
+        // eight, so the head denies each one by name. `SeatbeltProfile.head` gives the
+        // measurements. Six of the names are newer than the oldest macOS that runs a session,
+        // and `sandbox-exec` stops at a name that it does not know. So each deny stands
+        // behind a guard, and a macOS that does not know the name does not read the deny.
+        testCase "a profile denies each operation that its default leaves open and no workload attempts, where macOS knows the name" <| fun () ->
+            let lines = linesOf (profileOf plainHost emptyPolicy)
+            let missing =
+                [ "consume-extension"
+                  "file-graft"
+                  "file-ungraft"
+                  "mach-task-special-port-get"
+                  "process-info-sandbox-container"
+                  "process-iopolicy-get"
+                  "process-iopolicy-set"
+                  "system-privilege" ]
+                |> List.filter (fun operation ->
+                    not (List.contains (sprintf "(when (defined? '%s) (deny %s))" operation operation) lines))
+            Expect.equal missing [] "each of the eight is one deny of the head, behind its guard"
+
+        // A line with one name in its guard and a different name in its deny is a deny that
+        // no macOS reads, or a profile that does not compile.
+        testCase "each guard of the head names the operation that its line denies" <| fun () ->
+            let unlike =
+                SeatbeltProfile.head
+                |> List.filter (fun line -> line.Contains "(when")
+                |> List.filter (fun line ->
+                    match line.Split ([| ' '; '('; ')'; '\'' |]) |> List.ofArray |> List.filter (fun word -> word <> "") with
+                    | [ "when"; "defined?"; guarded; "deny"; denied ] -> guarded <> denied
+                    | _ -> true)
+            Expect.equal unlike [] "one name in each line, in the guard and in the deny"
+
+        // A workload attempts each of these seven, and `SeatbeltProfile.head` says what a deny
+        // of each one stops. A deny closes an operation by the name of the operation, behind
+        // a guard or not, or by the name of a family that holds it, for example `mach-task*`.
+        // `(deny default)` is not such a deny: it leaves these seven open.
+        testCase "a profile denies no operation that its default leaves open and a workload attempts" <| fun () ->
+            let denied =
+                linesOf (profileOf plainHost emptyPolicy)
+                |> List.filter (fun line -> line.Contains "(deny")
+                |> List.collect (fun line ->
+                    let shape = fst (read line)
+                    shape.Substring(shape.IndexOf "(deny").Split ([| ' '; '('; ')' |]) |> List.ofArray)
+                |> List.filter (fun word -> word <> "" && word <> "deny" && word <> "default")
+            let closes (word: string) (operation: string) : bool =
+                word = operation || (word.EndsWith "*" && operation.StartsWith (word.TrimEnd '*'))
+            let closed =
+                [ "syscall-mig"
+                  "mach-derive-port"
+                  "process-codesigning"
+                  "file-lock"
+                  "mach-task-exception-port-set"
+                  "sandbox-check"
+                  "mach-task-special-port-set" ]
+                |> List.filter (fun operation -> denied |> List.exists (fun word -> closes word operation))
+            Expect.equal closed [] "each of the seven stays open"
+
+        // Version 3 refuses each of these until a rule allows it. `SeatbeltProfile.essentials`
+        // says why each line is there.
+        testCase "a profile allows what version 3 refuses and each process needs" <| fun () ->
+            let lines = linesOf (profileOf plainHost emptyPolicy)
+            let missing =
+                [ "(allow syscall-unix)"
+                  "(allow syscall-mach)"
+                  "(allow system-fcntl)"
+                  "(allow system-mac-syscall (mac-policy-name \"AMFI\"))"
+                  "(allow system-mac-syscall (mac-policy-name \"Sandbox\"))"
+                  "(allow system-mac-syscall (mac-policy-name \"Quarantine\"))"
+                  "(allow file-test-existence)"
+                  "(allow file-map-executable)"
+                  "(allow file-clone)"
+                  "(allow file-link)"
+                  "(allow dynamic-code-generation)"
+                  "(allow socket-option-get)"
+                  "(allow socket-option-set)" ]
+                |> List.filter (fun line -> not (List.contains line lines))
+            Expect.equal missing [] "each line is one line of the profile"
+
+        // Version 3 refuses each of these too, and no workload needs one, so no line of a
+        // profile allows one. The first is the family of the calls to each policy of the
+        // kernel: a profile names three policies, and not the family.
+        testCase "the fixed text of a profile allows no operation that version 3 refuses and no workload needs" <| fun () ->
+            // The rules, and not the comments: a comment can name an operation.
+            let rules =
+                SeatbeltProfile.essentials.Split '\n'
+                |> Array.filter (fun line -> not (line.TrimStart().StartsWith ";"))
+                |> String.concat "\n"
+            let allowed =
+                [ "(allow system-mac-syscall)"
+                  "darwin-notification-post"
+                  "fs-quota"
+                  "fs-snapshot-mount"
+                  "iokit-get-properties"
+                  "iokit-open-service"
+                  "mach-bootstrap"
+                  "mach-cross-domain-lookup"
+                  "necp-client-open"
+                  "nvram"
+                  "socket-ioctl"
+                  "system-memorystatus-control"
+                  "system-necp-client-action" ]
+                |> List.filter (fun word -> rules.Contains word)
+            Expect.equal allowed [] "no rule of the fixed text names one of them"
 
         check "a path is read back from the profile as the path it was" <| fun () ->
             property {
@@ -714,8 +872,8 @@ let backendTests =
 
         testCase "a sandbox is its supervisor, behind sandbox-exec and the profile" <| fun () ->
             Expect.equal
-                (Sandboxes.SeatbeltSandbox.argvFor "(version 1)" "/opt/node" "/opt/yession/SandboxSupervisor.js")
-                ("/usr/bin/sandbox-exec", [ "-p"; "(version 1)"; "/opt/node"; "/opt/yession/SandboxSupervisor.js" ])
+                (Sandboxes.SeatbeltSandbox.argvFor "(version 3)" "/opt/node" "/opt/yession/SandboxSupervisor.js")
+                ("/usr/bin/sandbox-exec", [ "-p"; "(version 3)"; "/opt/node"; "/opt/yession/SandboxSupervisor.js" ])
                 "one sandbox-exec holds the sandbox, and the supervisor is the first process in it"
 
         testCase "the manifest of the supervisor is the nearest package.json above its entry" <| fun () ->
