@@ -201,16 +201,22 @@ let private carryTests =
                       // The loan named a lender HERE; github.com has no use for it.
                       GitGateway.loanHeader, "s3cret" ]
             Expect.equal
-                (names (GitGateway.upstreamHeaders sent "Basic lent"))
+                (names (GitGateway.upstreamHeaders sent (Some "Basic lent")))
                 [ "user-agent"; "content-type"; "content-encoding"; "authorization" ]
                 "what git said about its BODY goes up; what it said about its connection, and its loan, does not"
 
         // The sandbox holds no credential, so anything it managed to put in `authorization`
         // is its own invention — and would be what github.com judged if it were carried.
         testCase "the credential that goes up is the lender's, whatever arrived" <| fun () ->
-            let carried = GitGateway.upstreamHeaders (headers [ "authorization", "Basic c2FuZGJveA==" ]) "Basic lent"
+            let carried = GitGateway.upstreamHeaders (headers [ "authorization", "Basic c2FuZGJveA==" ]) (Some "Basic lent")
             Expect.equal (names carried) [ "authorization" ] "one authorization, not two"
             Expect.equal (valueOf "authorization" carried) (Some "Basic lent") "and it is the lender's"
+
+        // A request that no live loan answers for goes up with no credential. What its git
+        // put in `authorization` is not a loan, so it does not go up in the place of one.
+        testCase "a request that no loan answers for goes up with no authorization, whatever arrived" <| fun () ->
+            let carried = GitGateway.upstreamHeaders (headers [ "authorization", "Basic c2FuZGJveA==" ]) None
+            Expect.equal (names carried) [] "no authorization header"
 
         // Only the three that describe the upstream connection this process terminated. The
         // rest is github.com talking to git, including a `www-authenticate` that rides the
@@ -395,7 +401,7 @@ let private loopbackDoor (gateway: GitGateway.Gateway) : Sandboxes.HostDoor =
     | None -> failwith "the gateway has no door at loopback"
 
 /// The env a sandbox would get for a gateway on this box — the route and NOTHING else: no
-/// token, no helper, no loan. What a case asserts with this alone is a refusal.
+/// token, no helper, no loan. A git with this alone takes no credential to github.com.
 let private sandboxEnv (gateway: GitGateway.Gateway) (cap: string) : Map<string, string> =
     Sandboxes.withGitConfig (GitGateway.gitConfig (loopbackDoor gateway) cap) Map.empty
 
@@ -574,6 +580,44 @@ let private doorTests =
         })
     ]
 
+/// What became of one `ls-remote` that no live loan answered for: the run, and the
+/// `authorization` of each request that arrived at github.com.
+type private Unlent =
+    { Run : GitRun
+      Authorizations : string option list }
+
+/// One `ls-remote` through a new gateway, with the environment that `arrange` gives it,
+/// against a github.com that answers each request with `answer`.
+let private lsRemoteAgainst (answer: int) (arrange: GitGateway.Gateway -> Map<string, string>) : Async<Unlent> =
+    async {
+        let! upstream = startUpstream ()
+        upstream.Answer.Value <- answer
+        let ran = ref None
+        do!
+            withGateway upstream.Origin (fun gateway ->
+                async {
+                    let! run = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (arrange gateway)
+                    ran.Value <- Some run
+                })
+        do! upstream.Close ()
+        match ran.Value with
+        | Some run -> return { Run = run; Authorizations = List.ofSeq upstream.Authorizations }
+        | None -> return failwith "git did not run"
+    }
+
+/// A git on a route that no block lent on: it carries no loan.
+let private withNoLoan (answer: int) : Async<Unlent> =
+    lsRemoteAgainst answer (fun gateway ->
+        sandboxEnv gateway (gateway.Grant (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev"))))
+
+/// A git that still carries the loan of a block after its terminal returned that loan: a
+/// `git fetch &` that the block left running past the next block of its terminal.
+let private withAReturnedLoan (answer: int) : Async<Unlent> =
+    lsRemoteAgainst answer (fun gateway ->
+        let env = routeWith gateway "octo/hello:dev" (lending (Some "tok"))
+        gateway.Retire (GitGateway.Borrower.Terminal terminal)
+        env)
+
 let private portsTests =
     testList "a real git at the gateway" [
 
@@ -708,22 +752,29 @@ let private portsTests =
             do! upstream.Close ()
         }
 
-        // The route is the sandbox's; the credential is the block's. A request the route
-        // admits but no block lent is answered by nobody — in words, not with whoever
-        // happened to start the sandbox.
-        testCaseAsync "a request carrying no loan is refused in words, and github.com is not asked" <| async {
-            let! upstream = startUpstream ()
-            do!
-                withGateway upstream.Origin (fun gateway ->
-                    async {
-                        let cap = gateway.Grant (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev"))
-                        let! run = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (sandboxEnv gateway cap)
-                        Expect.isTrue (run.Status <> 0) "it fails"
-                        Expect.isTrue (run.Stderr.Contains "remote error:") (sprintf "on the remote-error channel: %s" run.Stderr)
-                        Expect.isTrue (run.Stderr.Contains "Run git as a command") "saying how a request gets a credential here"
-                        Expect.equal upstream.Authorizations.Count 0 "and github.com was not asked"
-                    })
-            do! upstream.Close ()
+        // The route belongs to the sandbox, and the credential belongs to the block. A request
+        // that the route admits and no block lent on goes up with no credential. It does not
+        // go up with the credential of the person who started the sandbox. github.com answers
+        // it as it answers anybody, so a route takes away nothing that git does without one.
+        // The gateway once refused such a request outright. A `prepare:` command is not a
+        // block and holds no loan, so it could not read a public repository.
+        testCaseAsync "a request carrying no loan reads what github.com gives anybody" <| async {
+            let! asked = withNoLoan 200
+            Expect.equal asked.Run.Status 0 (sprintf "ls-remote succeeded: %s" asked.Run.Stderr)
+        }
+
+        testCaseAsync "a request carrying no loan takes no credential to github.com" <| async {
+            let! asked = withNoLoan 200
+            Expect.equal asked.Authorizations [ None ] "one request, with no authorization"
+        }
+
+        testCaseAsync "a request carrying no loan that github.com wants a credential for is refused in words" <| async {
+            let! asked = withNoLoan 401
+            Expect.isTrue (asked.Run.Status <> 0) "it fails"
+            Expect.isTrue (asked.Run.Stderr.Contains "remote error:") (sprintf "on the remote-error channel: %s" asked.Run.Stderr)
+            Expect.isTrue (asked.Run.Stderr.Contains "wants a credential") "saying that github.com asked for one"
+            Expect.isTrue (asked.Run.Stderr.Contains "Run git as a command") "and what gives a request a credential here"
+            Expect.isFalse (asked.Run.Stderr.Contains "Username") "never a credential prompt"
         }
 
         // A loan answers on its own sandbox's route and nowhere else. Every process in a
@@ -745,23 +796,21 @@ let private portsTests =
         }
 
         // A loan belongs to a block. Returned, a request still carrying it — a `git push &`
-        // the block left running past its terminal's next block — is told so, naming whose
-        // credential it would have spent, rather than answered with the next block's.
-        testCaseAsync "a returned loan is refused in words naming whose it was" <| async {
-            let! upstream = startUpstream ()
-            do!
-                withGateway upstream.Origin (fun gateway ->
-                    async {
-                        let env = routeWith gateway "octo/hello:dev" (lending (Some "tok"))
-                        gateway.Retire (GitGateway.Borrower.Terminal terminal)
-                        let! run = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." env
-                        Expect.isTrue (run.Status <> 0) "it fails"
-                        Expect.isTrue (run.Stderr.Contains "remote error:") (sprintf "on the remote-error channel: %s" run.Stderr)
-                        Expect.isTrue (run.Stderr.Contains "lent to user:ada") (sprintf "whose it was: %s" run.Stderr)
-                        Expect.isTrue (run.Stderr.Contains "has been returned") "and that it is returned"
-                        Expect.equal upstream.Authorizations.Count 0 "and github.com was not asked"
-                    })
-            do! upstream.Close ()
+        // the block left running past its terminal's next block — goes up with no credential,
+        // rather than with the next block's.
+        testCaseAsync "a request carrying a returned loan takes no credential to github.com" <| async {
+            let! asked = withAReturnedLoan 200
+            Expect.equal asked.Authorizations [ None ] "one request, with no authorization"
+        }
+
+        // When github.com then wants a credential, the sentence names whose credential the
+        // request would have spent.
+        testCaseAsync "a request carrying a returned loan that github.com wants a credential for is refused in words naming whose it was" <| async {
+            let! asked = withAReturnedLoan 401
+            Expect.isTrue (asked.Run.Status <> 0) "it fails"
+            Expect.isTrue (asked.Run.Stderr.Contains "remote error:") (sprintf "on the remote-error channel: %s" asked.Run.Stderr)
+            Expect.isTrue (asked.Run.Stderr.Contains "lent to user:ada") (sprintf "whose it was: %s" asked.Run.Stderr)
+            Expect.isTrue (asked.Run.Stderr.Contains "has been returned") "and that it is returned"
         }
 
         testCaseAsync "lending a terminal's next block returns its last" <| async {
@@ -772,12 +821,12 @@ let private portsTests =
                         let cap = gateway.Grant (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev"))
                         let first = gateway.Lend (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev")) (GitGateway.Borrower.Terminal terminal) (lenderOf (lending (Some "one")))
                         let second = gateway.Lend (GitGateway.Routed.Sandbox (sandbox "octo/hello:dev")) (GitGateway.Borrower.Terminal terminal) (lenderOf (lending (Some "two")))
-                        let! old = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (lentEnv gateway cap first)
-                        Expect.isTrue (old.Status <> 0) "the first block's loan is returned"
-                        Expect.isTrue (old.Stderr.Contains "has been returned") (sprintf "and says so: %s" old.Stderr)
-                        let! current = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (lentEnv gateway cap second)
-                        Expect.equal current.Status 0 "the second block's answers"
-                        Expect.equal (List.ofSeq upstream.Authorizations) [ Some (basic "two") ] "with its own lender"
+                        let! _ = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (lentEnv gateway cap first)
+                        let! _ = git [ "ls-remote"; "https://github.com/octo/hello.git" ] "." (lentEnv gateway cap second)
+                        Expect.equal
+                            (List.ofSeq upstream.Authorizations)
+                            [ None; Some (basic "two") ]
+                            "the first block's loan is returned, so its request spent nothing, and the second block's spent its own lender's"
                     })
             do! upstream.Close ()
         }

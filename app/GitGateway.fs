@@ -42,11 +42,22 @@ module Yession.Host.GitGateway
 // lender spent that person's credential on everybody's push. The route names a sandbox; a
 // LOAN names an act. Every block's line exports a per-block secret into its process tree
 // (`loanConfig`: one `http.<here>.extraheader`, so git sends it on every request to this
-// gateway and to nowhere else), and a request is answered from the loan it carries and from
-// nothing else — no loan, no credential, said in words. A loan is returned when the next
-// block on that terminal starts, so a `git push &` a block left running still spends its own
-// act's credential, and a request arriving after that is refused in words rather than
-// answered with somebody else's.
+// gateway and to nowhere else). The credential that goes up with a request is the credential
+// of the loan that the request carries, and no other. A terminal returns a loan when its next
+// block starts. So a `git push &` that a block left running still spends the credential of its
+// own act. A request that arrives after that never goes up with the credential of a different
+// act.
+//
+// A request with no live loan goes up with NO credential. It carries no loan, or it carries a
+// loan that its terminal returned. github.com answers it as it answers anybody. A public
+// repository reads. For each other request github.com answers `401`, and git prints the
+// reason in words (`unlent`): why no credential went up.
+//
+// The gateway once refused such a request before it asked github.com. A route then took away
+// what git does with no route at all. The `prepare:` command of a sandbox is not a block, so
+// it holds no loan. In the first repository with such a command, nix fetched a public
+// repository for an input of its lock file. That sandbox did not start for a person who
+// trusted the repository.
 //
 // The session's own git takes the same route. `Repos`' clone and fetch run in the git
 // sandbox, which is no work sandbox and has no terminal, so a route is minted for
@@ -211,12 +222,16 @@ let private droppedDownstream = set [ "connection"; "keep-alive"; "transfer-enco
 /// then the lender's credential — appended rather than merged, because `authorization` is in
 /// that set and so cannot already be there.
 ///
+/// `None` is a request that no live loan answers for. It goes up with no `authorization`,
+/// and not with the one that arrived: the sandbox holds no credential, so that one is its
+/// own invention.
+///
 /// Node lowercases a header name on the way in, so the comparison is against lowercase and
 /// does no folding of its own. A value passes through as it arrived: said once, or repeated.
-let upstreamHeaders (sent: (string * HeaderValue)[]) (authorization: string) : (string * HeaderValue)[] =
+let upstreamHeaders (sent: (string * HeaderValue)[]) (authorization: string option) : (string * HeaderValue)[] =
     Array.append
         (sent |> Array.filter (fun (name, _) -> not (Set.contains name droppedUpstream)))
-        [| "authorization", HeaderValue.Single authorization |]
+        (authorization |> Option.map (fun value -> "authorization", HeaderValue.Single value) |> Option.toArray)
 
 /// The headers it carries back DOWN: github.com's, as they came, less the three above.
 let downstreamHeaders (received: (string * HeaderValue)[]) : (string * HeaderValue)[] =
@@ -244,7 +259,8 @@ type Forwarded =
     /// channel left to say anything else on.
     | Answered
 
-/// Carry one request to the upstream and its answer back, adding the credential on the way.
+/// Carry one request to the upstream and its answer back, adding the credential on the way
+/// when a loan gives one (`upstreamHeaders`).
 ///
 /// The bytes are PIPED, never read: git gzips its posts and expects its responses untouched,
 /// so a `fetch` — which decodes bodies for you — is exactly the wrong tool. Which headers go
@@ -254,7 +270,7 @@ let private forward
     (req: IncomingMessage)
     (res: ServerResponse)
     (url: string)
-    (authorization: string)
+    (authorization: string option)
     : Async<Forwarded> =
     Async.FromContinuations (fun (cont, _, _) ->
         // ONE answer, whatever arrives first. Every path below can be reached after another
@@ -305,6 +321,13 @@ let private ownerLabel (owner: CredentialFor) : string = CredentialFor.token own
 let private basicAuthorization (token: string) : string =
     "Basic " + Convert.ToBase64String (Text.Encoding.UTF8.GetBytes ("x-access-token:" + token))
 
+/// What git prints when github.com wants a credential for a request that went up with none:
+/// that fact, and then `why` no credential went up. The first sentence is there because a
+/// public repository reads with no credential. A reader of the second sentence alone asks
+/// why this request needed one.
+let private unlent (why: string) : string =
+    sprintf "%s wants a credential for this request. %s" remoteHost why
+
 // --- the gateway ---------------------------------------------------------------------------
 
 /// Whose git a route is minted for: a work sandbox's, or the session's own git verbs (`clone`
@@ -330,15 +353,17 @@ type Gateway =
       /// Docker network (`DockerSandbox.Network.Reached`).
       Open : string -> Async<Result<unit, string>>
       /// Mint the route for one sandbox, replacing any it had: the cap its git will name. A
-      /// route answers nothing by itself — what answers on it is the loan a request carries.
+      /// route adds no credential by itself. The credential that goes up is the one of the loan
+      /// that a request carries.
       Grant : Routed -> string
       /// Lend a borrower's requests a credential: the secret its git carries, live until the
       /// borrower's next loan or `Retire`. One live loan per borrower — lending the next
       /// returns the last.
       Lend : Routed -> Borrower -> Lender -> string
-      /// The loan a borrower holds is returned. A request still carrying a terminal's is
-      /// refused in words; the last returned loan per terminal is kept for that sentence, and
-      /// no more. A verb's is dropped: its git has exited.
+      /// The loan a borrower holds is returned. A request that still carries the loan of a
+      /// terminal goes up with no credential. When github.com then wants one, git prints a
+      /// sentence that names whose loan it was. The gateway keeps the last returned loan of
+      /// each terminal for that sentence, and no more. A verb's is dropped: its git has exited.
       Retire : Borrower -> unit
       /// Take a sandbox's route, and every loan under it, away — what makes the cap die
       /// with the sandbox.
@@ -395,10 +420,35 @@ let start (doors: string list list) (upstream: string) (report: string -> unit) 
                     sprintf "application/x-%s-%s" request.Service (if isAdvertisement then "advertisement" else "result")
                 let refuse (message: string) =
                     answer res 200 contentType (errorBody request isAdvertisement message)
+                let target () = upstream.TrimEnd '/' + "/" + request.Path + (requestUrl url).search
+                let unreachable (error: string) =
+                    refuse (sprintf "%s could not be reached from this session: %s" remoteHost error)
+                // One carry. A fault before the head of the answer goes to git in words. A
+                // fault after it goes to `report`, because no `ERR` channel remains by then.
+                let run (work: Async<unit>) =
+                    Async.StartImmediate (
+                        async {
+                            try
+                                do! work
+                            with e ->
+                                if not (res.headersSent) then refuse (sprintf "the git gateway failed: %s" e.Message)
+                                else report (sprintf "the git gateway failed after answering a request for %s: %s" (RepoRef.value request.Repo) e.Message)
+                        })
+                // A request that no live loan answers for: up with no credential, and
+                // github.com answers it as it answers anybody. `why` is what git prints when
+                // github.com then wants a credential (`unlent`).
+                let carryBare (why: string) =
+                    run (
+                        async {
+                            match! forward req res (target ()) None with
+                            | Forwarded.Unauthorized -> refuse (unlent why)
+                            | Forwarded.Unreachable error -> unreachable error
+                            | Forwarded.Answered -> ()
+                        })
                 match loanOf req with
                 | None ->
-                    refuse
-                        "nothing lends a github credential to this request. Git here spends the credential of the command it runs in. Run git as a command in this terminal."
+                    carryBare
+                        "Nothing lends one to it. Git here spends the credential of the command it runs in. Run git as a command in this terminal."
                 | Some secret ->
                     // A loan answers on the route of the sandbox it was lent in, and on no
                     // other. Carried down another sandbox's route it is a secret THAT route
@@ -413,52 +463,46 @@ let start (doors: string list list) (upstream: string) (report: string -> unit) 
                             |> Map.tryPick (fun _ (held, loan) -> if held = secret && onThisRoute loan then Some loan else None)
                         with
                         | Some loan ->
-                            refuse (
+                            carryBare (
                                 sprintf
-                                    "the github credential lent to %s for that command has been returned. Run the push as its own command."
+                                    "The github credential lent to %s for that command has been returned. Run the push as its own command."
                                     (ownerLabel loan.Lender.Owner))
                         | None -> notFound res
                     | Some loan ->
                         let lender = loan.Lender
-                        Async.StartImmediate (
+                        run (
                             async {
-                                try
-                                    match! lender.Resolve () with
-                                    | None ->
+                                match! lender.Resolve () with
+                                | None ->
+                                    refuse (
+                                        sprintf
+                                            "%s has not connected github. Connect it on the settings panel, then run the command again."
+                                            (ownerLabel lender.Owner))
+                                | Some token ->
+                                    match! forward req res (target ()) (Some (basicAuthorization token)) with
+                                    | Forwarded.Unauthorized ->
+                                        do! lender.Refused ()
                                         refuse (
                                             sprintf
-                                                "%s has not connected github. Connect it on the settings panel, then run the command again."
+                                                "github rejected %s's credential. Sign in again on the settings panel."
                                                 (ownerLabel lender.Owner))
-                                    | Some token ->
-                                        let target = upstream.TrimEnd '/' + "/" + request.Path + (requestUrl url).search
-                                        match! forward req res target (basicAuthorization token) with
-                                        | Forwarded.Unauthorized ->
-                                            do! lender.Refused ()
-                                            refuse (
-                                                sprintf
-                                                    "github rejected %s's credential. Sign in again on the settings panel."
-                                                    (ownerLabel lender.Owner))
-                                        | Forwarded.Unreachable error ->
-                                            refuse (sprintf "%s could not be reached from this session: %s" remoteHost error)
-                                        | Forwarded.Answered ->
-                                            // The push itself, not its advertisement: one
-                                            // sentence per push, however many requests it took.
-                                            // The push has already gone out, so a record that
-                                            // cannot be written is reported rather than allowed
-                                            // to read as a gateway fault git never sees.
-                                            if request.Service = "git-receive-pack" && not isAdvertisement then
-                                                try
-                                                    do! lender.Spent request.Repo
-                                                with e ->
-                                                    report (
-                                                        sprintf
-                                                            "a push to %s used %s's github credential. The record of that push could not be written: %s"
-                                                            (RepoRef.value request.Repo)
-                                                            (ownerLabel lender.Owner)
-                                                            e.Message)
-                                with e ->
-                                    if not (res.headersSent) then refuse (sprintf "the git gateway failed: %s" e.Message)
-                                    else report (sprintf "the git gateway failed after answering a request for %s: %s" (RepoRef.value request.Repo) e.Message)
+                                    | Forwarded.Unreachable error -> unreachable error
+                                    | Forwarded.Answered ->
+                                        // The push itself, not its advertisement: one
+                                        // sentence per push, however many requests it took.
+                                        // The push has already gone out, so a record that
+                                        // cannot be written is reported rather than allowed
+                                        // to read as a gateway fault git never sees.
+                                        if request.Service = "git-receive-pack" && not isAdvertisement then
+                                            try
+                                                do! lender.Spent request.Repo
+                                            with e ->
+                                                report (
+                                                    sprintf
+                                                        "a push to %s used %s's github credential. The record of that push could not be written: %s"
+                                                        (RepoRef.value request.Repo)
+                                                        (ownerLabel lender.Owner)
+                                                        e.Message)
                             })
 
     async {
