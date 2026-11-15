@@ -289,6 +289,12 @@ module SpawnedProcess =
     /// A real Node child, as the process the SDK was promised. The SDK's own declaration of
     /// `SpawnedProcess` is the slice of `ChildProcess` it reads, so a child IS one; F# has no
     /// structural typing to say so, and this is the one place that asserts it.
+    ///
+    /// The SDK calls `kill` on this child itself, and that is Node's own `kill`, with its
+    /// limit: until Node reports a failed spawn, it sends the signal to the process group of
+    /// the caller (`Fable.NodeExtras.ChildProcesses.signal` has the measurement). Nothing
+    /// here stands between the SDK and that call. SDK 0.3.318 makes each of its kills later
+    /// than that: `close` kills from a timer, and `killAll` runs when this process exits.
     let ofChild (child: Node.ChildProcess.ChildProcess) : SpawnedProcess = unbox child
 
     /// A process F# answers for, over streams it owns and a relay its events come from.

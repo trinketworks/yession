@@ -429,23 +429,45 @@ module Bundle =
 [<RequireQualifiedAccess>]
 module Processes =
 
+    /// Whether `kill` reads this number as one process, or as the process group that one
+    /// process leads (the negated pid of the leader).
+    ///
+    /// `kill` reads 0 as the process group of the caller, and -1 as each process that the
+    /// caller may signal. Pid 1 is the first process of the system. A caller gets such a
+    /// number from a pid that is not there: a child that did not start has no pid, and
+    /// `int child.pid` is 0 for it (`ChildProcesses.pid`). So the two verbs below send no
+    /// signal to such a number, whoever made it.
+    let namesOne (pid: int) : bool = pid >= 2 || pid <= -2
+
+    [<Emit("process.kill($0, $1)")>]
+    let private send (pid: int) (signal: string) : unit = jsNative
+
     /// `process.kill(pid, signal)`: a signal to a process by id — or to a whole process group,
     /// which is what a NEGATIVE id names, and how a detached child's tree is taken with one.
-    [<Emit("process.kill($0, $1)")>]
-    let kill (pid: int) (signal: string) : unit = jsNative
+    ///
+    /// It throws for a number that names more than that (`namesOne`), and sends nothing.
+    let kill (pid: int) (signal: string) : unit =
+        if namesOne pid then send pid signal
+        else failwithf "no signal goes to pid %d: it is not one process, and not the process group of one" pid
+
+    /// Node makes the error with no stack. A caller that asks about each pid of a host gets tens
+    /// of thousands of errors, and a stack for each one takes four times as long as the
+    /// question (measured: 214 ms against 56 ms for 99 998 pids).
+    [<Emit("(function (pid, signal) { const limit = Error.stackTraceLimit; Error.stackTraceLimit = 0; try { process.kill(pid, signal); return undefined; } catch (error) { return error.code ?? 'UNKNOWN'; } finally { Error.stackTraceLimit = limit; } })($0, $1)")>]
+    let private trySend (pid: int) (signal: string) : string option = jsNative
 
     /// `process.kill(pid, signal)` for a caller that reads the answer of the kernel: the error
     /// code where Node throws one (`EPERM`, `ESRCH`), and nothing where the kernel took the
     /// signal.
     ///
-    /// Node makes the error with no stack. A caller that asks about each pid of a host gets tens
-    /// of thousands of errors, and a stack for each one takes four times as long as the
-    /// question (measured: 214 ms against 56 ms for 99 998 pids).
-    [<Emit("(function (pid, signal) { const limit = Error.stackTraceLimit; Error.stackTraceLimit = 0; try { process.kill(pid, signal); return undefined; } catch (error) { return error.code ?? 'UNKNOWN'; } finally { Error.stackTraceLimit = limit; } })($0, $1)")>]
-    let trySignal (pid: int) (signal: string) : string option = jsNative
+    /// The kernel gets no question about a number that names more than one process or one
+    /// process group (`namesOne`). The answer for it is `ERR_OUT_OF_RANGE`, the code that Node
+    /// has for a number outside its range.
+    let trySignal (pid: int) (signal: string) : string option =
+        if namesOne pid then trySend pid signal else Some "ERR_OUT_OF_RANGE"
 
     /// `trySignal` with signal 0, which the kernel checks and sends to nobody: whether this
-    /// process may signal that one.
+    /// process may signal that one. It refuses no number, because it sends no signal.
     [<Emit("(function (pid) { const limit = Error.stackTraceLimit; Error.stackTraceLimit = 0; try { process.kill(pid, 0); return undefined; } catch (error) { return error.code ?? 'UNKNOWN'; } finally { Error.stackTraceLimit = limit; } })($0)")>]
     let tryProbe (pid: int) : string option = jsNative
 
@@ -717,6 +739,39 @@ module ChildProcesses =
     /// The signal that ended the child, `None` when one did not.
     [<Emit("$0.signalCode")>]
     let signalCode (child: ChildProcess) : string option = jsNative
+
+    /// The pid of the child, and `None` for a child that did not start. Node leaves `pid`
+    /// undefined after a spawn that failed, and Fable.Node types it as a number that is always
+    /// there. So `int child.pid` is 0 for such a child, and `kill` reads pid 0 as the process
+    /// group of the caller.
+    [<Emit("$0.pid")>]
+    let pid (child: ChildProcess) : int option = jsNative
+
+    [<Emit("$0.kill($1)")>]
+    let private nodeKill (child: ChildProcess) (signal: string) : bool = jsNative
+
+    /// Send the signal `name` to the child itself, and answer whether the kernel took it:
+    /// `child.kill` for a child that started. A child that did not start gets no signal, and
+    /// the answer is `false`.
+    ///
+    /// Node's own `kill` is not safe for a child that did not start. Until Node reports the
+    /// failed spawn (the `error` event), its `kill` sends the signal to the process group of
+    /// the caller. Measured on Node 24.14 and 24.21 on macOS: a process got the signal that
+    /// it sent to such a child, and so did a second process of its group. After the event,
+    /// Node sends nothing.
+    let signal (child: ChildProcess) (name: string) : bool =
+        match pid child with
+        | Some _ -> nodeKill child name
+        | None -> false
+
+    /// Send the signal `name` to the process group that the child leads, and answer whether
+    /// the kernel took it. A `detached` child leads the group of its whole tree, and `kill`
+    /// names that group by the negated pid of the child. A child that did not start leads no
+    /// group: it gets no signal, and the answer is `false`.
+    let signalGroup (child: ChildProcess) (name: string) : bool =
+        match pid child with
+        | Some leader -> Option.isNone (Processes.trySignal (-leader) name)
+        | None -> false
 
     /// Fable.Node's `spawn`, with its `obj` options typed.
     ///

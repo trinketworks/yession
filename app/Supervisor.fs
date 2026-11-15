@@ -821,13 +821,10 @@ let ports (ending: string) : Ports =
         { Write = fun text -> try input.writeText text |> ignore with _ -> ()
           EndInput = fun () -> try input.finish () with _ -> ()
           // The group is the command's own: its leader is the child that started here. A
-          // child that did not start has no pid, and thus no `Target` and no group to signal.
-          // The supervisor asks for no cancel after the leader ended (`create`).
-          Cancel =
-            fun () ->
-                match Target.ofPid (int child.pid) with
-                | Some leader -> Processes.trySignal (-(Target.pid leader)) ending |> ignore
-                | None -> () }
+          // child that did not start has no pid, and thus no group to signal
+          // (`ChildProcesses.signalGroup`). The supervisor asks for no cancel after the leader
+          // ended (`create`).
+          Cancel = fun () -> ChildProcesses.signalGroup child ending |> ignore }
     // The question for the second proof: one child that tries to enter a second profile.
     // It ends in `probeLimitMs`, or this ends it, and that is no answer.
     let nested () : Async<Nesting> =
@@ -852,7 +849,7 @@ let ports (ending: string) : Ports =
                     JS.setTimeout
                         (fun () ->
                             // Node signals this child only while it is this process's child.
-                            probe.kill "SIGKILL"
+                            ChildProcesses.signal probe "SIGKILL" |> ignore
                             answer (Nesting.Unanswered (sprintf "sandbox-exec did not end in %d ms" probeLimitMs)))
                         probeLimitMs
                 ChildProcessStreams.onError probe (fun error ->

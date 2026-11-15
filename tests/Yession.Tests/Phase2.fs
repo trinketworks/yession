@@ -2916,6 +2916,65 @@ let private agentSpawnerPortsTests =
         }
     ]
 
+
+// --- A kill of a child that did not start -----------------------------------------------------
+
+/// How the kill rehearsal (`KillRehearsalMain.fs`) ended after it made `kill`: its code, and
+/// the signal that ended it. The rehearsal leads a process group of its own (`Detached`). A
+/// kill that goes to the process group of its caller thus ends the rehearsal and nothing of
+/// the suite.
+///
+/// A rehearsal that does not end in 30 seconds fails the case, and it must not stay when the
+/// suite has gone. Its process group is one that this case made, so the case ends that group.
+let private rehearsed (kill: KillRehearsal.Kill) : Async<int option * string option> =
+    async {
+        let rehearsal =
+            ChildProcesses.spawn
+                (nodePath ())
+                [ Node.Api.path.join (StandIn.directory (), "KillRehearsalMain.js"); KillRehearsal.Kill.argument kill ]
+                { Cwd = None
+                  Env = ChildEnv.Replacing Map.empty
+                  Streams = { Stdin = Stdio.Ignore; Stdout = Stdio.Ignore; Stderr = Stdio.Inherit }
+                  Detached = true }
+        let mutable ended = false
+        let mutable refusal : string option = None
+        ChildProcessStreams.onExit rehearsal (fun _ -> ended <- true)
+        ChildProcessStreams.onError rehearsal (fun error -> refusal <- Some (StreamError.describe error))
+        let! inTime = Support.settledWithin 30000 (fun () -> ended || refusal.IsSome)
+        match refusal with
+        | Some why -> return failwithf "the kill rehearsal did not start: %s" why
+        | None when not inTime ->
+            ChildProcesses.signalGroup rehearsal "SIGKILL" |> ignore
+            return failwith "the kill rehearsal did not end in 30 seconds, and the case ended its process group"
+        | None -> return ChildProcesses.exitCode rehearsal, ChildProcesses.signalCode rehearsal
+    }
+
+/// A child that did not start has no pid. A kill of its process group once went to pid 0,
+/// which names the process group of the caller. Node's own kill of the child reaches that
+/// group too, until Node reports the failed spawn. Each case names one moment of such a kill.
+///
+/// The rehearsal leaves with a code of its own after the kill (`KillRehearsal.Survived`).
+/// Code 0 is not that code: Node gives it to a program that made no kill and had nothing left
+/// to do.
+let private killOfNoStartTests =
+    testList "A kill of a child that did not start" [
+
+        testCaseAsync "a kill of a command at the moment its start failed ends no process" <| async {
+            let! ending = rehearsed KillRehearsal.CommandAtOnce
+            Expect.equal ending (Some KillRehearsal.Survived, None) "the rehearsal made the kill, and is still there to leave with its own code"
+        }
+
+        testCaseAsync "a kill of a command after it reported that it did not start ends no process" <| async {
+            let! ending = rehearsed KillRehearsal.CommandAfterItsEnd
+            Expect.equal ending (Some KillRehearsal.Survived, None) "the rehearsal made the kill, and is still there to leave with its own code"
+        }
+
+        testCaseAsync "an abort that fired before an agent did not start ends no process" <| async {
+            let! ending = rehearsed KillRehearsal.Agent
+            Expect.equal ending (Some KillRehearsal.Survived, None) "the rehearsal made the kill, and is still there to leave with its own code"
+        }
+    ]
+
 let tests =
     testList "Phase2" [
         // Cheap tier: pure policy/parse, folds, host-sandbox child-process integration.
@@ -2939,4 +2998,7 @@ let tests =
         Tag.needs "Durable event log" [ Tag.Ports; Tag.Native ] (fun () -> persistenceTests)
         // Only ports: the agent CLI's spawners really spawning, with no WebRTC in it.
         Tag.needs "The agent CLI's spawners, driven" [ Tag.Ports ] (fun () -> agentSpawnerPortsTests)
+        // Only ports: each case starts one process. That process makes the kill, and a wrong
+        // kill ends only it.
+        Tag.needs "A kill of a child that did not start" [ Tag.Ports ] (fun () -> killOfNoStartTests)
     ]
