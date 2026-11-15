@@ -260,6 +260,17 @@ let private hostGit (args: string list) (cwd: string) : unit =
             Streams = Some { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Pipe } }
     |> ignore
 
+/// A git that has none of the session's env, as the git of a work sandbox is, and what it
+/// printed. It reads the checkout's own config and nothing of `Repos.hardenedEnv`.
+let private sandboxGit (args: string list) (checkout: string) : string =
+    execFileSync
+        "git"
+        args
+        { SyncOptions.none with
+            Cwd = Some checkout
+            Env = ChildEnv.Adding fixtureGitEnv
+            Streams = Some { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Pipe } }
+
 /// The fixtures live in a SIBLING of the repos dir, never an ancestor of it. srt re-binds
 /// an allowRead path over the write binds when both sit under a denyRead region (HOME —
 /// which is where a CI runner's temp dir lives), so an allowRead ANCESTOR of the repos dir
@@ -573,6 +584,50 @@ let private configBoundaryTests =
             let! service = withGitLinkedAway (mkdtemp ())
             let! added = service.AddRepo caller hello
             Expect.isError added "neither listed nor cloned over"
+        }
+    ]
+
+// --- A committed link, to a git that the session did not start ---------------------------
+
+/// `octo/hello` added from a fixture that commits `link`, a link to its own README: the
+/// service, and the checkout's path. The link stays inside the repository, as the usual
+/// `CLAUDE.md -> AGENTS.md` does.
+let private addedWithCommittedLink () : Async<Repos.ReposService * string> =
+    async {
+        let root = mkdtemp ()
+        makeBareFixtureArranged root "hello" (fun work -> TestFiles.symlink "README.md" (sprintf "%s/link" work)) |> ignore
+        let service = serviceIn root (freshLog ())
+        let! _ = service.AddRepo caller hello
+        return service, sprintf "%s/octo/hello" (reposIn root)
+    }
+
+/// The session checks a committed link out as a plain file. The clone writes that into the
+/// checkout's own config, so each git that works there reads the file as the link it is. A git
+/// in a work sandbox once read it as a changed type, committed it as a file, and wrote a real
+/// link over it.
+let private committedLinkTests =
+    testList "a committed link, to a git with no env of the session" [
+        testCaseAsync "a fresh checkout that holds a committed link shows no change" <| async {
+            let! _, checkout = addedWithCommittedLink ()
+            Expect.equal (sandboxGit [ "status"; "--porcelain" ] checkout) "" "no type change"
+        }
+
+        testCaseAsync "git add -A keeps a committed link a link" <| async {
+            let! _, checkout = addedWithCommittedLink ()
+            sandboxGit [ "add"; "-A" ] checkout |> ignore
+            Expect.isTrue ((sandboxGit [ "ls-files"; "-s"; "link" ] checkout).StartsWith "120000 ") "the index still holds a link"
+        }
+
+        testCaseAsync "git checkout keeps the plain file that holds a link's text" <| async {
+            let! _, checkout = addedWithCommittedLink ()
+            sandboxGit [ "checkout"; "--"; "link" ] checkout |> ignore
+            Expect.isFalse ((Node.Api.fs.lstatSync (U2.Case1 (sprintf "%s/link" checkout))).isSymbolicLink ()) "no link in the work tree"
+        }
+
+        testCaseAsync "the session's own status of that checkout shows no change" <| async {
+            let! service, _ = addedWithCommittedLink ()
+            let! status = service.RepoStatus hello
+            Expect.isFalse ((expect status).Contains "link") "the session's git and the checkout's config agree"
         }
     ]
 
@@ -1629,6 +1684,7 @@ let tests =
         layoutTests
         Tag.needs "Repo verbs (srt)" [ Tag.Sandbox ] (fun () -> srtTests)
         Tag.needs "A checkout's own config and content (srt and host)" [ Tag.Sandbox; Tag.Ports ] (fun () -> configBoundaryTests)
+        Tag.needs "A committed link, to a git of a sandbox (srt)" [ Tag.Sandbox ] (fun () -> committedLinkTests)
         Tag.needs "A repository's files, read from git (srt)" [ Tag.Sandbox ] (fun () -> committedReadTests)
         Tag.needs
             "Repos the session reports"
