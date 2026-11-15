@@ -29,8 +29,14 @@
     <Compile Include="TranscriptStore.fs" />
     <Compile Include="Emulator.fs" />
     <Compile Include="Fs.fs" />
+    <!-- The supervisor of one Seatbelt sandbox: the process inside the sandbox that starts
+         each command and ends each process at the stop. Before Sandboxes.fs, whose seatbelt
+         backend speaks its wire, and it takes nothing from the backends, so the bundle of its
+         entry stays small. -->
+    <Compile Include="Supervisor.fs" />
     <Compile Include="Sandboxes.fs" />
     <Compile Include="SandboxHost.fs" />
+    <Compile Include="SandboxSupervisor.fs" />
     <Compile Include="VolumeLeases.fs" />
     <!-- Attaching a terminal to somebody else's byte stream (Plan 16, part D). Beside the
          sandbox adapters because it is the same kind of thing: a way to get a PtyHandle. -->

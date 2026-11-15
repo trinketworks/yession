@@ -154,6 +154,12 @@
     <Compile Include="ProxyMap.fs" />
     <Compile Include="Resources.fs" />
     <Compile Include="Seatbelt.fs" />
+    <!-- The supervisor of a Seatbelt sandbox: its wire, its two proofs and its passes, over
+         ports that a case scripts, and its entry as a real process that must refuse. -->
+    <!-- The supervisor as a rehearsal runs it, with a signal that ends nothing. A program of
+         its own, as StandInMain.fs is: its top level runs only in a child started on it. -->
+    <Compile Include="SupervisorRehearsalMain.fs" />
+    <Compile Include="Supervisor.fs" />
     <Compile Include="VolumeLeases.fs" />
     <Compile Include="SeededFiles.fs" />
     <Compile Include="Properties.fs" />

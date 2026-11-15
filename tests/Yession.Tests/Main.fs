@@ -158,6 +158,10 @@ let all =
         Tag.needs "the resources algebra" [] (fun () -> Resources.tests)
         Tag.needs "the Seatbelt profile" [] (fun () -> Seatbelt.tests)
         Tag.needs "the Seatbelt backend" [] (fun () -> Seatbelt.backendTests)
+        // The process inside a seatbelt sandbox that ends its processes. The first list sends
+        // no signal. The second starts real processes, and its entry runs with no profile.
+        Tag.needs "the Seatbelt supervisor" [] (fun () -> Supervisor.tests)
+        Tag.needs "the Seatbelt supervisor, with real processes" [ Tag.Ports ] (fun () -> Supervisor.processTests)
         Tag.needs "Volume leases" [] (fun () -> VolumeLeases.tests)
         Tag.needs "seeded files" [] (fun () -> SeededFiles.tests)
         Tag.needs "Properties" [] (fun () -> Properties.tests)
