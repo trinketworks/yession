@@ -348,7 +348,7 @@ let private makeSandboxes
                 layout.Workspace |> Option.iter Fs.ensureDir
                 // Made AND seeded in one call: whatever this sandbox declared it needs to
                 // find in its own home is there before anything runs in it.
-                layout.Home |> Option.iter (fun path -> Sandboxes.SessionLayout.prepareHome path workSpec.Files)
+                layout.Home |> Option.iter (fun path -> Sandboxes.prepareHomeHere path workSpec.Files)
                 let prepare =
                     Sandboxes.preparePolicy
                         backend
