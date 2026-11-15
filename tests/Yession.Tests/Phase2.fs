@@ -250,6 +250,24 @@ let private promiseAwaitTests =
 
 /// The confinement tools, with the read scope's allow-back as the field a case varies. The
 /// tool paths are what a darwin host has (none): nothing below turns on them.
+/// The policy of a sandbox to which a session gave a home, on a host whose operator has
+/// another.
+let private policyOfASandboxWithAHome () : SandboxPolicy =
+    Sandboxes.policyFor
+        SrtBackend
+        (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin)
+        (Map.ofList [ "HOME", "/Users/operator" ])
+        Map.empty
+        (Some "/data/s/workspace")
+        (Some "/data/s/workspace/repos")
+        (Some "/data/s/home")
+        []
+        Set.empty
+        EnvironmentSpec.defaults
+    |> function
+        | Ok policy -> policy
+        | Error refusal -> failwithf "%A" refusal
+
 let private toolsWithRuntime (runtime: string list) : Sandboxes.SrtTools =
     { Bwrap = None
       Socat = None
@@ -895,7 +913,7 @@ let private sandboxPolicyTests =
         testCase "a sandbox's home is made holding what it asked to find there" <| fun () ->
             let home = tempDir () + "/home"
             let path = HomePath.create ".local/share/NuGet/Migrations/1" |> expect
-            Sandboxes.SessionLayout.prepareHome home (Map.ofList [ path, "" ])
+            Sandboxes.SessionLayout.prepareHome Node.Base.Platform.Linux home (Map.ofList [ path, "" ])
             Expect.isTrue
                 (Fs.exists (home + "/.local/share/NuGet/Migrations/1"))
                 "the file is there, parents and all"
@@ -906,10 +924,25 @@ let private sandboxPolicyTests =
         testCase "a seed does not overwrite what the sandbox has since written" <| fun () ->
             let home = tempDir () + "/home"
             let path = HomePath.create "tool/state" |> expect
-            Sandboxes.SessionLayout.prepareHome home (Map.ofList [ path, "seeded" ])
+            Sandboxes.SessionLayout.prepareHome Node.Base.Platform.Linux home (Map.ofList [ path, "seeded" ])
             Fs.writeTextAtomic (home + "/tool/state") "the sandbox wrote this"
-            Sandboxes.SessionLayout.prepareHome home (Map.ofList [ path, "seeded" ])
+            Sandboxes.SessionLayout.prepareHome Node.Base.Platform.Linux home (Map.ofList [ path, "seeded" ])
             Expect.equal (Fs.readText (home + "/tool/state")) "the sandbox wrote this" "the later start left it alone"
+
+        // A program makes most of what it keeps in a home, and not what the system makes for
+        // each account. .NET answers with an empty path for a data directory that does not
+        // exist, and on a Mac that directory is the home's `Library/Application Support`.
+        testCase "a new home on a Mac has the data directory that each account has" <| fun () ->
+            let home = tempDir () + "/home"
+            Sandboxes.SessionLayout.prepareHome Node.Base.Platform.Darwin home Map.empty
+            Expect.isTrue
+                (Fs.exists (home + "/Library/Application Support"))
+                "the directory is there before a program asks for it"
+
+        testCase "a new home off a Mac has no directory of a Mac's" <| fun () ->
+            let home = tempDir () + "/home"
+            Sandboxes.SessionLayout.prepareHome Node.Base.Platform.Linux home Map.empty
+            Expect.isFalse (Fs.exists (home + "/Library")) "nobody measured a tool there, so the home starts empty"
 
         // Canonical, for the reason `OperatorResources` refuses a path that is not: srt
         // canonicalises an allow-list entry and the OS denies the symlink nodes an access
@@ -1200,21 +1233,20 @@ let private sandboxPolicyTests =
         // says so as "The user's home directory could not be determined", which names
         // neither the sandbox nor anything an operator can set.
         testCase "a sandbox has a home of its own, and may write it" <| fun () ->
-            let policy =
-                Sandboxes.policyFor
-                    SrtBackend
-                    (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin)
-                    (Map.ofList [ "HOME", "/Users/operator" ])
-                    Map.empty
-                    (Some "/data/s/workspace")
-                    (Some "/data/s/workspace/repos")
-                    (Some "/data/s/home")
-                    []
-                    Set.empty
-                    EnvironmentSpec.defaults
-                |> expect
+            let policy = policyOfASandboxWithAHome ()
             Expect.equal (Map.tryFind "HOME" policy.Env) (Some "/data/s/home") "not the operator's, which it is denied"
             Expect.isTrue (List.contains "/data/s/home" policy.WritePaths) "and it may write it, or naming it changed nothing"
+
+        // A program built on CoreFoundation does not read `HOME`. It takes the home from the
+        // account, so with `HOME` alone it gets the operator's home, and the profile refuses
+        // that home. .NET asks Foundation for the directory where a build keeps its files.
+        // A build that got no directory wrote its key into the checkout.
+        testCase "a sandbox's home is its home for a program that asks CoreFoundation" <| fun () ->
+            let policy = policyOfASandboxWithAHome ()
+            Expect.equal
+                (Map.tryFind "CFFIXED_USER_HOME" policy.Env)
+                (Some "/data/s/home")
+                "the name that CoreFoundation reads gives the home that HOME gives"
 
         // The layout rule, beside the workspace one it copies: `default` keeps the session's
         // own directory, a named sandbox gets its own — two sandboxes exist precisely so

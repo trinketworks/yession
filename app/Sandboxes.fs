@@ -195,6 +195,20 @@ module SessionLayout =
         if sandbox = SandboxRef.defaultRef then sprintf "%s/home" dataDir
         else sprintf "%s/sandboxes/%s/home" dataDir (SandboxRef.slug sandbox)
 
+    /// The directories that a new home on `platform` has, as paths in the home.
+    ///
+    /// A program makes most of what it keeps in a home. It does not make what the system
+    /// makes for each account, and a home that this session made has none of that. On a Mac
+    /// that is `Library/Application Support`, where Foundation puts the data of a program.
+    /// .NET answers with an empty path when that directory does not exist
+    /// (`Environment.GetFolderPath`). Measured in a seatbelt sandbox: the .NET Android build
+    /// joined its own directory to the empty path, and wrote its debug key into the checkout.
+    ///
+    /// Add a directory when you see a tool that takes it as given. A home off a Mac has
+    /// none yet: nobody measured a tool there.
+    let homeDirectories (platform: Node.Base.Platform) : string list =
+        if platform = Node.Base.Platform.Darwin then [ "Library/Application Support" ] else []
+
     /// Make a sandbox's home, and put in it whatever the sandbox asked to find there.
     ///
     /// ONE verb, because a caller that made the directory and forgot the seeding would
@@ -209,8 +223,13 @@ module SessionLayout =
     ///
     /// `HomePath` has already refused anything that could land outside the home, so there
     /// is no second check here — one rule, in the type, reachable by the cheap tier.
-    let prepareHome (home: string) (files: Map<HomePath, string>) : unit =
+    ///
+    /// The platform is an argument for the reason `limitsFor`'s is. `prepareHomeHere` gives
+    /// it the host's.
+    let prepareHome (platform: Node.Base.Platform) (home: string) (files: Map<HomePath, string>) : unit =
         Fs.ensureDir home
+        for directory in homeDirectories platform do
+            Fs.ensureDir (sprintf "%s/%s" (home.TrimEnd '/') directory)
         for KeyValue (path, content) in files do
             let target = sprintf "%s/%s" (home.TrimEnd '/') (HomePath.value path)
             if not (Fs.exists target) then Fs.writeTextAtomic target content
@@ -556,6 +575,11 @@ let limitsFor (backend: SandboxBackend) (platform: Node.Base.Platform) : HostLim
 /// second caller reading `process.platform` for itself would be a second answer that only
 /// ever agrees with the first on the box it was written on.
 let limitsHere (backend: SandboxBackend) : HostLimits = limitsFor backend (platform ())
+
+/// `SessionLayout.prepareHome` on the host this process runs on: the same one-place reading
+/// of the platform `limitsHere` is, for the same reason.
+let prepareHomeHere (home: string) (files: Map<HomePath, string>) : unit =
+    SessionLayout.prepareHome (platform ()) home files
 
 /// The name by which a sandbox on this backend, on this platform, reaches a listener bound
 /// on THIS host — none when it cannot. A fact about the backend, stated by the backend, so
@@ -934,7 +958,14 @@ let policyFor
             // grants is what the start-up checks read.
             let baseline = Map.add "TMPDIR" (SessionLayout.tmpDir ()) (localeForReadline (hostBaseline ambient))
             match home with
-            | Some home -> Map.add "HOME" home baseline
+            // The same home under a second name. A program built on CoreFoundation does
+            // not read `HOME`: it takes the home from the account, and it reads
+            // `CFFIXED_USER_HOME` before that. Measured on macOS 26.5 in a seatbelt
+            // sandbox: with `HOME` alone, Foundation gave the operator's home, and the
+            // profile refuses that home. With this name, it gave the sandbox's. Only such
+            // a program reads the name, on a Mac and off one, so it is here for every
+            // host. A spec that names `HOME` names this one too, or the two differ.
+            | Some home -> baseline |> Map.add "HOME" home |> Map.add "CFFIXED_USER_HOME" home
             | None -> baseline
         // Granted variables sit UNDER the spec's, like the rest of the baseline: an operator
         // says what a sandbox starts with, and a repo may still say otherwise about its own.

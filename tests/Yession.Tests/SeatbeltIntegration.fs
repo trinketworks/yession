@@ -267,6 +267,27 @@ let private macCases () =
             Expect.isTrue (out.StartsWith "v") "the interpreter this very process runs on answers from inside"
         })
 
+        // A Mac has two ways to ask for a home. A program built on CoreFoundation does not
+        // read `HOME`: it takes the home from the account, and it reads `CFFIXED_USER_HOME`
+        // before that. The policy of a sandbox names its home both ways
+        // (`Sandboxes.policyFor`), and this asks the kernel's side of it: that Foundation,
+        // behind this profile, gives the home that the second name says. `osascript` is the
+        // program that each Mac has and that can ask Foundation.
+        testCaseAsync "a program that asks CoreFoundation for its home gets the home that its sandbox names" (async {
+            let home = freshDir ()
+            let policy = policyIn home
+            let named = policy.Env |> Map.add "HOME" home |> Map.add "CFFIXED_USER_HOME" home
+            let! sandbox = startSandbox { policy with Env = named }
+            let ask = """ObjC.import("Foundation"); $.NSHomeDirectory().js"""
+            let! _, out, err = shell sandbox (sprintf "/usr/bin/osascript -l JavaScript -e %s" (quoted ask))
+            do! sandbox.Dispose ()
+            // Foundation leaves `/private` off a path below `/tmp` or `/var`. So this compares
+            // the directory that it gave, and not how it spelled the path.
+            let answered = out.Trim ()
+            let gave = if TestFiles.exists answered then TestFiles.canonical answered else answered
+            Expect.equal gave home (sprintf "Foundation gave the sandbox's home, and stderr said: %s" err)
+        })
+
         testCaseAsync "work runs behind the entrypoint that its sandbox declares" (async {
             let! sandbox = startSandboxBehind marking (policyIn (freshDir ()))
             let! _, out, _ = shell sandbox "echo \"$BEHIND\""
