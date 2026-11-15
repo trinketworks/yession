@@ -474,6 +474,14 @@ module Processes =
     [<Emit("process.on($0, $1)")>]
     let onEnding (event: string) (listener: unit -> unit) : unit = jsNative
 
+    /// How long this process has been running, from the moment the system started it:
+    /// `process.uptime()`. That is before Node itself is up, so it covers what no clock
+    /// read by the program's own code can, the time before any of that code ran.
+    [<Emit("process.uptime()")>]
+    let private uptimeInSeconds () : float = jsNative
+
+    let uptime () : System.TimeSpan = System.TimeSpan.FromSeconds (uptimeInSeconds ())
+
     /// Hear `signal` (`"SIGTERM"`) the next time it arrives, and only then.
     ///
     /// While a signal has a listener Node does not end the process for it, so the listener

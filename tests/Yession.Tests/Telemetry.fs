@@ -537,6 +537,24 @@ let private timingTests =
                     "two launches that came up and one that did not, in seconds"
             }
 
+        // The two parts are one metric so that a backend adds them up to a boot, and two
+        // series so that it can tell which part moved.
+        testCaseAsync "a boot is one histogram, a series for each of its two parts" <|
+            async {
+                let exporter = inMemoryMetricExporter ()
+                let time, flush = Telemetry.timerTo exporter
+                time (Telemetry.Timing.SessionBoot Telemetry.BootPhase.Load) (System.TimeSpan.FromMilliseconds 500.0)
+                time (Telemetry.Timing.SessionBoot Telemetry.BootPhase.Start) (System.TimeSpan.FromMilliseconds 250.0)
+                do! flush () |> Interop.awaitPromise
+                Expect.equal
+                    (histogramsOf (exporter.getMetrics ()))
+                    [ "yession.session.boot.duration",
+                      "s",
+                      [ """{"yession.session.boot.phase":"load"}""", 1, 0.5
+                        """{"yession.session.boot.phase":"start"}""", 1, 0.25 ] ]
+                    "the load and the start, in seconds"
+            }
+
         testCase "the disabled emitter records no timing and never throws" <| fun () ->
             Telemetry.disabled.Time (Telemetry.Timing.SessionLaunch true) (System.TimeSpan.FromSeconds 1.0)
 

@@ -26,6 +26,11 @@ open Yession.Manager
 // will do without a session.
 Interop.parseOrExit (Cli.spec "yession-session") Version.current |> ignore
 
+/// How long the process had been running when this module's own code began: the first
+/// statement here that is not an import, so every module this session is made of has been
+/// read and evaluated by now. The first part of a boot (`BootPhase.Load`).
+let private loadedAfter = Fable.NodeExtras.Processes.uptime ()
+
 /// The process's one clock. Everything here that asks the time or waits some of it out —
 /// the Host and all it composes, the provider polls below, the caches' freshness — is
 /// handed this and nothing reaches for the system's own.
@@ -1801,9 +1806,18 @@ Async.StartImmediate (
             onStdinClosed (fun () ->
                 Async.StartImmediate (
                     async {
-                        do! telemetry.Shutdown () |> Interop.awaitPromise
+                        do! Telemetry.shutdownWithin clock Telemetry.shutdownDeadline telemetry
                         Interop.exit 0
                     }))
+        // The Manager stops a session with SIGTERM, and a session it stops ships its
+        // telemetry first, like one whose Manager died.
+        Telemetry.endOnSignal clock telemetry
+        // The boot, timed in its two parts at the moment it is over. Only a boot that got
+        // here is recorded: one that failed is the Manager's `SessionLaunch false`.
+        telemetry.Time (Telemetry.Timing.SessionBoot Telemetry.BootPhase.Load) loadedAfter
+        telemetry.Time
+            (Telemetry.Timing.SessionBoot Telemetry.BootPhase.Start)
+            (Fable.NodeExtras.Processes.uptime () - loadedAfter)
         // The one readiness line of the spawn contract — last, so the Manager can
         // treat everything before it as logs and everything after as a live session.
         // `version` lets the Manager notice it just launched a session from a different
