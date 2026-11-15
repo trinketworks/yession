@@ -555,6 +555,29 @@ let private timingTests =
                     "the load and the start, in seconds"
             }
 
+        // A turn's two durations are two metrics, not one with a label: a first output and
+        // a whole turn are different quantities, and a sum across them means nothing.
+        testCaseAsync "a turn's first output and its length are two histograms, the length by how it ended" <|
+            async {
+                let exporter = inMemoryMetricExporter ()
+                let time, flush = Telemetry.timerTo exporter
+                for timing in
+                    [ TurnTiming.FirstOutput (System.TimeSpan.FromSeconds 2.0)
+                      TurnTiming.Ended (TurnEnding.Completed, System.TimeSpan.FromSeconds 90.0)
+                      TurnTiming.Ended (TurnEnding.Interrupted, System.TimeSpan.FromSeconds 5.0) ] do
+                    let metric, took = Telemetry.Timing.ofTurn timing
+                    time metric took
+                do! flush () |> Interop.awaitPromise
+                Expect.equal
+                    (histogramsOf (exporter.getMetrics ()) |> List.sortBy (fun (name, _, _) -> name))
+                    [ "yession.agent.turn.duration",
+                      "s",
+                      [ """{"yession.agent.turn.outcome":"completed"}""", 1, 90.0
+                        """{"yession.agent.turn.outcome":"interrupted"}""", 1, 5.0 ]
+                      "yession.agent.turn.first_output.duration", "s", [ "{}", 1, 2.0 ] ]
+                    "the first output alone, and each ending as its own series"
+            }
+
         testCase "the disabled emitter records no timing and never throws" <| fun () ->
             Telemetry.disabled.Time (Telemetry.Timing.SessionLaunch true) (System.TimeSpan.FromSeconds 1.0)
 

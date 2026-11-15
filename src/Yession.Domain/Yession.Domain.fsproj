@@ -54,6 +54,8 @@
     <Compile Include="AgentFacts.fs" />
     <Compile Include="TerminalsFacts.fs" />
     <Compile Include="Events.fs" />
+    <!-- How long a turn took, folded from the events above. -->
+    <Compile Include="TurnTimings.fs" />
     <!-- What every watched thing's change keeps, whatever kind it is: after Events.fs, whose
          cases it reads, and before Acts.fs, whose sentences it lengthens. -->
     <Compile Include="WatchChanges.fs" />

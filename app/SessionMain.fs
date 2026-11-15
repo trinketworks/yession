@@ -1090,6 +1090,17 @@ Async.StartImmediate (
         // Filled before anything that could read it runs: the command table was built above
         // and holds a getter, not this value.
         openedLog <- Some log
+        // Each turn's durations, read off the log as it grows (`TurnTimings`): this
+        // listener is the whole of the wiring, and the code that runs a turn knows nothing
+        // of it.
+        let mutable turnTimings = TurnTimings.empty
+        log.OnAppended (fun appended ->
+            let next, timed = TurnTimings.step turnTimings appended.Timestamp appended.Event
+            turnTimings <- next
+            for timing in timed do
+                let metric, took = Telemetry.Timing.ofTurn timing
+                telemetry.Time metric took)
+        |> ignore
         // Read once, spent by the repo manager's name check and both endpoints below: a
         // second read of the same variable is a second default, and the two would disagree
         // the first time one moved.
