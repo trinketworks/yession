@@ -97,7 +97,8 @@ let validBranchName (raw: string) : Result<string, string> =
 /// text. A checkout is read by processes that follow links, and a link a repository names can
 /// point anywhere on the host, so a link in the work tree is a path the repository chose
 /// outside it. The cost is that a repository which commits symlinks has plain files in its
-/// checkout (docs/GAPS.md).
+/// checkout (docs/GAPS.md). The clone writes the same setting into the checkout's own config
+/// (`cloneInPlace`), so that a git with no env of this process reads those files as links too.
 ///
 /// Under the `host` backend `NO_PROXY=*` disables any proxy a `.git/config` names: git hands
 /// it to curl as `CURLOPT_NOPROXY`, and `http.<url>.proxy` matches by the longest URL, so a
@@ -841,7 +842,14 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                 // that populates them is what fails, and a clone that asks for no
                 // templates never attempts it. Nothing here wants a hooks directory
                 // anyway: repo-controlled execution is off by construction.
-                match! runOk unconfined (Some (lenderFor caller)) [ "clone"; "--no-recurse-submodules"; "--template="; config.CloneUrl repo; relative ] with
+                //
+                // `--config core.symlinks=false` writes into the checkout's own config the
+                // setting that `hardenedEnv` gives this process's git. A git in a work sandbox
+                // has no such env. Without the line, that git read each plain file that holds
+                // a link's text as a changed type. Its `git add -A` committed the links as
+                // files, and its `git checkout` wrote real links. This process's git does not
+                // rely on the line: a sandbox can write that config, and the env outranks it.
+                match! runOk unconfined (Some (lenderFor caller)) [ "clone"; "--no-recurse-submodules"; "--template="; "--config"; "core.symlinks=false"; config.CloneUrl repo; relative ] with
                 | Error e ->
                     // git removes a target it created itself, but not one it was killed
                     // out of. Either way the staging area is ours to leave clean.

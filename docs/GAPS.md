@@ -1110,6 +1110,17 @@ After the fixes land, one pass rewrites it to what still reproduces.
     repository chose, and the session and every sandbox read the checkout through calls that
     follow links. The cost: a repository that commits symlinks has plain files in its checkout,
     and a build that needs the links does not work there.
+
+    The clone writes the same setting into the checkout's own config. A git in a work sandbox
+    has none of the session's env, and it reads that config. So it shows no change for such a
+    file, `git add -A` keeps the link a link in the commit, and `git checkout` writes the plain
+    file again. A sandbox can change that config, and then only its own git reads the files
+    differently. The session's git keeps its env, which outranks the config.
+
+    A checkout from before this change has no such line. There, a git in a sandbox shows each
+    committed link as a changed type (` T`), `git add -A` commits the links as plain files, and
+    `git checkout` writes real links. Run `git config core.symlinks false` in that checkout
+    one time, or remove the repo and add it again.
   - **A checkout whose `.git` is not a directory is not in the session.** A work sandbox can
     write the repos directory, so it can put a symlink named `.git` (or a symlinked checkout or
     owner directory) in place of the real one, pointed at another repository on the host.
