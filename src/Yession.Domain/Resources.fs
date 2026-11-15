@@ -71,12 +71,13 @@ module VariableValue =
 
 /// One rule of a Seatbelt profile in the operator's own text: one `(allow ...)` form.
 ///
-/// Private, so `parse` is the only way to hold one. A profile here is one `(deny default)`
-/// and then allows (`Seatbelt.fs`). A rule that could deny would make the order of the
-/// rules mean something.
+/// Private, so `parse` is the only way to hold one. A profile here is the denies at its
+/// head and then allows (`Seatbelt.fs`). A rule that could deny would make the order of
+/// the rules mean something.
 ///
 /// `parse` checks the shape of the text and not its meaning. `sandbox-exec` says what an
-/// operation is, and which filter fits it, when it reads the profile.
+/// operation is, and which filter fits it, when it reads the profile. It reads a rule as
+/// version 3 of the language, which is the version of each profile (`SeatbeltProfile.head`).
 type SeatbeltAllow = private SeatbeltAllow of string
 
 module SeatbeltAllow =
@@ -102,7 +103,7 @@ module SeatbeltAllow =
         elif text |> Seq.exists (fun c -> c < ' ' || c = '\127') then
             Error "a Seatbelt rule has a control character in it. Write each rule on one line"
         elif not (text.StartsWith "(allow ") then
-            refused "does not start with `(allow `. A profile is one `(deny default)` and then allows only"
+            refused "does not start with `(allow `. A profile denies at its head and then allows only"
         else
             // `depth` counts the parentheses that are open. `quoted` is true inside a
             // string, and `escaped` is true for the character after a backslash there.

@@ -357,6 +357,45 @@ The last section holds trust boundaries as sharp as the first section's.
   - **It opens no terminal.** `SpawnPty` is `None`, so a terminal there runs each block as a
     separate process. `SeatbeltSandbox.create` in `app/Sandboxes.fs` says what a terminal
     needs first.
+  - **A command there still lists the processes of the host.** The profile refuses the
+    arguments and the environment of a process outside the sandbox (`SeatbeltProfile.head`
+    in `src/Yession.Domain/Seatbelt.fs` gives the measurements). The `kern.proc` sysctls
+    that each profile allows still give the pid and the name of each process of the host.
+    An operator's rule for `sysmond`, which `pgrep` asks, gives the arguments of each
+    process too. It gives no environment.
+  - **A command there learns if a path exists, in each place where the person can go.** A
+    profile allows the lookup of each path (`file-test-existence`, with no filter). So
+    `stat` answers "not permitted" for a file that exists and "no such file" for a name
+    that does not, in a home too. It also answers the kind of each directory. A filter by
+    path is not possible. Seatbelt judges the lookup on the path as a program wrote it, so
+    a path through `/etc`, `/tmp` or `/var` does not match the path that a rule names, and
+    a filter for directories does not match a lookup at all. Version 1 had the same limit.
+  - **The profile allows each system call.** Version 3 can allow a call by its number. No
+    rule here does: `syscall-unix`, `syscall-mach` and `system-fcntl` are each allowed
+    whole, because nobody measured the list of calls that a toolchain needs. The other
+    rules of a profile still judge what a call does to a file, a socket or a process.
+  - **Seven operations stay open that no rule allows.** `(deny default)` of version 3
+    leaves 15 operations open. The head of a profile denies eight of them by name, because
+    no workload attempts one. A workload attempts each of the other seven, so they stay
+    open. Without `syscall-mig`, each program ends at start. Without `mach-derive-port`, a
+    program cannot ask for the name of its user. Without `process-codesigning`, `/bin/sh`
+    cannot read its own code signature. Without `file-lock`, devenv cannot lock its files.
+    Without `mach-task-exception-port-set`, the .NET runtime does not start, and the
+    Android emulator finds no hypervisor. Each process calls `sandbox-check` and
+    `mach-task-special-port-set` when it starts: no workload failed without those two, and
+    the kernel refused 2639 calls in seven runs. `SeatbeltProfile.head` has the
+    measurements. Six of the eight names came after macOS 13, by the public lists of what
+    each release changed (five of those lists are of iOS). So each deny applies only where
+    macOS knows its name. The
+    [ADR](decisions/2026-11-16-a-seatbelt-profile-is-version-3.md) gives the alternatives.
+  - **We measured the profile on one macOS, with one set of tools.** The macOS is 26.5.2.
+    The tools are a shell with the usual commands, `pgrep`, git, Node, devenv with nix, a
+    .NET build of an Android app with its tests, and the Android emulator with adb. Nobody
+    measured macOS 13, 14 or 15, where the default of version 3 can leave a different set of
+    operations open. Nobody measured Rust, Go, Python with native modules, a browser or
+    the tools of Xcode. Version 3 refuses operations that a sandbox had under version 1
+    (docs/deployment.md lists them). A tool that needs one of them stops, the system log
+    names the operation, and an operator can allow it with a rule.
   - **Only work sandboxes can use it.** These are the session's own work sandbox
     (`YESSION_SESSION_WORK_BACKEND`) and a repo's `host:` sandbox
     (`YESSION_SESSION_REPO_BACKEND`). The agent CLI and the git verbs refuse it
@@ -1273,10 +1312,16 @@ After the fixes land, one pass rewrites it to what still reproduces.
   - **A forwarded credential is a route, and the route's cap lives in the sandbox's env for that
     sandbox's lifetime** (Plan 15 stage 2, reshaped by the git gateway). The header of
     `app/GitGateway.fs` describes the route, the per-sandbox cap, the per-block loan (`__y_env`)
-    and why a block can read another's live loan from `/proc`. The VALUE never enters the
-    sandbox. A refresh under Plan 21 reaches a running sandbox, a revocation at the provider
-    shows on the next push, and `stop_work_sandbox` revokes the route. A push writes
-    `GitCredentialSpent` to the log, where the person whose credential it was finds out.
+    and why a block can read another's live loan from `/proc`. On a Mac the same read is the
+    sysctl `kern.procargs2`, and a profile of version 1 that has only `(deny default)` does
+    not hold it to one sandbox. The seatbelt backend refuses it for a process outside the
+    sandbox. Under srt on a Mac nothing refuses it (anthropics/sandbox-runtime#160): a
+    command there reads the environment of each process of its user, and so the cap and the
+    loan of a block in another sandbox. No measurement says if it can also reach the gateway
+    from there. The VALUE never enters the sandbox. A refresh under Plan 21 reaches a running
+    sandbox, a revocation at the provider shows on the next push, and `stop_work_sandbox`
+    revokes the route. A push writes `GitCredentialSpent` to the log, where the person whose
+    credential it was finds out.
 
     The transcript is NOT held. `env`, `printenv` or a program that dumps its environment on
     exit prints the loan into a durable record that replays to every peer, present and future.

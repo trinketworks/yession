@@ -72,6 +72,11 @@ module Yession.Host.GitGateway
 // environment `env` dumps. That is the trust boundary a sandbox already is (docs/GAPS.md),
 // stated rather than solved; what IS held is that a loan answers only on the route of the
 // sandbox it was lent in, so a loan that leaks travels no further than that sandbox.
+//
+// A Mac has no `/proc`. The read there is the sysctl `kern.procargs2`, and a Seatbelt profile
+// of version 1 that has only `(deny default)` does not refuse it for a process outside the
+// sandbox. The seatbelt backend's profile refuses it (`SeatbeltProfile.head`). docs/GAPS.md
+// says what srt on a Mac leaves open.
 
 open System
 open Fable.Core

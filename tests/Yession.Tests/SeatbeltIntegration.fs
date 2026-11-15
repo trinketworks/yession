@@ -91,6 +91,171 @@ let private exitCode (run: SandboxRun) : int =
 /// One word quoted for `/bin/sh`.
 let private quoted (value: string) : string = "'" + value.Replace ("'", "'\\''") + "'"
 
+/// A process that has `YESSION_MARKER=<value>` in its environment and `value` in its
+/// arguments, started in `sandbox`. Answers its pid, and a way to end it. The process prints
+/// its pid when it runs, so the pid is that of a process that has its environment.
+let private marked (sandbox: Sandbox) (value: string) : Async<int * (unit -> unit)> =
+    async {
+        let printed = System.Text.StringBuilder ()
+        let! spawned =
+            sandbox.Spawn
+                { Executable = Node.Api.``process``.execPath
+                  Arguments = [ "-e"; sprintf "console.log(process.pid); setTimeout(() => {}, 600000) /* %s */" value ]
+                  Env = Map.ofList [ "YESSION_MARKER", value ]
+                  WorkingDirectory = None
+                  Via = Direct }
+                (fun (stream, text) -> if stream = Stdout then printed.Append text |> ignore)
+        match spawned with
+        | Error reason -> return failwithf "the marked process did not start: %s" reason
+        | Ok handle ->
+            let! started = settledWithin 20000 (fun () -> printed.ToString().Contains "\n")
+            if not started then
+                handle.Kill ()
+                failwith "the marked process did not print its pid"
+            return int (printed.ToString().Trim ()), handle.Kill
+    }
+
+/// `body` with the pid of a marked process in `sandbox` (`marked`). The process ends when
+/// `body` ends, and when `body` throws: a marked process lives for ten minutes, and a case
+/// that fails after it started one must not leave it.
+let private withMarked (sandbox: Sandbox) (value: string) (body: int -> Async<'T>) : Async<'T> =
+    async {
+        let! pid, stop = marked sandbox value
+        try
+            return! body pid
+        finally
+            stop ()
+    }
+
+/// Perl that asks the kernel for the arguments and the environment of one process, and
+/// answers the value of `YESSION_MARKER` there. The call is the sysctl `kern.procargs2`,
+/// which is the call that `ps -E` makes. A refusal answers `refused` and the error number.
+///
+/// Perl, because each Mac has it and it can make the call. `ps` is setuid, and a sandbox
+/// does not run a setuid program.
+let private markerOf : string =
+    """sub marker { my $mib = pack('i3', 1, 49, $_[0]); my $size = pack('Q', 1 << 20); my $buf = "\0" x (1 << 20);
+  return 'refused ' . ($! + 0) if syscall(202, $mib, 3, $buf, $size, 0, 0) != 0;
+  return substr($buf, 0, unpack('Q', $size)) =~ /YESSION_MARKER=([\w-]+)/ ? "marker $1" : 'no marker'; }
+"""
+
+/// What a command in `sandbox` reads of the environment of process `pid`, and what the
+/// command said on stderr.
+let private readsOf (sandbox: Sandbox) (pid: int) : Async<string * string> =
+    async {
+        let! _, out, err =
+            runInSandbox sandbox "/usr/bin/perl" [ "-e"; markerOf + "print marker($ARGV[0]);"; string pid ] Map.empty None
+        return out.Trim (), err
+    }
+
+/// The backend that confines nothing, for a process that a case needs outside each sandbox.
+let private unconfined () : Async<Sandbox> =
+    async {
+        let! host = Sandboxes.HostSandbox.create HostSpec.none emptyPolicy
+        return host |> expect
+    }
+
+/// `body` with the pid of a marked process outside each sandbox (`withMarked`).
+let private withOutside (value: string) (body: int -> Async<'T>) : Async<'T> =
+    async {
+        let! host = unconfined ()
+        let! answer = withMarked host value body
+        do! host.Dispose ()
+        return answer
+    }
+
+/// What a command in a new sandbox under `policy` reads of the environment of process `pid`,
+/// and what the command said on stderr.
+let private readsUnder (policy: SandboxPolicy) (pid: int) : Async<string * string> =
+    async {
+        let! sandbox = startSandbox policy
+        let! answer = readsOf sandbox pid
+        do! sandbox.Dispose ()
+        return answer
+    }
+
+/// The name that one line of the head guards, `(when (defined? 'name) ...)`. A line with no
+/// guard has none.
+let private guarded (line: string) : string option =
+    let opening = "(when (defined? '"
+    if line.StartsWith opening then
+        let rest = line.Substring opening.Length
+        match rest.IndexOf ')' with
+        | -1 -> None
+        | closing -> Some (rest.Substring (0, closing))
+    else
+        None
+
+/// The version of this macOS as two numbers: (26, 5) for 26.5.2. Nothing when `sw_vers` does
+/// not say one.
+let private macOSVersion () : (int * int) option =
+    let number (text: string) : int option =
+        match System.Int32.TryParse text with
+        | true, value -> Some value
+        | _ -> None
+    match (SyncChildProcesses.spawnSync "/usr/bin/sw_vers" [ "-productVersion" ] SyncOptions.none).stdout with
+    | Some said ->
+        match said.Trim().Split '.' |> List.ofArray |> List.map number with
+        | Some major :: Some minor :: _ -> Some (major, minor)
+        | _ -> None
+    | None -> None
+
+/// Whether this macOS is 26.5 or later. We measured 26.5.2, and it knows each name that the
+/// head of a profile guards.
+let private atLeastTheMeasuredMacOS () : bool =
+    match macOSVersion () with
+    | Some version -> version >= (26, 5)
+    | None -> false
+
+/// Whether the loader prints its lines for this Node outside each sandbox, when
+/// `DYLD_PRINT_LIBRARIES` asks. The loader ignores that variable for a program whose
+/// signature asks for the hardened runtime, under each profile and under none. For such a
+/// Node, no case can judge what a profile does with the variable.
+let private loaderAnswersOutside () : bool =
+    let ran =
+        SyncChildProcesses.spawnSync
+            Node.Api.``process``.execPath
+            [ "-e"; "0" ]
+            { SyncOptions.none with Env = ChildEnv.Adding (Map.ofList [ "DYLD_PRINT_LIBRARIES", "1" ]) }
+    ran.stderr |> Option.exists (fun said -> said.Contains "dyld[")
+
+/// What a confined command reads of the environment of the process that started its
+/// sandbox, and what the command said on stderr.
+///
+/// The launcher is a Node process with `YESSION_MARKER` in its environment. It starts
+/// `sandbox-exec` itself, under the profile of a policy, as the backend does. The confined
+/// command is in the process group of the launcher, or in a session of its own
+/// (`ownSession`), which is where the backend puts a command.
+let private readsItsLauncher (ownSession: bool) : Async<string * string> =
+    async {
+        let workspace = freshDir ()
+        let profile =
+            SeatbeltProfile.forPolicy
+                { RuntimePaths = (tools ()).Runtime; Tmp = workspace; ProxyPort = None; Above = [] }
+                (policyIn workspace)
+            |> expect
+        let launcher =
+            """const [profile, program, session] = process.argv.slice(1);
+const child = require('child_process').spawn(
+  '/usr/bin/sandbox-exec', ['-p', profile, '/usr/bin/perl', '-e', program, String(process.pid)],
+  { stdio: 'inherit', detached: session === 'own' });
+child.on('exit', () => process.exit(0));"""
+        let! host = unconfined ()
+        let! _, out, err =
+            runInSandbox
+                host
+                Node.Api.``process``.execPath
+                [ "-e"
+                  launcher
+                  SeatbeltProfile.render profile
+                  markerOf + "print marker($ARGV[0]);"
+                  (if ownSession then "own" else "shared") ]
+                (Map.ofList [ "YESSION_MARKER", "launcher" ])
+                None
+        do! host.Dispose ()
+        return out.Trim (), err
+    }
+
 /// What a fixture's listener does with a connection: say one thing and let it go. Its
 /// clients here are probes that hang up as soon as they know they connected, so it listens
 /// for the error such a client leaves behind before it answers.
@@ -437,6 +602,245 @@ let private macCases () =
                     | Error refusal -> return refusal
                 }
             Expect.isTrue (err.Contains "no-such-operation") (sprintf "said: %s" err)
+        })
+
+        // A profile is version 3, and `sandbox-exec` reads a rule of an operator as version 3
+        // too. `unix-socket` is a word of a filter that only version 1 knows.
+        testCaseAsync "a rule with a word that only version 1 knows stops the start of the sandbox, and sandbox-exec names the word" (async {
+            let rule = SeatbeltAllow.parse "(allow network-outbound (remote unix-socket))" |> expect
+            let! started =
+                Sandboxes.SeatbeltSandbox.create (tools ()) HostSpec.none (Some (ownRoot ())) { policyIn (freshDir ()) with SeatbeltRules = [ rule ] }
+            let! err =
+                async {
+                    match started with
+                    | Ok sandbox ->
+                        do! sandbox.Dispose ()
+                        return "the sandbox started"
+                    | Error refusal -> return refusal
+                }
+            Expect.isTrue (err.Contains "unix-socket") (sprintf "said: %s" err)
+        })
+
+        // Each deny of the head after the first two stands behind a guard, so that a macOS
+        // that does not know a name leaves that deny out. A name that no macOS knows, for
+        // example a name with a wrong letter, is then left out on each macOS, and no sandbox
+        // says so. This case takes each guarded name from the head itself. It asks the
+        // `sandbox-exec` of this Mac about each one: a profile with a plain deny of a name
+        // that it does not know does not compile.
+        //
+        // We measured macOS 26.5.2, which knows each name. An older macOS does not know each
+        // one, and that is what the guards are for. A failure there is not a fault, so the
+        // case stands as pending there and says why. On a later macOS the case fails when a
+        // name is gone, and then a deny of the head is not in force.
+        (if atLeastTheMeasuredMacOS () then
+            testCaseAsync "this macOS knows each operation that the head denies behind a guard" (async {
+                let names = SeatbeltProfile.head |> List.choose guarded
+                if List.isEmpty names then failwith "no line of the head has a guard that this case can read"
+                let! host = unconfined ()
+                let unknown = ResizeArray<string> ()
+                for name in names do
+                    let! run, _, err =
+                        runInSandbox
+                            host
+                            "/usr/bin/sandbox-exec"
+                            [ "-p"; sprintf "(version 3)(allow default)(deny %s)" name; "/usr/bin/true" ]
+                            Map.empty
+                            None
+                    if exitCode run <> 0 then unknown.Add (sprintf "%s: %s" name (err.Trim ()))
+                do! host.Dispose ()
+                Expect.equal (List.ofSeq unknown) [] "each name compiles in a plain deny, so each guard holds and each deny is in force"
+            })
+         else
+            ptestCase
+                "this macOS knows each operation that the head denies behind a guard (macOS 26.5 or later only: an older macOS knows fewer names)"
+                (fun () -> ()))
+
+        // --- what version 3 refuses until a profile allows it -------------------------------
+        //
+        // `(deny default)` of version 3 refuses each system call, and each operation that the
+        // fixed text of a profile does not allow (`SeatbeltProfile.essentials`). Each case
+        // above that runs a command needs most of those lines: no program starts without
+        // them. These cases are for the lines that a plain command does not need, and for one
+        // operation that the head leaves open.
+
+        // The loader asks the policy `AMFI` of the kernel when a program starts. When the
+        // profile refuses that call, the loader ignores each `DYLD_` variable. Node is the
+        // program here, because the system removes those variables for a program of Apple.
+        //
+        // The case is about the profile, so it runs only where the same command prints the
+        // lines of the loader outside a sandbox (`loaderAnswersOutside`). A Node whose
+        // signature asks for the hardened runtime prints none in each place, and the case
+        // then stands as pending and says why.
+        (if loaderAnswersOutside () then
+            testCaseAsync "the loader takes its variables in a sandbox, as it does outside one" (async {
+                let! sandbox = startSandbox (policyIn (freshDir ()))
+                let! _, _, err =
+                    runInSandbox sandbox Node.Api.``process``.execPath [ "-e"; "0" ] (Map.ofList [ "DYLD_PRINT_LIBRARIES", "1" ]) None
+                do! sandbox.Dispose ()
+                Expect.isTrue (err.Contains "dyld[") "the loader printed each library, as the variable asks"
+            })
+         else
+            ptestCase
+                "the loader takes its variables in a sandbox, as it does outside one (not this Node: its loader ignores them outside a sandbox too)"
+                (fun () -> ()))
+
+        testCaseAsync "a command makes a hard link in its workspace" (async {
+            let workspace = freshDir ()
+            TestFiles.write (workspace + "/first") "linked"
+            let! sandbox = startSandbox (policyIn workspace)
+            let! _, out, err = shell sandbox "ln first second && cat second"
+            do! sandbox.Dispose ()
+            Expect.equal (out.Trim ()) "linked" (sprintf "the second name reads as the file, and stderr said: %s" err)
+        })
+
+        // `/bin/cp`, because `-c` is an option of the `cp` of macOS, and a `cp` of a different
+        // maker can be first on PATH.
+        testCaseAsync "a command makes a copy that shares the blocks of its file" (async {
+            let workspace = freshDir ()
+            TestFiles.write (workspace + "/first") "cloned"
+            let! sandbox = startSandbox (policyIn workspace)
+            let! _, out, err = shell sandbox "/bin/cp -c first second && cat second"
+            do! sandbox.Dispose ()
+            Expect.equal (out.Trim ()) "cloned" (sprintf "the copy reads as the file, and stderr said: %s" err)
+        })
+
+        // The `cp` of macOS asks the policy `Quarantine` of the kernel when it copies a file.
+        // When the profile refuses that call, the copy of a file that has the quarantine mark
+        // has no mark, and nothing says so. A `cp` that clones the file keeps the mark with
+        // no such call, so this case names `/bin/cp`, which copies the data.
+        testCaseAsync "a copy keeps the quarantine mark of its file" (async {
+            let workspace = freshDir ()
+            TestFiles.write (workspace + "/first") "marked"
+            let! sandbox = startSandbox (policyIn workspace)
+            let! _, out, err =
+                shell
+                    sandbox
+                    "/usr/bin/xattr -w com.apple.quarantine '0083;65000000;Safari;' first && /bin/cp first second && /usr/bin/xattr -p com.apple.quarantine second"
+            do! sandbox.Dispose ()
+            Expect.isTrue (out.Contains ";") (sprintf "the copy has a mark, and stdout said: %s, and stderr said: %s" out err)
+        })
+
+        // `file-lock` is one of the operations that the default of version 3 leaves open,
+        // and the head does not deny it: devenv locks its files.
+        testCaseAsync "a command locks a file of its workspace" (async {
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            let program = """use Fcntl qw(:flock); open(my $file, '>', 'lock') or die "no file: $!"; print flock($file, LOCK_EX | LOCK_NB) ? 'locked' : 'refused ' . ($! + 0);"""
+            let! _, out, err = runInSandbox sandbox "/usr/bin/perl" [ "-e"; program ] Map.empty None
+            do! sandbox.Dispose ()
+            Expect.equal (out.Trim ()) "locked" (sprintf "the kernel gave the lock, and stderr said: %s" err)
+        })
+
+        // --- the processes that a sandbox reads ------------------------------------------------
+        //
+        // `(deny default)` of version 1 does not refuse the operations that read the arguments
+        // and the environment of a process. A profile is version 3, whose default refuses them
+        // on the macOS that we measured, and its head denies them by name too. The essentials
+        // allow them for the processes of the same sandbox (`SeatbeltProfile.head`). A command
+        // holds a loan in its environment, so these cases ask the kernel who reads an
+        // environment.
+
+        testCaseAsync "a command reads the environment of a process that it started" (async {
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            // One program starts the marked process and reads it, so the two are in one
+            // sandbox. The child prints a line when it runs, and the read follows that line.
+            let program =
+                markerOf
+                + """$ENV{YESSION_MARKER} = 'inside';
+my $pid = open(my $child, '-|', $ARGV[0], '-e', 'console.log(1); setTimeout(() => {}, 600000)') or die "no child: $!";
+my $line = <$child>;
+print marker($pid);
+kill('TERM', $pid);"""
+            let! _, out, err =
+                runInSandbox sandbox "/usr/bin/perl" [ "-e"; program; Node.Api.``process``.execPath ] Map.empty None
+            do! sandbox.Dispose ()
+            Expect.equal (out.Trim ()) "marker inside" (sprintf "the read of its own child, and stderr said: %s" err)
+        })
+
+        testCaseAsync "a command does not read the environment of a process outside its sandbox" (async {
+            let! read, err = withOutside "outside" (readsUnder (policyIn (freshDir ())))
+            Expect.equal read "refused 1" (sprintf "the kernel refused the read with EPERM, and stderr said: %s" err)
+        })
+
+        testCaseAsync "a command does not read the environment of a process of another sandbox" (async {
+            let! other = startSandbox (policyIn (freshDir ()))
+            let! read, err = withMarked other "other" (readsUnder (policyIn (freshDir ())))
+            do! other.Dispose ()
+            Expect.equal read "refused 1" (sprintf "the kernel refused the read with EPERM, and stderr said: %s" err)
+        })
+
+        // The call is `csops`, which answers the status of the code signature of a process.
+        // The default of version 1 leaves that call open for a process outside the sandbox,
+        // and a deny of `process-info*` by name does not close it there. Version 3 refuses it.
+        testCaseAsync "a command does not read the code signature of a process outside its sandbox" (async {
+            let! out, err =
+                withOutside "outside" (fun pid ->
+                    async {
+                        let! sandbox = startSandbox (policyIn (freshDir ()))
+                        // `+ 0`, because Perl gives `syscall` a pointer for an argument that is a string.
+                        let program = "my $status = pack('L', 0); print syscall(169, $ARGV[0] + 0, 0, $status, 4) == 0 ? 'answered' : 'refused ' . ($! + 0);"
+                        let! _, out, err = runInSandbox sandbox "/usr/bin/perl" [ "-e"; program; string pid ] Map.empty None
+                        do! sandbox.Dispose ()
+                        return out, err
+                    })
+            Expect.equal (out.Trim ()) "refused 1" (sprintf "the kernel refused the call with EPERM, and stderr said: %s" err)
+        })
+
+        // The process that starts a sandbox is the session, and it is outside the sandbox. A
+        // report says that a deny with the filter `(target others)` leaves a process in the
+        // process group of the sandbox readable, so the head's deny has no filter. These two
+        // cases put the launcher in the process group of the confined command, and then in a
+        // different session.
+        testCaseAsync "a command does not read the environment of the process that started its sandbox" (async {
+            let! read, err = readsItsLauncher false
+            Expect.equal read "refused 1" (sprintf "the kernel refused the read with EPERM, and stderr said: %s" err)
+        })
+
+        testCaseAsync "a command in a session of its own does not read the environment of the process that started its sandbox" (async {
+            let! read, err = readsItsLauncher true
+            Expect.equal read "refused 1" (sprintf "the kernel refused the read with EPERM, and stderr said: %s" err)
+        })
+
+        // The kernel gives the arguments of a process when the check of `process-info` allows
+        // it, or the check of `sysctl-read` does. An operator can write a rule that allows
+        // each sysctl. The head's deny of `kern.procargs` has a filter, so it holds against
+        // that rule.
+        testCaseAsync "a rule that allows each sysctl does not open the environment of a process outside the sandbox" (async {
+            let rule = SeatbeltAllow.parse "(allow sysctl-read)" |> expect
+            let! read, err = withOutside "outside" (readsUnder { policyIn (freshDir ()) with SeatbeltRules = [ rule ] })
+            Expect.equal read "refused 1" (sprintf "the kernel refused the read with EPERM, and stderr said: %s" err)
+        })
+
+        // Two rules of an operator that DO open the environment again, pinned as what the
+        // kernel does. Between two rules that both have a filter, or that both have none, the
+        // later rule wins, and a rule of an operator comes after the head. docs/deployment.md
+        // tells an operator what these two rules give a sandbox.
+        testCaseAsync "a rule that allows process information with no filter opens the environment of a process outside the sandbox" (async {
+            let rule = SeatbeltAllow.parse "(allow process-info*)" |> expect
+            let! read, err = withOutside "outside" (readsUnder { policyIn (freshDir ()) with SeatbeltRules = [ rule ] })
+            Expect.equal read "marker outside" (sprintf "the later rule with no filter won, and stderr said: %s" err)
+        })
+
+        testCaseAsync "a rule that allows the sysctls of a prefix that covers kern.procargs opens the environment of a process outside the sandbox" (async {
+            let rule = SeatbeltAllow.parse """(allow sysctl-read (sysctl-name-prefix "kern.proc"))""" |> expect
+            let! read, err = withOutside "outside" (readsUnder { policyIn (freshDir ()) with SeatbeltRules = [ rule ] })
+            Expect.equal read "marker outside" (sprintf "the later rule with a filter won, and stderr said: %s" err)
+        })
+
+        // An operator can offer the process list of the host as a resource: a rule for
+        // `sysmond`, which is the service that `pgrep` asks. The service answers for each
+        // process of the host, and the denies at the head do not change that.
+        testCaseAsync "a rule for the process list still finds a process outside the sandbox" (async {
+            let name = sprintf "listed-%d" (int Node.Api.``process``.pid)
+            let rule = SeatbeltAllow.parse """(allow mach-lookup (global-name "com.apple.sysmond"))""" |> expect
+            let! found, pid, err =
+                withOutside name (fun pid ->
+                    async {
+                        let! sandbox = startSandbox { policyIn (freshDir ()) with SeatbeltRules = [ rule ] }
+                        let! _, out, err = runInSandbox sandbox "/usr/bin/pgrep" [ "-f"; name ] Map.empty None
+                        do! sandbox.Dispose ()
+                        return out.Trim (), pid, err
+                    })
+            Expect.equal found (string pid) (sprintf "the pid that the service gave, and stderr said: %s" err)
         })
 
         testCaseAsync "a client is handed the proxy, and the proxy refuses a host nobody named" (async {
