@@ -1225,6 +1225,12 @@ After the fixes land, one pass rewrites it to what still reproduces.
     credential are blocks, sent from the command line, like everyone's. Only `github` is
     forwardable so far. The gateway admits only git's three smart-HTTP requests to a repository
     path, so a cap is not a token for the rest of github.com.
+
+    A request with no live loan goes up with no credential, and github.com answers it as it
+    answers anybody. So each process in a sandbox that forwards github by `git` reads a public
+    repository through the gateway. This holds for a `prepare:` command, for the own command
+    of a container, and for a block of a person who lends nothing. It also holds where the
+    network policy of the sandbox names no github.com.
   - **The GitHub API reaches a sandbox only as far as somebody bound it.** A connection
     forwarded by `api` routes `api.github.com` and `uploads.github.com` to the credential proxy,
     and nothing else, and never under srt ([technical-design.md

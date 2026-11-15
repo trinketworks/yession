@@ -564,6 +564,8 @@ installs them: a repository's `setup.sh`, for example. The session runs it each 
 starts the sandbox, after the start-up checks and before any work. It runs bare, because the
 entrypoint can be a tool that it installs. It runs in the sandbox, so it holds what the
 sandbox holds and nothing more. It is not a block, so the session lends it no credential.
+Where the sandbox forwards github by `git`, the git of the command goes through the gateway
+with no credential, and reads what github.com gives anybody.
 A command that fails refuses the start, and the refusal quotes the end of what the command
 printed. `SessionEnvironment.runPreparation` in `src/Yession.Session/Environment.fs` holds
 the rule, and the
@@ -685,8 +687,9 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     repository names. A work sandbox can write the checkout, so a path in it can be a symlink
     to anything the session's user can read, and a check before the open races the write.
 21. No git process holds a GitHub credential. git reaches github.com only through the git
-    gateway (`GitGateway`), which adds the credential of a loan on the way. A work sandbox's
-    git and the session's own clone and fetch take the same route.
+    gateway (`GitGateway`), which adds the credential of a loan on the way. A request with no
+    live loan goes up with no credential. A work sandbox's git and the session's own clone and
+    fetch take the same route.
 22. A string the agent supplied reaches a program only as an operand, never as an option. It
     stands after `--` or as an option's own argument, and a path operand is a `PathOperand`,
     which starts with `/` or `.`. A read-only tool never meets the gate, so this is what keeps
