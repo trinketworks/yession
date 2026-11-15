@@ -128,6 +128,14 @@ that runs a sandbox under `seatbelt`: `/Users/Shared/yession`, for example. Then
 - Add the new place to the mounts of a docker daemon that runs in a VM. Colima mounts the
   home by default, and a `--mount` flag replaces that default. So name the home and the new
   place (`colima start --mount`). Without the mount, a container finds its checkout empty.
+- Repair each git worktree that a sandbox made. A move changes the path of each checkout,
+  and git writes the two ends of a linked worktree as absolute paths. One is the `.git`
+  file of the worktree. The other is `worktrees/<name>/gitdir` in the `.git` directory of
+  its repository. After the move, git in that worktree stops with "not a git repository".
+  Put the new path in the two files. `git worktree repair` writes the same two files, but
+  it runs as you in a checkout that a work sandbox wrote (see the git verbs, below).
+- Make a clean build where a build cache holds the old path. A Python virtual environment
+  is an example.
 
 The git verbs work on checkouts that every work sandbox can write, `.git/config` included. Under
 `srt` a program that config names runs with the git sandbox's reach: the repos directory, and
