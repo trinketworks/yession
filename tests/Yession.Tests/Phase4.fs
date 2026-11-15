@@ -2753,6 +2753,7 @@ let private telemetryTests =
                     Support.withEnv
                         [ "YESSION_SESSION_AGENT", Some "usage-probe"
                           "OTEL_LOGS_EXPORTER", Some "otlp"
+                          "OTEL_METRICS_EXPORTER", Some "otlp"
                           "OTEL_EXPORTER_OTLP_ENDPOINT", Some stub.Url ]
                         (fun () -> pm.Launch record.SessionId)
                 let port = launched |> expect
@@ -2789,8 +2790,18 @@ let private telemetryTests =
                 Expect.isTrue (managerEvents.Contains "session launched") "the Manager emitted its own launch lifecycle signal"
 
                 do! a.Channel.Close ()
-                stub.Close ()
+                // The turn's durations, read off the child's own log, leave with it when it
+                // is stopped. The usage record above arrives when the turn ends, which is
+                // the event that times the turn, so both durations are recorded by now.
                 do! pm.StopAll ()
+                let metrics =
+                    stub.Posted ()
+                    |> List.filter (fun (path, _) -> path.EndsWith "/v1/metrics")
+                    |> List.map snd
+                    |> String.concat ""
+                Expect.isTrue (metrics.Contains "yession.agent.turn.duration") "how long the turn took reached the collector"
+                Expect.isTrue (metrics.Contains "yession.agent.turn.first_output.duration") "and how long until it first did something"
+                stub.Close ()
             }
 
         // A session records its boot once, at its readiness line, and a reader exports once a

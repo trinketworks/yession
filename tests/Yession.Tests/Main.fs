@@ -27,6 +27,7 @@ let all =
         Tag.needs "Routes" [] (fun () -> Routes.tests)
         Tag.needs "Static assets" [] (fun () -> Assets.tests)
         Tag.needs "Idle reaping" [] (fun () -> Reaper.tests)
+        Tag.needs "Turn timings" [] (fun () -> TurnTimings.tests)
         Tag.needs "Cli" [] (fun () -> Cli.tests)
         Tag.needs "Secrets" [] (fun () -> Secrets.tests)
         Tag.needs "Repo trust" [] (fun () -> RepoTrust.tests)

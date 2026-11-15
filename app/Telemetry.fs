@@ -142,6 +142,11 @@ type Timing =
     /// One part of a session's boot, as the session itself measures it. Recorded only by a
     /// boot that reached its readiness line.
     | SessionBoot of BootPhase
+    /// From an agent turn starting to its first output, as the session reads it off its own
+    /// log (`TurnTimings`).
+    | TurnFirstOutput
+    /// From an agent turn starting to the event that ended it, read the same way.
+    | Turn of TurnEnding
 
 module Timing =
     /// The metric's name. Ours, under `yession.`: the conventions name no such duration.
@@ -149,11 +154,16 @@ module Timing =
         match timing with
         | Timing.SessionLaunch _ -> "yession.session.launch.duration"
         | Timing.SessionBoot _ -> "yession.session.boot.duration"
+        | Timing.TurnFirstOutput -> "yession.agent.turn.first_output.duration"
+        | Timing.Turn _ -> "yession.agent.turn.duration"
 
     let description (timing: Timing) : string =
         match timing with
         | Timing.SessionLaunch _ -> "From spawning a session process to its readiness line, or to the launch failing."
         | Timing.SessionBoot _ -> "One part of a session process's boot: loading its code, then starting the session."
+        | Timing.TurnFirstOutput ->
+            "From an agent turn starting to the first thing it does that a person sees: a word, a thought or a tool call."
+        | Timing.Turn _ -> "From an agent turn starting to the event that ends it."
 
     let attributes (timing: Timing) : (string * AttributeValue) list =
         match timing with
@@ -165,12 +175,33 @@ module Timing =
                   match phase with
                   | BootPhase.Load -> "load"
                   | BootPhase.Start -> "start") ]
+        | Timing.TurnFirstOutput -> []
+        | Timing.Turn ending ->
+            [ "yession.agent.turn.outcome",
+              AttributeValue.String (
+                  match ending with
+                  | TurnEnding.Completed -> "completed"
+                  | TurnEnding.Failed -> "failed"
+                  | TurnEnding.Interrupted -> "interrupted") ]
 
-    /// The bucket edges, in seconds, for every duration here: a launch is under a second on a
-    /// warm machine and is given up on after fifteen (`LaunchTimeoutMs`), and the steps that
-    /// will join it (a sandbox start, a turn's first output) live in the same range.
-    let boundaries : float list =
-        [ 0.1; 0.25; 0.5; 0.75; 1.0; 1.5; 2.0; 3.0; 5.0; 7.5; 10.0; 15.0; 30.0; 60.0 ]
+    /// A turn's timing as the metric it is recorded under, and how long it was.
+    let ofTurn (timing: TurnTiming) : Timing * System.TimeSpan =
+        match timing with
+        | TurnTiming.FirstOutput took -> Timing.TurnFirstOutput, took
+        | TurnTiming.Ended (ending, took) -> Timing.Turn ending, took
+
+    /// The bucket edges, in seconds. A launch is under a second on a warm machine and is
+    /// given up on after fifteen (`LaunchTimeoutMs`); a boot and a turn's first output live
+    /// in the same range. A whole turn does not: one that calls tools runs for minutes, and
+    /// one that works alone for an hour.
+    let boundaries (timing: Timing) : float list =
+        match timing with
+        | Timing.Turn _ ->
+            [ 1.0; 2.0; 5.0; 10.0; 20.0; 30.0; 60.0; 120.0; 300.0; 600.0; 1200.0; 1800.0; 3600.0; 7200.0 ]
+        | Timing.SessionLaunch _
+        | Timing.SessionBoot _
+        | Timing.TurnFirstOutput ->
+            [ 0.1; 0.25; 0.5; 0.75; 1.0; 1.5; 2.0; 3.0; 5.0; 7.5; 10.0; 15.0; 30.0; 60.0 ]
 
 /// The telemetry sink plus a graceful flush. `Emit turnId usage` records one agent-turn log
 /// record (session emitters); `Log body attrs` records a general log record (the Manager's
@@ -406,7 +437,7 @@ let private timerOver
             | true, histogram -> histogram
             | _ ->
                 let histogram =
-                    OpenTelemetry.durationHistogram meter metric (Timing.description timing) Timing.boundaries
+                    OpenTelemetry.durationHistogram meter metric (Timing.description timing) (Timing.boundaries timing)
                 histograms.[metric] <- histogram
                 histogram
         let time (timing: Timing) (took: System.TimeSpan) : unit =
