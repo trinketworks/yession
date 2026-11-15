@@ -281,6 +281,28 @@ let portsTests =
             Expect.equal (exitCode child) (Some 3) "the code the child chose"
         }
 
+        // What a caller that asks the kernel about a pid reads: an answer where Node throws.
+        testCase "a signal that the kernel takes answers no error" <| fun () ->
+            Expect.equal (Processes.tryProbe (int ``process``.pid)) None "this process may signal itself"
+
+        testCaseAsync "a signal for a pid that no process has answers ESRCH" <| async {
+            let child = standIn (StandIn.Exit 0) bare
+            let! _ = until (fun () -> (exitCode child).IsSome)
+            Expect.equal (Processes.tryProbe (int child.pid)) (Some "ESRCH") "the child ended, and Node collected it"
+        }
+
+        testCase "a process that runs is alive" <| fun () ->
+            Expect.isTrue (Processes.isAlive (int ``process``.pid)) "this process runs"
+
+        testCaseAsync "a process that ended is not alive" <| async {
+            let child = standIn (StandIn.Exit 0) bare
+            let! _ = until (fun () -> (exitCode child).IsSome)
+            Expect.isFalse (Processes.isAlive (int child.pid)) "the child ended, and Node collected it"
+        }
+
+        testCase "the process that started this one has a pid" <| fun () ->
+            Expect.isTrue (Processes.parent () >= 1) "a process, or launchd when that process has gone"
+
         // The options record is the whole reason this binding exists — Fable.Node types them
         // `obj` — so what is pinned is that each field arrives under the name Node reads it by.
         testCaseAsync "the environment given is the environment the child has" <| async {

@@ -652,7 +652,7 @@ let private packageJson (version: string) =
   "bin": {
 %s
   },
-  "files": ["bin/", "manager.js", "session.js", "SandboxHost.js", "assets/", "README.md", "npm-shrinkwrap.json"],
+  "files": ["bin/", "manager.js", "session.js", "SandboxHost.js", "SandboxSupervisor.js", "assets/", "README.md", "npm-shrinkwrap.json"],
   "engines": { "node": ">=24.14" },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "%s",
@@ -685,7 +685,7 @@ let private assemble (version: string) =
         failwith "stage: no version (pass one, or set YESSION_VERSION)"
 
     // The two bins. The asset set checks itself, in `buildAssets`, against its declaration.
-    for required in [ "app/out/Main.js"; "app/SessionMain.js"; "app/SandboxHost.js" ] do
+    for required in [ "app/out/Main.js"; "app/SessionMain.js"; "app/SandboxHost.js"; "app/SandboxSupervisor.js" ] do
         if not (File.Exists (Path.Combine (repoRoot, required))) then
             failwithf "missing %s after compile" required
 
@@ -700,6 +700,9 @@ let private assemble (version: string) =
     // BESIDE the session's own file (`SrtSandbox.hostEntry`), which is why it keeps the name
     // its Fable output has: the unbundled session finds `app/SandboxHost.js` the same way.
     bundle version "app/SandboxHost.js" "SandboxHost.js"
+    // The supervisor of a seatbelt sandbox, one process inside each such sandbox. Not a bin
+    // either, and found beside the session's own file in the same way.
+    bundle version "app/SandboxSupervisor.js" "SandboxSupervisor.js"
 
     // The asset set, copied whole (read package-relative at runtime by `Assets.load`). A
     // directory rather than a list of files, because which files a build ships is the BUILD's

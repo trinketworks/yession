@@ -434,6 +434,49 @@ module Processes =
     [<Emit("process.kill($0, $1)")>]
     let kill (pid: int) (signal: string) : unit = jsNative
 
+    /// `process.kill(pid, signal)` for a caller that reads the answer of the kernel: the error
+    /// code where Node throws one (`EPERM`, `ESRCH`), and nothing where the kernel took the
+    /// signal.
+    ///
+    /// Node makes the error with no stack. A caller that asks about each pid of a host gets tens
+    /// of thousands of errors, and a stack for each one takes four times as long as the
+    /// question (measured: 214 ms against 56 ms for 99 998 pids).
+    [<Emit("(function (pid, signal) { const limit = Error.stackTraceLimit; Error.stackTraceLimit = 0; try { process.kill(pid, signal); return undefined; } catch (error) { return error.code ?? 'UNKNOWN'; } finally { Error.stackTraceLimit = limit; } })($0, $1)")>]
+    let trySignal (pid: int) (signal: string) : string option = jsNative
+
+    /// `trySignal` with signal 0, which the kernel checks and sends to nobody: whether this
+    /// process may signal that one.
+    [<Emit("(function (pid) { const limit = Error.stackTraceLimit; Error.stackTraceLimit = 0; try { process.kill(pid, 0); return undefined; } catch (error) { return error.code ?? 'UNKNOWN'; } finally { Error.stackTraceLimit = limit; } })($0)")>]
+    let tryProbe (pid: int) : string option = jsNative
+
+    [<Import("getPriority", "node:os")>]
+    let private priorityOf (pid: int) : int = jsNative
+
+    /// Whether a live process has this pid. `os.getPriority(pid)` answers for a live process
+    /// and throws for a pid that no live process has.
+    ///
+    /// A zombie is not alive. `process.kill` cannot say so: the kernel answers a signal for a
+    /// zombie with success (POSIX asks for that), whoever the zombie belonged to.
+    let isAlive (pid: int) : bool =
+        try
+            priorityOf pid |> ignore
+            true
+        with _ ->
+            false
+
+    /// The pid of the process that started this one, read again on each call. It is 1 when
+    /// that process has gone and launchd took this one.
+    [<Emit("process.ppid")>]
+    let parent () : int = jsNative
+
+    /// Hear each fault that nothing in this process caught: an exception that reached the
+    /// top, and a promise that rejected with nobody to hear it. `listener` gets its message.
+    ///
+    /// Node ends a process for such a fault. With a listener it does not, so a process that
+    /// holds something which must not outlive it can let go of it first.
+    [<Emit("(function (listener) { const said = fault => String(fault instanceof Error ? fault.message : fault); process.on('uncaughtException', fault => listener(said(fault))); process.on('unhandledRejection', fault => listener(said(fault))); })($0)")>]
+    let onFault (listener: string -> unit) : unit = jsNative
+
     /// Whether this process runs as uid 0. `false` where there are no uids at all: Windows
     /// has no `process.getuid`, and `Fable.Node` types it as always there, so a call through
     /// that binding would throw on the one platform the question has no answer for.
@@ -1273,6 +1316,11 @@ type Writable =
     [<Emit("$0.end()")>]
     abstract finish : unit -> unit
 
+    /// The next `drain`, once: the buffer that a `false` from a write reported full is empty
+    /// again. What a writer that minds backpressure waits for before it lets its source run.
+    [<Emit("$0.once('drain', $1)")>]
+    abstract onceDrain : handler: (unit -> unit) -> unit
+
     /// An `error` here is terminal: a stream that has errored never emits `finish`. Declared
     /// as its own member rather than a `on(name, handler)` taking a string for the reason the
     /// WebSocket bindings above are: the event's name and its handler's type are one fact,
@@ -1292,6 +1340,10 @@ type Readable =
     /// DISCARDED and the socket is freed. What to do with a response whose body is not
     /// wanted: leaving it paused instead leaks the connection.
     abstract resume : unit -> unit
+
+    /// Stop the stream flowing until `resume`. The bytes stay with the writer, which is how
+    /// a reader that cannot pass them on says so.
+    abstract pause : unit -> unit
 
     abstract destroy : unit -> unit
 
@@ -1509,6 +1561,24 @@ module ProcessStreams =
 
     [<Emit("process.stdin")>]
     let stdin () : Readable = jsNative
+
+    /// This process's own standard output, as the stream a line protocol writes to.
+    ///
+    /// A write to it does not wait. Measured on a Mac: `console.log` of 5 MB into a pipe and
+    /// then `process.exit` left 64 KiB in the pipe. So a process that must say something
+    /// before it ends waits for `writeThen`.
+    [<Emit("process.stdout")>]
+    let stdout () : Writable = jsNative
+
+    /// This process's own standard error, for a process that must outlive its reader: an
+    /// `error` on it that nobody hears ends the process.
+    [<Emit("process.stderr")>]
+    let stderr () : Writable = jsNative
+
+    /// Write text to standard output, and call `written` when the kernel has it and each
+    /// write before it.
+    [<Emit("process.stdout.write($0, $1)")>]
+    let writeThen (text: string) (written: unit -> unit) : bool = jsNative
 
 /// callback `httpRequest` took.
 [<AllowNullLiteral>]
