@@ -1,11 +1,12 @@
 module Yession.Tests.OtlpStub
 
-// A localhost OTLP/HTTP JSON logs receiver for tests — the stand-in for a real OpenTelemetry
+// A localhost OTLP/HTTP JSON receiver for tests — the stand-in for a real OpenTelemetry
 // Collector now that the Manager no longer collects. It decodes the narrow OTLP logs JSON the
 // emitter produces (`resourceLogs[].scopeLogs[].logRecords[]`) and records the LogRecords for
 // assertions. A real Collector would receive the identical payload. Accepts a POST on any path
 // (the exporter posts to `<endpoint>/v1/logs`), so callers point either an explicit url or
-// `OTEL_EXPORTER_OTLP_ENDPOINT` at it.
+// `OTEL_EXPORTER_OTLP_ENDPOINT` at it. The other signals post to the same server
+// (`/v1/metrics`, `/v1/traces`): their bodies are kept as received (`Posted`), not decoded.
 
 open Fable.Core
 open Fable.Core.JsInterop
@@ -151,6 +152,9 @@ let turnUsage (r: ReceivedLog) : TurnUsage option =
 type Stub =
     { Url : string
       Received : unit -> ReceivedLog list
+      /// Every POST so far, as the path it arrived on and its body: what a case reads for a
+      /// signal this stub does not decode.
+      Posted : unit -> (string * string) list
       Close : unit -> unit }
 
 /// Start a stub OTLP collector on localhost, calling `onRecord` for each decoded record (so a
@@ -158,11 +162,13 @@ type Stub =
 let startWith (onRecord: ReceivedLog -> unit) : Async<Stub> =
     async {
         let received = ResizeArray<ReceivedLog> ()
+        let posted = ResizeArray<string * string> ()
         let server =
             createServer (fun req res ->
                 match req.``method`` with
                 | "POST" ->
                     Interop.readBody req (fun body ->
+                        posted.Add (req.url, body)
                         for r in decode body do
                             received.Add r
                             onRecord r
@@ -179,6 +185,7 @@ let startWith (onRecord: ReceivedLog -> unit) : Async<Stub> =
         return
             { Url = url
               Received = fun () -> List.ofSeq received
+              Posted = fun () -> List.ofSeq posted
               Close = fun () -> server.close ignore }
     }
 

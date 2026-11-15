@@ -7,8 +7,12 @@ module Yession.Host.Telemetry
 // The signal is logs, not the GenAI `gen_ai.client.token.usage` metric, and that is a deliberate
 // first cut: a metric needs a reader and an aggregation pipeline at BOTH ends, while one
 // self-contained record per turn is legible to any OTLP logs backend with nothing configured.
-// Traces sit on the same env selection and the same bindings (below); metrics would too, when
-// something actually needs them.
+// Traces sit on the same env selection and the same bindings (below).
+//
+// Metrics are for the one thing a record per event answers badly: how long something takes,
+// across every time it happened. A duration is recorded into a histogram (`Timing`, below),
+// which a backend reads as a distribution without replaying records. Token counts stay log
+// records: each one belongs to a turn, and a sum of them is a query, not a signal.
 //
 // Fire-and-forget: a dropped export must never fail or stall a turn, so `Emit`/`Log` swallow
 // everything and the batch processor exports asynchronously off the turn path.
@@ -21,6 +25,7 @@ module Yession.Host.Telemetry
 //   OTEL_RESOURCE_ATTRIBUTES  extra/override resource attributes (k=v,k=v)
 //   OTEL_SDK_DISABLED=true  hard off
 //   OTEL_TRACES_EXPORTER    console | otlp | none  (the same reading; unset is `none`)
+//   OTEL_METRICS_EXPORTER   console | otlp | none  (the same reading; unset is `none`)
 // Unset `OTEL_LOGS_EXPORTER` defaults to `console` (stdout visibility, no network); with only
 // `console`, an absent collector simply means nothing is forwarded — the "otherwise drop" case.
 //
@@ -113,19 +118,52 @@ let spanResult
     : Async<Result<'a, string>> =
     spanWith (function Error reason -> Some reason | Ok _ -> None) tracer name attributes work
 
+/// A duration this repository records, as a histogram in seconds. Closed, so the set of
+/// metric names and their attribute values is this type: a case carries only what has a few
+/// possible values. A session's id is never one of them, because every value of an attribute
+/// is a time series at the backend, and the resource already says which process recorded it.
+[<RequireQualifiedAccess>]
+type Timing =
+    /// One session launch, as the Manager waits for it: from spawning the process to its
+    /// readiness line (`ready`), or to the launch failing (a timeout, an early exit, a build
+    /// the Manager refuses).
+    | SessionLaunch of ready: bool
+
+module Timing =
+    /// The metric's name. Ours, under `yession.`: the conventions name no such duration.
+    let name (timing: Timing) : string =
+        match timing with
+        | Timing.SessionLaunch _ -> "yession.session.launch.duration"
+
+    let description (timing: Timing) : string =
+        match timing with
+        | Timing.SessionLaunch _ -> "From spawning a session process to its readiness line, or to the launch failing."
+
+    let attributes (timing: Timing) : (string * AttributeValue) list =
+        match timing with
+        | Timing.SessionLaunch ready ->
+            [ "yession.session.launch.outcome", AttributeValue.String (if ready then "ready" else "failed") ]
+
+    /// The bucket edges, in seconds, for every duration here: a launch is under a second on a
+    /// warm machine and is given up on after fifteen (`LaunchTimeoutMs`), and the steps that
+    /// will join it (a sandbox start, a turn's first output) live in the same range.
+    let boundaries : float list =
+        [ 0.1; 0.25; 0.5; 0.75; 1.0; 1.5; 2.0; 3.0; 5.0; 7.5; 10.0; 15.0; 30.0; 60.0 ]
+
 /// The telemetry sink plus a graceful flush. `Emit turnId usage` records one agent-turn log
 /// record (session emitters); `Log body attrs` records a general log record (the Manager's
-/// lifecycle signals); `Tracer` is where spans go; `Shutdown` flushes both batch processors
-/// (call on exit so buffered records ship).
+/// lifecycle signals); `Time timing took` records one duration; `Tracer` is where spans go;
+/// `Shutdown` flushes every signal (call on exit so what is buffered ships).
 type Emitter =
     { Emit : AgentTurnId -> AgentUsage -> unit
       Log : string -> (string * AttributeValue) list -> unit
+      Time : Timing -> System.TimeSpan -> unit
       Tracer : Tracer
       Shutdown : unit -> JS.Promise<unit> }
 
 /// Telemetry off: every emit is a no-op, shutdown resolves immediately.
 let disabled : Emitter =
-    { Emit = (fun _ _ -> ()); Log = (fun _ _ -> ()); Tracer = Tracer.Off; Shutdown = resolved }
+    { Emit = (fun _ _ -> ()); Log = (fun _ _ -> ()); Time = (fun _ _ -> ()); Tracer = Tracer.Off; Shutdown = resolved }
 
 /// Which models the turn ran, as attributes.
 ///
@@ -187,6 +225,37 @@ let emitTo (logger: OpenTelemetry.Logger) (sessionId: SessionId) (turnId: AgentT
            "yession.session.id", OpenTelemetry.AttributeValue.String (SessionId.value sessionId)
            "yession.agent.turn.id", OpenTelemetry.AttributeValue.String (AgentTurnId.value turnId) ]
          @ modelAttributes usage.Models)
+
+/// How long a process waits for its telemetry to ship before it ends anyway. Shorter than
+/// the ten seconds a container runtime gives a stop before it kills, and long enough for one
+/// export to a collector that answers.
+let shutdownDeadline = System.TimeSpan.FromSeconds 5.0
+
+/// The emitter's shutdown, for a process that is ending: over when everything buffered has
+/// shipped, when the shutdown fails, or when `deadline` has passed, whichever is first.
+///
+/// It never throws and never outlasts the deadline, because the caller's next act is to end
+/// the process, and telemetry must not decide whether or when that happens. A collector
+/// that does not answer costs the deadline and what was buffered, nothing more.
+let shutdownWithin (clock: Clock) (deadline: System.TimeSpan) (emitter: Emitter) : Async<unit> =
+    Async.FromContinuations (fun (resolve, _, _) ->
+        let mutable settled = false
+        let settle () =
+            if not settled then
+                settled <- true
+                resolve ()
+        Async.StartImmediate (
+            async {
+                try
+                    do! Interop.awaitPromise (emitter.Shutdown ())
+                with _ -> ()
+                settle ()
+            })
+        Async.StartImmediate (
+            async {
+                do! clock.After deadline
+                settle ()
+            }))
 
 // --- Resource identity (code default, overridable by the standard env vars) --------------
 
@@ -266,6 +335,46 @@ let private spanProcessorsFromEnv () : OpenTelemetry.SpanProcessor list =
         | "console" -> OpenTelemetry.simpleSpanProcessor (OpenTelemetry.consoleSpanExporter ())
         | _ -> OpenTelemetry.batchSpanProcessor (OpenTelemetry.otlpSpanExporterFromEnv ()))
 
+/// The metric readers `OTEL_METRICS_EXPORTER` selects, read like the logs one. Unset is
+/// `none`, for the traces' reason: the console exporter prints every instrument on every
+/// interval.
+let private metricReadersFromEnv () : OpenTelemetry.MetricReader list =
+    exportersNamed "OTEL_METRICS_EXPORTER" "none"
+    |> List.map (function
+        | "console" -> OpenTelemetry.periodicReader (OpenTelemetry.consoleMetricExporter ())
+        | _ -> OpenTelemetry.periodicReader (OpenTelemetry.otlpMetricExporterFromEnv ()))
+
+/// What records a duration over the given readers, with its flush and its shutdown. No
+/// readers ⇒ nothing is recorded and nothing is built.
+///
+/// One histogram per metric name, made the first time that name is recorded. Fire-and-forget
+/// like the rest: a measurement that cannot be recorded is dropped.
+let private timerOver
+    (resource: OpenTelemetry.Resource)
+    (name: string)
+    (readers: OpenTelemetry.MetricReader list)
+    : (Timing -> System.TimeSpan -> unit) * (unit -> JS.Promise<unit>) * (unit -> JS.Promise<unit>) =
+    match readers with
+    | [] -> (fun _ _ -> ()), resolved, resolved
+    | _ ->
+        let provider = OpenTelemetry.meterProvider resource readers
+        let meter = provider.getMeter name
+        let histograms = System.Collections.Generic.Dictionary<string, OpenTelemetry.Histogram> ()
+        let histogramFor (timing: Timing) : OpenTelemetry.Histogram =
+            let metric = Timing.name timing
+            match histograms.TryGetValue metric with
+            | true, histogram -> histogram
+            | _ ->
+                let histogram =
+                    OpenTelemetry.durationHistogram meter metric (Timing.description timing) Timing.boundaries
+                histograms.[metric] <- histogram
+                histogram
+        let time (timing: Timing) (took: System.TimeSpan) : unit =
+            try
+                (histogramFor timing).record (took.TotalSeconds, OpenTelemetry.Attributes.ofList (Timing.attributes timing))
+            with _ -> ()
+        time, (fun () -> provider.forceFlush ()), (fun () -> provider.shutdown ())
+
 /// A tracer over the given span processors. None ⇒ `Tracer.Off`, and nothing is installed:
 /// the async context manager goes in only for a process that records spans.
 let private tracerOver
@@ -280,36 +389,43 @@ let private tracerOver
         let provider = OpenTelemetry.tracerProvider resource processors
         Tracer.On (provider.getTracer name), fun () -> provider.shutdown ()
 
-/// Build an emitter over the given processors and identity. `emitFor` is the session this
-/// emitter tags agent-turn records with (`None` for the Manager, whose `Emit` is inert).
-/// Each signal with no processors is off on its own.
+/// Build an emitter over the given processors, readers and identity. `emitFor` is the session
+/// this emitter tags agent-turn records with (`None` for the Manager, whose `Emit` is inert).
+/// Each signal with nothing to export to is off on its own.
 let private build
     (defaultServiceName: string)
     (instanceId: string option)
     (emitFor: SessionId option)
     (logProcessors: OpenTelemetry.LogRecordProcessor list)
     (spanProcessors: OpenTelemetry.SpanProcessor list)
+    (metricReaders: OpenTelemetry.MetricReader list)
     : Emitter =
     let resource = resourceOf defaultServiceName instanceId
     let tracer, shutdownTraces = tracerOver resource defaultServiceName spanProcessors
-    match logProcessors with
-    | [] -> { disabled with Tracer = tracer; Shutdown = shutdownTraces }
-    | _ ->
-        let provider = OpenTelemetry.loggerProviderMulti resource logProcessors
-        let logger = provider.getLogger defaultServiceName
-        { Emit =
+    let time, _, shutdownMetrics = timerOver resource defaultServiceName metricReaders
+    let emit, log, shutdownLogs =
+        match logProcessors with
+        | [] -> disabled.Emit, disabled.Log, resolved
+        | _ ->
+            let provider = OpenTelemetry.loggerProviderMulti resource logProcessors
+            let logger = provider.getLogger defaultServiceName
             (match emitFor with
              | Some sessionId -> fun turnId usage -> try emitTo logger sessionId turnId usage with _ -> ()
-             | None -> fun _ _ -> ())
-          Log = fun body attrs -> try emitLogTo logger body attrs with _ -> ()
-          Tracer = tracer
-          Shutdown =
-            fun () ->
-                async {
-                    do! Interop.awaitPromise (provider.shutdown ())
-                    do! Interop.awaitPromise (shutdownTraces ())
-                }
-                |> Async.StartAsPromise }
+             | None -> fun _ _ -> ()),
+            (fun body attrs -> try emitLogTo logger body attrs with _ -> ()),
+            (fun () -> provider.shutdown ())
+    { Emit = emit
+      Log = log
+      Time = time
+      Tracer = tracer
+      Shutdown =
+        fun () ->
+            async {
+                do! Interop.awaitPromise (shutdownLogs ())
+                do! Interop.awaitPromise (shutdownTraces ())
+                do! Interop.awaitPromise (shutdownMetrics ())
+            }
+            |> Async.StartAsPromise }
 
 // --- Constructors ------------------------------------------------------------------------
 
@@ -322,11 +438,12 @@ let fromEnv (sessionId: SessionId) : Emitter =
         (Some sessionId)
         (logProcessorsFromEnv ())
         (spanProcessorsFromEnv ())
+        (metricReadersFromEnv ())
 
 /// The Manager's own emitter, configured from the environment. Identity `yession-manager`;
 /// it emits lifecycle records via `Log` (never agent-turn usage).
 let managerFromEnv () : Emitter =
-    build "yession-manager" None None (logProcessorsFromEnv ()) (spanProcessorsFromEnv ())
+    build "yession-manager" None None (logProcessorsFromEnv ()) (spanProcessorsFromEnv ()) (metricReadersFromEnv ())
 
 /// A session emitter forwarding OTLP to an explicit `url` (tests / programmatic use — the
 /// stand-in for a real collector). Bypasses env exporter selection. `deadline` bounds each
@@ -335,8 +452,16 @@ let createOtlp (sessionId: SessionId) (url: string) (deadline: System.TimeSpan) 
     build "yession-session" (Some (SessionId.value sessionId)) (Some sessionId)
         [ OpenTelemetry.batchProcessor (OpenTelemetry.otlpLogExporter url Map.empty deadline) ]
         []
+        []
 
 /// A tracer exporting to `exporter` over this process's resource (tests: an in-memory
 /// exporter). Installs the async context manager, as every recording tracer does.
 let tracerTo (exporter: OpenTelemetry.SpanExporter) : Tracer =
     fst (tracerOver (resourceOf "yession-session" None) "yession-session" [ OpenTelemetry.simpleSpanProcessor exporter ])
+
+/// What records a duration into `exporter`, and the flush that hands it what was recorded
+/// (tests: an in-memory exporter, which would otherwise wait out the reader's interval).
+let timerTo (exporter: OpenTelemetry.MetricExporter) : (Timing -> System.TimeSpan -> unit) * (unit -> JS.Promise<unit>) =
+    let time, flush, _ =
+        timerOver (resourceOf "yession-manager" None) "yession-manager" [ OpenTelemetry.periodicReader exporter ]
+    time, flush

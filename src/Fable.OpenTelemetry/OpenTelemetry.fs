@@ -1,6 +1,6 @@
 module Fable.OpenTelemetry
 
-// Fable bindings to the OpenTelemetry JS SDK — the logs and traces signals, the slices the
+// Fable bindings to the OpenTelemetry JS SDK — the logs, traces and metrics signals, the slices the
 // session-process telemetry emitter uses (Plan 04). Mirrors Fable.Dockerode: a distinct
 // binding layer over an npm package that declares nothing beyond what we call. A ts2fable
 // pass over the packages' .d.ts is the starting point; this is the hand-trimmed surface.
@@ -10,7 +10,8 @@ module Fable.OpenTelemetry
 // site. Handles we only ever pass back into the SDK are opaque empty interfaces.
 //
 // Packages (pinned centrally in package.json): @opentelemetry/{api,api-logs,sdk-logs,
-// resources,exporter-logs-otlp-http,sdk-trace,exporter-trace-otlp-http,context-async-hooks}.
+// resources,exporter-logs-otlp-http,sdk-trace,exporter-trace-otlp-http,context-async-hooks,
+// sdk-metrics,exporter-metrics-otlp-http}.
 
 open Fable.Core
 open Fable.Core.JsInterop
@@ -425,3 +426,151 @@ let otlpSpanExporter (url: string) (headers: Map<string, string>) (deadline: Sys
 let consoleSpanExporter () : SpanExporter = consoleSpanExporterClass.Create ()
 
 let inMemorySpanExporter () : InMemorySpanExporter = inMemorySpanExporterClass.Create ()
+
+// --- Metrics -----------------------------------------------------------------------------
+//
+// The slice the emitter uses: a MeterProvider over periodic readers, and the one instrument
+// kind this repository records, a histogram. A reader collects on its interval and once more
+// at shutdown, so a short process still ships what it measured.
+
+/// A histogram instrument: one `record` is one measurement.
+type [<AllowNullLiteral>] Histogram =
+    abstract record: value: float * attributes: Attributes -> unit
+
+/// What the SDK is told about a histogram's buckets. Advice, not a view: a collector's own
+/// view still wins.
+[<AllowNullLiteral>]
+type HistogramAdvice =
+    abstract explicitBucketBoundaries : float array with get, set
+
+/// What `createHistogram` takes; built by `durationHistogram`.
+[<AllowNullLiteral>]
+type HistogramOptions =
+    abstract description : string with get, set
+    abstract unit : string with get, set
+    abstract advice : HistogramAdvice with get, set
+
+type [<AllowNullLiteral>] Meter =
+    abstract createHistogram: name: string * options: HistogramOptions -> Histogram
+
+type [<AllowNullLiteral>] MetricReader = interface end
+type [<AllowNullLiteral>] MetricExporter = interface end
+
+type [<AllowNullLiteral>] MeterProvider =
+    abstract getMeter: name: string -> Meter
+    abstract forceFlush: unit -> JS.Promise<unit>
+    abstract shutdown: unit -> JS.Promise<unit>
+
+/// Whether an exported point covers the interval since the last export or the whole life of
+/// the process. Only the SDK's enum hands these out.
+[<Erase>]
+type AggregationTemporality = private AggregationTemporality of int
+
+/// One exported histogram point, as a test reads it back.
+type [<AllowNullLiteral>] HistogramValue =
+    abstract count: int
+    abstract sum: float option
+
+type [<AllowNullLiteral>] HistogramPoint =
+    abstract attributes: Attributes
+    abstract value: HistogramValue
+
+type [<AllowNullLiteral>] MetricDescriptor =
+    abstract name: string
+    abstract unit: string
+
+type [<AllowNullLiteral>] MetricData =
+    abstract descriptor: MetricDescriptor
+    abstract dataPoints: HistogramPoint array
+
+type [<AllowNullLiteral>] ScopeMetrics =
+    abstract metrics: MetricData array
+
+type [<AllowNullLiteral>] ResourceMetrics =
+    abstract scopeMetrics: ScopeMetrics array
+
+/// Collects exported metrics in memory — for tests.
+type [<AllowNullLiteral>] InMemoryMetricExporter =
+    inherit MetricExporter
+    abstract getMetrics: unit -> ResourceMetrics array
+    abstract reset: unit -> unit
+
+[<AllowNullLiteral>]
+type private MeterProviderConfig =
+    abstract resource : Resource with get, set
+    abstract readers : MetricReader array with get, set
+
+[<AllowNullLiteral>]
+type private PeriodicReaderConfig =
+    abstract exporter : MetricExporter with get, set
+
+type private MeterProviderClass =
+    [<EmitConstructor>]
+    abstract Create : config: MeterProviderConfig -> MeterProvider
+
+type private PeriodicReaderClass =
+    [<EmitConstructor>]
+    abstract Create : config: PeriodicReaderConfig -> MetricReader
+
+type private OtlpMetricExporterClass =
+    [<EmitConstructor>]
+    abstract Create : config: OtlpExporterConfig -> MetricExporter
+    [<EmitConstructor>]
+    abstract Create : unit -> MetricExporter
+
+type private ConsoleMetricExporterClass =
+    [<EmitConstructor>]
+    abstract Create : unit -> MetricExporter
+
+type private InMemoryMetricExporterClass =
+    [<EmitConstructor>]
+    abstract Create : temporality: AggregationTemporality -> InMemoryMetricExporter
+
+type private AggregationTemporalities =
+    abstract DELTA : AggregationTemporality
+
+[<Import("MeterProvider", "@opentelemetry/sdk-metrics")>]
+let private meterProviderClass : MeterProviderClass = jsNative
+[<Import("PeriodicExportingMetricReader", "@opentelemetry/sdk-metrics")>]
+let private periodicReaderClass : PeriodicReaderClass = jsNative
+[<Import("ConsoleMetricExporter", "@opentelemetry/sdk-metrics")>]
+let private consoleMetricExporterClass : ConsoleMetricExporterClass = jsNative
+[<Import("InMemoryMetricExporter", "@opentelemetry/sdk-metrics")>]
+let private inMemoryMetricExporterClass : InMemoryMetricExporterClass = jsNative
+[<Import("AggregationTemporality", "@opentelemetry/sdk-metrics")>]
+let private aggregationTemporalities : AggregationTemporalities = jsNative
+[<Import("OTLPMetricExporter", "@opentelemetry/exporter-metrics-otlp-http")>]
+let private otlpMetricExporterClass : OtlpMetricExporterClass = jsNative
+
+/// A MeterProvider over the resource, collected by each of `readers`.
+let meterProvider (resource: Resource) (readers: MetricReader list) : MeterProvider =
+    meterProviderClass.Create (
+        jsOptions<MeterProviderConfig> (fun c ->
+            c.resource <- resource
+            c.readers <- Array.ofList readers))
+
+/// A reader that collects and exports on the SDK's interval (60s), and at flush and shutdown.
+/// Its timer does not hold the process open.
+let periodicReader (exporter: MetricExporter) : MetricReader =
+    periodicReaderClass.Create (jsOptions<PeriodicReaderConfig> (fun c -> c.exporter <- exporter))
+
+/// A histogram of durations in seconds, the unit the OTel conventions give a duration.
+/// `boundaries` are the bucket edges, in seconds: the SDK's defaults are sized for
+/// milliseconds and would put every duration here in the first two buckets.
+let durationHistogram (meter: Meter) (name: string) (description: string) (boundaries: float list) : Histogram =
+    meter.createHistogram (
+        name,
+        jsOptions<HistogramOptions> (fun o ->
+            o.description <- description
+            o.unit <- "s"
+            o.advice <- jsOptions<HistogramAdvice> (fun a -> a.explicitBucketBoundaries <- Array.ofList boundaries)))
+
+/// OTLP/HTTP metric exporter configured from the environment
+/// (`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`/`OTEL_EXPORTER_OTLP_ENDPOINT`, + `_HEADERS`).
+let otlpMetricExporterFromEnv () : MetricExporter = otlpMetricExporterClass.Create ()
+
+let consoleMetricExporter () : MetricExporter = consoleMetricExporterClass.Create ()
+
+/// An in-memory exporter. Each export holds what was recorded since the one before it.
+let inMemoryMetricExporter () : InMemoryMetricExporter =
+    inMemoryMetricExporterClass.Create aggregationTemporalities.DELTA

@@ -474,6 +474,19 @@ module Processes =
     [<Emit("process.on($0, $1)")>]
     let onEnding (event: string) (listener: unit -> unit) : unit = jsNative
 
+    /// Hear `signal` (`"SIGTERM"`) the next time it arrives, and only then.
+    ///
+    /// While a signal has a listener Node does not end the process for it, so the listener
+    /// owns the ending. Once this one has run nothing is listening, and the signal is the
+    /// system's again: a second one ends the process at once.
+    [<Emit("process.once($0, $1)")>]
+    let onceSignalled (signal: string) (listener: unit -> unit) : unit = jsNative
+
+    /// Send this process `signal`. With nothing listening for it, that is the signal's own
+    /// ending, and what started this process is told that a signal ended it.
+    [<Emit("process.kill(process.pid, $0)")>]
+    let signalSelf (signal: string) : unit = jsNative
+
     /// Keep the network out of every diagnostic report this process takes from now on —
     /// `process.report.excludeNetwork`, for the life of the process.
     ///
