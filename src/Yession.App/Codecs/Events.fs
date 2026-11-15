@@ -750,15 +750,20 @@ module Events =
                   RepoAdded.Repo = get.Required.Field "repo" Codec.repoRef.Decode
                   RepoAdded.Actor = get.Required.Field "actor" Codec.actor.Decode }) }
 
-    /// `{name, description}` -- `SkillSummary`'s frontmatter, on the wire the same shape it
-    /// decoded from.
+    /// `{name, description, path}`: the frontmatter of a skill, and its file from the root of
+    /// the checkout. Only `RepoSkillsChanged` holds one, and it always wrote the path.
     let private skillSummary : Codec<SkillSummary> =
         { Encode =
-            fun (s: SkillSummary) -> Encode.object [ "name", Encode.string s.Name; "description", Encode.string s.Description ]
+            fun (s: SkillSummary) ->
+                Encode.object
+                    [ "name", Encode.string s.Name
+                      "description", Encode.string s.Description
+                      "path", Encode.string s.Path ]
           Decode =
             Decode.object (fun get ->
                 { SkillSummary.Name = get.Required.Field "name" Decode.string
-                  SkillSummary.Description = get.Required.Field "description" Decode.string }) }
+                  SkillSummary.Description = get.Required.Field "description" Decode.string
+                  SkillSummary.Path = get.Required.Field "path" Decode.string }) }
 
     let private repoCloned : Codec<RepoCloned> =
         { Encode =
@@ -768,19 +773,36 @@ module Events =
                       "repo", Codec.repoRef.Encode p.Repo
                       "branch", Encode.string p.Branch
                       "actor", Codec.actor.Encode p.Actor
-                      "agentsMd", Encode.option Encode.string p.AgentsMd
-                      "skills", Encode.list (p.Skills |> List.map skillSummary.Encode) ]
+                      "agentsMd", Encode.option Encode.string p.AgentsMd ]
           Decode =
             Decode.object (fun get ->
                 { RepoCloned.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
                   RepoCloned.Repo = get.Required.Field "repo" Codec.repoRef.Decode
                   RepoCloned.Branch = get.Required.Field "branch" Decode.string
                   RepoCloned.Actor = get.Required.Field "actor" Codec.actor.Decode
-                  RepoCloned.AgentsMd = get.Optional.Field "agentsMd" Decode.string
-                  // Absent on a log written before this session read skills at all -- a
-                  // repo added under an older build never declared one, never a decode
-                  // failure for every clone fact this build had not written yet.
-                  RepoCloned.Skills = get.Optional.Field "skills" (Decode.list skillSummary.Decode) |> Option.defaultValue [] }) }
+                  // A record from before the session read the skills from the checkout
+                  // holds a `skills` key, with no path in it. This decoder does not read
+                  // it: the read before the next turn records what the checkout holds
+                  // (`RepoSkillsChanged`).
+                  RepoCloned.AgentsMd = get.Optional.Field "agentsMd" Decode.string }) }
+
+    let private repoSkillsChanged : Codec<RepoSkillsChanged> =
+        { Encode =
+            fun (p: RepoSkillsChanged) ->
+                Encode.object
+                    [ "messageId", Codec.messageId.Encode p.MessageId
+                      "repo", Codec.repoRef.Encode p.Repo
+                      // The whole list, as `repoCapabilitiesChanged` writes the whole set.
+                      "skills", Encode.list (p.Skills |> List.map skillSummary.Encode)
+                      "added", Encode.list (p.Added |> List.map Encode.string)
+                      "removed", Encode.list (p.Removed |> List.map Encode.string) ]
+          Decode =
+            Decode.object (fun get ->
+                { RepoSkillsChanged.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
+                  RepoSkillsChanged.Repo = get.Required.Field "repo" Codec.repoRef.Decode
+                  RepoSkillsChanged.Skills = get.Required.Field "skills" (Decode.list skillSummary.Decode)
+                  RepoSkillsChanged.Added = get.Required.Field "added" (Decode.list Decode.string)
+                  RepoSkillsChanged.Removed = get.Required.Field "removed" (Decode.list Decode.string) }) }
 
     /// A `repoAdded` record is one of two things, told apart by the branch. Before the add
     /// was recorded up front, it was written once the clone had landed and carried what
@@ -1841,6 +1863,8 @@ module Events =
                     Encode.object
                         [ "type", Encode.string "repoCapabilitiesChanged"
                           "payload", repoCapabilitiesChanged.Encode p ]
+                | RepoSkillsChanged p ->
+                    Encode.object [ "type", Encode.string "repoSkillsChanged"; "payload", repoSkillsChanged.Encode p ]
                 | RepoCapabilitiesApproved p ->
                     Encode.object
                         [ "type", Encode.string "repoCapabilitiesApproved"
@@ -1952,6 +1976,7 @@ module Events =
                 | "repoConfigWarned" -> Decode.field "payload" repoConfigWarned.Decode |> Decode.map RepoConfigWarned
                 | "repoCapabilitiesChanged" ->
                     Decode.field "payload" repoCapabilitiesChanged.Decode |> Decode.map RepoCapabilitiesChanged
+                | "repoSkillsChanged" -> Decode.field "payload" repoSkillsChanged.Decode |> Decode.map RepoSkillsChanged
                 | "repoCapabilitiesApproved" ->
                     Decode.field "payload" repoCapabilitiesApproved.Decode |> Decode.map RepoCapabilitiesApproved
                 | "repoTrustAsked" -> Decode.field "payload" repoTrustAsked.Decode |> Decode.map RepoTrustAsked

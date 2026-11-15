@@ -117,6 +117,11 @@ module Scheduler =
         // A person's own connections, and whether each works while they are away: read
         // when a turn starts, for the person it runs for, like the model below.
         (ownConnectionsOf: Principal -> Yession.Domain.Access.OwnConnection list)
+        // What each checkout holds as skills (`RepoSkills.refresh`). The scheduler asks when
+        // a turn is about to start, before it takes the slot, and gives the repos as the log
+        // has them. It reads the page for the turn after that, so the page holds each list
+        // that the read recorded.
+        (readSkills: SessionRepo list -> Async<unit>)
         (initialConsumed: Set<string>)
         : SessionScheduler =
 
@@ -125,6 +130,10 @@ module Scheduler =
         // with nothing to restart. A register that will not decode reads as no choice,
         // which is the provider's default.
         let selectedModel () : ModelId option = (SyncedStateSync.ofDoc doc).Model
+
+        /// The repos of the session, as a page of the log has them.
+        let reposOf (envelopes: EventEnvelope<SessionEvent> list) : SessionRepo list =
+            (envelopes |> List.fold (fun repos envelope -> ReposProjection.applyEvent repos envelope.Event) ReposProjection.empty).Repos
 
         let mutable consumed = initialConsumed
         let mutable generation = 0
@@ -205,6 +214,21 @@ module Scheduler =
                             match agent, page, people, answering with
                             | Some agent, Some page, Some people, Some trigger ->
                                 let trigger = AgentTurn.FromMessage trigger
+                                // The page above decided that a turn runs. The scheduler
+                                // asks for the skills now, and then reads the page for the
+                                // turn, so the turn's context has the lists as they are.
+                                //
+                                // The read comes BEFORE the scheduler takes the slot.
+                                // `drainBusy` holds it meanwhile, as for the page read. A
+                                // turn that showed as running during the read would have no
+                                // `AgentTurnStarted` in the log, and nobody could interrupt
+                                // it, because an interrupt names a turn of the log.
+                                //
+                                // A read that throws must not hold the scheduler here, so
+                                // the scheduler drops its failure: the turn runs with the
+                                // lists that the log has.
+                                let! _ = readSkills (reposOf page.Events) |> Async.Catch
+                                let! page = log.Read None System.Int32.MaxValue
                                 generation <- generation + 1
                                 let turn =
                                     { Generation = generation
@@ -272,6 +296,11 @@ module Scheduler =
                         match AgentWake.pendingReason events with
                         | None -> drainBusy <- false
                         | Some (reason, turnActor) ->
+                            // As on the message path: the skills and then the page for the
+                            // turn, before the scheduler takes the slot.
+                            let! _ = readSkills (reposOf page.Events) |> Async.Catch
+                            let! page = log.Read None System.Int32.MaxValue
+                            let events = page.Events |> List.map (fun envelope -> envelope.Event)
                             generation <- generation + 1
                             let turn =
                                 { Generation = generation

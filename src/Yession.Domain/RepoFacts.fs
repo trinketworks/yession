@@ -2,13 +2,18 @@ namespace Yession.Domain.Repos
 
 open Yession.Domain
 
-/// One skill a repo's `.agents/skills/<name>/SKILL.md` declares — its frontmatter, and
-/// nothing of its body. Enough to menu it: the agent reads the file itself
-/// (`ToolName.ReadFile`) when a description matches what it is doing, so nothing here needs
-/// to hold more than what a menu line says.
+/// One skill that a checkout holds at `.agents/skills/<directory>/SKILL.md` — its frontmatter,
+/// the path of its file, and nothing of its body. Enough to menu it: the agent reads the file
+/// itself (`ToolName.ReadFile`) when a description matches what it is doing, so nothing here
+/// needs to hold more than what a menu line says.
 type SkillSummary =
     { Name : string
-      Description : string }
+      Description : string
+      /// The file, from the root of the checkout. The menu shows it, because the directory
+      /// can have a different name from the skill: a tool that installs a skill names the
+      /// directory for the package (`.agents/skills/asd-ste100-skill/SKILL.md`, name
+      /// `asd-ste100`).
+      Path : string }
 
 /// The facts a repo records. They sit BELOW `SessionEvent` because the union names them,
 /// and the projections that fold that union sit above it — so a feature spans the event
@@ -52,15 +57,11 @@ and RepoCloned =
       /// like everything else this system remembers -- read again only when the repo is
       /// re-added, which is this system's cache-with-explicit-invalidation, never a
       /// per-turn re-read.
-      AgentsMd : string option
-      /// Every skill under `.agents/skills/` this checkout declared, read at the same
-      /// moment and for the same reason `AgentsMd` is: a skill's file is repo-authored, so
-      /// the moment of a landed clone is the one moment it is trustworthy, and re-reading it
-      /// every turn would be a re-fetch of something that only changes when the repo is
-      /// re-added. A directory with no `SKILL.md`, or one whose frontmatter does not parse,
-      /// contributes nothing -- a malformed skill is not a reason to fail an otherwise-
-      /// successful clone, the same tolerance `AgentsMd` already has.
-      Skills : SkillSummary list }
+      ///
+      /// The skills are not here. The session reads them from the checkout before each turn,
+      /// and a list that changed is a fact of its own (`RepoSkillsChanged`). A record from
+      /// before that change holds a `skills` key, and the codec does not read it.
+      AgentsMd : string option }
 
 /// The clone a `RepoAdded` began did not land, and why — in the words the failure used.
 /// Nothing was put in place: the clone runs in a staging area that is cleared on failure.
@@ -122,6 +123,32 @@ and [<RequireQualifiedAccess>] RepoCapabilitiesChanged =
       Actor : ActorRef
       /// What made the file be read this time — the same cause the starts it precedes carry.
       CausedBy : Cause option }
+
+/// The skills that a checkout holds, recorded when the list CHANGES.
+///
+/// The session reads `.agents/skills/<directory>/SKILL.md` from the checkout before each
+/// turn, because a repository can make its skills when its sandbox starts, and no commit
+/// holds those. The read writes nothing when the list is the one recorded last, so a turn
+/// adds no event of its own. The menu of the agent is a projection of these records
+/// (`ReposProjection`).
+///
+/// The checkout is the source, so a process in a sandbox can change the list. That is why
+/// each change is a record and a note on the timeline: a person sees when a skill arrived
+/// and what it says about itself. The record carries the whole list, as
+/// `RepoCapabilitiesChanged` carries the whole set, so a reader does not have to replay
+/// differences.
+and [<RequireQualifiedAccess>] RepoSkillsChanged =
+    { MessageId : MessageId
+      Repo : RepoRef
+      /// Every skill the checkout held at this read, sorted by name and then by path. Empty
+      /// when the last skill went away.
+      Skills : SkillSummary list
+      /// The names of the skills that this list holds and the list before it did not, by
+      /// name. The note on the timeline says these and not the whole list, so that a list
+      /// that changes at each turn does not put a long note into each turn.
+      Added : string list
+      /// The names of the skills that the list before held and this one does not.
+      Removed : string list }
 
 /// A person consented to what a repo asks for. RETIRED: consent is now a person's trust in
 /// the repo (`RepoTrusted`). Nothing appends this. The case stays because a log written before
@@ -282,6 +309,32 @@ module RepoCapabilitiesChanged =
         | []
         | [ _ ] -> []
         | granted -> [ Phrase.text (String.concat "; " granted) ]
+
+module RepoSkillsChanged =
+
+    /// How many skills a checkout holds now, as a count on the line.
+    let phrase (c: RepoSkillsChanged) : Phrase =
+        match List.length c.Skills with
+        | 0 -> Phrase.deed "found" [ Segment.Text "no skills in "; Segment.Ref (EntityRef.Repo c.Repo) ]
+        | 1 -> Phrase.deed "found" [ Segment.Text "1 skill in "; Segment.Ref (EntityRef.Repo c.Repo) ]
+        | count -> Phrase.deed "found" [ Segment.Text (sprintf "%d skills in " count); Segment.Ref (EntityRef.Repo c.Repo) ]
+
+    /// The most names that one clause of the note says. The agent reads each note, and a
+    /// process in a sandbox can change the list at each turn, so the note has a size that no
+    /// list can make longer. The menu in the turn's context holds the whole list.
+    let private named = 3
+
+    /// Some names in a row, and how many more there are when there are more than `named`.
+    let private names (all: string list) : string =
+        match List.length all with
+        | count when count <= named -> String.concat ", " all
+        | count -> sprintf "%s and %d more" (String.concat ", " (List.truncate named all)) (count - named)
+
+    /// The names that came and the names that went, one clause each. None when the list
+    /// changed in another way, such as a new description.
+    let particulars (c: RepoSkillsChanged) : Phrase list =
+        [ if not (List.isEmpty c.Added) then Phrase.text ("added " + names c.Added)
+          if not (List.isEmpty c.Removed) then Phrase.text ("removed " + names c.Removed) ]
 
 module RepoCapabilitiesApproved =
 

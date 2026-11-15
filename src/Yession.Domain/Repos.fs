@@ -19,8 +19,10 @@ type SessionRepo =
       /// authored convention info, not something the projection or the operator wrote.
       /// `None` when the checkout had none, or a re-add's read found none.
       AgentsMd : string option
-      /// The checkout's `.agents/skills/`, as read when this repo was added -- same
-      /// provenance and same re-add-to-refresh rule as `AgentsMd`.
+      /// The skills that the checkout holds, as the last `RepoSkillsChanged` recorded them.
+      /// Empty until the first read finds one. The session reads the checkout before each
+      /// turn, so this is not the `AgentsMd` rule: an add does not set it, and a new add of
+      /// the same repo keeps it.
       Skills : SkillSummary list }
 
 type ReposProjection =
@@ -32,15 +34,20 @@ module ReposProjection =
 
     /// Fold one event. A repo is here once its clone is (`RepoCloned`), not when it was
     /// asked for. Re-adding an existing repo replaces its entry (the clone was re-verified;
-    /// the newest add wins), keeping list order stable otherwise.
+    /// the newest add wins), keeping list order stable otherwise. The skills are not the
+    /// add's to say: a new add keeps the list that the last read recorded, and the fold drops
+    /// a list for a repo that is not here.
     let applyEvent (proj: ReposProjection) (event: SessionEvent) : ReposProjection =
         match event with
         | RepoCloned r ->
-            let entry = { Repo = r.Repo; Branch = r.Branch; AddedBy = r.Actor; AgentsMd = r.AgentsMd; Skills = r.Skills }
-            if proj.Repos |> List.exists (fun s -> s.Repo = r.Repo) then
+            match proj.Repos |> List.tryFind (fun s -> s.Repo = r.Repo) with
+            | Some known ->
+                let entry = { Repo = r.Repo; Branch = r.Branch; AddedBy = r.Actor; AgentsMd = r.AgentsMd; Skills = known.Skills }
                 { Repos = proj.Repos |> List.map (fun s -> if s.Repo = r.Repo then entry else s) }
-            else
-                { Repos = proj.Repos @ [ entry ] }
+            | None ->
+                { Repos = proj.Repos @ [ { Repo = r.Repo; Branch = r.Branch; AddedBy = r.Actor; AgentsMd = r.AgentsMd; Skills = [] } ] }
+        | RepoSkillsChanged c ->
+            { Repos = proj.Repos |> List.map (fun s -> if s.Repo = c.Repo then { s with Skills = c.Skills } else s) }
         | RepoRemoved r ->
             { Repos = proj.Repos |> List.filter (fun s -> s.Repo <> r.Repo) }
         | RepoBranchSwitched r ->

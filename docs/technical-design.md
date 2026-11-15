@@ -686,6 +686,14 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     sandbox (`ReposService.ReadCommitted`). The session process opens no path that a
     repository names. A work sandbox can write the checkout, so a path in it can be a symlink
     to anything the session's user can read, and a check before the open races the write.
+
+    The skill menu is the one exception. A repository can make its skills when its sandbox
+    starts (a package manager installs them), and no commit holds those. So the session reads
+    `.agents/skills/<directory>/SKILL.md` from the work tree before each turn
+    (`ReposService.SkillsOf`). The rest of the rule holds for that read: git does it, in the
+    git sandbox, git follows no link in a work tree, and the session process opens no path.
+    The session keeps only the name and the description of each skill, and it records each
+    change of the list (`RepoSkillsChanged`).
 21. No git process holds a GitHub credential. git reaches github.com only through the git
     gateway (`GitGateway`), which adds the credential of a loan on the way. A request with no
     live loan goes up with no credential. A work sandbox's git and the session's own clone and

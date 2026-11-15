@@ -22,6 +22,8 @@
          its tools by their literals. -->
     <Compile Include="Prompting.fs" />
     <Compile Include="EventLog.fs" />
+    <!-- After EventLog: a list of skills that changed is appended to the log. -->
+    <Compile Include="RepoSkills.fs" />
     <Compile Include="Model.fs" />
     <Compile Include="Commands.fs" />
     <Compile Include="Environment.fs" />

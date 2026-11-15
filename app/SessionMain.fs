@@ -1061,6 +1061,14 @@ let private summarize (credential: CredentialFor) : Summarize option =
                     | None -> return Error "no credential to write with"
             })
 
+/// The skills that a checkout holds now, for the read that a turn starts with
+/// (`RepoSkills.refresh`). The boot makes the repo service before it starts the host, so a turn
+/// finds it. Before that, there is no answer.
+let private skillsOfRepo (repo: RepoRef) : Async<Result<Yession.Domain.Repos.SkillSummary list, string>> =
+    match reposService with
+    | Some service -> service.SkillsOf repo
+    | None -> async { return Error "the repo service is not up yet" }
+
 /// A person's own connections in the status frame this session holds now, read when a turn
 /// starts for the person it runs for.
 let private ownConnectionsOf (person: Principal) : OwnConnection list =
@@ -1148,6 +1156,7 @@ Async.StartImmediate (
                             }
                       OnNetworkFailure = reportGitHubNetworkFailure
                       Tracer = telemetry.Tracer
+                      Sleep = Resilience.Policy.sleep
                       Log = log } with
             | Ok service -> reposService <- Some service
             | Error e -> failwithf "repos: %s" e
@@ -1613,7 +1622,7 @@ Async.StartImmediate (
                     fun terminal ->
                         gitGateway.Retire (GitGateway.Borrower.Terminal terminal)
                         credentialProxy.Retire terminal } ]
-        let! host = Host.startFull clock runAgent summarize ownConnectionsOf (Some (makeSandboxes forwardableCredentials (CredentialProxy.provider credentialProxy sandboxBackend doorFor))) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity agentReport telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage port
+        let! host = Host.startFull clock runAgent summarize ownConnectionsOf skillsOfRepo (Some (makeSandboxes forwardableCredentials (CredentialProxy.provider credentialProxy sandboxBackend doorFor))) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity agentReport telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
         // capabilities and the `work_sandboxes` query read is filled here — before the
         // readiness line, and therefore before any turn or any browser can ask.
