@@ -1362,12 +1362,12 @@ After the fixes land, one pass rewrites it to what still reproduces.
   they reach each child). The Manager also emits `yession.*` **audit records** for the
   secrets/ABAC surface (`Audit` in `app/SecretStore.fs` and Plan 06 § Telemetry list them), each
   one greppable stdout line. Missing:
-  - **a work sandbox's start.** The metrics signal records four histograms (`Timing` in
-    `app/Telemetry.fs`): `yession.session.launch.duration` from the Manager, and from each
-    session `yession.session.boot.duration` in its two parts,
-    `yession.agent.turn.first_output.duration` and `yession.agent.turn.duration`. How long
-    a work sandbox takes to start is not timed. Spans exist only on the path that adds a
-    repo.
+  - **any duration but these five.** The metrics signal records five histograms (`Timing`
+    in `app/Telemetry.fs`): `yession.session.launch.duration` from the Manager, and from
+    each session `yession.session.boot.duration` in its two parts,
+    `yession.agent.turn.first_output.duration`, `yession.agent.turn.duration` and
+    `yession.sandbox.start.duration`. Nothing else is timed: not a tool call, a command in
+    a sandbox, or a page a browser opens. Spans exist only on the path that adds a repo.
   - **an aggregate across sessions without a collector's help.** Each session is its own
     OTel resource (`service.instance.id` is the session's id), so each one's histograms are
     their own series. A backend that keeps resource attributes as labels gets a new set of

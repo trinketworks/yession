@@ -147,6 +147,10 @@ type Timing =
     | TurnFirstOutput
     /// From an agent turn starting to the event that ended it, read the same way.
     | Turn of TurnEnding
+    /// From a work sandbox beginning to come up to its being up, or failing to, read off
+    /// the log the same way (`SandboxTimings`). `backend` is one of the few a session can
+    /// host, never a sandbox's name.
+    | SandboxStart of backend: string * started: bool
 
 module Timing =
     /// The metric's name. Ours, under `yession.`: the conventions name no such duration.
@@ -156,6 +160,7 @@ module Timing =
         | Timing.SessionBoot _ -> "yession.session.boot.duration"
         | Timing.TurnFirstOutput -> "yession.agent.turn.first_output.duration"
         | Timing.Turn _ -> "yession.agent.turn.duration"
+        | Timing.SandboxStart _ -> "yession.sandbox.start.duration"
 
     let description (timing: Timing) : string =
         match timing with
@@ -164,6 +169,7 @@ module Timing =
         | Timing.TurnFirstOutput ->
             "From an agent turn starting to the first thing it does that a person sees: a word, a thought or a tool call."
         | Timing.Turn _ -> "From an agent turn starting to the event that ends it."
+        | Timing.SandboxStart _ -> "From a work sandbox beginning to come up to its being up, or failing to."
 
     let attributes (timing: Timing) : (string * AttributeValue) list =
         match timing with
@@ -184,6 +190,10 @@ module Timing =
                   | TurnEnding.Failed -> "failed"
                   | TurnEnding.Interrupted -> "interrupted") ]
 
+        | Timing.SandboxStart (backend, started) ->
+            [ "yession.sandbox.backend", AttributeValue.String backend
+              "yession.sandbox.start.outcome", AttributeValue.String (if started then "started" else "failed") ]
+
     /// A turn's timing as the metric it is recorded under, and how long it was.
     let ofTurn (timing: TurnTiming) : Timing * System.TimeSpan =
         match timing with
@@ -198,10 +208,33 @@ module Timing =
         match timing with
         | Timing.Turn _ ->
             [ 1.0; 2.0; 5.0; 10.0; 20.0; 30.0; 60.0; 120.0; 300.0; 600.0; 1200.0; 1800.0; 3600.0; 7200.0 ]
+        // Under a second for a confinement on the host, and minutes for a container that
+        // pulls an image or assembles a toolchain first.
+        | Timing.SandboxStart _ ->
+            [ 0.1; 0.25; 0.5; 1.0; 2.0; 5.0; 10.0; 20.0; 30.0; 60.0; 120.0; 300.0; 600.0; 1200.0 ]
         | Timing.SessionLaunch _
         | Timing.SessionBoot _
         | Timing.TurnFirstOutput ->
             [ 0.1; 0.25; 0.5; 0.75; 1.0; 1.5; 2.0; 3.0; 5.0; 7.5; 10.0; 15.0; 30.0; 60.0 ]
+
+/// Every duration a session reads off its own log, as one fold: the turns' and the work
+/// sandboxes'. One, so that the listener a session puts on its log is one line, and a
+/// duration added here is recorded without that line changing.
+[<RequireQualifiedAccess>]
+module SessionTimings =
+
+    type State = private { Turns : TurnTimings.State; Sandboxes : SandboxTimings.State }
+
+    let empty : State = { Turns = TurnTimings.empty; Sandboxes = SandboxTimings.empty }
+
+    /// Take one appended event, written at `at`: the state after it, and each duration it
+    /// completed, as the metric it is recorded under.
+    let step (state: State) (at: System.DateTimeOffset) (event: SessionEvent) : State * (Timing * System.TimeSpan) list =
+        let turns, turnTimings = TurnTimings.step state.Turns at event
+        let sandboxes, sandboxTimings = SandboxTimings.step state.Sandboxes at event
+        { Turns = turns; Sandboxes = sandboxes },
+        (turnTimings |> List.map Timing.ofTurn)
+        @ (sandboxTimings |> List.map (fun start -> Timing.SandboxStart (start.Backend, start.Started), start.Took))
 
 /// The telemetry sink plus a graceful flush. `Emit turnId usage` records one agent-turn log
 /// record (session emitters); `Log body attrs` records a general log record (the Manager's

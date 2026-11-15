@@ -578,6 +578,45 @@ let private timingTests =
                     "the first output alone, and each ending as its own series"
             }
 
+        // The one fold a session puts on its log (`SessionTimings`): what it hands back is
+        // already the metric and the duration, so this is the whole path from an appended
+        // event to a recorded point, short of the listener's one line.
+        testCaseAsync "a sandbox start read off the log is recorded by its backend and how it ended" <|
+            async {
+                let exporter = inMemoryMetricExporter ()
+                let time, flush = Telemetry.timerTo exporter
+                let at (seconds: float) = System.DateTimeOffset (2026, 11, 15, 9, 0, 0, System.TimeSpan.Zero) + System.TimeSpan.FromSeconds seconds
+                let beginning : SessionEvent =
+                    WorkSandboxStarting
+                        { MessageId = MessageId.create "start-1" |> expect
+                          Sandbox = SandboxRef.defaultRef
+                          Backend = "docker"
+                          Description = None
+                          Actor = ActorRef.System
+                          OnBehalfOf = None
+                          CausedBy = None }
+                let failure : SessionEvent =
+                    WorkSandboxStartFailed
+                        { MessageId = MessageId.create "start-1" |> expect
+                          Sandbox = SandboxRef.defaultRef
+                          Reason = "the image could not be pulled"
+                          Actor = ActorRef.System
+                          OnBehalfOf = None
+                          CausedBy = None }
+                let state, none = Telemetry.SessionTimings.step Telemetry.SessionTimings.empty (at 0.0) beginning
+                let _, timed = Telemetry.SessionTimings.step state (at 30.0) failure
+                Expect.isEmpty none "a beginning times nothing yet"
+                for metric, took in timed do
+                    time metric took
+                do! flush () |> Interop.awaitPromise
+                Expect.equal
+                    (histogramsOf (exporter.getMetrics ()))
+                    [ "yession.sandbox.start.duration",
+                      "s",
+                      [ """{"yession.sandbox.backend":"docker","yession.sandbox.start.outcome":"failed"}""", 1, 30.0 ] ]
+                    "thirty seconds to a failure, on docker"
+            }
+
         testCase "the disabled emitter records no timing and never throws" <| fun () ->
             Telemetry.disabled.Time (Telemetry.Timing.SessionLaunch true) (System.TimeSpan.FromSeconds 1.0)
 
