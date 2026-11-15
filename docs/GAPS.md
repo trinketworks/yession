@@ -364,6 +364,25 @@ The last section holds trust boundaries as sharp as the first section's.
     profile.
   - **A repo's `host:` sandbox has no memory limit and no process limit.** No backend on the
     host's own userland has one. A build there can use all of the host's memory.
+  - **A process that leaves its group stays when its sandbox stops.** The backend starts each
+    command as the leader of a process group. When the sandbox stops, the backend ends the
+    groups that still run (`Children.Registry` in `app/Sandboxes.fs`). A process that makes a
+    session of its own (`setsid`, a daemon) is in no group that the backend knows. An Android
+    emulator that a command started in that way ran on after its sandbox stopped, and kept
+    its memory. We measured two ways to find such a process on macOS 26.5. Each one fails:
+    - A second `sandbox-exec` with the same profile cannot end the process. To Seatbelt,
+      each `sandbox-exec` is a sandbox of its own, and the profile lets a process signal
+      only its sandbox (`same-sandbox`).
+    - A variable that marks the sandbox does not find each process. `ps -E` shows no
+      environment for a program that Apple signed.
+
+    Inside one `sandbox-exec`, a process does signal a child that made a session of its own.
+    So the fix is one `sandbox-exec` for each sandbox, with a process inside it that starts
+    each command and ends the others when the sandbox stops. Then the kernel decides which
+    processes are the sandbox's.
+  - **A command signals only what it started.** Each command is its own `sandbox-exec`, so
+    each command is a sandbox of its own to Seatbelt. `kill` in one block does not reach a
+    server that an earlier block started.
   - **A `prepare:` command has no time limit, and nothing records what it prints.** The
     start of a `host:` sandbox waits for the command until it ends. A command that fails
     refuses the start, and the refusal quotes the end of what the command printed
