@@ -406,7 +406,7 @@ let private loneRecordInQuietFrame () : JS.Promise<string list> =
 /// The conversation whose scroll is being watched, and every write to that scroll since the
 /// watch began (`watchScroll`). One watch for every case that asks whether something took a
 /// reader's scroll away: `SmoothScrollToTop` starts it once its scroll is sent, `ComposerGrows`
-/// as it is armed, and `ScrollTakenAway` reads it.
+/// as it grows the composer, and `ScrollTakenAway` reads it.
 let mutable private scrollWatched : Element option = None
 let private scrollWrites = ResizeArray<string> ()
 
@@ -445,8 +445,14 @@ let private scrollTakenAway () : string list =
 let private composerGrows (onScrollAsked: bool) : string list =
     match first Root.Document "#shell [data-conversation]", first Root.Document "#shell [data-composer-tray]" with
     | Some conversation, Some tray ->
-        watchScroll conversation
-        let grow () = setStyleProperty (tray :?> HTMLElement) "padding-bottom" "160px"
+        // The watch begins at the growth, not at the arming. Between the two the reader is
+        // still following, and a follower is put back at the end whenever the box resizes:
+        // while a page opens, the composer's line unfolds and resizes it frame by frame. Such
+        // a write is the rule doing its job, and it lands before any scroll it could end. A
+        // watch begun at the arming counted it against a scroll asked for a frame later.
+        let grow () =
+            watchScroll conversation
+            setStyleProperty (tray :?> HTMLElement) "padding-bottom" "160px"
         if onScrollAsked then
             // Bubbling at the window: after the page's own listeners, the product's among them,
             // have heard it, and before the browser's scroll in answer to it has moved.
