@@ -222,6 +222,7 @@ Async.StartImmediate(
                     // origin, or off-host browsers cannot follow the authorize bounce.
                     Public = publicAccess
                     OnEvent = telemetry.Log
+                    OnTiming = telemetry.Time
                     Strategy = Some strategy
                     Secrets = Some secretsBacking
                     Webhooks = Cli.valueOf ManagerCli.webhookOption args }

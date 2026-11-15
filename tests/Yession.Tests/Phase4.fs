@@ -1962,7 +1962,11 @@ let private spawnedChildren (ledger: string) : int list =
         try sigkill pid with _ -> ()
     pids
 
-let private managerOfStubs (name: string) (readiness: StandIn.Readiness) =
+let private managerOfStubsWith
+    (name: string)
+    (readiness: StandIn.Readiness)
+    (configure: ProcessManager.Options -> ProcessManager.Options)
+    =
     let dataDir =
         sprintf "tests/Yession.Tests/out/.data/%s-%d" name (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
     Fs.ensureDir dataDir
@@ -1970,10 +1974,14 @@ let private managerOfStubs (name: string) (readiness: StandIn.Readiness) =
     async {
         let! pm =
             ProcessManager.create
-                { ProcessManager.Options.defaults dataDir nodePath (stubSession ledger readiness) with
-                    Strategy = Some Strategy.localhost }
+                (configure
+                    { ProcessManager.Options.defaults dataDir nodePath (stubSession ledger readiness) with
+                        Strategy = Some Strategy.localhost })
         return pm, ledger
     }
+
+let private managerOfStubs (name: string) (readiness: StandIn.Readiness) =
+    managerOfStubsWith name readiness id
 
 let private launchOnceTests =
     testList "One session, one child (the launch in flight)" [
@@ -1995,6 +2003,45 @@ let private launchOnceTests =
                 Expect.isTrue (Result.isOk a) (sprintf "the launch succeeded: %A" a)
                 Expect.equal b a "one outcome, told to both"
                 Expect.equal (List.length spawned) 1 (sprintf "one child spawned, not %A" spawned)
+            }
+
+        // The launch is what is timed, not the asking: a joiner waits on the same spawn, so
+        // counting it again would report two launches where one process started.
+        testCaseAsync "a launch two askers joined is timed once, as ready, for at least as long as the child took" <|
+            async {
+                let timings = ResizeArray<Telemetry.Timing * TimeSpan> ()
+                let! pm, ledger =
+                    managerOfStubsWith "launch-timed" (StandIn.ReadyAfter 300) (fun options ->
+                        { options with OnTiming = fun timing took -> timings.Add (timing, took) })
+                let record = pm.CreateSession "launch-timed" "Launch timed" |> expect
+                let! first = pm.Launch record.SessionId |> Async.StartChild
+                let! second = pm.Launch record.SessionId |> Async.StartChild
+                let! a = first
+                let! _ = second
+                do! pm.StopAll ()
+                spawnedChildren ledger |> ignore
+                Expect.isTrue (Result.isOk a) (sprintf "the launch succeeded: %A" a)
+                match List.ofSeq timings with
+                | [ timing, took ] ->
+                    Expect.equal timing (Telemetry.Timing.SessionLaunch true) "one launch, and it came up"
+                    // The child holds its readiness line for 300ms, so the wait cannot be
+                    // shorter. No upper bound: how long a process takes to start is the box's.
+                    Expect.isTrue (took >= TimeSpan.FromMilliseconds 300.0) (sprintf "the wait for the readiness line, not %A" took)
+                | other -> failwithf "one launch is one timing, not %A" other
+            }
+
+        testCaseAsync "a launch that fails is timed as failed" <|
+            async {
+                let timings = ResizeArray<Telemetry.Timing> ()
+                let! pm, ledger =
+                    managerOfStubsWith "launch-fail-timed" exitBeforeReady (fun options ->
+                        { options with OnTiming = fun timing _ -> timings.Add timing })
+                let record = pm.CreateSession "launch-fail-timed" "Launch fail timed" |> expect
+                let! launched = pm.Launch record.SessionId
+                do! pm.StopAll ()
+                spawnedChildren ledger |> ignore
+                Expect.isTrue (Result.isError launched) "the launch failed"
+                Expect.equal (List.ofSeq timings) [ Telemetry.Timing.SessionLaunch false ] "and its wait is recorded as a failed launch"
             }
 
         testCaseAsync "a launch that fails fails everyone who joined it, and spawned once" <|

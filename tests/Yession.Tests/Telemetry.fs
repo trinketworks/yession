@@ -507,4 +507,55 @@ let private spanTests =
             }
     ]
 
-let tests = testList "Telemetry" [ bindingTests; emitterTests; forwardingTests; auditTests; spanTests ]
+/// What a test reads off one exported histogram: its name, its unit, and for each attribute
+/// set the count and the sum recorded under it.
+let private histogramsOf (exports: ResourceMetrics array) : (string * string * (string * int * float) list) list =
+    [ for export in exports do
+        for scope in export.scopeMetrics do
+            for metric in scope.metrics ->
+                metric.descriptor.name,
+                metric.descriptor.unit,
+                [ for point in metric.dataPoints ->
+                    Attributes.toJson point.attributes, point.value.count, defaultArg point.value.sum 0.0 ] ]
+
+let private timingTests =
+    testList "timings (app/Telemetry.fs)" [
+        testCaseAsync "launches are one histogram in seconds, a series for each outcome" <|
+            async {
+                let exporter = inMemoryMetricExporter ()
+                let time, flush = Telemetry.timerTo exporter
+                time (Telemetry.Timing.SessionLaunch true) (System.TimeSpan.FromMilliseconds 700.0)
+                time (Telemetry.Timing.SessionLaunch true) (System.TimeSpan.FromMilliseconds 300.0)
+                time (Telemetry.Timing.SessionLaunch false) (System.TimeSpan.FromSeconds 15.0)
+                do! flush () |> Interop.awaitPromise
+                Expect.equal
+                    (histogramsOf (exporter.getMetrics ()))
+                    [ "yession.session.launch.duration",
+                      "s",
+                      [ """{"yession.session.launch.outcome":"ready"}""", 2, 1.0
+                        """{"yession.session.launch.outcome":"failed"}""", 1, 15.0 ] ]
+                    "two launches that came up and one that did not, in seconds"
+            }
+
+        testCase "the disabled emitter records no timing and never throws" <| fun () ->
+            Telemetry.disabled.Time (Telemetry.Timing.SessionLaunch true) (System.TimeSpan.FromSeconds 1.0)
+
+        // A dead endpoint is the ordinary state of a machine with no collector. The record
+        // must cost the launch nothing, and the shutdown must end.
+        testCaseAsync "OTEL_METRICS_EXPORTER=otlp with nothing listening never throws; Shutdown ends" <|
+            async {
+                do! Support.withEnv
+                        [ "OTEL_METRICS_EXPORTER", Some "otlp"
+                          "OTEL_LOGS_EXPORTER", Some "none"
+                          "OTEL_EXPORTER_OTLP_ENDPOINT", Some "http://127.0.0.1:1"
+                          // The exporter's own deadline for one export, retries included.
+                          "OTEL_EXPORTER_OTLP_TIMEOUT", Some "500" ]
+                        (fun () -> async {
+                            let emitter = Telemetry.managerFromEnv ()
+                            emitter.Time (Telemetry.Timing.SessionLaunch true) (System.TimeSpan.FromSeconds 1.0)
+                            do! emitter.Shutdown () |> Interop.awaitPromise
+                        })
+            }
+    ]
+
+let tests = testList "Telemetry" [ bindingTests; emitterTests; forwardingTests; auditTests; spanTests; timingTests ]

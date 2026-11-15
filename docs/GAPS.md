@@ -1351,8 +1351,10 @@ After the fixes land, one pass rewrites it to what still reproduces.
   they reach each child). The Manager also emits `yession.*` **audit records** for the
   secrets/ABAC surface (`Audit` in `app/SecretStore.fs` and Plan 06 § Telemetry list them), each
   one greppable stdout line. Missing:
-  - a **metrics pipeline** and **traces** (the emitter path generalises to both, with the same
-    env selection and no collector to touch)
+  - **durations beyond a session launch.** The metrics signal records one histogram,
+    `yession.session.launch.duration`, from the Manager (`Timing` in `app/Telemetry.fs`). A
+    session's own boot, a turn's time to its first output and a work sandbox's start are not
+    timed. Spans exist only on the path that adds a repo.
   - **forwarding of audit records to a collector**
   - **structured app logging or crash reporting** beyond stdout
 - **Multi-node operation and work-intake integrations (Slack/Linear)** stay out of scope, as

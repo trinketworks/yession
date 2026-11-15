@@ -183,6 +183,9 @@ type Options =
       /// the standard `OTEL_*` env through to each child (Spawn merges over `process.env`) and
       /// adapts the child's identity (service.name/instance.id).
       OnEvent : string -> (string * Telemetry.AttributeValue) list -> unit
+      /// Where the Manager records how long something took: its emitter's `Time`. Default =
+      /// ignore.
+      OnTiming : Telemetry.Timing -> TimeSpan -> unit
       /// How the humans at this Manager's endpoint are authenticated: /authorize for
       /// the OIDC bounce, and every management-UI request. None = the
       /// deny-everything strategy — nothing authenticates until the operator chooses
@@ -253,6 +256,7 @@ module Options =
           Listen = Listener.Port 0
           Public = Loopback
           OnEvent = (fun _ _ -> ())
+          OnTiming = (fun _ _ -> ())
           Strategy = None
           Secrets = None
           IdleTimeout = None
@@ -1400,8 +1404,12 @@ let createWithUi
                         { SessionId = record.SessionId; LastBusyAt = clock (); EverReported = false }
                         activity
                 let diagnosticsDir = sprintf "%s/%s/launch-diagnostics" options.DataDir record.DataDir
+                // Timed from the spawn to its answer and nothing wider: what came before is
+                // the Manager's own bookkeeping, and a joiner's wait is this same launch.
+                let spawnedAt = clock ()
                 let! spawned =
                     Spawn.launch options.SessionCommand options.SessionArgs env diagnosticsDir options.LaunchTimeoutMs
+                options.OnTiming (Telemetry.Timing.SessionLaunch (Result.isOk spawned)) (clock () - spawnedAt)
                 // Everyone who joined, answered AFTER the bookkeeping below: a joiner that
                 // asks `TryFind` the moment it resumes must see what the launcher sees.
                 let joined = Map.tryFind key launching |> Option.defaultValue []
