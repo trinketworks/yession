@@ -85,6 +85,10 @@ and `getProxyAuthToken`. The proxy admits a client that has the token, with any 
   this backend. [One mechanism per requirement](../technical-design.md#one-mechanism-per-requirement)
   says that they must move, and that `Unconfined` must go with them.
 - **[GAPS.md](../GAPS.md) lists what the backend does not do yet.**
+- **A sandbox is one `sandbox-exec` since 2026-11-15.** The decision above says that each
+  command starts under `sandbox-exec`. That was the first version. A supervisor inside the
+  sandbox now starts each command
+  ([ADR](2026-11-15-a-seatbelt-sandbox-is-one-sandbox-exec.md)).
 
 We measured these by hand on macOS 26, under a profile of this shape, before we wrote the
 module:

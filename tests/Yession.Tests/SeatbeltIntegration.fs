@@ -422,15 +422,20 @@ let private macCases () =
         })
 
         // `SeatbeltAllow.parse` checks the shape of a rule and not its words. A word that
-        // Seatbelt does not know stops every command, and `sandbox-exec` says which word.
-        // The start-up check of a sandbox runs a command, so it refuses such a sandbox.
-        testCaseAsync "a rule that Seatbelt cannot read stops the command, and sandbox-exec names the word" (async {
+        // Seatbelt does not know stops `sandbox-exec`, which says which word. One `sandbox-exec`
+        // holds the sandbox, so the sandbox does not start, and its refusal has those words.
+        testCaseAsync "a rule that Seatbelt cannot read stops the start of the sandbox, and sandbox-exec names the word" (async {
             let rule = SeatbeltAllow.parse "(allow no-such-operation)" |> expect
-            let! sandbox = startSandbox { policyIn (freshDir ()) with SeatbeltRules = [ rule ] }
-            let! run, out, err = shell sandbox "echo ran"
-            do! sandbox.Dispose ()
-            Expect.notEqual (exitCode run) 0 "no command runs under a profile that does not compile"
-            Expect.isFalse (out.Contains "ran") "and this one did not"
+            let! started =
+                Sandboxes.SeatbeltSandbox.create (tools ()) HostSpec.none (Some (ownRoot ())) { policyIn (freshDir ()) with SeatbeltRules = [ rule ] }
+            let! err =
+                async {
+                    match started with
+                    | Ok sandbox ->
+                        do! sandbox.Dispose ()
+                        return "the sandbox started"
+                    | Error refusal -> return refusal
+                }
             Expect.isTrue (err.Contains "no-such-operation") (sprintf "said: %s" err)
         })
 
@@ -444,9 +449,219 @@ let private macCases () =
         })
     ]
 
+// --- the supervisor of a sandbox ----------------------------------------------------------------
+//
+// One `sandbox-exec` holds a sandbox, and the supervisor inside it ends each process of the
+// sandbox at the stop (`app/Supervisor.fs`). These cases ask the kernel, with real processes
+// and the real ending signal, which processes that is: each process that a command started,
+// and no process of a different sandbox or of the host.
+
+/// A long-lived process that a case starts outside each sandbox, as a child of this process.
+/// Answers its pid.
+let private outsideProcess () : int =
+    let child =
+        ChildProcesses.spawn
+            Node.Api.``process``.execPath
+            [ "-e"; "setTimeout(() => {}, 600000)" ]
+            { Cwd = None
+              Env = ChildEnv.Replacing Map.empty
+              Streams = { Stdin = Stdio.Ignore; Stdout = Stdio.Ignore; Stderr = Stdio.Ignore }
+              Detached = false }
+    int child.pid
+
+/// End a process that a case started, by its pid.
+let private endByPid (pid: int) : unit = Processes.trySignal pid "SIGKILL" |> ignore
+
+/// A command in `sandbox` that runs until something ends it, with `environment` beside what
+/// its sandbox gives it. It prints its pid when it runs. Answers that pid, and the handle
+/// of the command.
+let private runningCommandWith (environment: Map<string, string>) (sandbox: Sandbox) : Async<int * SandboxProcessHandle> =
+    async {
+        let printed = System.Text.StringBuilder ()
+        let! spawned =
+            sandbox.Spawn
+                { Executable = Node.Api.``process``.execPath
+                  Arguments = [ "-e"; "console.log(process.pid); setTimeout(() => {}, 600000)" ]
+                  Env = environment
+                  WorkingDirectory = None
+                  Via = Direct }
+                (fun (stream, text) -> if stream = Stdout then printed.Append text |> ignore)
+        match spawned with
+        | Error reason -> return failwithf "the command did not start: %s" reason
+        | Ok handle ->
+            let! started = settledWithin 20000 (fun () -> printed.ToString().Contains "\n")
+            if not started then failwith "the command did not print its pid"
+            return int (printed.ToString().Trim ()), handle
+    }
+
+/// A command in `sandbox` that runs until something ends it. Answers its pid, and the handle
+/// of the command.
+let private runningCommand (sandbox: Sandbox) : Async<int * SandboxProcessHandle> = runningCommandWith Map.empty sandbox
+
+/// Perl that asks the kernel for the environment of one process, and prints the value of
+/// `LOAN` there. The call is the sysctl `kern.procargs2`, which is the call that `ps -E`
+/// makes. Perl, because each Mac has it and it can make the call.
+let private loanOf : string =
+    """my $mib = pack('i3', 1, 49, $ARGV[0]); my $size = pack('Q', 1 << 20); my $buf = "\0" x (1 << 20);
+if (syscall(202, $mib, 3, $buf, $size, 0, 0) != 0) { print 'refused ', $! + 0; exit 0; }
+print substr($buf, 0, unpack('Q', $size)) =~ /LOAN=([\w-]+)/ ? "loan $1" : 'no loan';"""
+
+/// What `text` became as the input of a command in `sandbox` that counts the bytes of its
+/// input.
+let private countedAsInput (sandbox: Sandbox) (text: string) : Async<string> =
+    async {
+        let out = System.Text.StringBuilder ()
+        let! spawned =
+            sandbox.Spawn
+                { Executable = "/usr/bin/wc"; Arguments = [ "-c" ]; Env = Map.empty; WorkingDirectory = None; Via = Direct }
+                (fun (stream, chunk) -> if stream = Stdout then out.Append chunk |> ignore)
+        match spawned with
+        | Error reason -> return failwithf "the command did not start: %s" reason
+        | Ok handle ->
+            handle.WriteStdin text
+            handle.CloseStdin ()
+            let! _ = handle.Exited
+            return out.ToString().Trim ()
+    }
+
+/// A process in `sandbox` that left the process group of the command that started it: it is
+/// the leader of a session of its own, and its command ended, so process 1 holds it.
+/// Answers its pid.
+let private leftItsGroup (sandbox: Sandbox) : Async<int> =
+    async {
+        let program =
+            "const child = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000)'], "
+            + "{ detached: true, stdio: 'ignore' }); child.unref(); console.log(child.pid);"
+        let! run, out, err = runInSandbox sandbox Node.Api.``process``.execPath [ "-e"; program ] Map.empty None
+        if exitCode run <> 0 then failwithf "the command that starts the process failed, and said: %s" err
+        return int (out.Trim ())
+    }
+
+/// Whether the process with this pid goes, in the time that a case gives it.
+let private goes (pid: int) : Async<bool> = settledWithin 20000 (fun () -> not (Processes.isAlive pid))
+
+let private supervisionCases () =
+    [
+        testCaseAsync "a stop ends a process that left the group of its command" (async {
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            let! pid = leftItsGroup sandbox
+            do! sandbox.Dispose ()
+            let! gone = goes pid
+            Expect.isTrue gone "the process was in a session of its own, and the sandbox was still its sandbox"
+        })
+
+        testCaseAsync "a stop ends a command that still runs" (async {
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            let! pid, _ = runningCommand sandbox
+            do! sandbox.Dispose ()
+            let! gone = goes pid
+            Expect.isTrue gone "the command would have run for ten minutes"
+        })
+
+        testCaseAsync "a command that still runs when its sandbox stops ends as one that a signal took" (async {
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            let! _, handle = runningCommand sandbox
+            do! sandbox.Dispose ()
+            let! run = handle.Exited
+            Expect.equal run (SandboxExited -1) "the answer that the session got when each command was its own child"
+        })
+
+        testCaseAsync "a stop leaves a process of another sandbox running" (async {
+            let! other = startSandbox (policyIn (freshDir ()))
+            let! pid = leftItsGroup other
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            do! sandbox.Dispose ()
+            let alive = Processes.isAlive pid
+            do! other.Dispose ()
+            Expect.isTrue alive "the kernel refused the signal for a process of a different sandbox"
+        })
+
+        testCaseAsync "a stop leaves a process outside each sandbox running" (async {
+            let pid = outsideProcess ()
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            do! sandbox.Dispose ()
+            let alive = Processes.isAlive pid
+            endByPid pid
+            Expect.isTrue alive "the kernel refused the signal for a process of the host"
+        })
+
+        // An operator can write a rule that lets a signal out of a sandbox. Under such a
+        // profile a stop would end processes of the host, so the supervisor refuses at its
+        // start, and the sandbox does not start.
+        testCaseAsync "a sandbox whose profile lets a signal out does not start" (async {
+            let rule = SeatbeltAllow.parse "(allow signal)" |> expect
+            let! started =
+                Sandboxes.SeatbeltSandbox.create (tools ()) HostSpec.none (Some (ownRoot ())) { policyIn (freshDir ()) with SeatbeltRules = [ rule ] }
+            match started with
+            | Ok sandbox ->
+                do! sandbox.Dispose ()
+                failwith "the sandbox started, and its stop would signal processes of the host"
+            | Error refusal -> Expect.isTrue (refusal.Contains "lets a signal out of the sandbox") (sprintf "said: %s" refusal)
+        })
+
+        testCaseAsync "a command signals a process that an earlier command started" (async {
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            let! pid, _ = runningCommand sandbox
+            let! run, _, err = shell sandbox (sprintf "kill -TERM %d" pid)
+            do! sandbox.Dispose ()
+            Expect.equal (exitCode run) 0 (sprintf "the two commands are in one sandbox, and stderr said: %s" err)
+        })
+
+        // A KNOWN LIMIT, pinned so that nobody takes it for held. One `sandbox-exec` holds each
+        // command of a sandbox, and a profile lets a process read the arguments and the
+        // environment of the processes of its own sandbox. A block holds the loan of a person
+        // in its environment, so a second block of the same sandbox reads that loan. This is
+        // the boundary that the header of `app/GitGateway.fs` states for a sandbox, and
+        // docs/GAPS.md says that this backend has it.
+        testCaseAsync "a command reads the environment of an earlier command of its sandbox, which is a known limit" (async {
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            let! pid, _ = runningCommandWith (Map.ofList [ "LOAN", "of-the-first-block" ]) sandbox
+            let! _, out, err = runInSandbox sandbox "/usr/bin/perl" [ "-e"; loanOf; string pid ] Map.empty None
+            do! sandbox.Dispose ()
+            Expect.equal (out.Trim ()) "loan of-the-first-block" (sprintf "one sandbox-exec holds the two commands, and stderr said: %s" err)
+        })
+
+        // A command can end the supervisor: the two are in one sandbox. Such a supervisor
+        // makes no stop, so the sandbox must say that its processes can still run. The command
+        // signals the process that started it, and only a process with a pid above 1.
+        testCaseAsync "a sandbox whose supervisor a command ended says that its processes can still run" (async {
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            let! run, _, _ = shell sandbox "[ \"$PPID\" -gt 1 ] && kill -KILL \"$PPID\"; sleep 5"
+            do! sandbox.Dispose ()
+            let said = match run with SandboxRunFailed reason -> reason | other -> sprintf "%A" other
+            Expect.stringContains said "Processes of the sandbox can still run" "the sandbox answers the command that was in flight with the reason"
+        })
+
+        testCaseAsync "a sandbox still runs a command after one that Node could not start" (async {
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            let! _ = runInSandbox sandbox "/bin/echo" [ "a\u0000b" ] Map.empty None
+            let! _, out, _ = runInSandbox sandbox "/bin/echo" [ "still here" ] Map.empty None
+            do! sandbox.Dispose ()
+            Expect.equal (out.Trim ()) "still here" "a NUL in an argument is the end of one command, and not of the supervisor"
+        })
+
+        testCaseAsync "an input of five megabytes reaches a command whole" (async {
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            let! counted = countedAsInput sandbox (String.replicate (5 * 1024 * 1024) "x")
+            do! sandbox.Dispose ()
+            Expect.equal counted "5242880" "the session sent it as bounded requests, and the command read each byte"
+        })
+
+        testCaseAsync "the end of one command leaves a second command running" (async {
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            let! _, first = runningCommand sandbox
+            let! second, _ = runningCommand sandbox
+            first.Kill ()
+            let! _ = first.Exited
+            let alive = Processes.isAlive second
+            do! sandbox.Dispose ()
+            Expect.isTrue alive "a cancel ends the process group of its own command, and no other"
+        })
+    ]
+
 let tests =
     Tag.needs "Seatbelt integration" [ Tag.Srt ] (fun () ->
         testList "Seatbelt integration" (
-            if onMac () then macCases ()
+            if onMac () then macCases () @ supervisionCases ()
             else [ ptestCase "the seatbelt backend confines (macOS only: no other platform has a Seatbelt)" (fun () -> ()) ]
         ))

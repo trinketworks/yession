@@ -178,8 +178,9 @@ Only a sandbox under the `seatbelt` backend takes a rule. Each other confining b
 withholds it. A sandbox that `uses:` the resource then refuses to start, and a sandbox that
 `wants:` it starts without the rule. So do not list such a resource under `always:` on a host
 that also runs sandboxes under `srt` or `docker`. A rule with a word that Seatbelt does not
-know stops each command of its sandbox, and the start-up check shows what `sandbox-exec`
-said.
+know stops the start of its sandbox, and the refusal shows what `sandbox-exec` said. A rule
+that lets a signal out of the sandbox (`(allow signal)`) also stops the start: the stop of
+such a sandbox would end processes of the host.
 
 The same file may declare `sandboxes:` in the form a repo's `yession.yaml` uses
 (`ConfigFile.parseSandboxes` in `src/Yession.Domain/Config.fs`). Boot prints the notes of

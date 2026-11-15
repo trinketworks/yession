@@ -1246,6 +1246,10 @@ module private Children =
             (onChunk: OutputStream * string -> unit)
             : SandboxProcessHandle =
             let child = spawnChild executable arguments cwd env
+            // A write to a child that has gone can be an EPIPE on its input, and Node ends a
+            // process for an `error` that nobody hears. The end of the child is what reports
+            // it. A seatbelt sandbox's supervisor is such a child for the life of its sandbox.
+            (ChildProcessStreams.stdin child).onError ignore
             let id = next
             next <- next + 1
             live <- (id, fun () -> killTree child) :: live
@@ -3278,9 +3282,16 @@ module SrtSandbox =
 
 // --- seatbelt: macOS confinement under a profile written here -----------------------------
 
-/// macOS's Seatbelt under a `SeatbeltProfile`: each spawn is `sandbox-exec`, handed the
-/// profile and then the command as it is. No wrapper shell, so an argv reaches its program
-/// as an argv, and no round trip to another process for each spawn.
+/// macOS's Seatbelt under a `SeatbeltProfile`: one `sandbox-exec` for each sandbox, handed
+/// the profile. The first process in it is the sandbox's supervisor (`Supervisor.fs`), and
+/// the supervisor starts each command as the argv that it is. No wrapper shell, so an argv
+/// reaches its program as an argv.
+///
+/// One `sandbox-exec` and not one for each command, because Seatbelt keeps a signal to the
+/// `sandbox-exec` that it came from. A process that made a session of its own once ran on
+/// after its sandbox stopped, and nothing outside the sandbox could tell it from a process
+/// of the host. The header of `Supervisor.fs` and the decision record of 2026-11-15 in
+/// docs/decisions give the measurements.
 ///
 /// What srt still does here is filter egress. A profile can admit a port and cannot admit
 /// a host name, so the sandbox's one route out is the loopback port of srt's proxy
@@ -3300,17 +3311,37 @@ module SeatbeltSandbox =
     /// `hostedOn`, for the host this process runs on.
     let hostedHere () : Result<unit, string> = hostedOn (platform ())
 
-    /// What a spawn under `profile` is started as.
+    /// Where the supervisor's entry is: beside this module, which a bundle flattens into the
+    /// bin's own file, so the packaged supervisor sits beside the packaged session.
+    let private supervisorEntry () : string = FileUrls.toPath (Interop.urlBesideModule "./SandboxSupervisor.js")
+
+    /// The `package.json` that Node reads before it runs the module at `entry`: the nearest
+    /// one in the directories above the entry. `exists` says whether a file is there.
+    let manifestAbove (exists: string -> bool) (entry: string) : string option =
+        SeatbeltAbove.directories entry
+        |> List.map (fun directory -> directory + "/package.json")
+        |> List.tryFind exists
+
+    /// What a sandbox reads so that Node can run the supervisor in it, beside
+    /// `SrtTools.Runtime`.
+    ///
+    /// The supervisor is the one program of this package that runs INSIDE a sandbox. Node
+    /// reads two things for it: the tree that holds the entry, by the rule for srt's own
+    /// files (`SrtSandbox.installPrefix`), and the manifest of its package.
+    /// Measured: without the manifest, Node does not start the entry, and says
+    /// `Cannot read package config`. In a checkout of this repository the modules that the
+    /// session depends on are in the Nix store, so nothing else makes the tree readable.
+    let supervisorReads (ambient: Map<string, string>) (exists: string -> bool) (entry: string) : string list =
+        SrtSandbox.runtimeReadPaths (platform ()) [ entry ] ambient @ Option.toList (manifestAbove exists entry)
+
+    /// What a sandbox under `profile` is started as: `sandbox-exec`, the profile, and the
+    /// supervisor as `runtime` runs it.
     ///
     /// The profile is an ARGUMENT, never a file. A file would have to live somewhere, the
     /// only places a session writes are places its sandboxes write too, and a profile a
-    /// confined process can edit confines the next spawn to whatever that process chose.
-    ///
-    /// Work stands behind the entrypoint its sandbox declared (`entered`), inside the
-    /// profile like everything else it starts.
-    let argvFor (profile: string) (host: HostSpec) (exec: SandboxExec) : string * string list =
-        let executable, arguments = entered host exec
-        sandboxExec, [ "-p"; profile; executable ] @ arguments
+    /// confined process can edit confines the next sandbox to whatever that process chose.
+    let argvFor (profile: string) (runtime: string) (entry: string) : string * string list =
+        sandboxExec, [ "-p"; profile; runtime; entry ]
 
     /// A spawn's environment: the policy's, then the request's, then the proxy's, so that
     /// nothing a repo or a command sets can point a client past the filter. git is told to
@@ -3320,12 +3351,309 @@ module SeatbeltSandbox =
         mergeEnv (mergeEnv (environment Map.empty policy) exec.Env) (SeatbeltProxy.environment proxy)
         |> withGitConfig [ "http.proxyAuthMethod", "basic" ]
 
+    /// The request that starts `exec` as command `id` of a sandbox.
+    ///
+    /// Work stands behind the entrypoint its sandbox declared (`entered`), inside the
+    /// profile like everything else that the supervisor starts. The environment is the
+    /// whole of what the command gets, and it goes to that command only: a loan that a
+    /// block holds is in the request of that block, and in no other.
+    ///
+    /// That keeps a loan out of the environment of each other command. It does not keep it
+    /// from a command that asks the kernel: one `sandbox-exec` holds each command of the
+    /// sandbox, and a profile lets a process read the environment of the processes of its
+    /// own sandbox. docs/GAPS.md names that limit.
+    let requestFor
+        (proxy: SeatbeltProxy)
+        (policy: SandboxPolicy)
+        (host: HostSpec)
+        (id: int)
+        (exec: SandboxExec)
+        : Supervisor.Wire.Request =
+        let executable, arguments = entered host exec
+        Supervisor.Wire.Run (
+            id,
+            executable,
+            arguments,
+            SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory,
+            environmentFor proxy policy exec
+        )
+
+    /// One sandbox's supervisor, as the session holds it.
+    type private Supervised =
+        { /// Start a command. The first argument makes the request from the id that the
+          /// command gets.
+          Run : (int -> Supervisor.Wire.Request) -> (OutputStream * string -> unit) -> Result<SandboxProcessHandle, string>
+          /// Close the supervisor's input, which is the stop, and wait until it has gone.
+          Stop : unit -> Async<unit> }
+
+    /// How long a start waits for the supervisor to say that it is ready, in milliseconds.
+    /// Measured: a supervisor is ready in about 60 ms.
+    let private startPatienceMs : int = 30_000
+
+    /// Whether `work` ended in `ms` milliseconds.
+    let private within (ms: int) (work: Async<unit>) : Async<bool> =
+        Async.FromContinuations (fun (cont, _, _) ->
+            let mutable answered = false
+            let answer (inTime: bool) =
+                if not answered then
+                    answered <- true
+                    cont inTime
+            let timer = JS.setTimeout (fun () -> answer false) ms
+            async {
+                do! work
+                JS.clearTimeout timer
+                answer true
+            }
+            |> Async.StartImmediate)
+
+    /// How the supervisor's process ended, for a refusal or for the failure of a command.
+    /// The registry of children answers -1 for a child that a signal ended.
+    let private endOf (run: SandboxRun) : string =
+        match run with
+        | SandboxExited -1 -> "was ended by a signal"
+        | SandboxExited code -> sprintf "ended with code %d" code
+        | SandboxSignalled signal -> sprintf "was ended by %s" signal
+        | SandboxRunFailed failure -> sprintf "did not start: %s" failure
+        | SandboxKilledForMemory kill -> sprintf "was %s" (MemoryKill.described kill)
+
+    /// What a supervisor that was ready left behind when it ended: nothing when its stop
+    /// ended each process of the sandbox, and the reason when processes can still run.
+    ///
+    /// A supervisor ends by itself only after a stop, and its code says how that stop ended
+    /// (`Supervisor.ExitCode`). Each other end came from outside its control: a command that
+    /// signalled it, or the system when memory was short. Such a supervisor made no stop.
+    let leftBehind (run: SandboxRun) : string option =
+        match run with
+        | SandboxExited code when code = Supervisor.ExitCode.ended -> None
+        | SandboxExited code when code = Supervisor.ExitCode.left ->
+            Some "its stop gave up while some processes still took the ending signal"
+        | SandboxExited code when code = Supervisor.ExitCode.unproven ->
+            Some "its stop made no pass, because nothing proved that a profile confined the supervisor"
+        | SandboxExited _
+        | SandboxSignalled _
+        | SandboxRunFailed _
+        | SandboxKilledForMemory _ -> Some (sprintf "it %s, which is no end of its own, so it made no stop" (endOf run))
+
+    /// Why a sandbox whose supervisor ended by itself or from outside answers each command
+    /// with a failure, in words. The session did not stop the sandbox.
+    let afterReady (run: SandboxRun) : string =
+        match leftBehind run with
+        | None ->
+            "the supervisor of this sandbox failed. It ended each process of the sandbox, and left. Stop the sandbox and start it again"
+        | Some why ->
+            sprintf
+                "the supervisor of this sandbox has gone: %s. Processes of the sandbox can still run, and the session cannot end them. Stop the sandbox and start it again"
+                why
+
+    /// The line that carries `request` to a supervisor, or the refusal of a request that is
+    /// longer than a supervisor reads (`Supervisor.Wire.lineLimit`). A supervisor drops such
+    /// a line, and the command would get no answer.
+    let lineFor (request: Supervisor.Wire.Request) : Result<string, string> =
+        let line = Supervisor.Wire.request request
+        if line.Length > Supervisor.Wire.lineLimit then
+            Error (
+                sprintf
+                    "the command is %d characters as a request, with its arguments and its environment. A supervisor reads a request of %d characters at most"
+                    line.Length
+                    Supervisor.Wire.lineLimit)
+        else
+            Ok line
+
+    /// Start the supervisor of one sandbox under `profile`, and answer when it is ready, or
+    /// when it refuses.
+    ///
+    /// A supervisor that ends afterwards fails each command in flight and each one after
+    /// it, in words: the sandbox that it held has gone with it, and nothing starts another
+    /// behind the session's back. The words say whether processes of the sandbox can still
+    /// run (`leftBehind`): a supervisor that something ended from outside made no stop.
+    let private supervise
+        (children: Children.Registry)
+        (profile: string)
+        (entry: string)
+        (directory: string)
+        : Async<Result<Supervised, string>> =
+        Async.FromContinuations (fun (cont, _, _) ->
+            let commands = Collections.Generic.Dictionary<int, (OutputStream * string -> unit) * OneShot<SandboxRun>> ()
+            let mutable nextId = 0
+            let mutable gone : string option = None
+            let mutable stopping = false
+            let mutable settled = false
+            // The supervisor said that it is ready, so it can have commands.
+            let mutable ready = false
+            // Why processes of the sandbox can still run, after a supervisor that was ready
+            // ended and its stop did not end each one (`leftBehind`).
+            let mutable remains : string option = None
+            // The session gave up on a supervisor that did not leave, and ends it.
+            let mutable gaveUp = false
+            let mutable supervisor : SandboxProcessHandle option = None
+            // What `sandbox-exec` or the supervisor said before the supervisor was ready.
+            // `sandbox-exec` reports here a profile that Seatbelt cannot read.
+            let mutable complaints = ""
+            let mutable patience : int option = None
+            let settle (result: Result<Supervised, string>) =
+                if not settled then
+                    settled <- true
+                    patience |> Option.iter JS.clearTimeout
+                    cont result
+            let finish (id: int) (run: SandboxRun) =
+                match commands.TryGetValue id with
+                | true, (_, ended) ->
+                    commands.Remove id |> ignore
+                    ended.Settle run
+                | _ -> ()
+            // Nothing goes to the supervisor after its input closed: Node ends a process for
+            // a write to a stream that it ended.
+            let write (line: string) =
+                match supervisor, gone with
+                | Some handle, None when not stopping -> handle.WriteStdin (line + "\n")
+                | _ -> ()
+            let send (request: Supervisor.Wire.Request) = write (Supervisor.Wire.request request)
+            let supervised : Supervised =
+                { Run =
+                    fun toRequest onChunk ->
+                        match gone with
+                        | _ when stopping -> Error "this sandbox stops, and starts no command"
+                        | Some reason -> Error reason
+                        | None ->
+                            let id = nextId + 1
+                            match lineFor (toRequest id) with
+                            | Error refusal -> Error refusal
+                            | Ok line ->
+                                nextId <- id
+                                let ended = OneShot<SandboxRun> ()
+                                commands.[id] <- (onChunk, ended)
+                                write line
+                                Ok
+                                    { // A large input goes as requests of a bounded size, so
+                                      // no line of the wire is as long as the input.
+                                      WriteStdin = fun text -> Supervisor.Wire.inputs id text |> List.iter send
+                                      CloseStdin = fun () -> send (Supervisor.Wire.EndInput id)
+                                      Kill = fun () -> send (Supervisor.Wire.Cancel id)
+                                      Exited = ended.Await }
+                  Stop =
+                    fun () ->
+                        async {
+                            match supervisor, gone with
+                            | Some handle, None ->
+                                stopping <- true
+                                handle.CloseStdin ()
+                                // The supervisor says how long its stop can take. A shorter
+                                // wait would end it in the middle of its stop, and its
+                                // processes would stay.
+                                let! left =
+                                    within
+                                        Supervisor.longestStopMs
+                                        (async {
+                                            let! _ = handle.Exited
+                                            return ()
+                                        })
+                                if not left then
+                                    gaveUp <- true
+                                    eprintfn
+                                        "seatbelt sandbox: the supervisor did not leave in %d ms after its input closed. The session ends it, and processes of the sandbox can still run"
+                                        Supervisor.longestStopMs
+                            | _ ->
+                                // The supervisor ended before this stop, so this stop ends
+                                // no process.
+                                stopping <- true
+                                remains
+                                |> Option.iter (fun why ->
+                                    eprintfn
+                                        "seatbelt sandbox: this stop ended no process, because the supervisor of this sandbox had gone: %s. Processes of the sandbox can still run"
+                                        why)
+                        } }
+            let onEvent (line: string) =
+                match Supervisor.Wire.parseEvent line with
+                | Some Supervisor.Wire.Ready ->
+                    ready <- true
+                    settle (Ok supervised)
+                | Some (Supervisor.Wire.Refused reason) ->
+                    settle (Error (sprintf "the supervisor of this sandbox refused to start. It said: %s" reason))
+                | Some (Supervisor.Wire.Output (id, stream, text)) ->
+                    match commands.TryGetValue id with
+                    | true, (onChunk, _) ->
+                        match stream with
+                        | Supervisor.Wire.Out -> onChunk (Stdout, text)
+                        | Supervisor.Wire.Err -> onChunk (Stderr, text)
+                    | _ -> ()
+                // -1, "the OS gave us none", for a command a signal took: what the registry
+                // of children answered when each command was a child of this process.
+                | Some (Supervisor.Wire.Ended (id, code)) -> finish id (SandboxExited (code |> Option.defaultValue -1))
+                | Some (Supervisor.Wire.NotStarted (id, reason)) -> finish id (SandboxRunFailed reason)
+                | Some (Supervisor.Wire.Stopped []) -> ()
+                | Some (Supervisor.Wire.Stopped left) ->
+                    eprintfn
+                        "seatbelt sandbox: when its stop gave up, %d processes still took the ending signal (pids %s)"
+                        (List.length left)
+                        (left |> List.map string |> String.concat ", ")
+                | Some (Supervisor.Wire.NotStopped reason) -> eprintfn "seatbelt sandbox: the stop ended no process. %s" reason
+                | None -> eprintfn "[sandbox supervisor] %s" line
+            let read =
+                Supervisor.Wire.lines
+                    onEvent
+                    (fun () ->
+                        eprintfn
+                            "seatbelt sandbox: the supervisor wrote a line of more than %d characters, which is no event. The session dropped it"
+                            Supervisor.Wire.lineLimit)
+            let executable, arguments = argvFor profile Node.Api.``process``.execPath entry
+            let spawned =
+                children.Spawn
+                    (executable, arguments, directory, Map.empty)
+                    (fun (stream, text) ->
+                        match stream with
+                        | Stdout -> read text
+                        | Stderr ->
+                            if settled then eprintf "%s" text
+                            else complaints <- complaints + text)
+            supervisor <- Some spawned
+            // A supervisor that says nothing is a sandbox that does not start, in words.
+            patience <-
+                Some (
+                    JS.setTimeout
+                        (fun () ->
+                            if not settled then
+                                settle (Error (sprintf "the supervisor of this sandbox was not ready in %d ms" startPatienceMs))
+                                spawned.Kill ())
+                        startPatienceMs
+                )
+            async {
+                let! run = spawned.Exited
+                let reason =
+                    if ready then
+                        afterReady run
+                    elif complaints.Trim () = "" then
+                        sprintf "the supervisor of this sandbox %s before it was ready" (endOf run)
+                    else
+                        sprintf "the supervisor of this sandbox %s before it was ready. It said: %s" (endOf run) (complaints.Trim ())
+                gone <- Some reason
+                // A supervisor that was ready can have commands, so how it ended says whether
+                // their processes can still run. The session says so where it happens. A
+                // supervisor that refused, or that was not ready in time, started none.
+                if ready then
+                    remains <- leftBehind run
+                    match stopping, remains with
+                    | false, _ -> eprintfn "seatbelt sandbox: %s" reason
+                    | true, Some why when not gaveUp ->
+                        eprintfn
+                            "seatbelt sandbox: the stop of this sandbox is not complete. Its supervisor has gone: %s. Processes of the sandbox can still run"
+                            why
+                    | true, _ -> ()
+                let waiting = List.ofSeq commands.Values
+                commands.Clear ()
+                // A command that still ran when the sandbox stopped ends as one that a signal
+                // took. A supervisor that ended by itself fails each command in words.
+                waiting |> List.iter (fun (_, ended) -> ended.Settle (if stopping then SandboxExited -1 else SandboxRunFailed reason))
+                settle (Error reason)
+            }
+            |> Async.StartImmediate
+            send (Supervisor.Wire.Hello (int Node.Api.``process``.pid, int (Node.Api.``process``.getuid ()))))
+
     /// No terminal yet (`SpawnPty = None`), and that is a statement about what has been
     /// built, not about Seatbelt. A shell with job control opens `/dev/tty`, which the
     /// kernel judges as the terminal's own device, so the profile has to name that device.
     /// Naming `/dev/ttys*` (srt's `allowPty`) admits every terminal the user has open along
     /// with this one. Naming the one needs the pty opened before the profile is written.
-    /// Until that is done a terminal here runs each block as its own spawn.
+    /// Until that is done a terminal here runs each block as its own command.
     ///
     /// `own` is the directory from which down each directory is Yession's own. The
     /// sandbox lists the directories above its trees, and `SeatbeltAbove` says which
@@ -3355,8 +3683,9 @@ module SeatbeltSandbox =
                     match! SrtSandbox.egressFor tools policy with
                     | Error reason -> return Error (sprintf "seatbelt sandbox failed: %s" reason)
                     | Ok egress ->
+                        let entry = supervisorEntry ()
                         let onThisHost =
-                            { RuntimePaths = tools.Runtime |> List.map real
+                            { RuntimePaths = tools.Runtime @ supervisorReads (ambientEnv ()) Fs.exists entry |> List.map real
                               Tmp = real (SessionLayout.tmpDir ())
                               ProxyPort = Some egress.Proxy.Port
                               Above = above }
@@ -3370,39 +3699,43 @@ module SeatbeltSandbox =
                             egress.Close ()
                             return Error (sprintf "seatbelt sandbox failed: %s" refusal)
                         | Ok profile ->
-                            // Rendered once: the policy is fixed for the sandbox's life, so
-                            // every spawn in it is confined by the same text.
+                            // Rendered once: the policy is fixed for the sandbox's life, and
+                            // this text confines the one `sandbox-exec` of the sandbox.
                             let text = SeatbeltProfile.render profile
                             let children = Children.Registry ()
-                            let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
-                                async {
-                                    try
-                                        let cwd =
-                                            SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
-                                            |> Option.toObj
-                                        let executable, arguments = argvFor text host exec
-                                        return
-                                            Ok (
-                                                children.Spawn
-                                                    (executable, arguments, cwd, environmentFor egress.Proxy policy exec)
-                                                    onChunk
-                                            )
-                                    with ex -> return Error ex.Message
-                                }
-                            return
-                                Ok
-                                    { Ref = "seatbelt"
-                                      Spawn = spawn
-                                      SpawnPty = None
-                                      Shell = None
-                                      // The proxy goes with the sandbox, as srt's host does
-                                      // with the sandbox it confined.
-                                      Dispose =
-                                        fun () ->
-                                            async {
-                                                children.KillAll ()
-                                                egress.Close ()
-                                            } }
+                            // The supervisor starts in the temporary directory, which each
+                            // sandbox reads. A command names its own directory.
+                            match! supervise children text entry onThisHost.Tmp with
+                            | Error reason ->
+                                children.KillAll ()
+                                egress.Close ()
+                                return Error (sprintf "seatbelt sandbox failed: %s" reason)
+                            | Ok supervised ->
+                                let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
+                                    async {
+                                        try
+                                            return supervised.Run (fun id -> requestFor egress.Proxy policy host id exec) onChunk
+                                        with ex -> return Error ex.Message
+                                    }
+                                return
+                                    Ok
+                                        { Ref = "seatbelt"
+                                          Spawn = spawn
+                                          SpawnPty = None
+                                          Shell = None
+                                          // The stop is the end of the supervisor's input: the
+                                          // supervisor ends each process of the sandbox, and
+                                          // leaves. The registry then holds a supervisor only if
+                                          // it did not leave in time. The proxy goes with the
+                                          // sandbox, as srt's host does with the sandbox it
+                                          // confined.
+                                          Dispose =
+                                            fun () ->
+                                                async {
+                                                    do! supervised.Stop ()
+                                                    children.KillAll ()
+                                                    egress.Close ()
+                                                } }
                 with ex -> return Error (sprintf "seatbelt sandbox failed: %s" ex.Message)
             }
 
