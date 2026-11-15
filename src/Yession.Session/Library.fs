@@ -60,6 +60,7 @@ module Bootstrap =
         | SessionEvent.RepoConfigRefused _ -> "repo-config-refused"
         | SessionEvent.RepoConfigWarned _ -> "repo-config-warned"
         | SessionEvent.RepoCapabilitiesChanged _ -> "repo-capabilities-changed"
+        | SessionEvent.RepoSkillsChanged _ -> "repo-skills-changed"
         | SessionEvent.RepoCapabilitiesApproved _ -> "repo-capabilities-approved"
         | SessionEvent.RepoTrustAsked _ -> "repo-trust-asked"
         | SessionEvent.RepoTrusted _ -> "repo-trusted"

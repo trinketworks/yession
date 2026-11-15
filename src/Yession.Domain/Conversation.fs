@@ -674,6 +674,9 @@ module ConversationProjection =
         // when it changed; a person's yes to it; and the file that could not be honoured.
         | SessionEvent.RepoCapabilitiesChanged c ->
             proj |> causedNote c.MessageId c.CausedBy c.Actor (Act.RepoCapabilitiesChanged c) envelope
+        // The skills a checkout holds, when the list changed. `ActorRef.System`, because
+        // nobody in the session did this: the session read the checkout before a turn.
+        | SessionEvent.RepoSkillsChanged c -> proj |> noted c.MessageId ActorRef.System (Act.RepoSkillsChanged c) envelope
         | SessionEvent.RepoCapabilitiesApproved a -> proj |> noted a.MessageId a.Actor (Act.RepoCapabilitiesApproved a) envelope
         // Who this session's repo runs with, and when it waits for somebody to say. The agent
         // reads both as notes, which is how it learns that a repo it added is waiting.

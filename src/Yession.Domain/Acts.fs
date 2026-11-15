@@ -39,6 +39,7 @@ type Act =
     | RepoRemoved of RepoRemoved
     | RepoBranchSwitched of RepoBranchSwitched
     | RepoCapabilitiesChanged of RepoCapabilitiesChanged
+    | RepoSkillsChanged of RepoSkillsChanged
     | RepoCapabilitiesApproved of RepoCapabilitiesApproved
     | RepoTrustAsked of RepoTrustAsked
     | RepoTrusted of RepoTrusted
@@ -92,6 +93,7 @@ module Act =
         | Act.RepoRemoved r -> RepoRemoved.phrase r
         | Act.RepoBranchSwitched r -> RepoBranchSwitched.phrase r
         | Act.RepoCapabilitiesChanged c -> RepoCapabilitiesChanged.phrase c
+        | Act.RepoSkillsChanged c -> RepoSkillsChanged.phrase c
         | Act.RepoCapabilitiesApproved a -> RepoCapabilitiesApproved.phrase a
         | Act.RepoTrustAsked a -> RepoTrustAsked.phrase a
         | Act.RepoTrusted t -> RepoTrusted.phrase t
@@ -144,6 +146,7 @@ module Act =
         | Act.RepoRemoved _
         | Act.RepoBranchSwitched _
         | Act.RepoCapabilitiesChanged _
+        | Act.RepoSkillsChanged _
         | Act.RepoCapabilitiesApproved _
         | Act.RepoTrustAsked _
         | Act.RepoTrusted _
@@ -200,6 +203,7 @@ module Act =
         | Act.RepoCloned r -> RepoCloned.particulars r
         | Act.RepoCloneFailed r -> RepoCloneFailed.particulars r
         | Act.RepoCapabilitiesChanged c -> RepoCapabilitiesChanged.particulars c
+        | Act.RepoSkillsChanged c -> RepoSkillsChanged.particulars c
         | Act.RepoConfigRefused r -> RepoConfigRefused.particulars r
         | Act.RepoConfigWarned w -> RepoConfigWarned.particulars w
         | Act.SandboxStarting s -> WorkSandboxStarting.particulars s
@@ -263,6 +267,7 @@ module Act =
         | Act.RepoRemoved _ -> "removed", "repo", "repos"
         | Act.RepoBranchSwitched _ -> "switched", "branch", "branches"
         | Act.RepoCapabilitiesChanged _ -> "changed", "repo's capabilities", "repos' capabilities"
+        | Act.RepoSkillsChanged _ -> "found", "repo's skills", "repos' skills"
         | Act.RepoCapabilitiesApproved _ -> "approved", "repo's capabilities", "repos' capabilities"
         | Act.RepoTrustAsked _ -> "waited for trust", "repo", "repos"
         | Act.RepoTrusted _ -> "trusted", "repo", "repos"

@@ -38,6 +38,12 @@ module Yession.Host.Repos
 // linked to `~/.ssh/id_ed25519` put that key in the log for everyone in the session. A link
 // at `HEAD` is mode `120000`, and here that is no file (docs/technical-design.md §5, rule 20).
 //
+// The skill menu is the one exception, and a small one (`SkillsOf`). A repository can make
+// its skills when its sandbox starts, and no commit holds those. So git reads the menu from
+// the WORK TREE, in the same git sandbox: `git grep` prints the first lines of each
+// `.agents/skills/<directory>/SKILL.md`. git follows no link there, and this process still
+// opens no path.
+//
 // The credential (the acting human's GitHub token, Plan 08 precedence) reaches no git
 // process. Clone and fetch go through the git gateway, the same route a work sandbox's git
 // takes (`GitGateway`): one `insteadOf` sends `https://github.com/` there, and a loan in the
@@ -387,6 +393,9 @@ type ReposConfig =
       /// Where the add path's spans go. Each step of a clone is its own span, because
       /// "adding a repo is slow" has six candidates and only a measurement picks one.
       Tracer : Telemetry.Tracer
+      /// Time, as a port (`Resilience.Policy.sleep` in production). The read of a checkout's
+      /// skills has a deadline, and a case decides when that deadline comes.
+      Sleep : TimeSpan -> Async<unit>
       Log : EventLog<SessionEvent> }
 
 /// Who is calling a mutating/network verb. The two halves genuinely differ for the
@@ -441,6 +450,12 @@ type ReposService =
       /// The one way a repository's file reaches this process: the session opens no path a
       /// repository names (docs/technical-design.md §5, rule 20).
       ReadCommitted : CommittedFile
+      /// The skills that a checkout holds NOW, at `.agents/skills/<directory>/SKILL.md` in its
+      /// work tree: the one thing that reaches this process from a work tree, and it comes
+      /// through git in the git sandbox (docs/technical-design.md §5, rule 20). A link at any
+      /// part of that path is no skill. Sorted by name and then by path. `Error` when git
+      /// could not say, which is not "no skills": the caller keeps the list it had.
+      SkillsOf : RepoRef -> Async<Result<SkillSummary list, string>>
       /// Delete a checkout, and answer with the path it was at AS A TERMINAL SAW IT (Plan
       /// 26). That path rather than `unit`, because it is the one fact only this service has
       /// and the only one a shell profile could have been holding — the git sandbox's own
@@ -449,7 +464,12 @@ type ReposService =
       /// `force` is required to delete a checkout with uncommitted changes. An UNREADABLE
       /// checkout needs none: clearing one is what this verb was advertised for long before
       /// it existed, and refusing there would leave no way out of an interrupted clone.
-      RemoveRepo : RepoCaller -> RepoRef -> bool -> Async<Result<RootPath, string>> }
+      RemoveRepo : RepoCaller -> RepoRef -> bool -> Async<Result<RootPath, string>>
+      /// End the git sandboxes that this service started, and each process that they hold.
+      /// The service refuses each verb after it. A session does not call this, because its
+      /// git sandboxes end with its process. A process that makes more than one service ends
+      /// each one with this: under srt, a git sandbox has a host process of its own.
+      Close : unit -> Async<unit> }
 
 let private outputLimit = 20000
 
@@ -544,27 +564,74 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         // argv-rewriting wrapper, not a container, so per-verb spawns stay cheap. The
         // answer is remembered either way: a sandbox that failed its probe fails every
         // verb with the same sentence rather than re-probing per call.
-        let lazySandbox (kind: string) (policy: SandboxPolicy) : unit -> Async<Result<Sandbox, string>> =
-            let mutable ready : Result<Sandbox, string> option = None
+        //
+        // ONE creation for each policy, started at the first use. It runs apart from the
+        // caller that started it, and each caller waits for its answer. Two things need that.
+        //
+        // The session reads the skills of its repos at the same time (`skillsOf`), and each
+        // read can be the first use. Each one made a sandbox, and the service kept the last.
+        //
+        // That read also has a deadline, which stops its wait. A creation that ran as part
+        // of the read stopped with it, and nothing kept the sandbox that it made. The host
+        // process of a sandbox that nothing keeps runs until the session ends.
+        //
+        // `close` ends the sandbox, and the service refuses each use after it.
+        let lazySandbox (kind: string) (policy: SandboxPolicy) : (unit -> Async<Result<Sandbox, string>>) * (unit -> Async<unit>) =
+            let mutable creation : JS.Promise<Result<Sandbox, string>> option = None
+            let mutable closed = false
             let named = [ "yession.git.sandbox", Telemetry.AttributeValue.String kind ]
-            fun () ->
+            let create () : Async<Result<Sandbox, string>> =
                 async {
-                    match ready with
-                    | Some answer -> return answer
-                    | None ->
-                        let! answer =
-                            async {
-                                match!
-                                    Telemetry.spanResult config.Tracer "git.sandbox.create" named (createSandbox policy)
-                                with
-                                | Error e -> return Error (sprintf "git sandbox: %s" e)
-                                | Ok created -> return! Telemetry.spanResult config.Tracer "git.probe" named (usable created)
-                            }
-                        ready <- Some answer
-                        return answer
+                    let made =
+                        async {
+                            match!
+                                Telemetry.spanResult config.Tracer "git.sandbox.create" named (createSandbox policy)
+                            with
+                            | Error e -> return Error (sprintf "git sandbox: %s" e)
+                            | Ok created ->
+                                match! Telemetry.spanResult config.Tracer "git.probe" named (usable created) with
+                                | Ok proved -> return Ok proved
+                                | Error refusal ->
+                                    // Nothing else holds a sandbox that cannot run git, so
+                                    // it ends here.
+                                    do! created.Dispose ()
+                                    return Error refusal
+                        }
+                    // A throw is an answer too, so that the promise below always settles
+                    // with a value that each caller can read.
+                    match! Async.Catch made with
+                    | Choice1Of2 answer -> return answer
+                    | Choice2Of2 thrown -> return Error (sprintf "git sandbox: %s" thrown.Message)
                 }
+            let get () =
+                async {
+                    if closed then
+                        return Error "git sandbox: the repo service is closed"
+                    else
+                        let started =
+                            match creation with
+                            | Some started -> started
+                            | None ->
+                                let started = create () |> Async.StartAsPromise
+                                creation <- Some started
+                                started
+                        return! Interop.awaitPromise started
+                }
+            let close () =
+                async {
+                    closed <- true
+                    match creation with
+                    | None -> ()
+                    | Some started ->
+                        // A second close finds nothing to end.
+                        creation <- None
+                        match! Interop.awaitPromise started with
+                        | Ok sandbox -> do! sandbox.Dispose ()
+                        | Error _ -> ()
+                }
+            get, close
 
-        let confined = lazySandbox "confined" policy
+        let confined, closeConfined = lazySandbox "confined" policy
 
         /// The clone's sandbox, and nothing else's: a checkout can contain a `.vscode`,
         /// a `.mcp.json`, a `.gitmodules` — names srt refuses to write anywhere, over any
@@ -573,7 +640,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// the hardened one, and every other verb keeps the policy above: none of them
         /// writes a path srt objects to. Undo the moment srt can exempt a subtree instead
         /// of a whole spawn — `clone` goes back to `confined` and this sandbox goes away.
-        let unconfined = lazySandbox "unconfined" { policy with Filesystem = Unconfined }
+        let unconfined, closeUnconfined = lazySandbox "unconfined" { policy with Filesystem = Unconfined }
 
         /// One git process. A network verb names the `lender` whose credential it spends: the
         /// spawn then gets the gateway's route and a loan, lent before the spawn and returned
@@ -713,31 +780,115 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                 | Ok None | Error _ -> return None
             }
 
-        /// Every skill `HEAD` declares under `.agents/skills/`, read at the same moment and for
-        /// the same reason `agentsMdOf` is. A directory with no `SKILL.md` (or a symlink there),
-        /// one with no frontmatter, or frontmatter that does not decode contributes nothing --
-        /// malformed is not a reason to fail an otherwise-successful clone, the same tolerance
-        /// `agentsMdOf` already has. Sorted by name, so the menu reads the same on every clone.
-        let skillsOf (repo: RepoRef) : Async<SkillSummary list> =
-            async {
-                match! committedUnder repo [ ".agents/skills" ] with
-                | Error _ -> return []
-                | Ok blobs ->
-                    let mutable skills = []
-                    for path, objectId in blobs do
-                        match path.Split '/' with
-                        | [| ".agents"; "skills"; _; "SKILL.md" |] ->
-                            match! blobText repo objectId with
-                            | Ok text ->
-                                let decoded =
-                                    try
-                                        SkillFile.frontmatterOf text
-                                        |> Option.bind (fun yaml -> SkillFile.decode (Fable.Yaml.Plain.json (Fable.Yaml.parse yaml)) |> Result.toOption)
-                                    with _ -> None
-                                skills <- skills @ Option.toList decoded
-                            | Error _ -> ()
-                        | _ -> ()
-                    return skills |> List.sortBy (fun skill -> skill.Name)
+        /// What `skillsOf` asks git for: the first lines of each
+        /// `.agents/skills/<directory>/SKILL.md` in the work tree, as
+        /// `path NUL line-number NUL text`.
+        ///
+        /// - `--no-index` reads the work tree as plain files, with no index. So it reads a
+        ///   file that no commit holds, a file that git ignores (`--no-exclude-standard`), and
+        ///   a directory that is a repository of its own: a tool can install a skill with
+        ///   `git clone`, and `--untracked` does not go into such a directory.
+        /// - `:(glob)` with one `*` names one directory level. git follows no link in a work
+        ///   tree, so a `SKILL.md` that is a link, a directory that is a link and a fifo are
+        ///   not read.
+        /// - `-e ^` is a pattern that each line has. `--max-count` then gives the first lines.
+        /// - `-I` reads no binary file.
+        /// - The other flags are there because a sandbox can write the checkout's config, and
+        ///   a setting there changed the answer. `color.ui` and `grep.column` put other
+        ///   fields into each line. The column has no flag in an old git, so `skillsSettings`
+        ///   turns it off in the env.
+        let skillsArgs (checkout: string) : string list =
+            [ "-C"; checkout
+              "grep"
+              "--no-index"; "--no-exclude-standard"
+              "--no-color"; "--no-textconv"; "--no-recurse-submodules"; "--full-name"
+              "-G"; "-I"; "-z"; "-n"
+              sprintf "--max-count=%d" SkillFile.maxLines
+              "-e"; "^"
+              "--"; ":(glob).agents/skills/*/SKILL.md" ]
+
+        /// The config that `skillsArgs` cannot give as a flag. It goes into the env of the
+        /// spawn, which outranks the checkout's config.
+        let skillsSettings : (string * string) list = [ "grep.column", "false" ]
+
+        /// The most time that the read of a checkout's skills has. git answers in
+        /// milliseconds. The session reads its checkouts at the same time
+        /// (`RepoSkills.refresh`), so this is also how long a turn can wait for all of them.
+        let skillsDeadline = TimeSpan.FromSeconds 5.0
+
+        /// The skills in git's answer: each head that opens with frontmatter that decodes. A
+        /// file with no frontmatter, or with frontmatter that does not decode, gives nothing.
+        /// A malformed skill is not a reason to lose the others.
+        let skillsIn (answer: string) : SkillSummary list =
+            SkillFile.heads answer
+            |> List.choose (fun head ->
+                try
+                    SkillFile.frontmatterOf head.Text
+                    |> Option.bind (fun yaml ->
+                        SkillFile.decode head.Path (Fable.Yaml.Plain.json (Fable.Yaml.parse yaml)) |> Result.toOption)
+                with _ -> None)
+            |> SkillFile.ordered
+
+        /// The skills that the checkout holds now (`ReposService.SkillsOf`).
+        ///
+        /// git prints a whole line, and a line can be as long as its file. So this stops
+        /// reading soon after `SkillFile.maxAnswerChars` of the answer and then ends git.
+        /// `SkillFile.heads` takes exactly that many characters, so the answer does not
+        /// depend on where this stopped. The read also has a deadline, which starts before
+        /// the sandbox does. After it, this ends git, and the read is a failure.
+        ///
+        /// git exits 1 when no line matched, and says nothing. That is a checkout with no
+        /// skills, and not a failure (`SkillFile.foundNone`).
+        let skillsOf (repo: RepoRef) : Async<Result<SkillSummary list, string>> =
+            Telemetry.spanResult config.Tracer "repo.skills" [ "yession.repo", Telemetry.AttributeValue.String (RepoRef.value repo) ]
+            <| async {
+                if not (present repo) then return Error (notACheckout repo)
+                else
+                    let answer = Text.StringBuilder ()
+                    let said = Text.StringBuilder ()
+                    let mutable full = false
+                    let mutable late = false
+                    let mutable handle : SandboxProcessHandle option = None
+                    let asked () : Async<Result<SandboxRun, string>> =
+                        async {
+                            match! confined () with
+                            | Error e -> return Error e
+                            | Ok sandbox ->
+                                let! spawned =
+                                    sandbox.Spawn (execFor skillsSettings (skillsArgs (pathOf repo))) (fun (stream, chunk) ->
+                                        match stream with
+                                        | Stdout ->
+                                            if not full then
+                                                answer.Append chunk |> ignore
+                                                if answer.Length > SkillFile.maxAnswerChars then
+                                                    full <- true
+                                                    handle |> Option.iter (fun h -> h.Kill ())
+                                        | Stderr -> if said.Length < 2000 then said.Append chunk |> ignore)
+                                match spawned with
+                                | Error e -> return Error e
+                                | Ok h ->
+                                    handle <- Some h
+                                    // The cap or the deadline can come before the handle does.
+                                    if full || late then h.Kill ()
+                                    let! exited = h.Exited
+                                    return Ok exited
+                        }
+                    let timedOut =
+                        sprintf "git did not print the skills of %s in %.0f s" (visiblePathOf repo) skillsDeadline.TotalSeconds
+                    let failed (code: int) =
+                        Error (gitFailure (skillsArgs (pathOf repo)) code (capText 2000 ((said.ToString ()).Trim ())))
+                    match! Resilience.Policy.deadline config.Sleep skillsDeadline timedOut (fun ex -> Some ex.Message) asked () with
+                    | Error reason ->
+                        late <- true
+                        handle |> Option.iter (fun h -> h.Kill ())
+                        return Error reason
+                    | Ok _ when full -> return Ok (skillsIn (answer.ToString ()))
+                    | Ok (SandboxExited 0) -> return Ok (skillsIn (answer.ToString ()))
+                    | Ok (SandboxExited code) when SkillFile.foundNone code (said.ToString ()) -> return Ok []
+                    | Ok (SandboxExited code) -> return failed code
+                    | Ok (SandboxSignalled signal) -> return Error (sprintf "git was ended by %s" signal)
+                    | Ok (SandboxKilledForMemory kill) -> return Error (sprintf "git was %s" (MemoryKill.described kill))
+                    | Ok (SandboxRunFailed reason) -> return Error reason
             }
 
         let listingOf (repo: RepoRef) : Async<Result<RepoListing, string>> =
@@ -891,16 +1042,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                             (SessionEvent.RepoCloneFailed { MessageId = messageId; Repo = repo; Reason = e; Actor = caller.Actor })
                     return Error e
                 | Ok listing ->
-                    let! agentsMd, skills =
-                        Telemetry.span
-                            config.Tracer
-                            "repo.read_files"
-                            []
-                            (async {
-                                let! agentsMd = agentsMdOf repo
-                                let! skills = skillsOf repo
-                                return agentsMd, skills
-                            })
+                    let! agentsMd = Telemetry.span config.Tracer "repo.read_files" [] (agentsMdOf repo)
                     do!
                         Telemetry.span
                             config.Tracer
@@ -913,8 +1055,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                                       Repo = repo
                                       Branch = listing.Branch
                                       Actor = caller.Actor
-                                      AgentsMd = agentsMd
-                                      Skills = skills }))
+                                      AgentsMd = agentsMd }))
                     return Ok { Recorded.Answer = listing; Recorded.RecordedAs = Some messageId }
             }
 
@@ -948,7 +1089,6 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                             // clone would have.
                             let messageId = mintMessageId ()
                             let! agentsMd = agentsMdOf repo
-                            let! skills = skillsOf repo
                             do! append caller.Actor (SessionEvent.RepoAdded { MessageId = messageId; Repo = repo; Actor = caller.Actor })
                             do!
                                 append
@@ -958,8 +1098,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                                           Repo = repo
                                           Branch = listing.Branch
                                           Actor = caller.Actor
-                                          AgentsMd = agentsMd
-                                          Skills = skills })
+                                          AgentsMd = agentsMd })
                             return Ok { Recorded.Answer = listing; Recorded.RecordedAs = Some messageId }
                     | Error e ->
                         // The one bad state the rename cannot prevent, because it predates
@@ -1094,7 +1233,14 @@ let create (config: ReposConfig) : Result<ReposService, string> =
           // work sandbox. Both flags turn every driver off, whatever the config says.
           RepoDiff = inspect (fun path -> [ "-C"; path; "diff"; "--no-ext-diff"; "--no-textconv" ])
           ReadCommitted = readCommitted
-          RemoveRepo = removeRepo })
+          SkillsOf = skillsOf
+          RemoveRepo = removeRepo
+          Close =
+            fun () ->
+                async {
+                    do! closeConfined ()
+                    do! closeUnconfined ()
+                } })
 
 /// The agent-facing capability set for one turn: events attribute the AGENT (it is
 /// the acting party), the token is the TURN HUMAN's (Plan 08 — no borrowing across

@@ -587,7 +587,9 @@ let private reposReading (reposDir: string) (reads: unit -> RepoRead list) : Rep
       RepoLog = fun _ -> denied ()
       RepoDiff = fun _ -> denied ()
       ReadCommitted = committedIn reposDir
-      RemoveRepo = fun _ _ _ -> denied () }
+      SkillsOf = fun _ -> async { return Error "not part of this test" }
+      RemoveRepo = fun _ _ _ -> denied ()
+      Close = fun () -> async { return () } }
 
 let private listedAt (reposDir: string) (r: RepoRef) : RepoRead =
     RepoRead.Listed

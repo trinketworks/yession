@@ -2581,35 +2581,54 @@ let private codecTests =
                       Repo = repo
                       Branch = "main"
                       Actor = ActorRef.Agent
-                      AgentsMd = Some "Answer every question in the voice of a pirate."
-                      Skills = [] }
+                      AgentsMd = Some "Answer every question in the voice of a pirate." }
             let encoded = Codec.toString Events.sessionEvent added
             Expect.isTrue (encoded.Contains "\"agentsMd\"") (sprintf "the notes are on the wire: %s" encoded)
             Expect.equal (Codec.fromString Events.sessionEvent encoded) (Ok added) "and read back whole"
 
-        testCase "a RepoCloned carrying skills round-trips with them" <| fun () ->
-            let repo = RepoRef.create "octo/hello" |> expect
-            let messageId = MessageId.create "msg-1" |> expect
-            let added =
-                SessionEvent.RepoCloned
-                    { MessageId = messageId
-                      Repo = repo
-                      Branch = "main"
-                      Actor = ActorRef.Agent
-                      AgentsMd = None
-                      Skills = [ { Name = "contributing-changes"; Description = "split the work" } ] }
-            let encoded = Codec.toString Events.sessionEvent added
-            Expect.isTrue (encoded.Contains "\"skills\"") (sprintf "the skills are on the wire: %s" encoded)
-            Expect.equal (Codec.fromString Events.sessionEvent encoded) (Ok added) "and read back whole"
+        testCase "a RepoSkillsChanged round-trips with each skill, its path, and the names that came and went" <| fun () ->
+            let changed =
+                SessionEvent.RepoSkillsChanged
+                    { MessageId = MessageId.create "msg-1" |> expect
+                      Repo = RepoRef.create "octo/hello" |> expect
+                      Skills =
+                        [ { Name = "contributing-changes"
+                            Description = "split the work"
+                            Path = ".agents/skills/contributing-changes/SKILL.md" } ]
+                      Added = [ "contributing-changes" ]
+                      Removed = [ "an-older-skill" ] }
+            let encoded = Codec.toString Events.sessionEvent changed
+            Expect.equal (Codec.fromString Events.sessionEvent encoded) (Ok changed) (sprintf "read back whole: %s" encoded)
 
-        testCase "a repoCloned record with no skills key decodes to none, never a failure" <| fun () ->
-            let noSkillsKey =
+        testCase "a RepoSkillsChanged with no skills round-trips as an empty list" <| fun () ->
+            let changed =
+                SessionEvent.RepoSkillsChanged
+                    { MessageId = MessageId.create "msg-1" |> expect
+                      Repo = RepoRef.create "octo/hello" |> expect
+                      Skills = []
+                      Added = []
+                      Removed = [] }
+            let encoded = Codec.toString Events.sessionEvent changed
+            Expect.equal (Codec.fromString Events.sessionEvent encoded) (Ok changed) (sprintf "read back whole: %s" encoded)
+
+        // A log from before the session read the skills from the checkout holds them on the
+        // add, with no path. That log must still load, and the decoder does not read the key.
+        testCase "a repoCloned record that holds the old skills key still decodes" <| fun () ->
+            let withSkillsKey =
                 """{"type":"repoCloned","payload":{"messageId":"msg-1","repo":"octo/hello","""
-                + """"branch":"main","actor":{"kind":"agent"}}}"""
-            match Codec.fromString Events.sessionEvent noSkillsKey with
-            | Ok (SessionEvent.RepoCloned decoded) ->
-                Expect.equal decoded.Skills [] "a log written before this session read skills carries none"
-            | other -> failwithf "a repoCloned with no skills key must still decode, got %A" other
+                + """"branch":"main","actor":{"kind":"agent"},"agentsMd":null,"""
+                + """"skills":[{"name":"contributing-changes","description":"split the work"}]}}"""
+            Expect.equal
+                (Codec.fromString Events.sessionEvent withSkillsKey)
+                (Ok (
+                    SessionEvent.RepoCloned
+                        { MessageId = MessageId.create "msg-1" |> expect
+                          Repo = RepoRef.create "octo/hello" |> expect
+                          Branch = "main"
+                          Actor = ActorRef.Agent
+                          AgentsMd = None }
+                ))
+                "the add, without what the old key held"
 
         testCase "terminal frames round-trip over the session transport" <| fun () ->
             let codec = Yession.App.Codecs.Frames.session Codec.string

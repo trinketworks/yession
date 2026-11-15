@@ -1170,8 +1170,39 @@ After the fixes land, one pass rewrites it to what still reproduces.
     - **The file is read from `HEAD`, never from the working tree.** Whoever can push to the
       repo authors the file (technical-design §4), so an edit that nobody has committed
       declares nothing. Commit it, and the next fold (any verb that changes a checkout, or
-      a boot) reads it. `AGENTS.md` and `.agents/skills/*/SKILL.md` are read the same way,
-      when the clone lands. A symlink at `HEAD` is no file for any of the three (rule 20).
+      a boot) reads it. The session reads `AGENTS.md` the same way, when the clone lands. A
+      symlink at `HEAD` is no file for either one (rule 20).
+    - **The skill menu is what the checkout holds, not what `HEAD` commits.** The session
+      reads `.agents/skills/<directory>/SKILL.md` from the work tree before each turn, with
+      git, in the git sandbox (rule 20 says why this is the one exception). A skill that a
+      tool installed when a sandbox started is in the menu, and so is an edit that nobody
+      committed. git reads the work tree as plain files, so a skill directory that is a
+      repository of its own is in the menu too. The cost: a process in a sandbox can add a line to the menu, and the menu
+      is in the context of each turn. The session records each change of the list
+      (`RepoSkillsChanged`), and the timeline shows it, so a person sees when a skill
+      arrived and what it says about itself. A skill reaches the menu on the first turn
+      after its file is there. A turn that is running does not get it.
+    - **A `SKILL.md` has limits, and a file beyond them is not in the menu.** git gives the
+      first 64 lines of each file, and the session keeps 8192 characters of one file and 64
+      skills of one checkout. Frontmatter that does not close in that space is no skill.
+      The menu holds 64 characters of a name and 1024 characters of a description, and cuts
+      the rest. The session makes each name and description one line, and drops a skill with
+      no name or with a control character in its path.
+
+      git loads a whole file to print its first lines, so a very large `SKILL.md` costs the
+      git sandbox that memory at each turn. git also prints a whole line, however long. The
+      session reads the first 1 MiB of git's answer, ends git, and drops the file that the
+      cut is in. So a line longer than that hides its own file and the skills that sort
+      after it. The cut is at the same character at each read, so the same checkout gives
+      the same menu.
+
+      The session reads all its checkouts at the same time, and each read has 5 seconds. A
+      turn starts after the read, so a slow read delays the turn by that much at most, and
+      no turn shows as running meanwhile. When a read has no answer by then, or git fails,
+      the menu of that repo stays as it was.
+    - **The note for a list of skills is short.** It says how many skills the checkout holds
+      now, and names three that came and three that went at most. The menu in the turn's
+      context holds the whole list.
     - **No inter-sandbox networking.** A `db:` sandbox's process is reachable from inside that
       sandbox only. A compose-like shared network is a design of its own.
     - **A `command`, the limits (`mem_limit`, `oom_score_adj`, `pids_limit`,

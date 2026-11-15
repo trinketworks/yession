@@ -1253,6 +1253,7 @@ let private sessionRepos
           Canonical = fun _ _ -> async { return None }
           OnNetworkFailure = fun owner said -> async { failures.Add (owner, said) }
           Tracer = Telemetry.Tracer.Off
+          Sleep = Resilience.Policy.sleep
           Log = Yession.Session.InMemoryEventLog.create (SessionId.create "gateway-suite" |> expect) (fun () -> DateTimeOffset.UtcNow) }
     |> expect
 

@@ -130,6 +130,10 @@ type SessionEvent =
     // whoever can push to the checkout, so a `uses:` line added in a pull request takes
     // effect the next time anybody touches a repo — and did so silently.
     | RepoCapabilitiesChanged of RepoCapabilitiesChanged
+    // The skills that a checkout holds, said when the list CHANGES. The session reads the
+    // list from the checkout before each turn, so a process in a sandbox can change it. This
+    // record is how a person sees that it did.
+    | RepoSkillsChanged of RepoSkillsChanged
     // A person said yes to it. RETIRED (consent is trust now, below): the case stays so a log
     // written before then still loads.
     | RepoCapabilitiesApproved of RepoCapabilitiesApproved

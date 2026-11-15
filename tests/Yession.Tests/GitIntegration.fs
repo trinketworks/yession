@@ -313,23 +313,6 @@ let private makeBareFixtureWithAgentsMd (root: string) (name: string) (agentsMd:
     hostGit [ "clone"; "--bare"; work; bare ] fixtures
     bare
 
-/// The same fixture, with a `.agents/skills/<name>/SKILL.md` committed alongside the
-/// README -- what exercises `skillsOf`'s read at clone time without touching the plain
-/// fixture's other callers.
-let private makeBareFixtureWithSkill (root: string) (name: string) (skillName: string) (frontmatter: string) : string =
-    let fixtures = fixturesIn root
-    let work = sprintf "%s/work-%s" fixtures name
-    TestFiles.ensureDir work
-    hostGit [ "init"; "-b"; "main" ] work
-    TestFiles.write (sprintf "%s/README.md" work) "fixture\n"
-    TestFiles.ensureDir (sprintf "%s/.agents/skills/%s" work skillName)
-    TestFiles.write (sprintf "%s/.agents/skills/%s/SKILL.md" work skillName) (sprintf "---\n%s\n---\n\n# %s\n" frontmatter skillName)
-    hostGit [ "add"; "." ] work
-    hostGit [ "commit"; "-m"; "seed" ] work
-    let bare = sprintf "%s/%s.git" fixtures name
-    hostGit [ "clone"; "--bare"; work; bare ] fixtures
-    bare
-
 /// A fixture whose one commit is whatever `arrange` puts in its work tree beside the README.
 /// What a case about a repository's own CONTENT arranges, so that each such case says what it
 /// committed and nothing else.
@@ -384,6 +367,7 @@ let private serviceBuilt
           Canonical = canonical
           OnNetworkFailure = fun actor said -> async { failures.Add (actor, said) }
           Tracer = tracer
+          Sleep = Resilience.Policy.sleep
           Log = log }
     |> expect
 
@@ -694,9 +678,10 @@ let private committedReadTests =
             Expect.isFalse ((sprintf "%A" events).Contains "SECRET-0f3a9c") "the target was never read"
         }
 
-        testCaseAsync "a SKILL.md that is a symlink declares no skill" <| async {
-            let! _, events = addedWithLink ".agents/skills/leak/SKILL.md"
-            Expect.isEmpty (clonedOf events).Skills "a link is not a skill"
+        testCaseAsync "a SKILL.md that HEAD commits as a symlink is no skill" <| async {
+            let! service, _ = addedWithLink ".agents/skills/leak/SKILL.md"
+            let! skills = service.SkillsOf hello
+            Expect.equal skills (Ok []) "the checkout holds the link's text, and that is no frontmatter"
         }
 
         testCaseAsync "a yession.yaml that is a symlink declares nothing" <| async {
@@ -728,6 +713,399 @@ let private committedReadTests =
             hostGit [ "commit"; "-am"; "gate" ] checkout
             let! names = declaredNames service
             Expect.equal names [ "gate" ] "the commit is the declaration"
+        }
+    ]
+
+// --- The skills a checkout holds, read from its work tree by git ---------------------------
+
+/// What a `SKILL.md` holds for a skill of this name.
+let private skillText (name: string) : string =
+    sprintf "---\nname: %s\ndescription: what %s is for\n---\n\n# %s\n" name name name
+
+/// The skill that `skillText name` declares in `directory`, as the service reads it.
+let private skillIn (directory: string) (name: string) : SkillSummary =
+    { Name = name
+      Description = sprintf "what %s is for" name
+      Path = sprintf ".agents/skills/%s/SKILL.md" directory }
+
+/// A file in a checkout, with the directories to it.
+let private writeIn (checkout: string) (path: string) (text: string) : unit =
+    let whole = sprintf "%s/%s" checkout path
+    TestFiles.ensureDir (whole.Substring (0, whole.LastIndexOf '/'))
+    TestFiles.write whole text
+
+/// `body`, and then the end of `service`, whatever `body` did.
+///
+/// Under srt, each git sandbox of a service has a host process of its own, and a service has
+/// two git sandboxes. A service that nothing closes keeps the two processes until the run
+/// ends. Each case below that makes a service closes it with this.
+let private closing (service: Repos.ReposService) (body: Async<unit>) : Async<unit> =
+    async {
+        let! outcome = Async.Catch body
+        do! service.Close ()
+        match outcome with
+        | Choice1Of2 () -> ()
+        | Choice2Of2 failure -> raise failure
+    }
+
+/// A case with a service of its own: `octo/hello` added from a fixture whose one commit is what
+/// `arrange` wrote. `body` gets the service and the path of the checkout. For a case that
+/// needs its own commit, or that changes more of the checkout than `emptied` puts back.
+let private arrangedCase
+    (name: string)
+    (arrange: string -> unit)
+    (body: Repos.ReposService -> string -> Async<unit>)
+    =
+    testCaseAsync name <| async {
+        let root = mkdtemp ()
+        makeBareFixtureArranged root "hello" arrange |> ignore
+        let service = serviceIn root (freshLog ())
+        do!
+            closing service (async {
+                let! _ = service.AddRepo caller hello
+                do! body service (sprintf "%s/octo/hello" (reposIn root))
+            })
+    }
+
+/// The service that the cases of `sharedCase` use, and its checkout of `octo/hello`, from a
+/// fixture that commits no skill. `None` before the first of those cases, and after the case
+/// that closes the service.
+///
+/// Those cases differ only in the files that they write into the checkout, as a sandbox does.
+/// One service for all of them is two host processes and one clone, in place of two processes
+/// and one clone for each case.
+let mutable private shared : (Repos.ReposService * string) option = None
+
+/// The shared service and its checkout, with none of the files that a case before this one
+/// wrote: no `.agents` and no `.gitignore`. A link in `.agents` goes, and what it names stays.
+let private emptied () : Async<Repos.ReposService * string> =
+    async {
+        match shared with
+        | Some (service, checkout) ->
+            TestFiles.removeTree (sprintf "%s/.agents" checkout)
+            TestFiles.removeTree (sprintf "%s/.gitignore" checkout)
+            return service, checkout
+        | None ->
+            let root = mkdtemp ()
+            makeBareFixtureArranged root "hello" ignore |> ignore
+            let service = serviceIn root (freshLog ())
+            let! _ = service.AddRepo caller hello
+            let checkout = sprintf "%s/octo/hello" (reposIn root)
+            shared <- Some (service, checkout)
+            return service, checkout
+    }
+
+/// A case on the shared service. `body` gets the service and the path of the emptied checkout.
+let private sharedCase (name: string) (body: Repos.ReposService -> string -> Async<unit>) =
+    testCaseAsync name <| async {
+        let! service, checkout = emptied ()
+        do! body service checkout
+    }
+
+/// The srt host processes that this process started and that run now, by pid. `ps` gives each
+/// process with the pid of its parent and its command line. The options are the ones that
+/// POSIX gives `ps`, so that the `ps` of macOS and the `ps` of Linux read them the same.
+let private hostsOfThisProcess () : Set<int> =
+    let own = string (int Node.Api.``process``.pid)
+    let listed =
+        execFileSync
+            "ps"
+            [ "-A"; "-o"; "pid=,ppid=,args=" ]
+            { SyncOptions.none with Streams = Some { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Pipe } }
+    listed.Split '\n'
+    |> Array.choose (fun line ->
+        match line.Split ([| ' ' |], StringSplitOptions.RemoveEmptyEntries) |> List.ofArray with
+        | pid :: parent :: command when parent = own && command |> List.exists (fun word -> word.EndsWith "SandboxHost.js") ->
+            Some (int pid)
+        | _ -> None)
+    |> Set.ofArray
+
+/// The service of `serviceIn`, but each deadline of it comes at once: the sleep that a deadline
+/// waits on ends when it starts.
+let private serviceWithNoTime (root: string) : Repos.ReposService =
+    let reposDir = reposIn root
+    TestFiles.ensureDir reposDir
+    Repos.create
+        { Backend = SrtBackend
+          Network = DockerFixture.quietNetwork ()
+          ReposDir = reposDir
+          StartsAt = fun () -> None
+          Root = None
+          ExtraReadPaths = [ fixturesIn root ]
+          Git = namedGit
+          AllowedDomains = []
+          AllowProtocol = "file"
+          Route = Repos.GitRoute.none
+          CloneUrl = fun ref -> sprintf "file://%s/%s.git" (fixturesIn root) (RepoRef.repo ref)
+          ResolveToken = fun _ -> async { return None }
+          Canonical = fun _ _ -> async { return None }
+          OnNetworkFailure = fun _ _ -> async { return () }
+          Tracer = Telemetry.Tracer.Off
+          Sleep = fun _ -> async { return () }
+          Log = freshLog () }
+    |> expect
+
+/// `octo/hello` in the repos directory of `root`, cloned by a git of the host from a fixture
+/// that commits one skill. No service made this checkout, so a service of `root` holds no git
+/// sandbox when a case asks it for the skills. A session that starts again has its checkouts
+/// like this, and the read of its first turn is the first use of its git sandbox.
+let private checkedOutBefore (root: string) : unit =
+    let bare =
+        makeBareFixtureArranged root "hello" (fun work -> writeIn work ".agents/skills/committed/SKILL.md" (skillText "committed"))
+    let owner = sprintf "%s/octo" (reposIn root)
+    TestFiles.ensureDir owner
+    hostGit [ "clone"; bare; sprintf "%s/hello" owner ] owner
+
+/// The session reads a checkout's skills from its work tree before each turn, through git in
+/// the git sandbox (`ReposService.SkillsOf`). A repository can make its skills when its
+/// sandbox starts, so a skill does not have to be in a commit.
+let private skillsTests =
+    testList "the skills a checkout holds (srt)" [
+        arrangedCase
+            "a committed skill is read, with the path of its file"
+            (fun work -> writeIn work ".agents/skills/committed/SKILL.md" (skillText "committed"))
+            (fun service _ ->
+                async {
+                    let! skills = service.SkillsOf hello
+                    Expect.equal skills (Ok [ skillIn "committed" "committed" ]) "the skill of the commit"
+                })
+
+        sharedCase "a skill that no commit holds is read" (fun service checkout ->
+            async {
+                writeIn checkout ".agents/skills/made/SKILL.md" (skillText "made")
+                let! skills = service.SkillsOf hello
+                Expect.equal skills (Ok [ skillIn "made" "made" ]) "written into the checkout after the clone"
+            })
+
+        sharedCase "a skill in a directory that git ignores is read" (fun service checkout ->
+            async {
+                TestFiles.write (sprintf "%s/.gitignore" checkout) ".agents/\n"
+                writeIn checkout ".agents/skills/made/SKILL.md" (skillText "made")
+                let! skills = service.SkillsOf hello
+                Expect.equal skills (Ok [ skillIn "made" "made" ]) "an ignore rule does not hide it"
+            })
+
+        // A tool can install a skill with `git clone`. Its directory is then a repository of
+        // its own, and git does not go into such a directory when it reads with its index.
+        sharedCase "a skill in a directory that is a repository of its own is read" (fun service checkout ->
+            async {
+                writeIn checkout ".agents/skills/cloned/SKILL.md" (skillText "cloned")
+                hostGit [ "init"; "-b"; "main" ] (sprintf "%s/.agents/skills/cloned" checkout)
+                hostGit [ "add"; "." ] (sprintf "%s/.agents/skills/cloned" checkout)
+                hostGit [ "commit"; "-m"; "a skill" ] (sprintf "%s/.agents/skills/cloned" checkout)
+                let! skills = service.SkillsOf hello
+                Expect.equal skills (Ok [ skillIn "cloned" "cloned" ]) "its files are plain files to the read"
+            })
+
+        sharedCase
+            "a skill in a directory with another name keeps its name, and its path names the directory"
+            (fun service checkout ->
+                async {
+                    writeIn checkout ".agents/skills/asd ste100-skill/SKILL.md" (skillText "asd-ste100")
+                    let! skills = service.SkillsOf hello
+                    Expect.equal skills (Ok [ skillIn "asd ste100-skill" "asd-ste100" ]) "the file the agent reads"
+                })
+
+        sharedCase "skills come back by name, whatever their directories are called" (fun service checkout ->
+            async {
+                writeIn checkout ".agents/skills/a-dir/SKILL.md" (skillText "zeta")
+                writeIn checkout ".agents/skills/b-dir/SKILL.md" (skillText "alpha")
+                let! skills = service.SkillsOf hello
+                Expect.equal skills (Ok [ skillIn "b-dir" "alpha"; skillIn "a-dir" "zeta" ]) "one order at each read"
+            })
+
+        sharedCase "a SKILL.md with CRLF line ends is read" (fun service checkout ->
+            async {
+                writeIn checkout ".agents/skills/crlf/SKILL.md" ((skillText "crlf").Replace ("\n", "\r\n"))
+                let! skills = service.SkillsOf hello
+                Expect.equal skills (Ok [ skillIn "crlf" "crlf" ]) "the same skill as with LF"
+            })
+
+        sharedCase "a SKILL.md that is a link is no skill" (fun service checkout ->
+            async {
+                let outside = sprintf "%s/outside-SKILL.md" (checkout.Substring (0, checkout.LastIndexOf "/octo/hello"))
+                TestFiles.write outside (skillText "outside")
+                TestFiles.ensureDir (sprintf "%s/.agents/skills/linked" checkout)
+                TestFiles.symlink outside (sprintf "%s/.agents/skills/linked/SKILL.md" checkout)
+                let! skills = service.SkillsOf hello
+                Expect.equal skills (Ok []) "git does not follow the link"
+            })
+
+        sharedCase "an .agents/skills that is a link is no source of skills" (fun service checkout ->
+            async {
+                let outside = sprintf "%s/outside-skills" (checkout.Substring (0, checkout.LastIndexOf "/octo/hello"))
+                writeIn outside "made/SKILL.md" (skillText "made")
+                TestFiles.ensureDir (sprintf "%s/.agents" checkout)
+                TestFiles.symlink outside (sprintf "%s/.agents/skills" checkout)
+                let! skills = service.SkillsOf hello
+                Expect.equal skills (Ok []) "the directory itself is a link"
+            })
+
+        sharedCase "a skill directory that is a link is no skill" (fun service checkout ->
+            async {
+                let outside = sprintf "%s/outside-skill" (checkout.Substring (0, checkout.LastIndexOf "/octo/hello"))
+                writeIn outside "SKILL.md" (skillText "made")
+                TestFiles.ensureDir (sprintf "%s/.agents/skills" checkout)
+                TestFiles.symlink outside (sprintf "%s/.agents/skills/linked" checkout)
+                let! skills = service.SkillsOf hello
+                Expect.equal skills (Ok []) "its SKILL.md is behind a link"
+            })
+
+        sharedCase "a SKILL.md two levels down is no skill" (fun service checkout ->
+            async {
+                writeIn checkout ".agents/skills/outer/inner/SKILL.md" (skillText "deep")
+                let! skills = service.SkillsOf hello
+                Expect.equal skills (Ok []) "one directory level"
+            })
+
+        sharedCase "a SKILL.md with no frontmatter is no skill" (fun service checkout ->
+            async {
+                writeIn checkout ".agents/skills/plain/SKILL.md" "# Just a heading\n"
+                let! skills = service.SkillsOf hello
+                Expect.equal skills (Ok []) "nothing to put in a menu"
+            })
+
+        sharedCase "a checkout with no .agents/skills holds no skills, and that is not an error" (fun service _ ->
+            async {
+                let! skills = service.SkillsOf hello
+                Expect.equal skills (Ok []) "git found no line, which is an answer"
+            })
+
+        // git prints a whole line, however long. The read stops at its cap and ends git. The
+        // answer is the files before the one that the cap cut.
+        sharedCase
+            "a line longer than the whole answer may be ends the read with the skills before it"
+            (fun service checkout ->
+                async {
+                    writeIn checkout ".agents/skills/a/SKILL.md" (skillText "a")
+                    writeIn checkout ".agents/skills/b-long/SKILL.md" (String.replicate (SkillFile.maxAnswerChars + 4096) "y" + "\n")
+                    writeIn checkout ".agents/skills/c/SKILL.md" (skillText "c")
+                    let! skills = service.SkillsOf hello
+                    Expect.equal skills (Ok [ skillIn "a" "a" ]) "the read ended in the long line"
+                })
+
+        // LAST of the cases on the shared service, because it closes that service.
+        testCaseAsync "a service that is closed refuses a read" <| async {
+            let! service, _ = emptied ()
+            do! service.Close ()
+            shared <- None
+            match! service.SkillsOf hello with
+            | Error refusal -> Expect.stringContains refusal "closed" "the service starts no git sandbox again"
+            | Ok skills -> failwithf "the closed service read %d skills" (List.length skills)
+        }
+
+        // The cases from here have a service of their own, and each one closes it.
+
+        // A sandbox can write the checkout's config. Each of these settings changed what git
+        // printed, or made git refuse, until the read gave its own.
+        arrangedCase
+            "a setting in the checkout's config does not change the read"
+            (fun work -> writeIn work ".agents/skills/committed/SKILL.md" (skillText "committed"))
+            (fun service checkout ->
+                async {
+                    for key, value in [ "grep.column", "true"; "color.ui", "always"; "submodule.recurse", "true"; "grep.lineNumber", "false" ] do
+                        hostGit [ "config"; key; value ] checkout
+                    let! skills = service.SkillsOf hello
+                    Expect.equal skills (Ok [ skillIn "committed" "committed" ]) "the same answer"
+                })
+
+        // A wrapper around git can end with 1 for a failure of its own, and it says why. git
+        // itself ends with 1, and says nothing, when no line matched.
+        testCaseAsync "a git that ends with 1 and says why is a failure, not a checkout with no skills" <| async {
+            let root = mkdtemp ()
+            makeBareFixtureArranged root "hello" (fun work -> writeIn work ".agents/skills/committed/SKILL.md" (skillText "committed")) |> ignore
+            let wrapper = sprintf "%s/git-that-fails-to-grep" (fixturesIn root)
+            TestFiles.write
+                wrapper
+                (String.concat
+                    "\n"
+                    [ "#!/bin/sh"
+                      "for word; do"
+                      "  if [ \"$word\" = grep ]; then echo 'wrapper: could not start git' >&2; exit 1; fi"
+                      "done"
+                      sprintf "exec '%s' \"$@\"" namedGit
+                      "" ])
+            TestFiles.makeExecutable wrapper
+            let service = serviceWith wrapper root (freshLog ())
+            do!
+                closing service (async {
+                    let! _ = service.AddRepo caller hello
+                    let! skills = service.SkillsOf hello
+                    Expect.isError skills "the caller keeps the list it had"
+                })
+        }
+
+        testCaseAsync "a checkout that is not one is refused, not read" <| async {
+            let! service = withGitLinkedAway (mkdtemp ())
+            do!
+                closing service (async {
+                    let! skills = service.SkillsOf hello
+                    Expect.isError skills "git is not run on the repository the link names"
+                })
+        }
+
+        // The deadline comes at once here, and git has not answered by then.
+        testCaseAsync "a read that has no answer by its deadline is a failure, not an empty list" <| async {
+            let root = mkdtemp ()
+            makeBareFixtureArranged root "hello" (fun work -> writeIn work ".agents/skills/committed/SKILL.md" (skillText "committed")) |> ignore
+            let service = serviceWithNoTime root
+            do!
+                closing service (async {
+                    let! _ = service.AddRepo caller hello
+                    let! skills = service.SkillsOf hello
+                    Expect.isError skills "the caller keeps the list it had"
+                })
+        }
+
+        // The session reads the skills of its repos at the same time, and after a start with
+        // its checkouts in place, each read is the first use of the git sandbox. Each one made
+        // a sandbox of its own, and the service kept the last.
+        testCaseAsync "two reads at the same time, each the first use of the service, start one git sandbox" <| async {
+            let before = hostsOfThisProcess ()
+            let root = mkdtemp ()
+            checkedOutBefore root
+            let service = serviceIn root (freshLog ())
+            do!
+                closing service (async {
+                    let! _ = [ service.SkillsOf hello; service.SkillsOf hello ] |> Async.Parallel
+                    let started = Set.difference (hostsOfThisProcess ()) before
+                    Expect.equal (Set.count started) 1 "one host process, for the one sandbox that both reads use"
+                })
+        }
+
+        // A deadline stops the wait of a read. It must not stop the start of the git sandbox:
+        // the service then kept no sandbox, and each later read started one more.
+        testCaseAsync "a read that ends at its deadline leaves its git sandbox to the next read" <| async {
+            let before = hostsOfThisProcess ()
+            let root = mkdtemp ()
+            checkedOutBefore root
+            let service = serviceWithNoTime root
+            do!
+                closing service (async {
+                    let! _ = service.SkillsOf hello
+                    let! _ = service.SkillsOf hello
+                    let started = Set.difference (hostsOfThisProcess ()) before
+                    Expect.equal (Set.count started) 1 "the second read waits for the sandbox that the first one started"
+                })
+        }
+
+        // What `Close` is for: a process that makes many services, as this run does, must not
+        // keep the host processes of each one.
+        testCaseAsync "a service that is closed leaves no host process of its git sandboxes" <| async {
+            let before = hostsOfThisProcess ()
+            let root = mkdtemp ()
+            makeBareFixtureArranged root "hello" ignore |> ignore
+            let service = serviceIn root (freshLog ())
+            do!
+                closing service (async {
+                    let! _ = service.AddRepo caller hello
+                    let started = Set.difference (hostsOfThisProcess ()) before
+                    if Set.isEmpty started then
+                        failwith "the add started no srt host process that `ps` shows, so this case can prove nothing"
+                    do! service.Close ()
+                    let! gone = settledWithin 20000 (fun () -> started |> Set.forall (fun pid -> not (Processes.isAlive pid)))
+                    Expect.isTrue gone (sprintf "each of the %d host processes that the add started has ended" (Set.count started))
+                })
         }
     ]
 
@@ -985,44 +1363,6 @@ let private srtTests =
             | other -> failwithf "expected one add and its clone, got %A" other
         }
 
-        testCaseAsync "a repo's .agents/skills ride on the add" <| async {
-            let root = mkdtemp ()
-            makeBareFixtureWithSkill
-                root
-                "hello"
-                "contributing-changes"
-                "name: contributing-changes\ndescription: Split the work into stand-alone PRs."
-            |> ignore
-            let log = freshLog ()
-            let service = serviceIn root log
-            let repo = RepoRef.create "octo/hello" |> expect
-            let! listing = service.AddRepo caller repo
-            expect listing |> ignore
-            let! events = eventsOf log
-            match events with
-            | [ SessionEvent.RepoAdded _; SessionEvent.RepoCloned cloned ] ->
-                Expect.equal
-                    cloned.Skills
-                    [ { Name = "contributing-changes"; Description = "Split the work into stand-alone PRs." } ]
-                    "the checkout's own skill landed on the fact, read once at clone time"
-            | other -> failwithf "expected one add and its clone, got %A" other
-        }
-
-        testCaseAsync "a checkout with no .agents/skills declares none" <| async {
-            let root = mkdtemp ()
-            makeBareFixture root "hello" |> ignore
-            let log = freshLog ()
-            let service = serviceIn root log
-            let repo = RepoRef.create "octo/hello" |> expect
-            let! listing = service.AddRepo caller repo
-            expect listing |> ignore
-            let! events = eventsOf log
-            match events with
-            | [ SessionEvent.RepoAdded _; SessionEvent.RepoCloned cloned ] ->
-                Expect.equal cloned.Skills [] "no .agents/skills at this fixture's root"
-            | other -> failwithf "expected one add and its clone, got %A" other
-        }
-
         // Every case here uses an absolute mkdtemp; a SESSION's data directory need not be
         // one — `Launch.unlaunched`'s default is relative, and so is what the
         // live suite passes. That difference was invisible and total: the clone landed and
@@ -1056,6 +1396,7 @@ let private srtTests =
                       Canonical = fun _ _ -> async { return None }
                       OnNetworkFailure = fun _ _ -> async { return () }
                       Tracer = Telemetry.Tracer.Off
+                      Sleep = Resilience.Policy.sleep
                       Log = log }
                 |> expect
             let repo = RepoRef.create "octo/hello" |> expect
@@ -1428,8 +1769,7 @@ let private compositionTests =
                           Repo = RepoRef.create "octo/hello" |> expect
                           Branch = "main"
                           Actor = ActorRef.Agent
-                          AgentsMd = None
-                          Skills = [] })
+                          AgentsMd = None })
 
             let! launched = pm.Launch record.SessionId
             let port = launched |> expect
@@ -1686,6 +2026,7 @@ let tests =
         Tag.needs "A checkout's own config and content (srt and host)" [ Tag.Sandbox; Tag.Ports ] (fun () -> configBoundaryTests)
         Tag.needs "A committed link, to a git of a sandbox (srt)" [ Tag.Sandbox ] (fun () -> committedLinkTests)
         Tag.needs "A repository's files, read from git (srt)" [ Tag.Sandbox ] (fun () -> committedReadTests)
+        Tag.needs "The skills a checkout holds (srt)" [ Tag.Sandbox ] (fun () -> skillsTests)
         Tag.needs
             "Repos the session reports"
             [ Tag.Ports; Tag.Native; Tag.Sandbox ]

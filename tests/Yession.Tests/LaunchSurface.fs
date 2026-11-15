@@ -137,7 +137,7 @@ let private offeredTests =
 
         testCase "a repo, or anything said, takes it away" <| fun () ->
             let begun =
-                clientAt 2L (fresh @ [ at 2L (RepoCloned { MessageId = MessageId.create "r1" |> expect; Repo = hello; Branch = "main"; Actor = PeerRef ada; AgentsMd = None; Skills = [] }) ])
+                clientAt 2L (fresh @ [ at 2L (RepoCloned { MessageId = MessageId.create "r1" |> expect; Repo = hello; Branch = "main"; Actor = PeerRef ada; AgentsMd = None }) ])
             Expect.isFalse (ClientModel.launchOffered begun) "a repo is the session having begun"
             // An add whose clone is running is not yet a repo. The card has stepped aside for
             // the person who sent it (`committed`); it is a failed clone that brings it back.

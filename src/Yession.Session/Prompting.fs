@@ -73,17 +73,21 @@ module Prompting =
           Text =
             $"Use {ToolName.ReadFile} to read a file. Use {ToolName.EditFile} to change part of a file. Use {ToolName.WriteFile} to write a whole file. Do not use cat, sed, awk, head, tail or heredocs in {ToolName.ExecuteCommand} for this. The file tools record which file you read and what you changed. Shell text does not." }
 
-    /// A repo's own `.agents/skills/<name>/SKILL.md` names a process or convention it wants
-    /// followed for a kind of work -- this very repository's contributing-changes skill is
-    /// one. The turn's context (`skillsText`, conditioned on `HasSkills`) lists every one a
-    /// repo in the session declares, by name and description alone, never its body: reading
-    /// the whole file every turn would cost context nobody asked to spend, so a turn reads
-    /// a skill's file for itself, with `ToolName.ReadFile`, only once its description matches
-    /// what it is doing -- the same progressive disclosure Claude's own skill format uses.
+    /// A `SKILL.md` under a checkout's `.agents/skills/` names a process or convention the
+    /// repo wants followed for a kind of work -- this very repository's contributing-changes
+    /// skill is one. The turn's context (`skillsText`, conditioned on `HasSkills`) lists every
+    /// one a checkout in the session holds, by name, file and description, never its body:
+    /// reading the whole file every turn would cost context nobody asked to spend, so a turn
+    /// reads a skill's file for itself, with `ToolName.ReadFile`, only once its description
+    /// matches what it is doing -- the same progressive disclosure Claude's own skill format
+    /// uses.
+    ///
+    /// The text names no path for the agent to build. The directory of a skill can have a
+    /// different name from the skill, so the menu gives the file of each one.
     let skills =
         { Name = "skills"
           Text =
-            $"A repo can declare a skill at `.agents/skills/<name>/SKILL.md`: a process or convention it wants followed for a kind of work. The turn's context lists the skills a repo in this session declares, by name and description. When the description of a skill matches what you are doing, read its file with {ToolName.ReadFile}. Do this before you act." }
+            $"A repo can hold skills under `.agents/skills/` in its checkout. A skill is a process or convention that the repo wants followed for a kind of work. The turn's context lists the skills of each repo in this session: the name of each skill, its file from the root of the checkout, and its description. When the description of a skill matches what you are doing, read its file with {ToolName.ReadFile}. Do this before you act." }
 
     /// Every tool description says how to reach each sandbox, and none can say which to
     /// prefer. A runtime is not assured in the default sandbox: python is a stub on a Mac
@@ -214,7 +218,7 @@ module Prompting =
         | HasTerminalActivity
         /// A repo in the session has an AGENTS.md at its root.
         | HasRepoNotes
-        /// A repo in the session declares a skill under `.agents/skills/`.
+        /// A checkout in the session holds a skill under `.agents/skills/`.
         | HasSkills
         /// The session has a repo.
         | HasRepos
@@ -403,12 +407,13 @@ module Prompting =
              |> List.map render
              |> String.concat "\n\n")
 
-    /// Every repo's skill menu: name and description alone, never a body (`skills`,
+    /// Every repo's skill menu: name, file and description, never a body (`skills`,
     /// Section, says why). One header per repo, which matters once a session holds more
-    /// than one -- a bare list would leave a skill's repo to be guessed from its name.
+    /// than one -- a bare list would leave a skill's repo to be guessed from its name. The
+    /// file is the one the agent reads, from the root of that repo's checkout.
     let private skillsText (context: Context) =
         let render (repo: RepoRef, skills: SkillSummary list) =
-            let lines = skills |> List.map (fun s -> sprintf "- %s: %s" s.Name s.Description) |> String.concat "\n"
+            let lines = skills |> List.map (fun s -> sprintf "- %s (%s): %s" s.Name s.Path s.Description) |> String.concat "\n"
             sprintf "Skills in %s:\n%s" (RepoRef.value repo) lines
         context.Repos
         |> List.choose (fun r -> if List.isEmpty r.Skills then None else Some (r.Repo, r.Skills))
