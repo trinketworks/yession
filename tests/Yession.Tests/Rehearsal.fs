@@ -8,7 +8,6 @@ module Yession.Tests.Rehearsal
 // `KillRehearsalMain.fs` and `LaunchRehearsalMain.fs` are the programs. Each one says which
 // action it makes, and why that action is a rehearsal.
 
-open Fable.Core
 open Fable.NodeExtras
 
 /// How long a rehearsal lives at most (`endsItself`). It is less than the 30 seconds that
@@ -21,21 +20,17 @@ let private capMs = 20000
 [<Literal>]
 let Capped = 44
 
-/// `action` after `ms`, on a timer that does not hold the process: a process that has
-/// nothing left to do ends before the timer comes.
-[<Emit("setTimeout($0, $1).unref()")>]
-let private later (action: unit -> unit) (ms: int) : unit = jsNative
-
 /// For a rehearsal program, as its first step: the program ends itself after `capMs`, with
 /// the code `Capped`. `name` is the program in the words that it says then.
 ///
 /// A case runs a rehearsal as the leader of a process group of its own, with no input from
 /// its runner. So a rehearsal that holds a listener stays when somebody ends the runner in
-/// the middle of the case. The cap is the safety net for that. A rehearsal that makes its
-/// action and leaves is gone long before it.
+/// the middle of the case. The cap is the safety net for that. The timer of the cap does not
+/// hold the process (`Timers.unheld`). So a rehearsal that makes its action and leaves is
+/// gone long before the cap.
 [<Support.Waits>]
 let endsItself (name: string) : unit =
-    later
+    Timers.unheld
         (fun () ->
             eprintfn "%s: this program is still here after %d seconds, so it ends itself" name (capMs / 1000)
             Processes.exitWith Capped)

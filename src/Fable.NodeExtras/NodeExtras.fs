@@ -2425,6 +2425,19 @@ module Microtasks =
     [<Emit("queueMicrotask($0)")>]
     let queue (callback: unit -> unit) : unit = jsNative
 
+/// A timer of Node that does not hold its process. In Node, `setTimeout` answers an object
+/// that has `unref`. `Fable.Node` types that object (`Node.Base.Timer`) and has no function
+/// that answers one. `Fable.Core`'s `JS.setTimeout` types the answer as a number, and a number
+/// has no `unref`.
+[<RequireQualifiedAccess>]
+module Timers =
+
+    /// `setTimeout(callback, ms).unref()`: `callback` runs after `ms`, on a timer that does not
+    /// hold the process. A process that has nothing else to do ends before the timer comes,
+    /// and `callback` does not run then.
+    [<Emit("setTimeout($0, $1).unref()")>]
+    let unheld (callback: unit -> unit) (ms: int) : unit = jsNative
+
 // --- Relaying somebody else's listeners --------------------------------------------------------
 
 /// A listener somebody ELSE wrote, held only to be handed on.
