@@ -130,6 +130,9 @@
     <!-- What a Docker case leaves on the daemon: nothing. Before the three suites that
          make docker objects. -->
     <Compile Include="DockerFixture.fs" />
+    <!-- How a case runs a rehearsal and reads its end: a program of the suite, in a process
+         of its own. Before the two rehearsals that follow. -->
+    <Compile Include="Rehearsal.fs" />
     <!-- A kill of a child that did not start, in a process that a wrong kill can end: what a
          case and that program share, and then the program. The program is one of its own, as
          StandInMain.fs is: its top level runs only in a child started on it. -->
@@ -156,6 +159,11 @@
     <!-- What the Manager page's MCP forms mean, decoded from a body. Before Phase4.fs, whose
          rendering cases are the other half of the same page; cheap, no Manager. -->
     <Compile Include="ManagerForms.fs" />
+    <!-- A launch of a session that goes wrong, in a process that such a launch can end or
+         hold: what a case and that program share, and then the program. The program is one of
+         its own, as StandInMain.fs is: its top level runs only in a child that runs it. -->
+    <Compile Include="LaunchRehearsal.fs" />
+    <Compile Include="LaunchRehearsalMain.fs" />
     <Compile Include="Phase4.fs" />
     <Compile Include="ProxyMap.fs" />
     <Compile Include="Resources.fs" />

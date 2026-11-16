@@ -105,6 +105,8 @@ let private agent () : unit =
 
 let private words = Node.Api.``process``.argv |> Seq.skip 2 |> List.ofSeq
 
+Rehearsal.endsItself "kill rehearsal"
+
 match Kill.parse words with
 | Some CommandAtOnce -> commandAtOnce ()
 | Some CommandAfterItsEnd -> commandAfterItsEnd ()

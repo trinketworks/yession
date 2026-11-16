@@ -256,6 +256,17 @@ let tests =
                 (ResponseHeader.wire named |> List.filter (fun (name, _) -> name <> "x-content-type-options"))
                 [ "content-type", "text/plain"; "cache-control", "no-store" ]
                 "the writer's headers, by name and value, in its order"
+
+        // The cap of a rehearsal is this timer (`Rehearsal.endsItself`). This case pins one half
+        // of its promise: the timer runs its callback. The launch suite pins the other half,
+        // that the timer holds no process. Its case is "the launch keeps no deadline, so a
+        // process that made only that launch ends by itself".
+        testCaseAsync "a timer that does not hold its process runs its callback" <| async {
+            let mutable ran = false
+            Timers.unheld (fun () -> ran <- true) 1
+            let! inTime = until (fun () -> ran)
+            Expect.isTrue inTime "the callback ran, because the process of the suite was still there"
+        }
     ]
 
 // --- Spawning, and the members of a child Fable.Node does not declare ------------------------
