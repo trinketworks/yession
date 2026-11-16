@@ -2920,33 +2920,13 @@ let private agentSpawnerPortsTests =
 // --- A kill of a child that did not start -----------------------------------------------------
 
 /// How the kill rehearsal (`KillRehearsalMain.fs`) ended after it made `kill`: its code, and
-/// the signal that ended it. The rehearsal leads a process group of its own (`Detached`). A
-/// kill that goes to the process group of its caller thus ends the rehearsal and nothing of
+/// the signal that ended it. The rehearsal leads a process group of its own (`Rehearsal.run`).
+/// A kill that goes to the process group of its caller thus ends the rehearsal and nothing of
 /// the suite.
-///
-/// A rehearsal that does not end in 30 seconds fails the case, and it must not stay when the
-/// suite has gone. Its process group is one that this case made, so the case ends that group.
 let private rehearsed (kill: KillRehearsal.Kill) : Async<int option * string option> =
     async {
-        let rehearsal =
-            ChildProcesses.spawn
-                (nodePath ())
-                [ Node.Api.path.join (StandIn.directory (), "KillRehearsalMain.js"); KillRehearsal.Kill.argument kill ]
-                { Cwd = None
-                  Env = ChildEnv.Replacing Map.empty
-                  Streams = { Stdin = Stdio.Ignore; Stdout = Stdio.Ignore; Stderr = Stdio.Inherit }
-                  Detached = true }
-        let mutable ended = false
-        let mutable refusal : string option = None
-        ChildProcessStreams.onExit rehearsal (fun _ -> ended <- true)
-        ChildProcessStreams.onError rehearsal (fun error -> refusal <- Some (StreamError.describe error))
-        let! inTime = Support.settledWithin 30000 (fun () -> ended || refusal.IsSome)
-        match refusal with
-        | Some why -> return failwithf "the kill rehearsal did not start: %s" why
-        | None when not inTime ->
-            ChildProcesses.signalGroup rehearsal "SIGKILL" |> ignore
-            return failwith "the kill rehearsal did not end in 30 seconds, and the case ended its process group"
-        | None -> return ChildProcesses.exitCode rehearsal, ChildProcesses.signalCode rehearsal
+        let! ending = Rehearsal.run "KillRehearsalMain.js" [ KillRehearsal.Kill.argument kill ]
+        return ending.Code, ending.Signal
     }
 
 /// A child that did not start has no pid. A kill of its process group once went to pid 0,

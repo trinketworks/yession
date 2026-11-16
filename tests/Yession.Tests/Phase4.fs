@@ -2066,6 +2066,111 @@ let private launchOnceTests =
             }
     ]
 
+// --- A launch of a session that goes wrong -----------------------------------------------------
+
+/// How the launch rehearsal (`LaunchRehearsalMain.fs`) ended, and what it wrote: the failure
+/// of the launch. The rehearsal makes `launch` in a process of its own, over a data directory
+/// of this case.
+let private rehearsedLaunch (launch: LaunchRehearsal.Launch) : Async<Rehearsal.Ending> =
+    let dataDir =
+        sprintf
+            "tests/Yession.Tests/out/.data/launch-%s-%d"
+            (LaunchRehearsal.Launch.argument launch)
+            (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+    Fs.ensureDir dataDir
+    Rehearsal.run
+        "LaunchRehearsalMain.js"
+        [ LaunchRehearsal.Launch.argument launch; Node.Api.path.resolve dataDir ]
+
+/// The Manager of the rehearsal answered the launch with a failure, and is still there to
+/// leave with its own code (`LaunchRehearsal.Answered`). Code 0 is not that code: Node gives
+/// it to a program that had nothing left to do.
+let private answered (ending: Rehearsal.Ending) : unit =
+    Expect.equal
+        (ending.Code, ending.Signal)
+        (Some LaunchRehearsal.Answered, None)
+        "the launch answered with a failure, and its process is still there to leave with its own code"
+
+/// The two cases for one program that the system does not run. `named` is that program in
+/// the name of a case, and `cause` is the code that the system gives.
+let private noRunOf (program: LaunchRehearsal.Program) (named: string) (cause: string) =
+    [ testCaseAsync (sprintf "a launch of %s fails, and its Manager is still there" named) <| async {
+          let! ending = rehearsedLaunch (LaunchRehearsal.Of program)
+          answered ending
+      }
+
+      testCaseAsync (sprintf "the failure of a launch of %s names the program and the cause" named) <| async {
+          let! ending = rehearsedLaunch (LaunchRehearsal.Of program)
+          let path = LaunchRehearsal.Program.path program
+          Expect.isTrue
+              (ending.Said.Contains path && ending.Said.Contains cause)
+              (sprintf "the failure holds '%s' and '%s'. The rehearsal wrote: '%s'" path cause (ending.Said.Trim ()))
+      } ]
+
+/// What Node says when it refuses the name of a program. Node throws that from the spawn and
+/// makes no child, so the suite can ask in its own process.
+let private refusalOfNode (program: string) : string =
+    let refusal =
+        try
+            let child =
+                ChildProcesses.spawn
+                    program
+                    []
+                    { Cwd = None
+                      Env = ChildEnv.Replacing Map.empty
+                      Streams = { Stdin = Stdio.Ignore; Stdout = Stdio.Ignore; Stderr = Stdio.Ignore }
+                      Detached = false }
+            // Node made a child after all. An `error` of that child that nobody hears would
+            // end the suite.
+            ChildProcessStreams.onError child ignore
+            None
+        with thrown ->
+            Some thrown.Message
+    match refusal with
+    | Some said -> said
+    | None -> failwithf "Node did not refuse the name of the program, so this case has no sentence of Node to look for"
+
+/// A session whose program does not run is a launch that failed, and nothing more. Node
+/// says such a spawn in one of two ways (`LaunchRehearsal.Program`), and each took more than
+/// the launch with it. An `error` that nobody heard ended the Manager, and each session of
+/// that Manager with it. A throw from the spawn went to the first asker, and the launch
+/// stayed in flight: each later asker joined a launch that never ended.
+let private launchOfNoRunTests =
+    testList "A launch of a session whose program does not run" [
+        yield! noRunOf LaunchRehearsal.NotThere "a program that is not there" "ENOENT"
+        yield! noRunOf LaunchRehearsal.ThroughAFile "a program whose path goes through a file" "ENOTDIR"
+
+        // Node refuses this name with a sentence of its own and a code that says little
+        // (`ERR_INVALID_ARG_VALUE`). The failure of the launch keeps the sentence.
+        testCaseAsync "the failure of a launch of a program whose name Node refuses holds what Node said" <| async {
+            let said = refusalOfNode (LaunchRehearsal.Program.path LaunchRehearsal.NotAName)
+            let! ending = rehearsedLaunch (LaunchRehearsal.Of LaunchRehearsal.NotAName)
+            Expect.isTrue
+                (ending.Said.Contains said)
+                (sprintf "the failure holds the sentence of Node, '%s'. The rehearsal wrote: '%s'" said (ending.Said.Trim ()))
+        }
+    ]
+
+/// The deadline of a launch is for a session that is still there. A session that ended
+/// before it was ready has its failure, and once its deadline stayed all the same. It held
+/// the process of the launch until its time. Then it sent the signal for a report to a pid
+/// that was gone, which the system can give to a different process.
+///
+/// The rehearsal makes that launch alone, with a deadline that is far away, and does not ask
+/// for its own end. With no deadline left it ends by itself, with its own code. With the
+/// deadline left it is still there at its cap, and leaves with the code of the cap
+/// (`Rehearsal.Capped`), long before the deadline.
+let private launchThatEndedEarlyTests =
+    testList "A launch of a session that ended before it was ready" [
+        testCaseAsync "the launch keeps no deadline, so a process that made only that launch ends by itself" <| async {
+            let! ending = rehearsedLaunch LaunchRehearsal.EndsBeforeReady
+            Expect.equal
+                (ending.Code, ending.Signal)
+                (Some LaunchRehearsal.Answered, None)
+                "the rehearsal got the failure of the launch and ended by itself: nothing of the launch held it"
+        }
+    ]
+
 /// A Manager with its management endpoint up over stub sessions, and a session in it already
 /// running. The stub reports port 1, so the address `/open` names is known in advance.
 let private runningBehindUi (name: string) =
@@ -4134,6 +4239,11 @@ let tests =
         // here launches a child — the invariant is about the moment BEFORE the first launch.
         Tag.needs "Registry writes announce themselves (UX review P0)" [ Tag.Ports ] (fun () -> registryPublishTests)
         Tag.needs "One session, one child (the launch in flight)" [ Tag.Ports ] (fun () -> launchOnceTests)
+        // `Ports` only: each case runs one process, a Manager of its own. That Manager makes
+        // the launch, and a launch that ends its Manager ends only that process.
+        Tag.needs "A launch of a session whose program does not run" [ Tag.Ports ] (fun () -> launchOfNoRunTests)
+        // `Ports` only: the case runs one process, which makes one launch of a stand-in.
+        Tag.needs "A launch of a session that ended before it was ready" [ Tag.Ports ] (fun () -> launchThatEndedEarlyTests)
         Tag.needs "Opening a session that is already running" [ Tag.Ports ] (fun () -> openRunningTests)
         Tag.needs "Opening a session that is not running yet" [ Tag.Ports ] (fun () -> openStoppedTests)
         Tag.needs "Idle reaping over the process boundary (Plan 11)" [ Tag.Ports; Tag.Native ] (fun () -> reapingTests)

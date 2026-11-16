@@ -102,7 +102,7 @@ let private childNodeOptions (diagnosticsDir: string) : string =
     | Some inherited when inherited.Trim().Length > 0 -> inherited + " " + report
     | _ -> report
 
-/// Record what a session missing its readiness deadline is stuck on, then call `kill`.
+/// Record what a session missing its readiness deadline is stuck on, then kill it.
 ///
 /// Two views, because they answer for different hangs. The Node report (`ReportSignal`) is
 /// written when the child's event loop next turns, so it covers a session waiting on I/O — and
@@ -110,40 +110,161 @@ let private childNodeOptions (diagnosticsDir: string) : string =
 /// native stacks from outside, so it covers exactly that case; it exists on macOS only.
 /// Both are best effort: neither may stand between a hung child and its kill, so a sampler
 /// that fails to start or overruns its cap still ends in `kill`.
-let private captureThenKill (pid: int) (diagnosticsDir: string) (kill: unit -> unit) : unit =
-    let mutable killed = false
-    let killOnce () =
-        if not killed then
-            killed <- true
-            kill ()
-    try
-        Files.mkdirp diagnosticsDir
-        Processes.kill pid ReportSignal
-    with _ ->
-        ()
-    if Fs.exists Sampler then
-        let sampler =
-            ChildProcesses.spawn
-                Sampler
-                [ string pid; "2"; "-file"; sprintf "%s/sample-%d.txt" diagnosticsDir pid ]
-                { Cwd = None
-                  Env = ChildEnv.Adding Map.empty
-                  Streams = { Stdin = Stdio.Ignore; Stdout = Stdio.Ignore; Stderr = Stdio.Ignore }
-                  Detached = false }
-        ChildProcessStreams.onError sampler (fun _ -> killOnce ())
-        ChildProcessStreams.onExit sampler (fun _ -> killOnce ())
-        // Two seconds of sampling plus its own start-up; past this it is not coming back.
-        JS.setTimeout killOnce 5000 |> ignore
-    else
-        // Time for the report to be written: it needs one turn of the child's loop.
-        JS.setTimeout killOnce 1000 |> ignore
+///
+/// A child that ended gets no part of this. It has nothing to record, and the system can
+/// give its pid to a different process. The signal for a report would then go to that
+/// process, and the default action of that signal ends a process.
+let private captureThenKill (child: RunningChild) (diagnosticsDir: string) : unit =
+    if not (child.HasExited ()) then
+        let pid = child.Pid
+        let mutable killed = false
+        let killOnce () =
+            if not killed then
+                killed <- true
+                child.Kill ()
+        try
+            Files.mkdirp diagnosticsDir
+            Processes.kill pid ReportSignal
+        with _ ->
+            ()
+        if Fs.exists Sampler then
+            let sampler =
+                ChildProcesses.spawn
+                    Sampler
+                    [ string pid; "2"; "-file"; sprintf "%s/sample-%d.txt" diagnosticsDir pid ]
+                    { Cwd = None
+                      Env = ChildEnv.Adding Map.empty
+                      Streams = { Stdin = Stdio.Ignore; Stdout = Stdio.Ignore; Stderr = Stdio.Ignore }
+                      Detached = false }
+            ChildProcessStreams.onError sampler (fun _ -> killOnce ())
+            ChildProcessStreams.onExit sampler (fun _ -> killOnce ())
+            // Two seconds of sampling plus its own start-up; past this it is not coming back.
+            JS.setTimeout killOnce 5000 |> ignore
+        else
+            // Time for the report to be written: it needs one turn of the child's loop.
+            JS.setTimeout killOnce 1000 |> ignore
 
-/// Spawn `command args` with `env` merged over the parent environment, and resolve
-/// once the child prints its readiness line (or fails: early exit / timeout). The
-/// returned handle observes the child for the rest of its life.
+/// Why the system did not run the program of a session, as the failure of its launch.
+///
+/// `said` is what Node said about the spawn, and the failure keeps each word of it. For a
+/// cause that Node reports as an `error`, that is `spawn <program> <code>`. Node leaves the
+/// program out when it throws from the spawn, so the failure then names the program first.
+let private didNotStart (command: string) (said: string) : string =
+    if said.Contains command then sprintf "session process did not start: %s" said
+    else sprintf "session process did not start: %s: %s" command said
+
+/// Wait for the readiness line of a session whose program runs, and give `answer` the
+/// session, or the failure: an early exit, or no line in `timeoutMs`. The handle in the
+/// answer observes the child for the rest of its life. `answer` takes the first answer of a
+/// launch and no other (`launch`), so a step here that answers first has the last word.
+///
+/// `pid` is the pid of `child`. Node gives a pid only to a child whose program runs
+/// (`launch`). So each step here that names a pid is for a process that is there: a log
+/// line, the signal for a report, the stack sampler.
 ///
 /// `diagnosticsDir` is where a child that misses `timeoutMs` leaves its account of why
-/// (`captureThenKill`). Nothing is written there for a launch that succeeds.
+/// (`captureThenKill`). A launch that succeeds writes nothing there.
+let private awaitReady
+    (child: Node.ChildProcess.ChildProcess)
+    (pid: int)
+    (diagnosticsDir: string)
+    (timeoutMs: int)
+    (answer: Result<LaunchedSession, string> -> unit)
+    : unit =
+    // Node also reports a signal that the kernel refused as the `error` of a child, and it
+    // ends a process for an `error` that nobody hears. The session is still there after such
+    // a refusal. So the Manager hears it, says it, and goes on.
+    ChildProcessStreams.onError child (fun error -> eprintfn "[session %d] %s" pid (StreamError.describe error))
+
+    let mutable exited : int option option = None // Some code = exited (code option)
+    let mutable exitWaiters : (int option -> unit) list = []
+    // `exit` rather than `close`: a launch has to fail the moment the child is gone, and
+    // `close` waits for its stdout to drain as well — a stream this launch is reading and
+    // a crashing session may never have written to.
+    ChildProcessStreams.onExit child (fun code ->
+        exited <- Some code
+        let waiters = exitWaiters
+        exitWaiters <- []
+        // Registration order: the Manager's bookkeeping (registered at launch)
+        // must observe the exit before any stop/wait continuation resumes.
+        waiters |> List.rev |> List.iter (fun w -> w code))
+
+    let running =
+        { Pid = pid
+          // Through `ChildProcesses.signal`: a session that did not start gets no signal.
+          Terminate = fun () -> ChildProcesses.signal child "SIGTERM" |> ignore
+          Kill = fun () -> ChildProcesses.signal child "SIGKILL" |> ignore
+          OnExit =
+            fun waiter ->
+                match exited with
+                | Some code -> waiter code
+                | None -> exitWaiters <- waiter :: exitWaiters
+          HasExited = fun () -> Option.isSome exited }
+
+    let timer =
+        JS.setTimeout
+            (fun () ->
+                // Answer first, as the skew refusal below does: the kill fires the exit
+                // handler, whose "exited before ready" would otherwise bury the reason.
+                answer (
+                    Error (
+                        sprintf
+                            "session process not ready within %dms; diagnostics in %s"
+                            timeoutMs
+                            diagnosticsDir
+                    )
+                )
+                captureThenKill running diagnosticsDir)
+            timeoutMs
+
+    running.OnExit (fun code ->
+        // A session that ended has no deadline to miss. Before, the deadline stayed: it
+        // held the Manager's loop, and at its time it made its steps for a pid that was gone.
+        JS.clearTimeout timer
+        answer (Error (sprintf "session process exited before ready (code %A)" code)))
+
+    // Accumulate stdout and scan complete lines for the readiness JSON; anything
+    // else is a log line and passes through.
+    let mutable buffer = ""
+    Readables.text (ChildProcessStreams.stdout child) (fun chunk ->
+        buffer <- buffer + chunk
+        let parts = buffer.Split '\n'
+        buffer <- parts.[parts.Length - 1]
+        for line in parts.[0 .. parts.Length - 2] do
+            match ReadyLine.parse line with
+            | Some ready ->
+                JS.clearTimeout timer
+                // The version arrives on the readiness line, so this is the first
+                // moment the pairing can be checked — and the last moment before the
+                // Manager starts treating the child as a working session.
+                let build = ready.Version
+                match majorSkew build with
+                | Some reason ->
+                    // Answer first: killing the child fires its exit handler, which
+                    // would otherwise answer this launch with "exited before ready" and
+                    // bury the actual reason.
+                    answer (Error reason)
+                    running.Kill ()
+                | None -> answer (Ok { Child = running; Port = ready.Port; Build = build })
+            | None ->
+                if line.Trim().Length > 0 then printfn "[session %d] %s" pid line)
+
+/// Spawn `command args` with `env` merged over the parent environment, and resolve
+/// once the child prints its readiness line (or fails: no spawn / early exit / timeout). The
+/// returned handle observes the child for the rest of its life.
+///
+/// A program that the system does not run is a failure of the launch, with the cause in its
+/// words. Node says such a spawn in one of two ways. For five causes the spawn answers with
+/// a child that has no pid, and Node reports the cause later as the `error` of that child:
+/// ENOENT, EACCES, EAGAIN, EMFILE and ENFILE (a program that is not there, a file that the
+/// user may not run, no free process, no free file handle). For each other cause Node
+/// throws from the spawn (a path that goes through a file, a file whose format the system
+/// cannot run, a name that Node refuses). Before, nothing heard that `error`, and Node ends
+/// a process for an `error` that nobody hears. So the Manager ended, and each of its
+/// sessions with it.
+///
+/// `diagnosticsDir` is where a child that misses `timeoutMs` leaves its account of why
+/// (`captureThenKill`). A launch that succeeds writes nothing there.
 let launch
     (command: string)
     (args: string list)
@@ -152,98 +273,40 @@ let launch
     (timeoutMs: int)
     : Async<Result<LaunchedSession, string>> =
     Async.FromContinuations (fun (cont, _, _) ->
+        // A launch answers once. Each way out of it goes through `answer`, which takes the
+        // first answer and no other.
+        let mutable answered = false
+        let answer (result: Result<LaunchedSession, string>) : unit =
+            if not answered then
+                answered <- true
+                cont result
+
         // stdin is a pipe on purpose: the child watches it and exits when the Manager dies
         // (the kernel closes the pipe even on SIGKILL), so sessions never outlive their
-        // Manager. stdout is parsed for the readiness line below; stderr is the parent's own
+        // Manager. `awaitReady` reads stdout for the readiness line. stderr is the parent's own
         // handle, so whatever the session says for a person to read lands where the Manager's
         // own output does rather than in a pipe this file would have to drain.
         //
         // `Adding` rather than `Replacing`: `env` carries the spawn contract's variables and
         // nothing else, so a child given only those would have lost `PATH` — and a Node bundle
         // that cannot find its own interpreter fails before it can say why.
-        let child =
-            ChildProcesses.spawn
-                command
-                args
-                { Cwd = None
-                  Env = ChildEnv.Adding (Map.ofList (("NODE_OPTIONS", childNodeOptions diagnosticsDir) :: env))
-                  Streams = { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Inherit }
-                  Detached = false }
+        let spawned =
+            try
+                Ok (
+                    ChildProcesses.spawn
+                        command
+                        args
+                        { Cwd = None
+                          Env = ChildEnv.Adding (Map.ofList (("NODE_OPTIONS", childNodeOptions diagnosticsDir) :: env))
+                          Streams = { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Inherit }
+                          Detached = false })
+            with thrown -> Error (didNotStart command (StreamError.describe (StreamError.ofThrown thrown)))
 
-        let pid = int child.pid
-
-        let mutable exited : int option option = None // Some code = exited (code option)
-        let mutable exitWaiters : (int option -> unit) list = []
-        // `exit` rather than `close`: a launch has to fail the moment the child is gone, and
-        // `close` waits for its stdout to drain as well — a stream this launch is reading and
-        // a crashing session may never have written to.
-        ChildProcessStreams.onExit child (fun code ->
-            exited <- Some code
-            let waiters = exitWaiters
-            exitWaiters <- []
-            // Registration order: the Manager's bookkeeping (registered at launch)
-            // must observe the exit before any stop/wait continuation resumes.
-            waiters |> List.rev |> List.iter (fun w -> w code))
-
-        let running =
-            { Pid = pid
-              // Through `ChildProcesses.signal`: a session that did not start gets no signal.
-              Terminate = fun () -> ChildProcesses.signal child "SIGTERM" |> ignore
-              Kill = fun () -> ChildProcesses.signal child "SIGKILL" |> ignore
-              OnExit =
-                fun waiter ->
-                    match exited with
-                    | Some code -> waiter code
-                    | None -> exitWaiters <- waiter :: exitWaiters
-              HasExited = fun () -> Option.isSome exited }
-
-        let mutable settled = false
-        let settle (result: Result<LaunchedSession, string>) =
-            if not settled then
-                settled <- true
-                cont result
-
-        let timer =
-            JS.setTimeout
-                (fun () ->
-                    // Settle first, as the skew refusal below does: the kill fires the exit
-                    // handler, whose "exited before ready" would otherwise bury the reason.
-                    settle (
-                        Error (
-                            sprintf
-                                "session process not ready within %dms; diagnostics in %s"
-                                timeoutMs
-                                diagnosticsDir
-                        )
-                    )
-                    captureThenKill pid diagnosticsDir running.Kill)
-                timeoutMs
-
-        running.OnExit (fun code ->
-            settle (Error (sprintf "session process exited before ready (code %A)" code)))
-
-        // Accumulate stdout and scan complete lines for the readiness JSON; anything
-        // else is a log line and passes through.
-        let mutable buffer = ""
-        Readables.text (ChildProcessStreams.stdout child) (fun chunk ->
-            buffer <- buffer + chunk
-            let parts = buffer.Split '\n'
-            buffer <- parts.[parts.Length - 1]
-            for line in parts.[0 .. parts.Length - 2] do
-                match ReadyLine.parse line with
-                | Some ready ->
-                    JS.clearTimeout timer
-                    // The version arrives on the readiness line, so this is the first
-                    // moment the pairing can be checked — and the last moment before the
-                    // Manager starts treating the child as a working session.
-                    let build = ready.Version
-                    match majorSkew build with
-                    | Some reason ->
-                        // Settle first: killing the child fires its exit handler, which
-                        // would otherwise settle this launch with "exited before ready" and
-                        // bury the actual reason.
-                        settle (Error reason)
-                        running.Kill ()
-                    | None -> settle (Ok { Child = running; Port = ready.Port; Build = build })
-                | None ->
-                    if line.Trim().Length > 0 then printfn "[session %d] %s" pid line))
+        match spawned with
+        | Error reason -> answer (Error reason)
+        | Ok child ->
+            match ChildProcesses.pid child with
+            | None ->
+                ChildProcessStreams.onError child (fun error ->
+                    answer (Error (didNotStart command (StreamError.describe error))))
+            | Some pid -> awaitReady child pid diagnosticsDir timeoutMs answer)
