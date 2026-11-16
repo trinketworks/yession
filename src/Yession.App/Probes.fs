@@ -394,10 +394,11 @@ module Probes =
         /// as it does while the composer's line unfolds: at once with a parameter of 0, or with
         /// 1 inside the next wheel turned or key pressed on the conversation — after it is asked
         /// for and before the scroll it asks for can move. Watches the conversation's scroll from
-        /// the moment it is armed (`ScrollTakenAway`). Empty once armed.
+        /// the moment it grows the composer (`ScrollTakenAway`), so what put a following reader
+        /// back at the end before that is not counted against the scroll. Empty once armed.
         | ComposerGrows
         /// Every write that has landed on the conversation's scroll since the watch began —
-        /// `SmoothScrollToTop` sent its scroll, or `ComposerGrows` was armed — each with the value
+        /// `SmoothScrollToTop` sent its scroll, or `ComposerGrows` grew the composer — each with the value
         /// written, where the scroll stood, and the page's own frames that wrote it — any one of
         /// them ends a scroll in flight — and a line saying so if the conversation was replaced
         /// under it. Empty while nothing has taken it.
