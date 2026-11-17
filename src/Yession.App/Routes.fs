@@ -397,6 +397,42 @@ module SessionRoute =
           | GitHubPullHead (owner, repo, number) -> sprintf "github/repos/%s/%s/pulls/%s" owner repo number
           | Queries -> "queries")
 
+    /// A route as its SHAPE: `relative` with a name where each value goes, so every request
+    /// for an event range is the one `events/{first}-{last}`. What telemetry names a request
+    /// by, because a name that carried the values would be a new one for every request.
+    let pattern (route: SessionRoute) : string =
+        match route with
+        | Shell
+        | ServiceWorker
+        | Manifest
+        | Icon
+        | Favicon
+        | Signal
+        | Me
+        | Login
+        | Callback
+        | EventsAfter None
+        | EventsAhead None
+        | Claude _
+        | GitHub _
+        | GitHubRepos
+        | Queries ->
+            let (RelativeUrl path) = relative route
+            path
+        | Asset _ -> assetsPrefix + "{build}/{path}"
+        | EventsAfter (Some _) -> "events/after/{after}"
+        | Events _ -> "events/{first}-{last}"
+        | EventsAhead (Some _) -> "events/ahead/{after}"
+        | TerminalTranscriptAfter (_, None) -> "terminals/{terminal}"
+        | TerminalTranscriptAfter (_, Some _) -> "terminals/{terminal}/after/{after}"
+        | TerminalTranscriptRange _ -> "terminals/{terminal}/{first}-{last}"
+        | TerminalKeyframe _ -> "terminals/{terminal}/keyframes/{seq}"
+        | Content _
+        | ContentUpload _ -> contentPrefix + "{path}"
+        | StagedUpload _ -> "staged/{upload}"
+        | GitHubBranches _ -> "github/repos/{owner}/{repo}/branches"
+        | GitHubPullHead _ -> "github/repos/{owner}/{repo}/pulls/{number}"
+
     /// A route as an absolute URL under a session's address — what a client outside a
     /// browser needs, having no document base to resolve against. The single `/` between
     /// the two halves lives here, so no caller writes a leading slash of its own.

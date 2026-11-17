@@ -258,12 +258,20 @@ type SpanStatus =
 /// A span in flight. Ended exactly once; its status is set before that, never after.
 type [<AllowNullLiteral>] Span =
     abstract setStatus: status: SpanStatus -> unit
+    /// Add attributes learned while the span ran. Call before `end`.
+    abstract setAttributes: attributes: Attributes -> unit
     abstract ``end``: unit -> unit
 
-/// What `Tracer.startSpan` takes: the attributes the span starts with.
+/// Which side of a remote call a span is (`SpanKind` in the data model). Only the API's
+/// own enum hands these out (`spanKindServer`); a span started without one is internal.
+[<Erase>]
+type SpanKind = private SpanKind of int
+
+/// What `Tracer.startSpan` takes: the attributes the span starts with, and its kind.
 [<AllowNullLiteral>]
 type SpanOptions =
     abstract attributes : Attributes with get, set
+    abstract kind : SpanKind with get, set
 
 /// The propagation context a span is started under: whatever is active, which the
 /// async context manager carries across every await.
@@ -289,6 +297,7 @@ type [<AllowNullLiteral>] SpanContext =
 /// repository reads back; the rest stays undeclared.
 type [<AllowNullLiteral>] ReadableSpan =
     abstract name: string
+    abstract kind: SpanKind
     abstract attributes: Attributes
     abstract spanContext: unit -> SpanContext
     abstract parentSpanContext: SpanContext option
@@ -352,6 +361,9 @@ type private TraceApi =
 type private SpanStatusCodes =
     abstract ERROR : SpanStatusCode
 
+type private SpanKinds =
+    abstract SERVER : SpanKind
+
 [<Import("TracerProvider", "@opentelemetry/sdk-trace")>]
 let private tracerProviderClass : TracerProviderClass = jsNative
 [<Import("BatchSpanProcessor", "@opentelemetry/sdk-trace")>]
@@ -373,6 +385,12 @@ let private traceApi : TraceApi = jsNative
 [<Import("SpanStatusCode", "@opentelemetry/api")>]
 let private spanStatusCodes : SpanStatusCodes = jsNative
 
+[<Import("SpanKind", "@opentelemetry/api")>]
+let private spanKinds : SpanKinds = jsNative
+
+/// The kind of a span that covers a request this process answered.
+let spanKindServer : SpanKind = spanKinds.SERVER
+
 /// The status a span that failed ends with.
 let spanStatusError : SpanStatusCode = spanStatusCodes.ERROR
 
@@ -393,6 +411,15 @@ let tracerProvider (resource: Resource) (processors: SpanProcessor list) : Trace
 /// Start a span under the active context, with its first attributes.
 let startSpan (tracer: Tracer) (name: string) (attributes: Attributes) : Span =
     tracer.startSpan (name, jsOptions<SpanOptions> (fun o -> o.attributes <- attributes), contextApi.active ())
+
+/// Start a span for a request this process answers, under the active context.
+let startServerSpan (tracer: Tracer) (name: string) (attributes: Attributes) : Span =
+    tracer.startSpan (
+        name,
+        jsOptions<SpanOptions> (fun o ->
+            o.attributes <- attributes
+            o.kind <- spanKinds.SERVER),
+        contextApi.active ())
 
 /// Run `fn` with `span` as the active span — the parent of every span started inside.
 let withSpan (span: Span) (fn: unit -> 'T) : 'T =

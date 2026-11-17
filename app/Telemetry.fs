@@ -36,7 +36,9 @@ module Yession.Host.Telemetry
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Yession.Domain
+open Yession.App
 open Yession.Domain.Agent
 
 /// The binding layer (module `Fable.OpenTelemetry`), qualified for clarity in app code.
@@ -117,6 +119,41 @@ let spanResult
     (work: Async<Result<'a, string>>)
     : Async<Result<'a, string>> =
     spanWith (function Error reason -> Some reason | Ok _ -> None) tracer name attributes work
+
+/// Time one request a session's HTTP server answers, as one server span: it starts now and
+/// ends when the response is over, however that came about. Named by the route's shape
+/// (`SessionRoute.pattern`) and never by its path, so the names are as few as the routes;
+/// the mount is left out for the same reason, because it carries the session's id. A request
+/// for nothing the session serves is named by its method alone.
+///
+/// Attach it with the server's `onRequestFirst`. It answers nothing and reads no body, so
+/// the server's own handler sees the request exactly as it would without it.
+let traceRequest (tracer: Tracer) (mount: string) (req: IncomingMessage) (res: ServerResponse) : unit =
+    match tracer with
+    | Tracer.Off -> ()
+    | Tracer.On sdk ->
+        let route =
+            SessionRoute.parseUnder mount req.``method`` (Interop.pathnameOf req.url)
+            |> Option.map (fun route -> "/" + SessionRoute.pattern route)
+        let span =
+            OpenTelemetry.startServerSpan
+                sdk
+                (match route with
+                 | Some route -> req.``method`` + " " + route
+                 | None -> req.``method``)
+                (OpenTelemetry.Attributes.ofList [
+                    "http.request.method", AttributeValue.String req.``method``
+                    match route with
+                    | Some route -> "http.route", AttributeValue.String route
+                    | None -> () ])
+        res.onceClosed (fun () ->
+            let status = res.statusCode
+            span.setAttributes (
+                OpenTelemetry.Attributes.ofList [ "http.response.status_code", AttributeValue.Int status ])
+            // The convention's rule for a server: only its own failures fail the span. A 4xx
+            // is the caller's, and a 401 here is how a browser learns to sign in.
+            if status >= 500 then OpenTelemetry.failSpan span (sprintf "HTTP %d" status)
+            span.``end`` ())
 
 /// A duration this repository records, as a histogram in seconds. Closed, so the set of
 /// metric names and their attribute values is this type: a case carries only what has a few

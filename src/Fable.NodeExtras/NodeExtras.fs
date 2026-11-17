@@ -1828,6 +1828,14 @@ type ServerResponse =
     /// response or has to close it.
     abstract headersSent : bool
 
+    /// The status this response answers with: what `writeHead` was given, and 200 before
+    /// that. What something that watches a response reads once it is over.
+    abstract statusCode : int
+
+    /// The response is over, once: finished, or its connection gone before it could be.
+    [<Emit("$0.once('close', $1)")>]
+    abstract onceClosed : handler: (unit -> unit) -> unit
+
 [<AutoOpen>]
 module ResponseHeads =
 
@@ -2139,6 +2147,11 @@ type HttpServer =
     /// for it first and fails with a sentence instead.
     [<Emit("$0.once('error', $1)")>]
     abstract onceError : handler: (StreamError -> unit) -> unit
+
+    /// Hear every request BEFORE the server's own handler does, without answering it. What
+    /// something that times a request attaches, so its clock starts ahead of the work.
+    [<Emit("$0.prependListener('request', $1)")>]
+    abstract onRequestFirst : handler: System.Func<IncomingMessage, ServerResponse, unit> -> unit
 
     /// Stop accepting connections, and call back once every open one has ended. Node hands the
     /// callback an `Error` when the server was not listening and nothing when it closed, which
