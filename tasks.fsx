@@ -2911,9 +2911,10 @@ let benchPublish (label: string) =
 // Run a command capturing stdout AND its exit code. Everywhere else in this file a non-zero
 // exit is a build failure; here one of the two runs is SUPPOSED to fail, and what it printed
 // while failing is the thing being checked.
-let private runCapturing (command: string) (arguments: string list) : int * string =
+let private runCapturing (command: string) (arguments: string list) (env: (string * string) list) : int * string =
     let psi = ProcessStartInfo (command)
     arguments |> List.iter psi.ArgumentList.Add
+    env |> List.iter (fun (name, value) -> psi.Environment.[name] <- value)
     psi.WorkingDirectory <- repoRoot
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
@@ -3156,6 +3157,14 @@ let private analyze (projects: string list) : Verdict * string =
                   repoRoot
                   "--report"
                   report ]
+                // THE ANALYZER CLI'S HEAP IS CAPPED. Left alone, the GC let it grow to about 10 GB
+                // before collecting, while what it keeps alive is 2-3 GB: on a 4-core, 15 GB box
+                // (Nov 2026), the solution run peaked at 10.5 GB uncapped, 5.4 GB at a 5 GiB cap
+                // (310s against 335s), 3.4 GB at 3 GiB (376s), and died at 2 GiB. Whole `lint`
+                // went from a 10.0-11.0 GB peak to 5.9 GB. 5 GiB keeps twice the floor as
+                // headroom. A run that outgrows it dies without a report, which `analyze`
+                // answers as `Unfinished`, not as a finding; raise the cap then.
+                [ "DOTNET_GCHeapHardLimit", "0x140000000" ]
 
         let verdict =
             // A death the CLI lives long enough to NAME. Read first because it says more than
