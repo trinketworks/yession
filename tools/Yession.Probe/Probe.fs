@@ -160,9 +160,15 @@ let private keep (response: Fetch.Types.Response) =
         | -1 -> ()
         | at -> jar.[pair.Substring (0, at)] <- pair.Substring (at + 1)
 
+/// Every address a bounce went through, newest last. The Manager's `/open` names the session
+/// in its redirect, not in a page: it sends the browser straight to the session's own sign-in,
+/// and the session's page links itself relatively (`<base href>`). So the address a caller
+/// wants is a hop, and `get` keeps the hops for `run` to read.
+let private hops = ResizeArray<string> ()
+
 /// Follow redirects by hand, so the jar rides every hop. `fetch` on its own would follow them
 /// and drop the cookies the bounce depends on.
-let rec private get (url: string) (hops: int) : JS.Promise<string> =
+let rec private get (url: string) (hops': int) : JS.Promise<string> =
     promise {
         let! response = Fetch.fetchUnsafe url (request (cookie ()))
         keep response
@@ -170,8 +176,10 @@ let rec private get (url: string) (hops: int) : JS.Promise<string> =
         // this replaced: a 3xx that names nowhere to go is a response to READ, not a hop to
         // follow, where resolving a missing header gave a plausible address to fetch again.
         match response.Status, response.Headers.Location with
-        | status, Some location when status >= 300 && status < 400 && hops > 0 ->
-            return! get (Urls.resolve location url) (hops - 1)
+        | status, Some location when status >= 300 && status < 400 && hops' > 0 ->
+            let next = Urls.resolve location url
+            hops.Add next
+            return! get next (hops' - 1)
         | _ -> return! response.text ()
     }
 
@@ -256,8 +264,14 @@ let private run () =
             attempts <- attempts + 1
             try
                 let! _ = Fetch.fetchUnsafe (ManagerRoute.at manager ManagerRoute.CreateSession) (post (cookie ()) [ "id", id ])
+                hops.Clear ()
                 let! opened = get (ManagerRoute.at manager (ManagerRoute.OpenSession sessionId)) 10
-                session <- firstMatch sessionAddress opened
+                // The hops first: `/open` redirects to the session's sign-in, and the session
+                // address is that hop's prefix. The page is what an older Manager put it in.
+                session <-
+                    hops
+                    |> Seq.tryPick (firstMatch sessionAddress)
+                    |> Option.orElse (firstMatch sessionAddress opened)
             with _ -> ()
             if session.IsNone then do! delay 2000
         let session =
