@@ -542,6 +542,33 @@ let private histogramsOf (exports: ResourceMetrics array) : (string * string * (
                 [ for point in metric.dataPoints ->
                     Attributes.toJson point.attributes, point.value.count, defaultArg point.value.sum 0.0 ] ]
 
+let private slotTests =
+    testList "metric slots (app/Telemetry.fs)" [
+        testCase "the first session takes slot 0" <| fun () ->
+            Expect.equal (Telemetry.MetricSlot.lowestFree Set.empty) 0 "nobody holds one"
+
+        testCase "a slot a session gave up is the next one taken" <| fun () ->
+            Expect.equal (Telemetry.MetricSlot.lowestFree (Set.ofList [ 0; 2; 3 ])) 1 "the lowest nobody holds"
+
+        testCase "with every slot below it held, the next is one more" <| fun () ->
+            Expect.equal (Telemetry.MetricSlot.lowestFree (Set.ofList [ 0; 1; 2 ])) 3 "as many slots as sessions alive at once"
+
+        testCase "a session given a slot records its metrics as that slot, and names no session" <| fun () ->
+            Expect.equal
+                (Telemetry.MetricSlot.identity (
+                    Map.ofList
+                        [ "service.name", "yession-session"
+                          "service.instance.id", "swift-heron-41"
+                          "yession.session.id", "swift-heron-41"
+                          "yession.session.slot", "2" ]))
+                (Map.ofList [ "service.name", "yession-session"; "service.instance.id", "slot-2" ])
+                "the id is in neither attribute that carried it"
+
+        testCase "a session given no slot records its metrics as itself" <| fun () ->
+            let own = Map.ofList [ "service.name", "yession-session"; "service.instance.id", "swift-heron-41" ]
+            Expect.equal (Telemetry.MetricSlot.identity own) own "one process with no Manager is one set of series"
+    ]
+
 let private timingTests =
     testList "timings (app/Telemetry.fs)" [
         testCaseAsync "launches are one histogram in seconds, a series for each outcome" <|
@@ -720,4 +747,4 @@ let private shutdownTests =
     ]
 
 let tests =
-    testList "Telemetry" [ bindingTests; emitterTests; forwardingTests; auditTests; spanTests; timingTests; shutdownTests ]
+    testList "Telemetry" [ bindingTests; emitterTests; forwardingTests; auditTests; spanTests; slotTests; timingTests; shutdownTests ]

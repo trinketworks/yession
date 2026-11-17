@@ -2945,6 +2945,48 @@ let private telemetryTests =
                 Expect.isTrue (body.Contains "\"load\"" && body.Contains "\"start\"") "as the load and the start"
             }
 
+        // Three sessions, never more than two alive at once: the third takes the slot the
+        // first gave up. Every metric they sent is under one of two slots, whichever
+        // session sent it, and none names a session.
+        testCaseAsync "sessions' metrics are told apart by as many slots as were alive at once, and name no session" <|
+            async {
+                let dataDir =
+                    sprintf "tests/Yession.Tests/out/.data/tel-slot-%d" (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+                let! stub = OtlpStub.start ()
+                let! pm =
+                    ProcessManager.create
+                        { ProcessManager.Options.defaults dataDir nodePath [ "app/SessionMain.js" ] with
+                            Strategy = Some Strategy.localhost }
+                let launch (id: string) =
+                    async {
+                        let record = pm.CreateSession id id |> expect
+                        let! launched =
+                            Support.withEnv
+                                [ "OTEL_METRICS_EXPORTER", Some "otlp"
+                                  "OTEL_EXPORTER_OTLP_ENDPOINT", Some stub.Url ]
+                                (fun () -> pm.Launch record.SessionId)
+                        launched |> expect |> ignore
+                        return record.SessionId
+                    }
+                let! first = launch "tel-slot-a"
+                let! _ = launch "tel-slot-b"
+                let! stopped = pm.Stop first
+                stopped |> expect
+                let! _ = launch "tel-slot-c"
+                do! pm.StopAll ()
+                stub.Close ()
+
+                let metrics =
+                    stub.Posted ()
+                    |> List.filter (fun (path, body) -> path.EndsWith "/v1/metrics" && body.Contains "yession-session")
+                    |> List.map snd
+                let slots =
+                    [ for slot in 0 .. 3 do
+                        if metrics |> List.exists (fun body -> body.Contains (sprintf "\"slot-%d\"" slot)) then slot ]
+                let named = metrics |> List.exists (fun body -> body.Contains "tel-slot-")
+                Expect.equal (List.length metrics, slots, named) (3, [ 0; 1 ], false) "one export from each session's stop"
+            }
+
         // The spans themselves are pinned over an in-memory exporter (`TelemetryE2E`). What
         // only a real session process can show is that its server is the one being heard.
         testCaseAsync "a request a real session answers reaches the collector as a span" <|
