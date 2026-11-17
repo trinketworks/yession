@@ -390,17 +390,13 @@ let
     installPhase = ''
       runHook preInstall
       mkdir -p "$out/bin" "$out/libexec"
-      cp -r --no-preserve=mode,ownership ${staged}/dist-npm "$out/libexec/yession"
-      cp -r --no-preserve=mode,ownership ${staged}/node_modules "$out/libexec/yession/node_modules"
-
-      # `--no-preserve=mode` above is what makes the copy writable for the wrapper phase, and
-      # it also strips the execute bit off every file — including node-pty's `spawn-helper`,
-      # the one program in the tree that has to RUN. On macOS node-pty forks the shell through
-      # it, and a helper it cannot execute fails as `posix_spawnp failed.`: every terminal on
-      # the host then silently fell back to a process per block, with no persistent shell,
-      # no `cd` carrying between commands, and nothing to type into. Deployed that way for
-      # weeks; the check below is what would have said so.
-      find "$out/libexec/yession/node_modules" -name spawn-helper -type f -exec chmod 755 {} +
+      # The tree keeps the mode of each file, and only gets the write bit for the wrapper phase.
+      # `--no-preserve=mode` would remove the execute bit from each file, and the tree holds
+      # programs that must run: node-pty's `spawn-helper`, and srt's `apply-seccomp`, which runs
+      # each command of a Linux sandbox. The install check below compares the two trees.
+      cp -r ${staged}/dist-npm "$out/libexec/yession"
+      cp -r ${staged}/node_modules "$out/libexec/yession/node_modules"
+      chmod -R u+w "$out/libexec/yession"
 
       mkdir -p "$out/libexec/yession/node_modules/node-datachannel/build/Release"
       cp ${node-datachannel}/build/Release/node_datachannel.node \
@@ -466,6 +462,17 @@ let
       runHook preInstallCheck
       export HOME="$TMPDIR/home"
       mkdir -p "$HOME"
+
+      # Each file that the staged tree can run, the package can run too. The list must not be
+      # empty, because the loop passes an empty list with no comparison.
+      (cd ${staged}/node_modules && find . -type f -perm -u+x) > programs.txt
+      test -s programs.txt || { echo "the staged node_modules holds no program to compare"; exit 1; }
+      while read -r program; do
+        test -x "$out/libexec/yession/node_modules/$program" \
+          || { echo "$program runs in the staged node_modules, but not in the package"; exit 1; }
+      done < programs.txt
+      echo "smoke: the package keeps the execute bit of $(wc -l < programs.txt) programs"
+      rm programs.txt
 
       # Every bin answers `--version` — the product gives one to each of them from a single
       # boundary (`Cli.fs`), so this asks its own contract rather than an affordance invented
