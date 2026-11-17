@@ -58,7 +58,7 @@ module Chromium =
     let private ended (child: ChildProcess) : bool =
         ChildProcesses.exitCode child |> Option.isSome
         || ChildProcesses.signalCode child |> Option.isSome
-        || isNull (box child.pid)
+        || ChildProcesses.pid child |> Option.isNone
 
     /// Stop the browser at once and remove its profile, without waiting for it to end: for the
     /// `exit` listener `launch` hangs, which runs in a process that is already leaving and can

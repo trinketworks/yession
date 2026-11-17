@@ -155,7 +155,7 @@ let private announcedPair () : Async<ChildProcess * string * string> =
                 (fun () ->
                     if not settled then
                         settled <- true
-                        child.kill ()
+                        ChildProcesses.signal child "SIGTERM" |> ignore
                         econt (exn (sprintf "socat did not announce two PTYs in time; it said: %s" (said.ToString ()))))
                 10000
 
@@ -224,7 +224,7 @@ let private startPair () : Async<Pair> =
             with _ ->
                 ()
 
-            child.kill ()
+            ChildProcesses.signal child "SIGTERM" |> ignore
 
         return
             { Ours = ours

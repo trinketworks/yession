@@ -314,7 +314,7 @@ let portsTests =
         testCaseAsync "a signal for a pid that no process has answers ESRCH" <| async {
             let child = standIn (StandIn.Exit 0) bare
             let! _ = until (fun () -> (exitCode child).IsSome)
-            Expect.equal (Processes.tryProbe (int child.pid)) (Some "ESRCH") "the child ended, and Node collected it"
+            Expect.equal (pid child |> Option.map Processes.tryProbe) (Some (Some "ESRCH")) "the child ended, and Node collected it"
         }
 
         testCase "a process that runs is alive" <| fun () ->
@@ -323,7 +323,7 @@ let portsTests =
         testCaseAsync "a process that ended is not alive" <| async {
             let child = standIn (StandIn.Exit 0) bare
             let! _ = until (fun () -> (exitCode child).IsSome)
-            Expect.isFalse (Processes.isAlive (int child.pid)) "the child ended, and Node collected it"
+            Expect.equal (pid child |> Option.map Processes.isAlive) (Some false) "the child ended, and Node collected it"
         }
 
         testCase "the process that started this one has a pid" <| fun () ->
@@ -455,7 +455,7 @@ let portsTests =
         // `killed` says a signal was SENT, which is why it is true before the child is gone.
         testCaseAsync "a child is killed from the moment it is signalled" <| async {
             let child = standIn StandIn.Linger bare
-            child.kill "SIGKILL"
+            ChildProcesses.signal child "SIGKILL" |> ignore
             let signalled = killed child
             let! _ = until (fun () -> (signalCode child).IsSome)
             Expect.isTrue signalled "the child reports the signal was sent"
@@ -465,7 +465,7 @@ let portsTests =
         // a caller reading only `exitCode` cannot tell it from one still running.
         testCaseAsync "a child a signal ended reports the signal rather than a code" <| async {
             let child = standIn StandIn.Linger bare
-            child.kill "SIGKILL"
+            pid child |> Option.iter (fun number -> Processes.kill number "SIGKILL")
             let! _ = until (fun () -> (signalCode child).IsSome)
             Expect.equal (signalCode child) (Some "SIGKILL") "the signal that ended it"
         }

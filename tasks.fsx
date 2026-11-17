@@ -3035,7 +3035,8 @@ let private fixtures =
       "YES018", "Yession.EmDashFixture", [ "Copy.fs" ]
       "YES018", "EmDashInBindingFixture", [ "Binding.fs" ]
       "YES019", "SyncLoopFixture", [ "Loops.fs" ]
-      "YES020", "TemplateHolePositionFixture", [ "Positions.fs" ] ]
+      "YES020", "TemplateHolePositionFixture", [ "Positions.fs" ]
+      "YES021", "SignalFixture", [ "Signals.fs" ] ]
 
 let private fixtureProject name =
     Path.Combine ("analyzers", "fixtures", name, name + ".fsproj")

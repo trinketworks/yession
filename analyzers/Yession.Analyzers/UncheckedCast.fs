@@ -113,9 +113,6 @@ let private writtenDowncasts (input: ParsedInput) =
     ASTCollecting.walkAst collector input
     Set.ofSeq found
 
-let private sameFile (a: string) (b: string) =
-    try Path.GetFullPath a = Path.GetFullPath b with _ -> false
-
 let private eventMessage (project: string) =
     "this downcast asserts what an event is, or what it reached, and checks nothing: under Fable "
     + "it compiles to the value itself, so a listener handed another event, or an event that "
