@@ -845,6 +845,11 @@ module UserTiming =
     [<Emit("performance.measure($0, { start: $1, end: $2 })")>]
     let measure (name: string) (start: float) (finish: float) : unit = jsNative
 
+    /// When the first byte of this document arrived, as the browser timed the navigation;
+    /// nothing where the browser keeps no entry for it.
+    [<Emit("(function () { const entry = performance.getEntriesByType('navigation')[0]; return entry ? entry.responseStart : undefined })()")>]
+    let responseStart () : float option = jsNative
+
     /// The name of every mark whose name begins with `prefix`, in the order they stand on
     /// the timeline.
     [<Emit("performance.getEntriesByType('mark').filter(function (entry) { return entry.name.startsWith($0) }).map(function (entry) { return entry.name })")>]
@@ -853,3 +858,12 @@ module UserTiming =
     /// The name of every measure on the timeline.
     [<Emit("performance.getEntriesByType('measure').map(function (entry) { return entry.name })")>]
     let measures () : string array = jsNative
+
+/// A last word to this page's own server, which the browser sends although the page may be
+/// on its way out (`navigator.sendBeacon`): a POST carrying the page's cookies, whose answer
+/// nobody reads.
+[<RequireQualifiedAccess>]
+module Beacon =
+    /// Queue `body` for `url`. False where the browser would not take it.
+    [<Emit("navigator.sendBeacon($0, $1)")>]
+    let send (url: string) (body: string) : bool = jsNative

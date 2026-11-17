@@ -325,6 +325,12 @@ address it received, and takes where an answer starts from what it ASKED: the an
 `after n` starts at `n + 1`. `TranscriptCache` in `src/Yession.App/Client.fs` says why
 transcripts depend on that server contract, which has a test of its own.
 
+One write, which is not the session's API either: a page tells its session how its own
+opening went (`POST opened`, an `OpenReport`), once. It goes over HTTP because the opening
+most worth hearing of is one whose data channel never opened. The session records it as
+telemetry and nothing else: no event is written and nothing is answered but that it was
+heard.
+
 The history feed is therefore a second leg that can fail independently, and the design treats
 it as one:
 
@@ -657,8 +663,9 @@ Update this list before a change that breaks a rule, in the same PR, and say why
 2. Ylmish is the encoding/sync boundary.
 3. Yjs is not the domain model.
 4. WebRTC is the session transport.
-5. HTTP is bootstrap/signalling only. [§2.3](#23-transport) names its one read-only exception,
-   the history by cursor.
+5. HTTP is bootstrap/signalling only. [§2.3](#23-transport) names its two exceptions: the
+   history by cursor, which is read-only, and a page's report of its own opening, which
+   writes nothing but telemetry.
 6. The Session is the only event writer.
 7. Clients consume events read-only by offset.
 8. Drafts are collaborative state.

@@ -1460,16 +1460,22 @@ After the fixes land, one pass rewrites it to what still reproduces.
   they reach each child). The Manager also emits `yession.*` **audit records** for the
   secrets/ABAC surface (`Audit` in `app/SecretStore.fs` and Plan 06 § Telemetry list them), each
   one greppable stdout line. Missing:
-  - **any duration but these five.** The metrics signal records five histograms (`Timing`
+  - **any duration but these six.** The metrics signal records six histograms (`Timing`
     in `app/Telemetry.fs`): `yession.session.launch.duration` from the Manager, and from
     each session `yession.session.boot.duration` in its two parts,
-    `yession.agent.turn.first_output.duration`, `yession.agent.turn.duration` and
-    `yession.sandbox.start.duration`. Nothing else is timed: not a tool call, a command in
-    a sandbox, or a page a browser opens. Spans exist on the path that adds a repo, and
-    one per request a session's HTTP server answers (`Telemetry.traceRequest`): the
-    Manager's requests have none. A page writes the moments of its opening on the
-    browser's own timeline (`OpenTimings`, read in the Performance panel), and reports
-    them to nobody: no collector sees what a person waited through.
+    `yession.agent.turn.first_output.duration`, `yession.agent.turn.duration`,
+    `yession.sandbox.start.duration` and `yession.client.open.duration`, a page's opening
+    as the page timed it (`OpenTimings`) and told its session, a series for each moment.
+    Nothing else is timed: not a tool call or a command in a sandbox. Spans exist on the
+    path that adds a repo, one per request a session's HTTP server answers
+    (`Telemetry.traceRequest`), and one trace per page's opening: the Manager's requests
+    have none.
+  - **the parts of an opening no page of the session sees.** A page's report starts at
+    its own navigation. The Manager's opening screen before it, the launch it waits on,
+    and each sign-in redirect are behind the document's first byte (`responded`) as one
+    number. An opening that never reaches a signed-in page reports nothing, and nothing
+    throttles the reports of one that does. A report's trace is not joined to the spans
+    of the requests it made.
   - **an aggregate across sessions without a collector's help.** Each session is its own
     OTel resource (`service.instance.id` is the session's id), so each one's histograms are
     their own series. A backend that keeps resource attributes as labels gets a new set of

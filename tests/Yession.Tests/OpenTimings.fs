@@ -59,6 +59,51 @@ let tests =
             let _, news = OpenTimings.step first 480.0 [ OpenMark.Booted; OpenMark.Accepted ]
             Expect.equal news [ OpenMark.Accepted, 480.0 ] "what the page writes on its timeline, once"
 
+        testCase "an opening is over once the timeline is shown and the log is read through" <| fun () ->
+            let shown, _ = OpenTimings.step OpenTimings.empty 300.0 [ OpenMark.Shown ]
+            let both, _ = OpenTimings.step shown 900.0 [ OpenMark.ReadThrough ]
+            Expect.equal
+                (OpenTimings.complete OpenTimings.empty, OpenTimings.complete shown, OpenTimings.complete both)
+                (false, false, true)
+                "a kept copy on the screen is not the whole of it"
+
+        testCase "a page that has reached nothing has nothing to report" <| fun () ->
+            Expect.equal (OpenTimings.report OpenTimings.empty 50.0) None "no moment, no report"
+
+        testCase "a report reads back as it was written" <| fun () ->
+            let report =
+                { Marks = [ OpenMark.Responded, 41.5; OpenMark.Booted, 320.0; OpenMark.Shown, 900.25 ]
+                  SentAt = 901.0 }
+            Expect.equal (OpenReport.toJson report |> OpenReport.ofJson) (Ok report) "every moment, at its time"
+
+        testCase "a moment this build does not know is refused" <| fun () ->
+            Expect.isError
+                (OpenReport.ofJson """{"marks":[{"mark":"teleported","at":1}],"sentAt":2}""")
+                "the set of names is closed"
+
+        testCase "a moment reported twice is refused" <| fun () ->
+            Expect.isError
+                (OpenReport.ofJson """{"marks":[{"mark":"booted","at":1},{"mark":"booted","at":2}],"sentAt":3}""")
+                "a moment is reached once"
+
+        testCase "a moment later than the report itself is refused" <| fun () ->
+            Expect.isError
+                (OpenReport.ofJson """{"marks":[{"mark":"booted","at":9}],"sentAt":3}""")
+                "nothing is reached after it is told of"
+
+        testCase "a moment before the navigation is refused" <| fun () ->
+            Expect.isError
+                (OpenReport.ofJson """{"marks":[{"mark":"booted","at":-1}],"sentAt":3}""")
+                "the navigation is where the count starts"
+
+        testCase "a report sent hours into an opening is refused" <| fun () ->
+            Expect.isError
+                (OpenReport.ofJson (sprintf """{"marks":[{"mark":"booted","at":1}],"sentAt":%f}""" (OpenReport.longestMs + 1.0)))
+                "that is a fault, not a duration"
+
+        testCase "a report of no moment is refused" <| fun () ->
+            Expect.isError (OpenReport.ofJson """{"marks":[],"sentAt":3}""") "there is nothing in it to record"
+
         testCase "every moment has a name of its own" <| fun () ->
             let names = OpenMark.all |> List.map OpenMark.name
             Expect.equal (List.distinct names) names "two moments under one name would be one mark on the timeline"

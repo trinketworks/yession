@@ -188,6 +188,9 @@ type Timing =
     /// the log the same way (`SandboxTimings`). `backend` is one of the few a session can
     /// host, never a sandbox's name.
     | SandboxStart of backend: string * started: bool
+    /// From the navigation that opened a session's page to one moment of its opening, as
+    /// the page timed it and told the session (`OpenReport`).
+    | ClientOpen of OpenMark
 
 module Timing =
     /// The metric's name. Ours, under `yession.`: the conventions name no such duration.
@@ -198,6 +201,7 @@ module Timing =
         | Timing.TurnFirstOutput -> "yession.agent.turn.first_output.duration"
         | Timing.Turn _ -> "yession.agent.turn.duration"
         | Timing.SandboxStart _ -> "yession.sandbox.start.duration"
+        | Timing.ClientOpen _ -> "yession.client.open.duration"
 
     let description (timing: Timing) : string =
         match timing with
@@ -207,6 +211,8 @@ module Timing =
             "From an agent turn starting to the first thing it does that a person sees: a word, a thought or a tool call."
         | Timing.Turn _ -> "From an agent turn starting to the event that ends it."
         | Timing.SandboxStart _ -> "From a work sandbox beginning to come up to its being up, or failing to."
+        | Timing.ClientOpen _ ->
+            "From the navigation that opened a session's page to one moment of its opening, as the page timed it."
 
     let attributes (timing: Timing) : (string * AttributeValue) list =
         match timing with
@@ -230,6 +236,7 @@ module Timing =
         | Timing.SandboxStart (backend, started) ->
             [ "yession.sandbox.backend", AttributeValue.String backend
               "yession.sandbox.start.outcome", AttributeValue.String (if started then "started" else "failed") ]
+        | Timing.ClientOpen mark -> [ "yession.client.open.mark", AttributeValue.String (OpenMark.name mark) ]
 
     /// A turn's timing as the metric it is recorded under, and how long it was.
     let ofTurn (timing: TurnTiming) : Timing * System.TimeSpan =
@@ -249,6 +256,10 @@ module Timing =
         // pulls an image or assembles a toolchain first.
         | Timing.SandboxStart _ ->
             [ 0.1; 0.25; 0.5; 1.0; 2.0; 5.0; 10.0; 20.0; 30.0; 60.0; 120.0; 300.0; 600.0; 1200.0 ]
+        // A page that kept its session shows it in a few tens of milliseconds, and one
+        // that signs in and reads a long log takes seconds.
+        | Timing.ClientOpen _ ->
+            [ 0.05; 0.1; 0.25; 0.5; 0.75; 1.0; 1.5; 2.0; 3.0; 5.0; 7.5; 10.0; 15.0; 30.0; 60.0 ]
         | Timing.SessionLaunch _
         | Timing.SessionBoot _
         | Timing.TurnFirstOutput ->
@@ -283,6 +294,77 @@ type Emitter =
       Time : Timing -> System.TimeSpan -> unit
       Tracer : Tracer
       Shutdown : unit -> JS.Promise<unit> }
+
+/// Record a page's opening as the page reported it, received at `receivedAt`: each moment
+/// as a duration from the navigation, and the whole as one trace, a span from the navigation
+/// to the last moment and under it a span for each stretch between two moments, named by the
+/// moment it ends at.
+///
+/// The page sent only how long ago each thing was by its own count, so the navigation is
+/// placed at `receivedAt` less the report's age: no clock of the page's is believed, and
+/// the time the report spent on the wire is the error.
+let recordOpening (emitter: Emitter) (receivedAt: System.DateTimeOffset) (report: OpenReport) : unit =
+    for mark, at in report.Marks do
+        emitter.Time (Timing.ClientOpen mark) (System.TimeSpan.FromMilliseconds at)
+    match emitter.Tracer with
+    | Tracer.Off -> ()
+    | Tracer.On sdk ->
+        let navigation = float (receivedAt.ToUnixTimeMilliseconds ()) - report.SentAt
+        let inOrder = report.Marks |> List.sortBy snd
+        let last = inOrder |> List.map snd |> List.fold max 0.0
+        let none = OpenTelemetry.Attributes.ofList []
+        let whole = OpenTelemetry.startSpanAt sdk "yession.client.open" none navigation
+        OpenTelemetry.withSpan whole (fun () ->
+            inOrder
+            |> List.fold
+                (fun (from: float) (mark, at) ->
+                    let stretch = OpenTelemetry.startSpanAt sdk (OpenMark.name mark) none (navigation + from)
+                    stretch.endAt (navigation + at)
+                    at)
+                0.0
+            |> ignore)
+        whole.endAt (navigation + last)
+
+/// The route a page reports its opening to (`SessionRoute.OpenReported`), for the session's extra
+/// routes. A page that is signed in may say it, once it has something to say; with no
+/// sign-in configured, as on a session nobody fronts, any page may. The answer says only
+/// that it was heard: 204, or why not.
+let openReports
+    (now: unit -> System.DateTimeOffset)
+    (emitter: Emitter)
+    (auth: SessionAuth.Auth option)
+    (mount: string)
+    : IncomingMessage -> ServerResponse -> bool =
+    fun req res ->
+        let answer (status: int) (body: string) =
+            res.writeHead (status, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
+            res.``end`` body
+        match SessionRoute.parseUnder mount req.``method`` (Interop.pathnameOf req.url) with
+        | Some OpenReported ->
+            let allowed =
+                match auth with
+                | Some auth -> auth.IsAuthenticated req
+                | None -> true
+            if not allowed then answer 401 "unauthorized"
+            else
+                // Read to its end whatever its size, and kept only while it could still be
+                // a report: a body past the limit is refused without being held.
+                let body = System.Text.StringBuilder ()
+                let mutable tooLarge = false
+                Readables.text req (fun chunk ->
+                    if body.Length + chunk.Length > OpenReport.largestBytes then tooLarge <- true
+                    elif not tooLarge then body.Append chunk |> ignore)
+                req.onEnd (fun () ->
+                    if tooLarge then answer 413 "too large"
+                    else
+                        match OpenReport.ofJson (body.ToString ()) with
+                        | Error _ -> answer 400 "not a report of an opening"
+                        | Ok report ->
+                            recordOpening emitter (now ()) report
+                            res.writeHead (204, [ ResponseHeader.CacheControl "no-store" ])
+                            res.``end`` "")
+            true
+        | _ -> false
 
 /// Telemetry off: every emit is a no-op, shutdown resolves immediately.
 let disabled : Emitter =
