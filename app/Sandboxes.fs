@@ -293,6 +293,14 @@ module SessionLayout =
           Workspace : string option
           /// The session's checkouts, reachable at this absolute path.
           SharedRepos : string option
+          /// The session's artifacts store, reachable at this absolute path, which a
+          /// `share_artifact` from this sandbox copies into.
+          ///
+          /// A write path of its own, as `SharedRepos` is, and for the same reason: the
+          /// DEFAULT sandbox's workspace contains it, a named one's does not, and seatbelt
+          /// refused a share out of a named sandbox at `mkdir` — "Operation not permitted" —
+          /// because nothing named the store as writable.
+          SharedArtifacts : string option
           /// The sandbox's own HOME, which it may write.
           Home : string option }
 
@@ -303,7 +311,11 @@ module SessionLayout =
     /// It still NAMES the sandbox, because a command running here is running in one: what
     /// this composition lacks is directories, not an identity.
     let nothing (sandbox: SandboxRef) : Contribution =
-        { Name = SandboxRef.name sandbox; Workspace = None; SharedRepos = None; Home = None }
+        { Name = SandboxRef.name sandbox
+          Workspace = None
+          SharedRepos = None
+          SharedArtifacts = None
+          Home = None }
 
     /// The contribution `backend` takes, for the sandbox `sandbox` names.
     ///
@@ -326,6 +338,7 @@ module SessionLayout =
             { Name = SandboxRef.name sandbox
               Workspace = Some (workspaceFor dataDir sandbox)
               SharedRepos = Some (reposDir dataDir)
+              SharedArtifacts = Some (artifactsDir dataDir)
               Home = Some (homeFor dataDir sandbox) }
         | DockerBackend -> nothing sandbox
 
@@ -470,7 +483,8 @@ let artifactsVisibleTo (backendOf: SandboxRef -> SandboxBackend) (hostArtifactsD
 /// The docker backend cannot share a host path by policy, so it rides the spec as a
 /// bind mount at the directory's own path (`checkoutAt`) — beside the named workspace
 /// volume, not replacing it.
-/// Host-family backends share it by write path instead (`SessionMain`'s `sharedRepos`).
+/// Host-family backends share both by write path instead (`SessionLayout.forSandbox`'s
+/// `SharedRepos` and `SharedArtifacts`, which `preparePolicy` writes into the policy).
 /// The runtime union makes this branch structural rather than incidental: only the
 /// docker arm can name a mount, because only it has a container to mount into.
 ///
@@ -825,6 +839,11 @@ let policyFor
     // checkout. The docker backend carries it as a bind mount on the spec instead
     // (`SessionMain`), so it is None there.
     (reposDir: string option)
+    // The session's artifacts store (`SessionLayout.artifactsDir`), which a share from this
+    // sandbox copies into. The repos directory's rule again: a write path in its own
+    // right under the host family, because only the DEFAULT sandbox's workspace contains
+    // it. The docker backend mounts it (`withSessionShares`), so it is None there.
+    (artifactsDir: string option)
     // This sandbox's own HOME (`SessionLayout.homeFor`), which it may write and which is
     // what `$HOME` says inside it. `None` only where the backend supplies its own — docker,
     // whose image has a home of its own that this process did not create.
@@ -1039,6 +1058,7 @@ let policyFor
           WritePaths =
             (workspace |> Option.toList)
             @ (reposDir |> Option.toList)
+            @ (artifactsDir |> Option.toList)
             @ (home |> Option.toList)
             @ grantedWrites
           // Every domain a sandbox may reach is one an operator named in a resource
@@ -1153,7 +1173,7 @@ let preparePolicy
                     return
                         policyFor
                             backend (limitsHere backend) (ambientEnv ()) resolved
-                            layout.Workspace layout.SharedRepos layout.Home
+                            layout.Workspace layout.SharedRepos layout.SharedArtifacts layout.Home
                             granted optional spec
                         |> Result.map (fun policy -> { policy with Derived = variables.Derived })
         }

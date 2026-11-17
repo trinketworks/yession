@@ -802,7 +802,7 @@ let backendTests =
         testCase "a granted Seatbelt rule reaches the policy of a seatbelt sandbox" <| fun () ->
             let policy =
                 Sandboxes.policyFor
-                    SeatbeltBackend (Sandboxes.limitsFor SeatbeltBackend mac) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    SeatbeltBackend (Sandboxes.limitsFor SeatbeltBackend mac) Map.empty Map.empty (Some "/ws") None None (Some "/ws/home")
                     [ Seatbelt (ruleAt 1); Seatbelt (ruleAt 0) ]
                     Set.empty
                     EnvironmentSpec.defaults
@@ -812,7 +812,7 @@ let backendTests =
         testCase "a Seatbelt rule that a sandbox needs refuses the sandbox under another backend" <| fun () ->
             match
                 Sandboxes.policyFor
-                    SrtBackend (Sandboxes.limitsFor SrtBackend mac) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    SrtBackend (Sandboxes.limitsFor SrtBackend mac) Map.empty Map.empty (Some "/ws") None None (Some "/ws/home")
                     [ Seatbelt (ruleAt 0) ]
                     Set.empty
                     EnvironmentSpec.defaults
@@ -823,7 +823,7 @@ let backendTests =
         testCase "a Seatbelt rule that a sandbox only wants is absent under another backend" <| fun () ->
             let policy =
                 Sandboxes.policyFor
-                    SrtBackend (Sandboxes.limitsFor SrtBackend mac) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
+                    SrtBackend (Sandboxes.limitsFor SrtBackend mac) Map.empty Map.empty (Some "/ws") None None (Some "/ws/home")
                     [ Seatbelt (ruleAt 0) ]
                     (Set.ofList [ Seatbelt (ruleAt 0) ])
                     EnvironmentSpec.defaults
