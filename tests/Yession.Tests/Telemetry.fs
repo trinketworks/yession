@@ -436,6 +436,30 @@ let private spanTests =
                     "the inner span hangs off the outer one"
             }
 
+        // The page sends how long ago each moment was, and no clock: the session places the
+        // navigation at the report's arrival less its age.
+        testCase "a page's opening is one trace: the whole, and under it each stretch between two moments" <| fun () ->
+            let exporter = inMemorySpanExporter ()
+            let received = System.DateTimeOffset.FromUnixTimeMilliseconds 1_800_000_010_000L
+            Telemetry.recordOpening
+                { Telemetry.disabled with Tracer = Telemetry.tracerTo exporter }
+                received
+                { Marks = [ Yession.App.OpenMark.Shown, 4000.0; Yession.App.OpenMark.Booted, 1000.0 ]; SentAt = 10_000.0 }
+            let spans = exporter.getFinishedSpans ()
+            let seconds (time: float array) = time.[0] - 1_800_000_000.0 + time.[1] / 1e9
+            let nameOf (id: string) =
+                spans |> Array.tryFind (fun s -> (s.spanContext ()).spanId = id) |> Option.map (fun s -> s.name)
+            Expect.equal
+                [ for span in spans ->
+                    span.name,
+                    (span.parentSpanContext |> Option.bind (fun parent -> nameOf parent.spanId)),
+                    seconds span.startTime,
+                    seconds span.endTime ]
+                [ "booted", Some "yession.client.open", 0.0, 1.0
+                  "shown", Some "yession.client.open", 1.0, 4.0
+                  "yession.client.open", None, 0.0, 4.0 ]
+                "from the navigation, ten seconds before the report arrived"
+
         testCaseAsync "an Error outcome marks its span failed, and the answer is untouched" <|
             async {
                 let exporter = inMemorySpanExporter ()
@@ -553,6 +577,24 @@ let private timingTests =
                       [ """{"yession.session.boot.phase":"load"}""", 1, 0.5
                         """{"yession.session.boot.phase":"start"}""", 1, 0.25 ] ]
                     "the load and the start, in seconds"
+            }
+
+        testCaseAsync "a page's opening is one histogram, a series for each moment" <|
+            async {
+                let exporter = inMemoryMetricExporter ()
+                let time, flush = Telemetry.timerTo exporter
+                Telemetry.recordOpening
+                    { Telemetry.disabled with Time = time }
+                    (System.DateTimeOffset.FromUnixTimeMilliseconds 0L)
+                    { Marks = [ Yession.App.OpenMark.Booted, 250.0; Yession.App.OpenMark.Shown, 1500.0 ]; SentAt = 1600.0 }
+                do! flush () |> Interop.awaitPromise
+                Expect.equal
+                    (histogramsOf (exporter.getMetrics ()))
+                    [ "yession.client.open.duration",
+                      "s",
+                      [ """{"yession.client.open.mark":"booted"}""", 1, 0.25
+                        """{"yession.client.open.mark":"shown"}""", 1, 1.5 ] ]
+                    "each moment's time from the navigation, in seconds"
             }
 
         // A turn's two durations are two metrics, not one with a label: a first output and

@@ -550,6 +550,7 @@ let start
         | Some (GitHubBranches _)
         | Some (GitHubPullHead _)
         | Some Queries
+        | Some OpenReported
         | Some (Content _)
         | Some (ContentUpload _)
         | Some (StagedUpload _)

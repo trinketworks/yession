@@ -307,6 +307,10 @@ type SessionRoute =
     /// branch — so a pasted link to one can be checked out. The number is carried raw
     /// with the segments, for the same reason.
     | GitHubPullHead of owner: string * repo: string * number: string
+    /// Where a page says how its own opening went (`OpenReport`), once. Over HTTP, and not
+    /// the data channel, because an opening whose channel never opened is the one most
+    /// worth hearing of.
+    | OpenReported
     /// The session's read-only query surface (Plan 15): one multiplexed SSE stream
     /// carrying every registered query's declaration and value. It is a STREAM rather
     /// than a fetch-plus-stream pair because its opening burst already is the snapshot,
@@ -395,6 +399,7 @@ module SessionRoute =
           | GitHubRepos -> "github/repos"
           | GitHubBranches (owner, repo) -> sprintf "github/repos/%s/%s/branches" owner repo
           | GitHubPullHead (owner, repo, number) -> sprintf "github/repos/%s/%s/pulls/%s" owner repo number
+          | OpenReported -> "opened"
           | Queries -> "queries")
 
     /// A route as its SHAPE: `relative` with a name where each value goes, so every request
@@ -416,6 +421,7 @@ module SessionRoute =
         | Claude _
         | GitHub _
         | GitHubRepos
+        | OpenReported
         | Queries ->
             let (RelativeUrl path) = relative route
             path
@@ -450,6 +456,7 @@ module SessionRoute =
         match method, segments with
         | "GET", [ "" ] -> Some Shell
         | "POST", [ "signal" ] -> Some Signal
+        | "POST", [ "opened" ] -> Some OpenReported
         | "GET", [ "me" ] -> Some Me
         | "GET", [ "sw.js" ] -> Some ServiceWorker
         | "GET", [ "manifest.webmanifest" ] -> Some Manifest

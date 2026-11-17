@@ -69,11 +69,13 @@ let private every =
       GitHubRepos
       GitHubBranches ("octo", "hello")
       GitHubPullHead ("octo", "hello", "42")
+      OpenReported
       Queries ]
 
 let private methodOf (route: SessionRoute) =
     match route with
     | Signal
+    | OpenReported
     | Claude _ -> "POST"
     | _ -> "GET"
 

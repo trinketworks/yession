@@ -70,21 +70,48 @@ module private Handshake =
 module private Opening =
     let mutable private timings = OpenTimings.empty
     let mutable private shownAsked = false
+    let mutable private told = false
 
-    /// These moments stand reached now.
-    let reached (marks: OpenMark list) : unit =
-        let next, fresh = OpenTimings.step timings (UserTiming.now ()) marks
+    /// Tell the session how the opening went, once. A page that is not signed in is
+    /// refused, and is about to leave for the sign-in: the page it comes back to tells of
+    /// its own opening.
+    let private tell () : unit =
+        if not told then
+            match OpenTimings.report timings (UserTiming.now ()) with
+            | None -> ()
+            | Some report ->
+                told <- true
+                Beacon.send (Page.href OpenReported) (OpenReport.toJson report) |> ignore
+
+    /// These moments stood reached at `at`.
+    let private reachedAt (at: float) (marks: OpenMark list) : unit =
+        let next, fresh = OpenTimings.step timings at marks
         timings <- next
         for mark, at in fresh do
             UserTiming.mark (OpenTimings.markPrefix + OpenMark.name mark) at
             match mark with
             | OpenMark.Shown -> UserTiming.measure OpenTimings.measure 0.0 at
+            | OpenMark.Responded
             | OpenMark.Booted
             | OpenMark.StoreAnswered
             | OpenMark.Authorized
             | OpenMark.ChannelOpen
             | OpenMark.Accepted
             | OpenMark.ReadThrough -> ()
+        if OpenTimings.complete timings then tell ()
+
+    /// These moments stand reached now.
+    let reached (marks: OpenMark list) : unit = reachedAt (UserTiming.now ()) marks
+
+    /// The app's code has begun to run. The document's first byte is behind it, at the
+    /// time the browser wrote down. An opening that never completes is told of as the page
+    /// is put away, with as far as it got.
+    let booted () : unit =
+        UserTiming.responseStart () |> Option.iter (fun at -> reachedAt at [ OpenMark.Responded ])
+        reached [ OpenMark.Booted ]
+        Browser.Dom.document.addEventListener (
+            "visibilitychange",
+            fun _ -> if Browser.Dom.document.visibilityState = "hidden" then tell ())
 
     /// The model the page now holds, after it was handed to the render. The timeline is
     /// `Shown` at the frame after the first model that draws it: the render that draws it
@@ -1071,7 +1098,7 @@ let private openQueryStream (url: string) (onFrame: string -> unit) : EventSourc
 
 let private start () =
     async {
-        Opening.reached [ OpenMark.Booted ]
+        Opening.booted ()
         let peerId =
             match PeerId.create (persisted "yession/peer-id" (mintId "peer")) with
             | Ok id -> id

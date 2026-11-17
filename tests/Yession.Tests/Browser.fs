@@ -1709,6 +1709,20 @@ let tests =
                         "each moment once, and no other"
                 }
 
+        // The page tells its session how the opening went, once it is over. Read off the
+        // answer to the page's own request, on a reload: the first opening's report left
+        // before this case could listen for it.
+        sessionCase "a page that has opened its session tells the session how the opening went, and is heard" <|
+            fun page ->
+                async {
+                    do! waitConnected page
+                    let answers = ResizeArray<int> ()
+                    page.Response.Add (fun r -> if r.Request.Method = "POST" && r.Url.EndsWith "/opened" then answers.Add r.Status)
+                    let! _ = await (page.ReloadAsync ())
+                    do! Wait.until "the report of the opening to be answered" (fun () -> async { return List.ofSeq answers }) (List.isEmpty >> not)
+                    Expect.equal (List.ofSeq answers) [ 204 ] "one report, heard"
+                }
+
         Tag.needs "measuring several terminals" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionCase "a render asks the whole document nothing, however many terminals are open" <|
             fun page ->

@@ -1417,7 +1417,10 @@ Async.StartImmediate (
                             artifactsDir
                             sessionMount)
                 | None -> None
-            [ claudeRoutes; githubRoutes; queryRoutes; repoRoutes; contentRoutes ]
+            // Where a page says how its opening went, recorded by this process's emitter.
+            let openingRoutes =
+                Some (Telemetry.openReports (fun () -> clock.Now ()) telemetry auth sessionMount)
+            [ claudeRoutes; githubRoutes; queryRoutes; repoRoutes; contentRoutes; openingRoutes ]
             |> List.choose id
             |> function
                | [] -> None

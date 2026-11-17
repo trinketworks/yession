@@ -103,9 +103,86 @@ let private requestSpanTests =
             }
     ]
 
+/// A server holding the one route a page reports its opening to, with `allowed` standing in
+/// for the sign-in; what it recorded, as (mark, seconds); and how to stop it.
+let private reportServer (allowed: bool option) =
+    async {
+        let recorded = ResizeArray<string * float> ()
+        let emitter =
+            { Telemetry.disabled with
+                Time =
+                    fun timing took ->
+                        match timing with
+                        | Telemetry.Timing.ClientOpen mark -> recorded.Add (OpenMark.name mark, took.TotalSeconds)
+                        | _ -> () }
+        let auth =
+            allowed
+            |> Option.map (fun allowed ->
+                { (SessionAuth.create (SessionId.create "e2e-open-report" |> expect) "" Yession.Domain.Access.CookieScheme.AnyScheme) with
+                    IsAuthenticated = fun _ -> allowed })
+        let route = Telemetry.openReports (fun () -> (System.DateTimeOffset.FromUnixTimeMilliseconds 0L)) emitter auth ""
+        let server =
+            createServer (fun req res ->
+                if not (route req res) then
+                    res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
+                    res.``end`` "not found")
+        do! Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
+        let stop () = Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ()))
+        return sprintf "http://127.0.0.1:%d/opened" (serverPort server), recorded, stop
+    }
+
+let private aReport = """{"marks":[{"mark":"booted","at":250},{"mark":"shown","at":1500}],"sentAt":1600}"""
+
+let private openReportTests =
+    testList "a page's report of its opening" [
+        testCaseAsync "a report is heard, and each moment recorded as its time from the navigation" <|
+            async {
+                let! url, recorded, stop = reportServer None
+                let! reply = TestHttp.post [] "text/plain" aReport url
+                do! stop ()
+                Expect.equal
+                    (reply.Status, List.ofSeq recorded)
+                    (204, [ "booted", 0.25; "shown", 1.5 ])
+                    "in seconds, by the moment's name"
+            }
+
+        testCaseAsync "a page that is not signed in is refused, and nothing is recorded" <|
+            async {
+                let! url, recorded, stop = reportServer (Some false)
+                let! reply = TestHttp.post [] "text/plain" aReport url
+                do! stop ()
+                Expect.equal (reply.Status, recorded.Count) (401, 0) "the report is a signed-in page's to make"
+            }
+
+        testCaseAsync "a signed-in page's report is heard" <|
+            async {
+                let! url, recorded, stop = reportServer (Some true)
+                let! reply = TestHttp.post [] "text/plain" aReport url
+                do! stop ()
+                Expect.equal (reply.Status, recorded.Count) (204, 2) "both moments"
+            }
+
+        testCaseAsync "a body that is no report is refused, and nothing is recorded" <|
+            async {
+                let! url, recorded, stop = reportServer None
+                let! reply = TestHttp.post [] "text/plain" """{"marks":[{"mark":"teleported","at":1}],"sentAt":2}""" url
+                do! stop ()
+                Expect.equal (reply.Status, recorded.Count) (400, 0) "said in the answer"
+            }
+
+        testCaseAsync "a body larger than any report is refused, and nothing is recorded" <|
+            async {
+                let! url, recorded, stop = reportServer None
+                let! reply = TestHttp.post [] "text/plain" (String.replicate (OpenReport.largestBytes + 1) "x") url
+                do! stop ()
+                Expect.equal (reply.Status, recorded.Count) (413, 0) "without being read as one"
+            }
+    ]
+
 let tests =
     testList "Telemetry E2E (real Host, stub collector, no WebRTC)" [
         requestSpanTests
+        openReportTests
         testCaseAsync "a completed turn's usage reaches the collector over OTLP" <|
             async {
                 // A stub OTLP collector on localhost — the stand-in for a real OTel Collector.

@@ -260,6 +260,10 @@ type [<AllowNullLiteral>] Span =
     abstract setStatus: status: SpanStatus -> unit
     /// Add attributes learned while the span ran. Call before `end`.
     abstract setAttributes: attributes: Attributes -> unit
+    /// End the span at a moment that is not now, in milliseconds since the Unix epoch: what
+    /// a span told of after the fact ends with.
+    [<Emit("$0.end($1)")>]
+    abstract endAt: epochMs: float -> unit
     abstract ``end``: unit -> unit
 
 /// Which side of a remote call a span is (`SpanKind` in the data model). Only the API's
@@ -272,6 +276,8 @@ type SpanKind = private SpanKind of int
 type SpanOptions =
     abstract attributes : Attributes with get, set
     abstract kind : SpanKind with get, set
+    /// When the span began, in milliseconds since the Unix epoch, where that is not now.
+    abstract startTime : float with get, set
 
 /// The propagation context a span is started under: whatever is active, which the
 /// async context manager carries across every await.
@@ -298,6 +304,9 @@ type [<AllowNullLiteral>] SpanContext =
 type [<AllowNullLiteral>] ReadableSpan =
     abstract name: string
     abstract kind: SpanKind
+    /// When the span began and ended, each as `[seconds, nanoseconds]` since the Unix epoch.
+    abstract startTime: float array
+    abstract endTime: float array
     abstract attributes: Attributes
     abstract spanContext: unit -> SpanContext
     abstract parentSpanContext: SpanContext option
@@ -419,6 +428,17 @@ let startServerSpan (tracer: Tracer) (name: string) (attributes: Attributes) : S
         jsOptions<SpanOptions> (fun o ->
             o.attributes <- attributes
             o.kind <- spanKinds.SERVER),
+        contextApi.active ())
+
+/// Start a span that began at `epochMs` (milliseconds since the Unix epoch) and not now,
+/// under the active context: what a span told of after the fact starts with. End it with
+/// `endAt`.
+let startSpanAt (tracer: Tracer) (name: string) (attributes: Attributes) (epochMs: float) : Span =
+    tracer.startSpan (
+        name,
+        jsOptions<SpanOptions> (fun o ->
+            o.attributes <- attributes
+            o.startTime <- epochMs),
         contextApi.active ())
 
 /// Run `fn` with `span` as the active span — the parent of every span started inside.
