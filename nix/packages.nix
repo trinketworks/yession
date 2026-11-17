@@ -395,6 +395,7 @@ let
       # programs that must run: node-pty's `spawn-helper`, and srt's `apply-seccomp`, which runs
       # each command of a Linux sandbox. The install check below compares the two trees.
       cp -r ${staged}/dist-npm "$out/libexec/yession"
+      chmod u+w "$out/libexec/yession"
       cp -r ${staged}/node_modules "$out/libexec/yession/node_modules"
       chmod -R u+w "$out/libexec/yession"
 
