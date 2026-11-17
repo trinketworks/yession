@@ -49,6 +49,9 @@
          one answer, so selection and focus cannot disagree. -->
     <Compile Include="TabStrip.fs" />
     <Compile Include="Model.fs" />
+    <!-- When each moment of a page's opening of its session was reached: read off the model,
+         so after it. -->
+    <Compile Include="OpenTimings.fs" />
     <!-- Where carets stand to the character: outside the model, which holds only their
          field, and below the connection that sends and receives them. -->
     <Compile Include="Carets.fs" />

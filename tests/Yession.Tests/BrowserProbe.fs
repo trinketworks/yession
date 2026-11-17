@@ -55,6 +55,9 @@ module Probe =
     /// Whether the page runs an animation frame within the given milliseconds.
     let framing (page: IPage) (withinMs: int) : Async<bool> = ask page Probes.framing withinMs
 
+    /// The moments of its opening the page has written on the browser's timeline.
+    let opening (page: IPage) : Async<Probes.Opening> = ask page Probes.opening ()
+
     /// Let the page run this many animation frames.
     let frames (page: IPage) (count: int) : Async<unit> = ask page Probes.frames count |> Async.Ignore
 

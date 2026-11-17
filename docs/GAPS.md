@@ -1467,7 +1467,9 @@ After the fixes land, one pass rewrites it to what still reproduces.
     `yession.sandbox.start.duration`. Nothing else is timed: not a tool call, a command in
     a sandbox, or a page a browser opens. Spans exist on the path that adds a repo, and
     one per request a session's HTTP server answers (`Telemetry.traceRequest`): the
-    Manager's requests have none, and neither has anything the browser does itself.
+    Manager's requests have none. A page writes the moments of its opening on the
+    browser's own timeline (`OpenTimings`, read in the Performance panel), and reports
+    them to nobody: no collector sees what a person waited through.
   - **an aggregate across sessions without a collector's help.** Each session is its own
     OTel resource (`service.instance.id` is the session's id), so each one's histograms are
     their own series. A backend that keeps resource attributes as labels gets a new set of
