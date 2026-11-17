@@ -2945,6 +2945,38 @@ let private telemetryTests =
                 Expect.isTrue (body.Contains "\"load\"" && body.Contains "\"start\"") "as the load and the start"
             }
 
+        // The spans themselves are pinned over an in-memory exporter (`TelemetryE2E`). What
+        // only a real session process can show is that its server is the one being heard.
+        testCaseAsync "a request a real session answers reaches the collector as a span" <|
+            async {
+                let dataDir =
+                    sprintf "tests/Yession.Tests/out/.data/tel-req-%d" (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+                let! stub = OtlpStub.start ()
+                let! pm =
+                    ProcessManager.create
+                        { ProcessManager.Options.defaults dataDir nodePath [ "app/SessionMain.js" ] with
+                            Strategy = Some Strategy.localhost }
+                let record = pm.CreateSession "tel-req" "Tel req" |> expect
+                let! launched =
+                    Support.withEnv
+                        [ "OTEL_TRACES_EXPORTER", Some "otlp"
+                          "OTEL_EXPORTER_OTLP_ENDPOINT", Some stub.Url ]
+                        (fun () -> pm.Launch record.SessionId)
+                let port = launched |> expect
+                let! _ = TestHttp.get (sprintf "http://127.0.0.1:%d/me" port)
+                let! stopped = pm.Stop record.SessionId
+                stopped |> expect
+                do! pm.StopAll ()
+                stub.Close ()
+
+                let traces =
+                    stub.Posted ()
+                    |> List.filter (fun (path, _) -> path.EndsWith "/v1/traces")
+                    |> List.map snd
+                    |> String.concat ""
+                Expect.isTrue (traces.Contains "GET /me") (sprintf "the request's span reached the collector: %A" (stub.Posted () |> List.map fst))
+            }
+
         // The Manager exports its metrics once a minute, so a launch it timed in its last
         // minute reaches a collector only if the stop itself ships it. This case stops a
         // real Manager seconds after its first launch: nothing but the stop can have sent

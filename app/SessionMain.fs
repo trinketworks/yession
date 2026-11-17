@@ -1653,6 +1653,7 @@ Async.StartImmediate (
                 (fun sandbox ->
                     ShellProfileProjection.workingDirectory sandbox (terminals.Profiles ()) |> Option.map RootPath.value)
                 TerminalShell.posix
+        host.ObserveRequests (Telemetry.traceRequest telemetry.Tracer sessionMount)
         host.SetStaging artifacts.Staging
         terminalCommands <- host.TerminalCommands
         repoSandboxes <-

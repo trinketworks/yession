@@ -1465,7 +1465,9 @@ After the fixes land, one pass rewrites it to what still reproduces.
     each session `yession.session.boot.duration` in its two parts,
     `yession.agent.turn.first_output.duration`, `yession.agent.turn.duration` and
     `yession.sandbox.start.duration`. Nothing else is timed: not a tool call, a command in
-    a sandbox, or a page a browser opens. Spans exist only on the path that adds a repo.
+    a sandbox, or a page a browser opens. Spans exist on the path that adds a repo, and
+    one per request a session's HTTP server answers (`Telemetry.traceRequest`): the
+    Manager's requests have none, and neither has anything the browser does itself.
   - **an aggregate across sessions without a collector's help.** Each session is its own
     OTel resource (`service.instance.id` is the session's id), so each one's histograms are
     their own series. A backend that keeps resource attributes as labels gets a new set of

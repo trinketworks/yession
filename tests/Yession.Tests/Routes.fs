@@ -141,6 +141,24 @@ let private routeTests =
             Expect.equal (SessionRoute.parse "GET" "/events/ahead-99") None "a range cannot be spelled with a word"
             Expect.equal (SessionRoute.parse "GET" "/events/ahead/nope") None "and a plan's cursor is a number or nothing"
 
+        testCase "a route's shape carries none of its values" <| fun () ->
+            // What telemetry names a request by: one name per kind of request, however many
+            // offsets, terminals and files there are.
+            let shapes = every |> List.map SessionRoute.pattern |> List.distinct
+            Expect.equal
+                (SessionRoute.pattern (Events (0L, 99L)))
+                (SessionRoute.pattern (Events (100L, 136L)))
+                "two ranges are one shape"
+            Expect.equal (SessionRoute.pattern (Events (0L, 99L))) "events/{first}-{last}" "which names what varies"
+            Expect.equal
+                (SessionRoute.pattern (Asset ("K3nR7pQx2wL0", "client.js")))
+                (SessionRoute.pattern (Asset ("8fZs1mVb4tHc", "fonts/monaspace-neon-latin-300-normal.woff2")))
+                "every static file is one shape"
+            Expect.equal (SessionRoute.pattern Me) "me" "a route with no values is its own address"
+            for value in [ "4711"; "term-a"; "octo"; "hello"; "K3nR7pQx2wL0"; "client.js" ] do
+                for shape in shapes do
+                    Expect.isFalse (shape.Contains value) (sprintf "%s carries the value %s" shape value)
+
         testCase "a route reached with the wrong method is no route at all" <| fun () ->
             // None, not a 405: an unknown path and a method mismatch answer identically, as
             // they did when the server matched on (method, path) pairs directly.

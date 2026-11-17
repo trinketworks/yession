@@ -45,6 +45,10 @@ type SessionHost =
       /// browser whose cookie names a Manager-verified user.
       MintPeerTokenAs : PeerAttribution -> string
       Port : int
+      /// Hear every request the session's HTTP server is sent, ahead of the server's own
+      /// handler and without answering it: where SessionMain attaches the request spans
+      /// (`Telemetry.traceRequest`), which are composed a layer above this.
+      ObserveRequests : (IncomingMessage -> ServerResponse -> unit) -> unit
       /// The item this process's boot recorded (`SessionStarted` / `SessionResumed`): what
       /// the boot's own work names as its cause.
       Boot : MessageId
@@ -1280,6 +1284,7 @@ let startFull
               MintPeerToken = fun () -> peerTokens.Mint UnattributedAccess
               MintPeerTokenAs = peerTokens.Mint
               Port = port
+              ObserveRequests = fun hear -> server.onRequestFirst (System.Func<_, _, _> hear)
               Boot = boot
               Log = log
               Doc = doc

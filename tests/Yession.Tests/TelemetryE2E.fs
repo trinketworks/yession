@@ -12,6 +12,7 @@ module Yession.Tests.TelemetryE2E
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yjs
 open Yession.Domain
@@ -28,8 +29,83 @@ open Yession.Peer
 let private usageAgent (usage: AgentUsage) : RunAgent =
     fun _ _ _ _ -> async { return AgentCompleted ("scripted turn", Some usage) }
 
+/// A finished request span as these cases read it: its name, the route and status it
+/// carries, and whether it ended failed.
+type private RequestSpan =
+    { Name : string
+      Route : string option
+      Status : int
+      Failed : bool }
+
+let private requestSpans (exporter: Fable.OpenTelemetry.InMemorySpanExporter) : RequestSpan list =
+    let decoder =
+        Thoth.Json.Decode.map2
+            (fun route status -> route, status)
+            (Thoth.Json.Decode.optional "http.route" Thoth.Json.Decode.string)
+            (Thoth.Json.Decode.field "http.response.status_code" Thoth.Json.Decode.int)
+    [ for span in exporter.getFinishedSpans () do
+        Expect.equal span.kind Fable.OpenTelemetry.spanKindServer "a request this process answered is a server span"
+        match Thoth.Json.Decode.fromString decoder (Fable.OpenTelemetry.Attributes.toJson span.attributes) with
+        | Error reason -> failwithf "a request span this suite cannot read: %s" reason
+        | Ok (route, status) ->
+            { Name = span.name
+              Route = route
+              Status = status
+              Failed = span.status.code = Fable.OpenTelemetry.spanStatusError } ]
+
+let private requestSpanTests =
+    testList "request spans" [
+        testCaseAsync "each request a session answers is one server span, named by its route's shape" <|
+            async {
+                let exporter = Fable.OpenTelemetry.inMemorySpanExporter ()
+                let! host = Host.start (SessionId.create "e2e-request-spans" |> expect) 0
+                host.ObserveRequests (Telemetry.traceRequest (Telemetry.tracerTo exporter) "")
+                let at (path: string) = sprintf "http://127.0.0.1:%d/%s" host.Port path
+                let token = host.MintPeerToken ()
+
+                let! me = TestHttp.get (at "me")
+                let! refused = TestHttp.get (at "events/0-99")
+                let! range = TestHttp.get (at (sprintf "events/0-0?token=%s" token))
+                let! unknown = TestHttp.get (at "nothing/here")
+                Expect.equal (me.Status, refused.Status, range.Status, unknown.Status) (200, 401, 200, 404) "the answers are the server's own, untouched"
+
+                // A span ends when its response closes, which the server learns after the
+                // caller has its answer.
+                do! waitUntil "four request spans" (fun () -> (exporter.getFinishedSpans ()).Length = 4)
+                Expect.equal
+                    (requestSpans exporter |> List.sortBy (fun span -> span.Name, span.Status))
+                    [ { Name = "GET"; Route = None; Status = 404; Failed = false }
+                      { Name = "GET /events/{first}-{last}"; Route = Some "/events/{first}-{last}"; Status = 200; Failed = false }
+                      { Name = "GET /events/{first}-{last}"; Route = Some "/events/{first}-{last}"; Status = 401; Failed = false }
+                      { Name = "GET /me"; Route = Some "/me"; Status = 200; Failed = false } ]
+                    "one span per request, and a refusal is the caller's failure, not the span's"
+                do! host.Stop ()
+            }
+
+        testCaseAsync "a request under a mount is named without it, and the server's own failure fails its span" <|
+            async {
+                let exporter = Fable.OpenTelemetry.inMemorySpanExporter ()
+                let server =
+                    createServer (fun _ res ->
+                        res.writeHead (503, [ ResponseHeader.ContentType "text/plain" ])
+                        res.``end`` "not now")
+                server.onRequestFirst (System.Func<_, _, _> (Telemetry.traceRequest (Telemetry.tracerTo exporter) "/s/abc"))
+                do! Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
+
+                let! reply = TestHttp.get (sprintf "http://127.0.0.1:%d/s/abc/me" (serverPort server))
+                Expect.equal reply.Status 503 "the handler's answer"
+                do! waitUntil "the request span" (fun () -> (exporter.getFinishedSpans ()).Length = 1)
+                Expect.equal
+                    (requestSpans exporter)
+                    [ { Name = "GET /me"; Route = Some "/me"; Status = 503; Failed = true } ]
+                    "the session's id, which the mount carries, is in no name"
+                do! Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ()))
+            }
+    ]
+
 let tests =
     testList "Telemetry E2E (real Host, stub collector, no WebRTC)" [
+        requestSpanTests
         testCaseAsync "a completed turn's usage reaches the collector over OTLP" <|
             async {
                 // A stub OTLP collector on localhost — the stand-in for a real OTel Collector.
