@@ -11,6 +11,9 @@
 # returns at once, so a fresh container installs itself without anybody asking: see the
 # hand-off below.
 set -euo pipefail
+# The full run goes to a log in the background, and `set -e` exits without a word: a run that
+# died left an empty log and no process, which said nothing about why.
+trap 'echo "setup: failed (exit $?) at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 hook_only=false
 [ "${1:-}" = "--hook" ] && hook_only=true
@@ -168,69 +171,27 @@ grep -q 'yession.cachix.org' "$HOME/.config/nix/nix.conf" 2>/dev/null || {
 }
 
 # nixpkgs is a `github:NixOS/nixpkgs` input (flake.nix, devenv.yaml) so Dependabot can move it,
-# and the sandbox proxy refuses github. Every rev of the `nixos-unstable` branch is also a
-# nixos.org channel release, and that release's nixexprs.tar.xz is the same tree plus five
-# files the channel adds. Without them its NAR hash IS the lock's narHash (checked when this
-# was written), so the source is rebuilt here and added to the store under the path the lock
-# already names: nix finds a locked input that is present and never fetches it. A rev with no
-# release (one Dependabot did not take from the branch head) warns and is left to fail where it
-# is used, saying what it could not fetch.
+# and the sandbox proxy refuses github. The input's source is a fixed-output path, named by the
+# lock's narHash alone, and cache.nixos.org holds that path for every channel release (Hydra's
+# closures carry it): checked for the locked rev, the unstable head, 25.05 and a 2021 release.
+# So it is SUBSTITUTED, by hash, under the path the lock already names, and nix finds a locked
+# input that is present and never fetches it. A rev with no release (one Dependabot did not take
+# from the branch head) is not in the cache; it warns and is left to fail where it is used.
 #
-# Rooted like the devenv source below, so a collection does not take what the lock points at.
-materialize_nixpkgs() {
-  nixpkgs_src=""
-  local lock="$1" node rev narhash expected short tok q r hit tmp got
-  node="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); n=d["nodes"][d["nodes"]["root"]["inputs"]["nixpkgs"]]["locked"]; print(n["type"], n.get("rev") or n.get("path",""), n.get("narHash",""))' "$lock" 2>/dev/null)" || return 0
-  set -- $node
-  # devenv rewrites devenv.lock's node to the `path:` this function gave it (see the clean
-  # filter below), so a second run (the hook on a resume) reads its own answer back. It is
-  # still the answer while the path is in the store; dropping it wrote a devenv.local.yaml
-  # with no nixpkgs line, and devenv went to github for the input.
-  if [ "${1:-}" = path ]; then
-    if nix path-info "${2:-}" >/dev/null 2>&1; then nixpkgs_src="$2"; fi
-    return 0
-  fi
-  [ "${1:-}" = github ] || return 0
-  rev="$2" narhash="$3"
-  expected="$(nix-store --print-fixed-path --recursive sha256 "$narhash" source)"
-  if ! nix path-info "$expected" >/dev/null 2>&1; then
-    short="${rev:0:12}" tok="" hit=""
-    while :; do
-      q="list-type=2&prefix=nixos/unstable/&delimiter=/"
-      [ -n "$tok" ] && q="$q&continuation-token=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$tok")"
-      r="$(curl -fsS --max-time 60 "https://nix-releases.s3.amazonaws.com/?$q")" || break
-      hit="$(printf '%s' "$r" | grep -o "<Prefix>nixos/unstable/[^<]*\.$short/</Prefix>" | sed 's|<Prefix>||;s|/</Prefix>||' | head -1 || true)"
-      [ -n "$hit" ] && break
-      tok="$(printf '%s' "$r" | sed -n 's|.*<NextContinuationToken>\([^<]*\)</NextContinuationToken>.*|\1|p')"
-      [ -n "$tok" ] || break
-    done
-    if [ -z "$hit" ]; then
-      echo "setup: no nixos-unstable channel release for nixpkgs $rev ($lock); a github-restricted sandbox cannot fetch it"
-      return 0
-    fi
-    tmp="$(mktemp -d)"
-    if ! { curl -fsSL --max-time 600 "https://releases.nixos.org/$hit/nixexprs.tar.xz" | tar -xJ -C "$tmp" \
-         && ( cd "$tmp"/* && rm -f .git-revision .version-suffix programs.sqlite svn-revision nixpkgs ) \
-         && got="$(nix store add --name source "$(echo "$tmp"/*)")"; }; then
-      rm -rf "$tmp"
-      echo "setup: could not rebuild nixpkgs $rev from $hit; left to fail where it is used"
-      return 0
-    fi
-    rm -rf "$tmp"
-    if [ "$got" != "$expected" ]; then
-      echo "setup: nixpkgs $rev from $hit hashed to $got, not the locked $expected; left to fail where it is used"
-      return 0
-    fi
-    echo "setup: rebuilt nixpkgs $rev ($lock) from $hit"
-  fi
-  mkdir -p "$repo/.devenv"
-  nix-store --realise "$expected" --add-root "$repo/.devenv/nixpkgs-$rev" --indirect >/dev/null
+# flake.lock, never devenv.lock: devenv rewrites its own lock's node to the `path:` written
+# below, so reading it back made a resume depend on its own earlier answer (LockSource holds the
+# two locks to the same rev). Rooted like the devenv source below, so a collection keeps it.
+nixpkgs_src=""
+if narhash="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["nodes"][d["nodes"]["root"]["inputs"]["nixpkgs"]]["locked"]["narHash"])' "$repo/flake.lock")" \
+   && expected="$(nix-store --print-fixed-path --recursive sha256 "$narhash" source)" \
+   && mkdir -p "$repo/.devenv" \
+   && nix-store --realise "$expected" --add-root "$repo/.devenv/nixpkgs-src" --indirect >/dev/null; then
   nixpkgs_src="$expected"
-}
-materialize_nixpkgs "$repo/flake.lock"
+else
+  echo "setup: could not substitute the locked nixpkgs source; a github-restricted sandbox cannot fetch it"
+fi
 # devenv's own Nix fetches a github input even when its locked path is present (the system Nix
 # the flake route uses does not), so the dev shell is pointed at the path in devenv.local.yaml.
-materialize_nixpkgs "$repo/devenv.lock"
 
 # devenv.local.yaml repoints the devenv input at devenv's OWN source substituted from
 # cache.nixos.org, because the sandbox proxy blocks the github:cachix/devenv fetch the
@@ -344,7 +305,10 @@ $hook_only && exit 0
   || nix profile install "${nixpkgs}#devenv"
 
 # Warm everything: dev shell, offline node_modules, dotnet tools, full build.
+# `9>&-`: the build leaves dotnet build servers running, and they inherited the hook's lock fd.
+# They held the lock for the container's life, so every later hook said "already running",
+# started nothing, and left an empty log. The lock stays with this script, not its children.
 cd "$repo"
-devenv shell -- build
+devenv shell -- build 9>&-
 settle_lock
 echo "setup: done — use 'devenv shell -- <task>' (check / build / verify ...)"

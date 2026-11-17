@@ -8,8 +8,8 @@
   # `devenv` input. devenv.nix imports the same nix/packages.nix, so the two never diverge.
   #
   # nixpkgs is the github `nixos-unstable` branch so Dependabot can move it (it tracks github
-  # inputs, not tarballs). A github-restricted Claude Code sandbox rebuilds the locked source
-  # from the nixos.org channel tarball of the same rev (.claude/setup.sh).
+  # inputs, not tarballs). A github-restricted Claude Code sandbox substitutes the locked source
+  # from cache.nixos.org by its narHash (.claude/setup.sh).
 
   description = "Yession — local-first runtime where humans and AI agents collaborate in a shared session.";
 
