@@ -482,6 +482,37 @@ let endOnSignal (clock: Clock) (emitter: Emitter) : unit =
 
 // --- Resource identity (code default, overridable by the standard env vars) --------------
 
+/// Which of the Manager's live sessions a session process is, as a small number the Manager
+/// hands out again once its holder has ended. It is what a session's METRICS are told apart
+/// by, in place of the session's id.
+///
+/// A backend keeps one time series for each set of attributes it is sent, for good. Under
+/// its own id every session ever launched was a new set of every metric. Under a slot there
+/// are as many sets as there were ever sessions alive at once, and two processes that are
+/// alive together still never write the same one, which cumulative metrics cannot survive.
+/// Logs and traces keep the session's id: one record of those is about one session.
+[<RequireQualifiedAccess>]
+module MetricSlot =
+
+    /// The resource attribute the Manager gives a session its slot in.
+    let attribute = "yession.session.slot"
+
+    /// The lowest slot nobody holds.
+    let lowestFree (taken: Set<int>) : int =
+        Seq.initInfinite id |> Seq.find (fun slot -> not (Set.contains slot taken))
+
+    /// A process's resource attributes as its metrics carry them. One that was given a slot
+    /// is that slot's instance and names no session; one that was given none, a session
+    /// with no Manager, is whatever it already was.
+    let identity (attributes: Map<string, string>) : Map<string, string> =
+        match Map.tryFind attribute attributes with
+        | None -> attributes
+        | Some slot ->
+            attributes
+            |> Map.add "service.instance.id" ("slot-" + slot)
+            |> Map.remove "yession.session.id"
+            |> Map.remove attribute
+
 /// The operator's own `OTEL_RESOURCE_ATTRIBUTES`, as written. Read HERE rather than wherever
 /// it happens to be wanted: this process overlays its own resource with it (below), and the
 /// Manager prepends it to the identity it gives a child (`ProcessManager`), so a second reader
@@ -503,7 +534,7 @@ let private envResourceAttributes () : (string * string) list =
 /// The resource for this process: the per-process defaults (`service.name`, namespace, and an
 /// optional `service.instance.id`) overlaid by `OTEL_RESOURCE_ATTRIBUTES` then `OTEL_SERVICE_NAME`
 /// (env wins — the Manager sets these on a child to adapt its identity).
-let private resourceOf (defaultServiceName: string) (instanceId: string option) : OpenTelemetry.Resource =
+let private resourceAttributes (defaultServiceName: string) (instanceId: string option) : Map<string, string> =
     let baseAttrs =
         [ "service.name", defaultServiceName
           // The BUILD these records came from — without it two releases' counts are
@@ -518,12 +549,20 @@ let private resourceOf (defaultServiceName: string) (instanceId: string option) 
     let merged =
         (baseAttrs @ envResourceAttributes ())
         |> List.fold (fun acc (k, v) -> Map.add k v acc) Map.empty
-    let merged =
-        match Interop.envOr "OTEL_SERVICE_NAME" "" with
-        | "" -> merged
-        | name -> Map.add "service.name" name merged
+    match Interop.envOr "OTEL_SERVICE_NAME" "" with
+    | "" -> merged
+    | name -> Map.add "service.name" name merged
+
+let private toResource (attributes: Map<string, string>) : OpenTelemetry.Resource =
     OpenTelemetry.resource (
-        OpenTelemetry.Attributes.ofList [ for KeyValue (k, v) in merged -> k, OpenTelemetry.AttributeValue.String v ])
+        OpenTelemetry.Attributes.ofList [ for KeyValue (k, v) in attributes -> k, OpenTelemetry.AttributeValue.String v ])
+
+let private resourceOf (defaultServiceName: string) (instanceId: string option) : OpenTelemetry.Resource =
+    resourceAttributes defaultServiceName instanceId |> toResource
+
+/// The resource this process's metrics are recorded under (`MetricSlot.identity`).
+let private metricResourceOf (defaultServiceName: string) (instanceId: string option) : OpenTelemetry.Resource =
+    resourceAttributes defaultServiceName instanceId |> MetricSlot.identity |> toResource
 
 // --- Exporter selection from OTEL_LOGS_EXPORTER ------------------------------------------
 
@@ -625,7 +664,8 @@ let private build
     : Emitter =
     let resource = resourceOf defaultServiceName instanceId
     let tracer, shutdownTraces = tracerOver resource defaultServiceName spanProcessors
-    let time, _, shutdownMetrics = timerOver resource defaultServiceName metricReaders
+    let time, _, shutdownMetrics =
+        timerOver (metricResourceOf defaultServiceName instanceId) defaultServiceName metricReaders
     let emit, log, shutdownLogs =
         match logProcessors with
         | [] -> disabled.Emit, disabled.Log, resolved

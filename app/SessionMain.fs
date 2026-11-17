@@ -482,8 +482,8 @@ let private auth =
 
 // Telemetry: this session is a direct OTel emitter — one OTel log record per completed turn.
 // Destination (stdout / a collector / both / off) comes from the standard OTEL_* env the
-// Manager passes through; identity (service.name=yession-session, service.instance.id=<id>)
-// the Manager adapts per child. No Manager-side collector, no bespoke endpoint.
+// Manager passes through; identity (service.name=yession-session, service.instance.id=<id>,
+// and the slot its metrics are recorded under) the Manager adapts per child. No Manager-side collector, no bespoke endpoint.
 let private telemetry = Telemetry.fromEnv sessionId
 
 // The reverse leg over the same control channel: subscribe to the Manager's notification

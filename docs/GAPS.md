@@ -1476,10 +1476,11 @@ After the fixes land, one pass rewrites it to what still reproduces.
     number. An opening that never reaches a signed-in page reports nothing, and nothing
     throttles the reports of one that does. A report's trace is not joined to the spans
     of the requests it made.
-  - **an aggregate across sessions without a collector's help.** Each session is its own
-    OTel resource (`service.instance.id` is the session's id), so each one's histograms are
-    their own series. A backend that keeps resource attributes as labels gets a new set of
-    series for every session. Drop or aggregate that attribute at the collector.
+  - **a session's own metrics.** A session's metrics are recorded under the slot the
+    Manager gave it (`Telemetry.MetricSlot`: `service.instance.id` is `slot-<n>`), not
+    under its id, so there are as many sets of series as sessions were ever alive at once.
+    A slot is handed on when its session ends, so one series is many sessions in turn:
+    what one session took is in its logs and traces, which keep its id.
   - **forwarding of audit records to a collector**
   - **structured app logging or crash reporting** beyond stdout
 - **Multi-node operation and work-intake integrations (Slack/Linear)** stay out of scope, as

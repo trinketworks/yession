@@ -710,6 +710,9 @@ let createWithUi
     // for sessions that died without a Stop.
     let mutable children : Map<string, Spawn.LaunchedSession> = Map.empty
     let mutable lastExit : Map<string, int option> = Map.empty
+    // The slot each session's metrics are told apart by (`Telemetry.MetricSlot`), by
+    // session. An entry outlives its session's process until the next launch drops it.
+    let mutable metricSlots : Map<string, int> = Map.empty
     // Stops in flight: their exits are expected, not crashes.
     let mutable stopping : Set<string> = Set.empty
     // Launches in flight: a session whose child is spawning but has not yet printed its
@@ -1339,12 +1342,27 @@ let createWithUi
                 // so OTEL_LOGS_EXPORTER / OTEL_EXPORTER_OTLP_* flow to the child unchanged) and
                 // overrides only the child's IDENTITY — service.name=yession-session plus
                 // service.instance.id=<sessionId>, merged over any operator OTEL_RESOURCE_ATTRIBUTES
-                // so the child never inherits the Manager's own service.name.
+                // so the child never inherits the Manager's own service.name. Its metrics are
+                // told apart by the slot given here instead (`Telemetry.MetricSlot`).
                 let telemetryIdentityEnv =
                     let sid = SessionId.value record.SessionId
                     let inherited = Telemetry.inheritedResourceAttributes ()
+                    // The lowest slot no session that is up, or coming up, holds. This launch
+                    // is among those coming up already, so a slot it held before is given up
+                    // only if another took it.
+                    metricSlots <-
+                        metricSlots
+                        |> Map.filter (fun held _ ->
+                            held <> key && (Map.containsKey held children || Map.containsKey held launching))
+                    let slot = Telemetry.MetricSlot.lowestFree (metricSlots |> Map.toSeq |> Seq.map snd |> Set.ofSeq)
+                    metricSlots <- Map.add key slot metricSlots
                     let sessionAttrs =
-                        sprintf "service.instance.id=%s,service.namespace=yession,yession.session.id=%s" sid sid
+                        sprintf
+                            "service.instance.id=%s,service.namespace=yession,yession.session.id=%s,%s=%d"
+                            sid
+                            sid
+                            Telemetry.MetricSlot.attribute
+                            slot
                     let resourceAttrs =
                         if inherited.Trim().Length = 0 then sessionAttrs else inherited + "," + sessionAttrs
                     [ "OTEL_SERVICE_NAME", "yession-session"
