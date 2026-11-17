@@ -242,7 +242,7 @@ let private startStack (timeoutMs: int) : Async<Stack> =
         let stop () =
             async {
                 for child in children do
-                    try child.kill "SIGTERM" with _ -> ()
+                    try ChildProcesses.signal child "SIGTERM" |> ignore with _ -> ()
 
                 // Bounded by what a signal is owed to land, not by each exit: what this owes
                 // the next case is not leaving two processes behind it, and a half that will

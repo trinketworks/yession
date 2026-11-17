@@ -89,6 +89,11 @@ let private kept = Kept.Answer<Binding list> ()
 let of' (ctx: CliContext) =
     kept.For (ctx.CheckProjectResults, fun () -> walk ctx.CheckProjectResults)
 
+/// Whether two paths name one file. A rule that reports per file asks this of the file that
+/// has a call and the file that the CLI judges.
+let sameFile (a: string) (b: string) =
+    try Path.GetFullPath a = Path.GetFullPath b with _ -> false
+
 /// The file something is written in, spelled the way a person here would say it: relative to
 /// the repository, so a message can name two of them and be read at a glance.
 let fileOf (ctx: CliContext) (where: range) =

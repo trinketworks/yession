@@ -3129,7 +3129,10 @@ module SrtSandbox =
                         input.finish ()
                     | Some (HostWire.Confined (id, argv)) -> answered id (Ok argv)
                     | Some (HostWire.Unconfined (id, reason)) -> answered id (Error reason)
-                    | None -> eprintfn "[srt host %d] %s" (int child.pid) line))
+                    | None ->
+                        match ChildProcesses.pid child with
+                        | Some number -> eprintfn "[srt host %d] %s" number line
+                        | None -> eprintfn "[srt host] %s" line))
             send (HostWire.Start config))
 
     /// One sandbox's filtering proxy, and the way to let it go.

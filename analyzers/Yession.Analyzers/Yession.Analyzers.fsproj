@@ -47,6 +47,7 @@
     <Compile Include="ObjSignature.fs" />
     <Compile Include="EmDashes.fs" />
     <Compile Include="SyncLoops.fs" />
+    <Compile Include="Signals.fs" />
   </ItemGroup>
 
   <ItemGroup>

@@ -697,16 +697,16 @@ let private firstLine (parent: int) : string =
 /// check, and only that one: the process that started the entry is not the process that the
 /// first line names.
 ///
-/// The case ends the entry by its pid, and never closes its input: the end of the input is
-/// what starts a stop, and this entry holds the signal that ends a process. Answers what
+/// The case ends the entry with a signal, and never closes its input. The end of the input
+/// is what starts a stop, and this entry holds the signal that ends a process. Answers what
 /// the entry said.
 let private productionEntryWithAWrongFirstLine () : Async<Wire.Event list> =
     async {
         let entry, said = entryProcess (Node.Api.path.join (StandIn.directory (), "app", "SandboxSupervisor.js"))
         (ChildProcessStreams.stdin entry).writeText (firstLine 2) |> ignore
         let! _ = settledWithin 20000 (fun () -> said.Count > 0)
-        // By its pid, and not by the end of its input.
-        Processes.trySignal (int entry.pid) "SIGKILL" |> ignore
+        // With a signal, and not by the end of its input.
+        ChildProcesses.signal entry "SIGKILL" |> ignore
         return List.ofSeq said
     }
 
@@ -749,7 +749,7 @@ let private rehearsalEntryWithATrueFirstLine () : Async<Wire.Event list * string
         // A signal that the entry sent before it ended needs a moment to reach the record.
         do! quietFor 500
         let recorded = TestFiles.read record
-        Processes.trySignal (int witness.pid) "SIGKILL" |> ignore
+        ChildProcesses.signal witness "SIGKILL" |> ignore
         return List.ofSeq said, recorded
     }
 

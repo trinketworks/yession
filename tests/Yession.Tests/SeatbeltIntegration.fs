@@ -871,7 +871,12 @@ let private outsideProcess () : int =
               Env = ChildEnv.Replacing Map.empty
               Streams = { Stdin = Stdio.Ignore; Stdout = Stdio.Ignore; Stderr = Stdio.Ignore }
               Detached = false }
-    int child.pid
+    // Node reports a spawn that failed as an `error` event, and it throws when nobody hears
+    // that event.
+    ChildProcessStreams.onError child ignore
+    match ChildProcesses.pid child with
+    | Some number -> number
+    | None -> failwith "the process outside each sandbox did not start"
 
 /// End a process that a case started, by its pid.
 let private endByPid (pid: int) : unit = Processes.trySignal pid "SIGKILL" |> ignore

@@ -2702,7 +2702,7 @@ let private startPackagedManager (args: string list) (env: (string * string) lis
                             fun () ->
                                 Async.FromContinuations (fun (kcont, _, _) ->
                                     ChildProcessStreams.onExit child (fun _ -> kcont ())
-                                    child.kill "SIGKILL" |> ignore) }
+                                    ChildProcesses.signal child "SIGKILL" |> ignore) }
                 | _ -> ()))
 
 /// Which port the launched child answers on, read off the row's OPEN LINK.
@@ -3004,7 +3004,7 @@ let private telemetryTests =
                         output.Contains "management UI at" || ended.IsSome)
                 Expect.isNone ended (sprintf "the Manager is up, not gone: %s" output)
 
-                child.kill "SIGTERM" |> ignore
+                ChildProcesses.signal child "SIGTERM" |> ignore
                 do! waitUntilWithin 15_000 "the Manager to end" (fun () -> ended.IsSome)
                 stub.Close ()
 

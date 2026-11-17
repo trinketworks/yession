@@ -426,6 +426,9 @@ module Bundle =
 
 /// What `Fable.Node`'s `process` leaves out. Everything it types — `execPath`, `platform`,
 /// `argv`, `stdin`, the listeners — is used through `Node.Api.process` directly.
+///
+/// Rule YES021 refuses Node's own `kill`, which `Fable.Node` types: it takes each number that
+/// it gets. `kill` and `trySignal` below refuse 0, 1 and -1.
 [<RequireQualifiedAccess>]
 module Processes =
 
@@ -743,7 +746,8 @@ module ChildProcesses =
     /// The pid of the child, and `None` for a child that did not start. Node leaves `pid`
     /// undefined after a spawn that failed, and Fable.Node types it as a number that is always
     /// there. So `int child.pid` is 0 for such a child, and `kill` reads pid 0 as the process
-    /// group of the caller.
+    /// group of the caller. Rule YES021 refuses Node's own member in each project, so a caller
+    /// reads the pid here.
     [<Emit("$0.pid")>]
     let pid (child: ChildProcess) : int option = jsNative
 
@@ -759,6 +763,9 @@ module ChildProcesses =
     /// the caller. Measured on Node 24.14 and 24.21 on macOS: a process got the signal that
     /// it sent to such a child, and so did a second process of its group. After the event,
     /// Node sends nothing.
+    ///
+    /// Rule YES021 refuses Node's own `kill` in each project, so a caller sends a signal to a
+    /// child with this verb or with `signalGroup`.
     let signal (child: ChildProcess) (name: string) : bool =
         match pid child with
         | Some _ -> nodeKill child name

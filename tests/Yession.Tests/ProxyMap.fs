@@ -66,7 +66,7 @@ let private startMap
                         stopped ()
 
                 ChildProcessStreams.onExit child (fun _ -> finish ())
-                try child.kill "SIGTERM" with _ -> finish ())
+                try ChildProcesses.signal child "SIGTERM" |> ignore with _ -> finish ())
 
         let handle = {| Said = (fun () -> said.ToString ()); Stop = stop |}
 
