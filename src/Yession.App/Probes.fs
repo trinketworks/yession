@@ -246,6 +246,25 @@ module Probes =
           EncodeAnswer = Encode.int
           DecodeAnswer = Decode.int }
 
+    /// The moments of its opening this page has written on the browser's timeline
+    /// (`OpenTimings`), by `OpenMark.name` in the order they were reached, and whether the
+    /// whole opening is on it as a measure.
+    type Opening = { Marks: string list; Measured: bool }
+
+    let opening : Probe<unit, Opening> =
+        { Name = "__probeOpening"
+          EncodeAsk = fun () -> Encode.nil
+          DecodeAsk = Decode.succeed ()
+          EncodeAnswer =
+            fun opening ->
+                Encode.object
+                    [ "marks", opening.Marks |> List.map Encode.string |> Encode.list
+                      "measured", Encode.bool opening.Measured ]
+          DecodeAnswer =
+            Decode.object (fun get ->
+                { Marks = get.Required.Field "marks" (Decode.list Decode.string)
+                  Measured = get.Required.Field "measured" Decode.bool }) }
+
     /// One computed style property of every match, in document order.
     let computedAll : Probe<string * string, string list> =
         { Name = "__probeComputedAll"

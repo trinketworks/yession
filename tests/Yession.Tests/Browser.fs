@@ -1693,6 +1693,22 @@ let tests =
         // `Sandbox` because opening a terminal starts a shell in the session's work sandbox: on a
         // box that cannot host one no terminal ever appears, and untagged this would fail at once,
         // quoting the sandbox's reason, rather than skip.
+        // What a person waits through when they open a session, on the browser's own timeline:
+        // the page writes each moment there as it reaches it (`OpenTimings`). A session nobody
+        // has said anything in is read through as soon as it takes the page, so every moment
+        // is reached and none of them waits on a turn.
+        sessionCase "a page that has opened its session has every moment of the opening on the browser's timeline" <|
+            fun page ->
+                async {
+                    do! waitConnected page
+                    do! Wait.until "the whole opening to be measured" (fun () -> Probe.opening page) (fun opening -> opening.Measured)
+                    let! opening = Probe.opening page
+                    Expect.equal
+                        (List.sort opening.Marks)
+                        (Yession.App.OpenMark.all |> List.map Yession.App.OpenMark.name |> List.sort)
+                        "each moment once, and no other"
+                }
+
         Tag.needs "measuring several terminals" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionCase "a render asks the whole document nothing, however many terminals are open" <|
             fun page ->

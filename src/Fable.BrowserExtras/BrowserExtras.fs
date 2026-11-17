@@ -828,3 +828,28 @@ module DomException =
     /// else, and wherever there is no `DOMException` to ask about.
     [<Emit("(function (error) { return typeof DOMException !== 'undefined' && error instanceof DOMException ? error.name : undefined })($0)")>]
     let name (error: exn) : string option = jsNative
+
+/// The browser's own timeline of what a page says about itself (User Timing): where a mark or
+/// a measure written here shows in the Performance panel beside the browser's own entries.
+/// Every time is in milliseconds since the navigation began, the clock `now` reads.
+[<RequireQualifiedAccess>]
+module UserTiming =
+    [<Emit("performance.now()")>]
+    let now () : float = jsNative
+
+    /// A named moment, at `at`.
+    [<Emit("performance.mark($0, { startTime: $1 })")>]
+    let mark (name: string) (at: float) : unit = jsNative
+
+    /// A named span, from `start` to `finish`.
+    [<Emit("performance.measure($0, { start: $1, end: $2 })")>]
+    let measure (name: string) (start: float) (finish: float) : unit = jsNative
+
+    /// The name of every mark whose name begins with `prefix`, in the order they stand on
+    /// the timeline.
+    [<Emit("performance.getEntriesByType('mark').filter(function (entry) { return entry.name.startsWith($0) }).map(function (entry) { return entry.name })")>]
+    let marksUnder (prefix: string) : string array = jsNative
+
+    /// The name of every measure on the timeline.
+    [<Emit("performance.getEntriesByType('measure').map(function (entry) { return entry.name })")>]
+    let measures () : string array = jsNative

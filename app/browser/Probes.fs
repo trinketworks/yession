@@ -463,7 +463,15 @@ let private awaiting (probe: Probes.Probe<'Ask, 'Answer>) (answer: 'Ask -> JS.Pr
             | Ok ask -> answer ask |> Promise.map (fun a -> Encode.toString 0 (probe.EncodeAnswer a))
             | Error e -> Promise.reject (exn (sprintf "%s was asked something it cannot read: %s" probe.Name e)))
 
+let private openingMarks () : Probes.Opening =
+    { Marks =
+        UserTiming.marksUnder OpenTimings.markPrefix
+        |> Array.map (fun name -> name.Substring OpenTimings.markPrefix.Length)
+        |> List.ofArray
+      Measured = UserTiming.measures () |> Array.contains OpenTimings.measure }
+
 answering Probes.seen seen
+answering Probes.opening openingMarks
 answering Probes.boxes boxes
 answering Probes.computed computed
 awaiting Probes.framing framing

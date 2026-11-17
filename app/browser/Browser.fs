@@ -64,6 +64,37 @@ module private Handshake =
         | Unrouted -> "unrouted"
         | TimedOut -> "timed out"
 
+/// This page's opening of its session, written down as it happens (`OpenTimings`): each
+/// moment goes on the browser's own timeline the first time it is reached, so the Performance
+/// panel shows where an opening's time went with nothing else installed.
+module private Opening =
+    let mutable private timings = OpenTimings.empty
+    let mutable private shownAsked = false
+
+    /// These moments stand reached now.
+    let reached (marks: OpenMark list) : unit =
+        let next, fresh = OpenTimings.step timings (UserTiming.now ()) marks
+        timings <- next
+        for mark, at in fresh do
+            UserTiming.mark (OpenTimings.markPrefix + OpenMark.name mark) at
+            match mark with
+            | OpenMark.Shown -> UserTiming.measure OpenTimings.measure 0.0 at
+            | OpenMark.Booted
+            | OpenMark.StoreAnswered
+            | OpenMark.Authorized
+            | OpenMark.ChannelOpen
+            | OpenMark.Accepted
+            | OpenMark.ReadThrough -> ()
+
+    /// The model the page now holds, after it was handed to the render. The timeline is
+    /// `Shown` at the frame after the first model that draws it: the render that draws it
+    /// runs inside this frame, and a page nobody is looking at runs none.
+    let saw (model: ClientModel) : unit =
+        reached (OpenTimings.ofModel model)
+        if not shownAsked && ClientModel.showsFolded model then
+            shownAsked <- true
+            Browser.Dom.window.requestAnimationFrame (fun _ -> reached [ OpenMark.Shown ]) |> ignore
+
 /// How long a whole handshake gets before it counts as "the session did not answer". Long
 /// enough for ICE gathering on a slow machine, short enough that a dead session is reported
 /// rather than waited on.
@@ -313,7 +344,9 @@ let private connectChannel (signalUrl: string) : Async<Result<FrameChannel<strin
                 (int (Math.Round (Browser.Performance.performance.now () - startedAt))))
         return
             match outcome with
-            | Opened transport -> Ok (frameChannel transport)
+            | Opened transport ->
+                Opening.reached [ OpenMark.ChannelOpen ]
+                Ok (frameChannel transport)
             | TimedOut -> Error Client.ChannelTimedOut
             | Unrouted -> Error Client.ChannelUnrouted
             | Refused detail -> Error (Client.ChannelUnreachable detail)
@@ -1038,6 +1071,7 @@ let private openQueryStream (url: string) (onFrame: string -> unit) : EventSourc
 
 let private start () =
     async {
+        Opening.reached [ OpenMark.Booted ]
         let peerId =
             match PeerId.create (persisted "yession/peer-id" (mintId "peer")) with
             | Ok id -> id
@@ -1229,6 +1263,7 @@ let private start () =
         let setState (model: ClientModel) (dispatch: Ylmish.Program.Message<ClientMsg> -> unit) =
             dispatchRef <- fun msg -> dispatch (Ylmish.Program.Message.User msg)
             renderer.SetState model
+            Opening.saw model
 
         let launchReads : Client.LaunchReads =
             { Client.LaunchReads.Listing = fetchRepoListing
@@ -1368,6 +1403,7 @@ let private start () =
         | None -> ()
         | Some ProbeUnauthorized -> renavigateTo (Page.href Login)
         | Some (ProbeAuthorized me) ->
+            Opening.reached [ OpenMark.Authorized ]
             // Authenticated: the read stream has a cookie that will be accepted, and its
             // opening frames are what fill the panels and the query surface alike.
             subscribeRead ()
