@@ -1966,7 +1966,7 @@ module DockerSandbox =
                                         // container's own memory ceiling, with no swap
                                         // (`ContainerLimits.buildMemory`).
                                         let ceiling = ContainerLimits.buildMemory limits
-                                        o.buildargs <- createObj [ for name, value in ownerBuildArgs () -> name ==> value ]
+                                        o.buildargs <- DK.BuildArgs.ofList (ownerBuildArgs ())
                                         o.memory <- float ceiling.Memory
                                         o.memswap <- float ceiling.MemorySwap)
                                 let! stream = client.buildImage (context, opts) |> Interop.awaitPromise
