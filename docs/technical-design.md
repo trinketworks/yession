@@ -477,6 +477,12 @@ config` can lint it once the file it is pasted into declares `workspace` under a
 decoder refuses, by name, each key that it does not take, and says what this file offers
 instead.
 
+A container runs the user of its image, root unless the image names another. The checkouts in
+it belong to the session's user on the host. A `build:` gets that user's uid and gid as the
+build args `USER_UID` and `USER_GID` (`ContainerBuildSpec.ownerArgs`). So a Dockerfile
+that declares them can make a user who owns the checkouts, and name it in `USER`, for a tool
+that refuses root.
+
 A sandbox has one body. `container:` brings a userland. `host:` uses the userland of the host
 that runs the session, and holds only `entrypoint`. A repo's sandbox must name one of the
 two. The session refuses a sandbox that names both, and a repo's sandbox that names none.

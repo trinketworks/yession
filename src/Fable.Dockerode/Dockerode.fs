@@ -214,6 +214,9 @@ type BuildOptions =
     abstract memory: float with get, set
     /// Memory plus swap, in bytes. Equal to `memory`, a build gets no swap.
     abstract memswap: float with get, set
+    /// `--build-arg`s, as an object of names to values. docker-modem writes it as the JSON
+    /// that the Engine API reads.
+    abstract buildargs: obj with get, set
 
 /// A running `docker exec` handle.
 type [<AllowNullLiteral>] Exec =

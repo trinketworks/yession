@@ -1921,6 +1921,10 @@ module DockerSandbox =
                                     (let text = said.ToString().Trim () in if text = "" then "nothing" else text))
         }
 
+    /// `ContainerBuildSpec.ownerArgs` for this process, which is the session's.
+    let private ownerBuildArgs () : (string * string) list =
+        ContainerBuildSpec.ownerArgs (int (Node.Api.``process``.getuid ())) (int (Node.Api.``process``.getgid ()))
+
     let create (network: Network) (name: string) (spec: EnvironmentSpec) (container: ContainerSpec) : CreateSandbox =
         fun policy ->
             async {
@@ -1962,6 +1966,7 @@ module DockerSandbox =
                                         // container's own memory ceiling, with no swap
                                         // (`ContainerLimits.buildMemory`).
                                         let ceiling = ContainerLimits.buildMemory limits
+                                        o.buildargs <- createObj [ for name, value in ownerBuildArgs () -> name ==> value ]
                                         o.memory <- float ceiling.Memory
                                         o.memswap <- float ceiling.MemorySwap)
                                 let! stream = client.buildImage (context, opts) |> Interop.awaitPromise

@@ -550,6 +550,23 @@ let tests =
                 do! sandbox.Dispose ()
             })
 
+            // A Dockerfile can make a user who owns the session's checkouts, because the build
+            // is told whose they are.
+            testCaseAsync "an image build gets the session's uid and gid as build args" (async {
+                let spec =
+                    alpineSpec
+                    |> withContainer (fun c ->
+                        { c with
+                            Image = None
+                            Build = Some { ContextPath = "tests/fixtures/docker-owner"; DockerfilePath = None } })
+                let! _, sandbox = startOrFail spec
+                let! _, out, _ = runInSandbox sandbox "cat" [ "/owner" ] Map.empty None
+                do! sandbox.Dispose ()
+                let expected =
+                    sprintf "%d:%d" (int (Node.Api.``process``.getuid ())) (int (Node.Api.``process``.getgid ()))
+                Expect.equal (out.Trim ()) expected "the uid and gid of the process that built it"
+            })
+
             testCaseAsync "the Manager's secret store feeds resolve-at-spawn from the session's own scope (Plan 06)" (async {
                 // A store seeded with a session-scoped secret and a bound user's secret,
                 // resolved through the SAME resolver the control route serves, then

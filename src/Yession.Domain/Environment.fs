@@ -20,6 +20,26 @@ module ContainerImage =
 
 type ContainerBuildSpec = { ContextPath : string; DockerfilePath : string option }
 
+module ContainerBuildSpec =
+
+    /// The build args that every image build gets: the uid and the gid that the session
+    /// runs as, under `USER_UID` and `USER_GID`. Those are the names that a dev container's
+    /// Dockerfile already takes them by, so one Dockerfile serves a person's container and a
+    /// session's alike.
+    ///
+    /// The session mounts its checkouts into a container, and they belong to the session's
+    /// uid on the host. A container runs its image's user, root unless the image says
+    /// otherwise, and root writes them with `DAC_OVERRIDE`. A tool that refuses root (smolvm's
+    /// workspace mapping, for one) needs a user who owns them, and only the session knows
+    /// which uid that is. So a Dockerfile that declares the two `ARG`s can make that user and
+    /// name it in `USER`. A Dockerfile that declares neither builds as before.
+    ///
+    /// Build args and not a `user:` key that runs the container as the uid: a user that the
+    /// image made has a home and a name, and directories the image gave it, which a new
+    /// volume takes its owner from. A bare uid has none of them.
+    let ownerArgs (uid: int) (gid: int) : (string * string) list =
+        [ "USER_UID", string uid; "USER_GID", string gid ]
+
 type MountSource =
     | HostPath of string
     | NamedVolume of string
