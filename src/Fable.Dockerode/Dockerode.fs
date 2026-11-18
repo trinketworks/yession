@@ -63,6 +63,19 @@ module Labels =
 
     let ofList (labels: (string * string) list) : Labels = ofEntries (Array.ofList labels)
 
+/// An image build's `--build-arg`s: names to values. Opaque, and made only by
+/// `BuildArgs.ofList`, for the reason `Labels` is: an argument's NAME is the Dockerfile's.
+type BuildArgs =
+    interface end
+
+[<RequireQualifiedAccess>]
+module BuildArgs =
+
+    [<Emit("Object.fromEntries($0)")>]
+    let private ofEntries (entries: (string * string) array) : BuildArgs = jsNative
+
+    let ofList (args: (string * string) list) : BuildArgs = ofEntries (Array.ofList args)
+
 /// What a `HostConfig.Mounts` entry's source is: a host path bound in, or a named volume.
 [<StringEnum; RequireQualifiedAccess>]
 type MountType =
@@ -214,6 +227,8 @@ type BuildOptions =
     abstract memory: float with get, set
     /// Memory plus swap, in bytes. Equal to `memory`, a build gets no swap.
     abstract memswap: float with get, set
+    /// `--build-arg`s. docker-modem writes the object as the JSON that the Engine API reads.
+    abstract buildargs: BuildArgs with get, set
 
 /// A running `docker exec` handle.
 type [<AllowNullLiteral>] Exec =

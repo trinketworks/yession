@@ -516,8 +516,10 @@ The last section holds trust boundaries as sharp as the first section's.
 
   The container runs the image's default (usually root) user, by DECISION. With
   `DAC_OVERRIDE`, that root bypasses file permissions on anything MOUNTED, so the boundary is the
-  mount set (`mountPlan`: the session's checkouts and what the operator granted). Non-root breaks
-  the named workspace volume, which Docker creates root-owned. Files written through a BIND
+  mount set (`mountPlan`: the session's checkouts and what the operator granted). An image that
+  yession builds can name a user who owns the checkouts, from the build args `USER_UID` and
+  `USER_GID` (`ContainerBuildSpec.ownerArgs`). Non-root breaks the named workspace volume,
+  which Docker creates root-owned, so such a sandbox works in a checkout. Files written through a BIND
   mount belong to root on the host: a nuisance, not an escape.
 
   Each session's containers share one Docker network of their own (`DockerSandbox.Network`).

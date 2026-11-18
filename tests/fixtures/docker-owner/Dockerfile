@@ -1,0 +1,4 @@
+FROM alpine:3
+ARG USER_UID
+ARG USER_GID
+RUN echo "$USER_UID:$USER_GID" > /owner
