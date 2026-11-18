@@ -38,6 +38,7 @@ let private policy : SandboxPolicy =
       Binds = []
       Volumes = []
       SeatbeltRules = []
+      Devices = []
       Realisation = []
       Env = Map.empty
       WorkingDirectory = None
