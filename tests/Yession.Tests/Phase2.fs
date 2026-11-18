@@ -464,6 +464,15 @@ let private sandboxPolicyTests =
             Expect.isTrue (HostLimits.can HostDistinction.SocketsByPath docker) "a bind mount is per path"
             Expect.isFalse (HostLimits.can HostDistinction.EgressByHost docker) "and it filters nothing"
 
+        // A device node is a provision, as a named volume is: only docker has a `--device`
+        // to put one in, and every other backend withholds the grant with a reason.
+        testCase "only docker passes a device of the host through" <| fun () ->
+            let passes =
+                [ DockerBackend; SrtBackend; HostBackend; SeatbeltBackend ]
+                |> List.filter (fun backend ->
+                    Sandboxes.limitsFor backend Node.Base.Platform.Linux |> HostLimits.can HostDistinction.Devices)
+            Expect.equal passes [ DockerBackend ] "docker, and no other backend"
+
         // The backend's own consequences ride its baseline, not every repo's file. The
         // session bind-mounts checkouts owned by the operator's uid into a container
         // running as the image's user, and git refuses a repository its caller does not

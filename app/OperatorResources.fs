@@ -68,7 +68,10 @@ let private canonicalPaths (file: ProfileFile) : Result<ProfileFile, string> =
         | Variable _
         | Volume _
         | Connection _
-        | Seatbelt _ -> None)
+        | Seatbelt _ -> None
+        // A device is a path of the host, and docker refuses one that is not a device
+        // node. A symlink to one is still one, so there is nothing for this check to add.
+        | Device _ -> None)
     |> function
         | Some reason -> Error reason
         | None -> Ok file

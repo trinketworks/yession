@@ -580,7 +580,9 @@ let limitsFor (backend: SandboxBackend) (platform: Node.Base.Platform) : HostLim
     // rule for it. srt on a Mac writes a profile of its own, and takes none.
     | SeatbeltBackend ->
         HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.EgressByHost; HostDistinction.SeatbeltRules ]
-    | DockerBackend -> HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.NamedVolumes ]
+    // `--device` passes a device of the host into the container at its own path.
+    | DockerBackend ->
+        HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.NamedVolumes; HostDistinction.Devices ]
 
 /// What a backend can distinguish on the host this process is running on.
 ///
@@ -741,7 +743,9 @@ type GrantedLeaves =
       Binds : ResourceMount list
       Volumes : (string * string * ResourceMountMode) list
       /// Seatbelt rules, each as the operator wrote it. The seatbelt backend reads them.
-      Rules : SeatbeltAllow list }
+      Rules : SeatbeltAllow list
+      /// Devices of the host, by path. The docker backend reads them.
+      Devices : string list }
 
 let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
     let rec fold (acc: GrantedLeaves) remaining =
@@ -755,7 +759,8 @@ let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
                     Sockets = List.rev acc.Sockets
                     Binds = List.rev acc.Binds
                     Volumes = List.rev acc.Volumes
-                    Rules = List.rev acc.Rules }
+                    Rules = List.rev acc.Rules
+                    Devices = List.rev acc.Devices }
         | leaf :: rest ->
             match leaf with
             | Mount mount ->
@@ -807,8 +812,19 @@ let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
             // Only the seatbelt backend takes one. The realisation withheld it from every
             // other backend before this fold ran, as for a volume.
             | Seatbelt rule -> fold { acc with Rules = rule :: acc.Rules } rest
+            // Only the container backend passes one through. The realisation withheld it
+            // from every other backend before this fold ran, as for a volume.
+            | Device path -> fold { acc with Devices = path :: acc.Devices } rest
     fold
-        { Reads = []; Writes = []; Domains = []; Sockets = []; Env = Map.empty; Binds = []; Volumes = []; Rules = [] }
+        { Reads = []
+          Writes = []
+          Domains = []
+          Sockets = []
+          Env = Map.empty
+          Binds = []
+          Volumes = []
+          Rules = []
+          Devices = [] }
         leaves
 
 /// The directories of granted executables, for PATH.
@@ -1080,6 +1096,7 @@ let policyFor
           Binds = granted'.Binds
           Volumes = granted'.Volumes
           SeatbeltRules = granted'.Rules
+          Devices = granted'.Devices
           Realisation = differences
           Env = env
           // What the sandbox ASKED to start in, RESOLVED — the workspace when it asked
@@ -2058,6 +2075,19 @@ module DockerSandbox =
                                             // still far below docker's own default set — no
                                             // NET_RAW, no SETUID/SETGID, no MKNOD — and
                                             // no-new-privileges stays.
+                                            // The devices the operator granted, each at its
+                                            // own path. `rw` and not `rwm`: the container
+                                            // opens the node docker made, and makes none.
+                                            // No capability is added for one: root opens
+                                            // a node with the DAC_OVERRIDE below.
+                                            host.Devices <-
+                                                policy.Devices
+                                                |> List.map (fun path ->
+                                                    jsOptions<DK.DeviceMapping> (fun device ->
+                                                        device.PathOnHost <- path
+                                                        device.PathInContainer <- path
+                                                        device.CgroupPermissions <- "rw"))
+                                                |> List.toArray
                                             host.CapDrop <- [| "ALL" |]
                                             host.CapAdd <- [| "CHOWN"; "FOWNER"; "DAC_OVERRIDE" |]
                                             host.SecurityOpt <- [| "no-new-privileges" |]
@@ -3821,6 +3851,7 @@ module AgentSandbox =
           Binds = []
           Volumes = []
           SeatbeltRules = []
+          Devices = []
           Realisation = []
           Env = env
           WorkingDirectory = None

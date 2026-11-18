@@ -30,7 +30,8 @@ module OperatorProfile =
     let private fileKeys = [ "version"; "resources"; "always"; "agent"; "sandboxes"; "container" ]
     let private containerKeys = [ "mem_limit"; "pids_limit"; "cgroup_parent" ]
     let private agentKeys = [ "guidance"; "prompt" ]
-    let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "connection"; "seatbelt" ]
+    let private leafKeys =
+        [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "connection"; "seatbelt"; "device" ]
     let private mountKeys = [ "from"; "at"; "mode" ]
     let private volumeKeys = [ "name"; "at"; "mode"; "maintain" ]
     let private maintainKeys = [ "pin"; "every" ]
@@ -219,6 +220,22 @@ module OperatorProfile =
                 | Ok leaves -> Decode.succeed leaves
                 | Error e -> Decode.fail e)
 
+    /// `device:` is one path or a list of them, each a device of the host under `/dev`,
+    /// passed into the sandbox at the same path. Absolute and without `..`, because docker
+    /// reads it on the host, and a relative one means wherever the daemon happens to run.
+    let private devices : Decoder<ResourceLeaf list> =
+        stringList
+        |> Decode.andThen (fun paths ->
+            match
+                paths
+                |> List.tryFind (fun path ->
+                    not (path.StartsWith "/dev/") || path.Split('/') |> Array.contains "..")
+            with
+            | Some path ->
+                Decode.fail (
+                    sprintf "device '%s' is not a path under /dev. Name the device node, like /dev/kvm" path)
+            | None -> Decode.succeed (paths |> List.map Device))
+
     /// `sensitive` marked a resource as one to ask about. Whether a grant asks is its kind's
     /// to say now (`ResourceClosure.asksItsUser`), so the key is refused whatever its value,
     /// and BY NAME rather than left to `noUnknownKeys`: a file carrying it says something
@@ -262,13 +279,14 @@ module OperatorProfile =
                 @ (execs |> List.map Exec)
                 @ volumes
                 @ connections
-                @ (get.Optional.Field "seatbelt" seatbeltRules |> Option.defaultValue [])))
+                @ (get.Optional.Field "seatbelt" seatbeltRules |> Option.defaultValue [])
+                @ (get.Optional.Field "device" devices |> Option.defaultValue [])))
         |> Decode.andThen (fun leaves ->
             // A resource that grants nothing is a name that reads as configuration and is
             // none — the same failure an unknown key would be, arriving by a different route.
             failIf
                 (List.isEmpty leaves)
-                "this resource grants nothing. Name at least one of: mount, socket, endpoint, env, exec, volume, connection or seatbelt"
+                "this resource grants nothing. Name at least one of: mount, socket, endpoint, env, exec, volume, connection, seatbelt or device"
                 (Decode.succeed (ResourceDecl.Leaf leaves)))
 
     /// An ARRAY is a composition.

@@ -77,11 +77,21 @@ type Mount =
     abstract Target: string with get, set
     abstract ReadOnly: bool with get, set
 
+/// One device of the host in a container: `docker run --device`.
+[<AllowNullLiteral>]
+type DeviceMapping =
+    abstract PathOnHost: string with get, set
+    abstract PathInContainer: string with get, set
+    /// What the container's device cgroup allows on it: `r`, `w` and `m` (make a node).
+    abstract CgroupPermissions: string with get, set
+
 /// The half of a container's creation that is about the host it runs on rather than the
 /// process it runs.
 [<AllowNullLiteral>]
 type HostConfig =
     abstract Mounts: Mount array with get, set
+    /// `--device`: devices of the host, each at the path the container sees it.
+    abstract Devices: DeviceMapping array with get, set
     /// `name:address` lines for the container's `/etc/hosts`.
     abstract ExtraHosts: string array with get, set
     abstract CapDrop: string array with get, set

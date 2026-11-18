@@ -244,6 +244,24 @@ know stops the start of its sandbox, and the refusal shows what `sandbox-exec` s
 that lets a signal out of the sandbox (`(allow signal)`) also stops the start: the stop of
 such a sandbox would end processes of the host.
 
+A resource can pass a device of the host into a container, under `device:`. Write one path
+under `/dev`, or a list of them:
+
+```yaml
+resources:
+  kvm:
+    device: /dev/kvm
+```
+
+The container gets the device at the same path, and can read and write it. It gets no
+capability for it: root in the container opens the node as it opens a file. A device reaches
+the host's kernel, and each sandbox that holds it shares it, so only you grant one. A
+repository selects it by name, and its user is not asked. Only the docker backend passes a
+device through. A sandbox on another backend that `uses:` the resource refuses to start, and
+one that `wants:` it starts without the device. `/dev/kvm` lets a repository's tests boot a
+VM. On a virtual machine, the host has `/dev/kvm` only when its hypervisor offers nested
+virtualization.
+
 The same file may declare `sandboxes:` in the form a repo's `yession.yaml` uses
 (`ConfigFile.parseSandboxes` in `src/Yession.Domain/Config.fs`). Boot prints the notes of
 `ConfigAnalysis.fs` on what is legal but likely unmeant.

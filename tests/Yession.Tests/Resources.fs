@@ -59,10 +59,11 @@ let private leafShapesFor (i: int) (mode: ResourceMountMode) : ResourceLeaf list
           Volume (sprintf "vol%d" i, sprintf "/vol/%d" i, (if mode = ResourceMountMode.Read then mode else ResourceMountMode.Write))
           Exec (sprintf "/bin/tool%d" i)
           Connection (sprintf "conn%d" i, ConnectionRoute.Git)
-          Seatbelt (SeatbeltAllow.parse (sprintf "(allow mach-lookup (global-name \"svc%d\"))" i) |> expect) ]
+          Seatbelt (SeatbeltAllow.parse (sprintf "(allow mach-lookup (global-name \"svc%d\"))" i) |> expect)
+          Device (sprintf "/dev/d%d" i) ]
     for shape in shapes do
         match shape with
-        | Mount _ | Socket _ | Endpoint _ | Variable _ | Volume _ | Exec _ | Connection _ | Seatbelt _ -> ()
+        | Mount _ | Socket _ | Endpoint _ | Variable _ | Volume _ | Exec _ | Connection _ | Seatbelt _ | Device _ -> ()
     shapes
 
 /// Every mount mode, proved total the same way.
@@ -87,14 +88,16 @@ let private distinctions : HostDistinction list =
           HostDistinction.EgressByHost
           HostDistinction.OverlayMounts
           HostDistinction.NamedVolumes
-          HostDistinction.SeatbeltRules ]
+          HostDistinction.SeatbeltRules
+          HostDistinction.Devices ]
     for distinction in all do
         match distinction with
         | HostDistinction.SocketsByPath
         | HostDistinction.EgressByHost
         | HostDistinction.OverlayMounts
         | HostDistinction.NamedVolumes
-        | HostDistinction.SeatbeltRules -> ()
+        | HostDistinction.SeatbeltRules
+        | HostDistinction.Devices -> ()
     all
 
 /// A host that can express some arbitrary subset of the distinctions.
@@ -494,6 +497,18 @@ let tests =
                   """sb:(allow network-bind (local ip "localhost:*"))""" ]
                 "two rules, two grants"
 
+        // A device is the operator's path of the host, and docker reads it on the host.
+        testCase "a device resource decodes to one leaf for each path" <| fun () ->
+            Expect.equal
+                (resolved """{ "device": [ "/dev/kvm", "/dev/fuse" ] }""" |> ResourceClosure.describe)
+                [ "dev:/dev/fuse"; "dev:/dev/kvm" ]
+                "two devices, two grants"
+
+        testCase "a device outside /dev is refused at the resource that names it" <| fun () ->
+            let result =
+                OperatorProfile.parse """{ "version": 1, "resources": { "vm": { "device": "/dev/../etc/shadow" } } }"""
+            Expect.isError result "a path that climbs out of /dev is no device of the host"
+
         testCase "one seatbelt rule may be written bare" <| fun () ->
             Expect.equal
                 (resolved """{ "seatbelt": "(allow process-info*)" }""" |> ResourceClosure.describe)
@@ -812,7 +827,8 @@ let tests =
                    Volume ("yession-nix", "/nix", ResourceMountMode.Write)
                    Variable ("CI", VariableValue.Text "1")
                    Exec "/usr/bin/git"
-                   Seatbelt (SeatbeltAllow.parse """(allow mach-lookup (global-name "com.apple.sysmond"))""" |> expect) ]
+                   Seatbelt (SeatbeltAllow.parse """(allow mach-lookup (global-name "com.apple.sysmond"))""" |> expect)
+                   Device "/dev/kvm" ]
                  |> List.map ResourceLeaf.describe)
                 [ "path:/nix:ro"
                   "path:/h/.npm>/root/.npm:ovl"
@@ -822,7 +838,8 @@ let tests =
                   "vol:yession-nix>/nix:rw"
                   "env:CI=1"
                   "exec:/usr/bin/git"
-                  """sb:(allow mach-lookup (global-name "com.apple.sysmond"))""" ]
+                  """sb:(allow mach-lookup (global-name "com.apple.sysmond"))"""
+                  "dev:/dev/kvm" ]
                 "the notation"
 
         // A variable's value is the one part of a grant that is arbitrary text, so it is the
@@ -852,7 +869,8 @@ let tests =
                   Volume ("yession-nix", "/nix", ResourceMountMode.Write)
                   Variable ("CI", VariableValue.Text "1")
                   Exec "/usr/bin/git"
-                  Seatbelt (SeatbeltAllow.parse "(allow process-info*)" |> expect) ] do
+                  Seatbelt (SeatbeltAllow.parse "(allow process-info*)" |> expect)
+                  Device "/dev/kvm" ] do
                 let written = ResourceLeaf.describe leaf
                 let kind = written.Substring (0, written.IndexOf ':' + 1)
                 Expect.isTrue
@@ -937,7 +955,8 @@ let tests =
                     | Socket _
                     | Endpoint _
                     | Volume _
-                    | Seatbelt _ -> ()
+                    | Seatbelt _
+                    | Device _ -> ()
             }
 
         // Every difference is one of the two directions, and which one is not a detail: a
