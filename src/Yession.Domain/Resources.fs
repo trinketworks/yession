@@ -131,7 +131,7 @@ module SeatbeltAllow =
                         | _ -> scan (index + 1) depth false false
             scan 0 0 false false
 
-/// The eight primitives, and there is no ninth.
+/// The nine primitives, and there is no tenth.
 type ResourceLeaf =
     | Mount of ResourceMount
     | Socket of path: string
@@ -182,6 +182,18 @@ type ResourceLeaf =
     /// ONE rule, for the reason a variable is one leaf: a set of rule lists does not
     /// deduplicate.
     | Seatbelt of SeatbeltAllow
+    /// A device of the host, passed into the sandbox at the same path: `/dev/kvm`, so a
+    /// repository's tests can boot a VM. Only a container backend passes one through; every
+    /// other backend withholds it, because none of them has a place to put it.
+    ///
+    /// The operator's alone, as a volume is. A device is a door into the host's kernel and
+    /// the hardware under it, shared with every sandbox that holds it, and a repository
+    /// cannot write a host path in its file. The session's user is not asked
+    /// (`ResourceClosure.asksItsUser`): the harm lands on the host, not on them.
+    ///
+    /// The same path on both sides, so there is no `at`: a tool looks for a device where the
+    /// kernel puts it, and a device somewhere else is one nothing finds.
+    | Device of path: string
 
 /// One resource as the operator declared it: either a thing, or a name for several things.
 [<RequireQualifiedAccess>]
@@ -206,6 +218,7 @@ type ResourceTarget =
     /// A rule occupies itself. A profile is the union of its allows, so two rules that
     /// differ never collide.
     | RuleTarget of SeatbeltAllow
+    | DeviceTarget of path: string
 
 module ResourceLeaf =
 
@@ -221,6 +234,7 @@ module ResourceLeaf =
         | Exec path -> ExecTarget path
         | Connection (name, route) -> ConnectionTarget (name, route)
         | Seatbelt rule -> RuleTarget rule
+        | Device path -> DeviceTarget path
         // A volume occupies the same axis a mount does — a container path — so a volume
         // and a mount at one target collide like two mounts would.
         | Volume (_, at, _) -> MountTarget at
@@ -272,6 +286,7 @@ module ResourceLeaf =
         // The text of the rule, with no quotes around it. A rule opens with a
         // parenthesis, and the parenthesis that closes it says where the grant ends.
         | Seatbelt rule -> sprintf "sb:%s" (SeatbeltAllow.text rule)
+        | Device path -> sprintf "dev:%s" path
 
     /// Every colliding pair in a set of leaves.
     ///
@@ -327,7 +342,8 @@ module ResourceClosure =
         | Endpoint _
         | Variable _
         | Exec _
-        | Seatbelt _ -> false
+        | Seatbelt _
+        | Device _ -> false
 
     /// Whether this selection waits for a person to approve it: exactly when it holds a
     /// connection.
@@ -403,6 +419,10 @@ type HostDistinction =
     /// A rule in Seatbelt's own language, which a sandbox holds as the operator wrote it.
     /// A backend that writes no Seatbelt profile has no place to put one.
     | SeatbeltRules
+    /// A device of the host passed into the sandbox. A provision, as `NamedVolumes` is:
+    /// the host backend allows everything and still has no device node to give a sandbox
+    /// that the host does not already show it.
+    | Devices
 
 /// What this host can express. The THIRD author of a grant, after the operator who named it
 /// and the repo that selected it, and the only one that is not a person.
@@ -425,7 +445,8 @@ module HostLimits =
                   HostDistinction.EgressByHost
                   HostDistinction.OverlayMounts
                   HostDistinction.NamedVolumes
-                  HostDistinction.SeatbeltRules ])
+                  HostDistinction.SeatbeltRules
+                  HostDistinction.Devices ])
 
     let of' (distinctions: HostDistinction list) : HostLimits = HostLimits (Set.ofList distinctions)
 
@@ -502,6 +523,11 @@ module RealisedClosure =
                 HostDistinction.SeatbeltRules,
                 LeafRealisation.Withheld
                     "only the seatbelt backend takes a Seatbelt rule. Grant this where Seatbelt confines the sandbox, not here")
+        | Device _ ->
+            Some (
+                HostDistinction.Devices,
+                LeafRealisation.Withheld
+                    "only a container backend passes a device through. Grant this where the sandbox is a container, not here")
         | Variable _
         | Exec _
         // Whether this backend can be reached by the connection's route is the credential
@@ -639,6 +665,10 @@ module GrantNotation =
             "sb:RULE",
             "a rule of a Seatbelt profile, as the operator wrote it. Only a sandbox that \
              Seatbelt confines holds it"
+        | Device _ ->
+            "dev:PATH",
+            "a device of the host, at the same path in the sandbox. It reaches the host's \
+             kernel, and every sandbox that holds it shares it. Only a container holds it"
 
     /// One leaf per kind. What makes `kind` a total match over the vocabulary rather than a
     /// list somebody keeps in step with it.
@@ -650,7 +680,8 @@ module GrantNotation =
           Variable ("CI", VariableValue.Text "1")
           Exec "/usr/bin/git"
           Connection ("github", ConnectionRoute.Git)
-          Seatbelt (SeatbeltAllow "(allow mach-lookup (global-name \"com.apple.sysmond\"))") ]
+          Seatbelt (SeatbeltAllow "(allow mach-lookup (global-name \"com.apple.sysmond\"))")
+          Device "/dev/kvm" ]
 
     /// Whether a written grant is of this kind, by the token the RENDERER emits for it —
     /// everything up to its first colon, read off `describe` rather than off the shape

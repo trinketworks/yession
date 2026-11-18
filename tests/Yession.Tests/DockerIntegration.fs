@@ -515,6 +515,27 @@ let tests =
                 TestFiles.removeTree dir
             })
 
+            // A device the operator grants is a device node in the container. /dev/kmsg is on
+            // every Linux host, and docker puts none in a container unasked.
+            testCaseAsync "a granted device of the host is a device node in the container" (async {
+                let createSandbox =
+                    Sandboxes.forBackend None DockerBackend (DockerFixture.quietNetwork ()) (DockerFixture.name ()) alpineSpec
+                    |> expect
+                let policy =
+                    Sandboxes.policyFor
+                        DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) Map.empty Map.empty None None None None
+                        [ Device "/dev/kmsg" ]
+                        Set.empty
+                        EnvironmentSpec.defaults
+                    |> expect
+                match! createSandbox policy with
+                | Error reason -> failwithf "docker sandbox failed: %s" reason
+                | Ok sandbox ->
+                    let! found, _, _ = runInSandbox sandbox "test" [ "-c"; "/dev/kmsg" ] Map.empty None
+                    do! sandbox.Dispose ()
+                    Expect.equal found (SandboxExited 0) "/dev/kmsg is a character device in the container"
+            })
+
             testCaseAsync "build spec: an image is built from a context and run" (async {
                 let spec =
                     alpineSpec

@@ -721,8 +721,8 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     only by the routes their own trust in that repo grants, read from their record for each
     block, and only from their own connection (`RepoTrust.granted`, `GrantedRoutes`). A repo
     runs here with the GitHub of a person whose own act offered their trust (`RepoTrusted`).
-    Joining a session never does. A volume or a socket reaches other sessions and the host, so
-    the operator decides it in the profile, and a volume states its mode there. The session's
+    Joining a session never does. A volume, a socket or a device reaches other sessions and the
+    host, so the operator decides it in the profile, and a volume states its mode there. The session's
     user is not asked about it.
 26. A repository's container limits narrow the operator's, and only the operator names a
     cgroup (`ContainerSpec.forDaemon`, `ContainerCeiling`).

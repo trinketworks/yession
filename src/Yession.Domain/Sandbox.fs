@@ -176,6 +176,10 @@ type SandboxPolicy =
       /// takes one. Every other backend has the leaf withheld before a policy exists, as
       /// for `Volumes`.
       SeatbeltRules : SeatbeltAllow list
+      /// Granted devices of the host, each passed in at its own path. Only a container
+      /// backend passes one through. Every other backend has the leaf withheld before a
+      /// policy exists, as for `Volumes`.
+      Devices : string list
       Env : Map<string, string>
       /// Where this sandbox stands: an ABSOLUTE directory, and the two things that
       /// depend on it are why it has to be.
