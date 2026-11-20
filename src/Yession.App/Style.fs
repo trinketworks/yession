@@ -2101,7 +2101,7 @@ module Style =
     /// As wide as its text, not as wide as an input's default 20 characters: the rule under
     /// "session" ran 300px, twice the word, and began 8px before it in the padding below.
     /// `field-sizing:content` sizes the box to the value, or to the placeholder while there
-    /// is none, so an empty title still wears a rule as long as "session". It sizes the height
+    /// is none, so an empty title still wears a rule as long as its placeholder. It sizes the height
     /// too, and a placeholder's line is taller than the value's (38px against 32, measured
     /// live), so `wide:h-8` holds the box to the heading's line. The wrap is that
     /// wide, and the field stretches across it, so a long title the band cannot hold shrinks
@@ -2148,7 +2148,11 @@ module Style =
     /// On a wide screen the wrap carries the title's 2px optical drop and its 1px rule
     /// (`titleWrap`), which together put the padding box's bottom 1px lower than the line the
     /// id hung from when the field wore both. `wide:top-[calc(100%-1px)]` pays it back.
-    let titleId = "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full wide:top-[calc(100%-1px)] left-0 right-0 select-text"
+    /// On a wide screen it is as wide as its own text, not the title's: held to the wrap
+    /// (`right-0`), a short title or the empty one cut the 26-character id to about 11
+    /// (measured at 1440 under "session"). Nothing stands to its right on the band but the
+    /// terminals' door, far past it. A phone's wrap is the row, so there it stays bounded.
+    let titleId = "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full wide:top-[calc(100%-1px)] left-0 phone:right-0 select-text"
 
     /// A collaborator's selection highlight in the title: an absolutely-positioned span the
     /// browser places and sizes against the input's own box by measurement (the translucent

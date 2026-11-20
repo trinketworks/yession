@@ -759,6 +759,10 @@ module Dom =
         /// focus: a chapter nobody has named shows no name on its divider, and this is how
         /// the divider still says it can be given one.
         let chapterNamePlaceholder = "name this chapter"
+        /// What an untitled session's heading offers, in the chapter's words. It is a verb
+        /// phrase and not "session" because the empty title sizes to it (`Style.titleInput`),
+        /// and one word made the heading narrower than the id hanging under it.
+        let sessionTitlePlaceholder = "name this session"
         /// The break's label says how long the session was away; its accessible name and its
         /// tooltip say the whole of what pressing it does, because the visible words are a
         /// duration and a duration does not announce that it is a control.

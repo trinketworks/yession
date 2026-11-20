@@ -1507,7 +1507,7 @@ module View =
                      (`commitOnEnter`): it finishes with the field. A phone draws the hint on
                      the key itself, so the promise is legible before it is pressed rather
                      than only after. -->
-                <input type="text" class="{Style.titleInput}" data-session-title aria-label="Session title" placeholder="session"
+                <input type="text" class="{Style.titleInput}" data-session-title aria-label="Session title" placeholder="{Dom.Text.sessionTitlePlaceholder}"
                        autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
                        enterkeyhint="done"
                        value="{titleStr}"
