@@ -82,6 +82,18 @@ let private routeTests =
                   "http.https://github.com/.sslCAInfo", "/run/yession/proxy/bundle.pem" ]
                 "both scoped to github.com, so git's other hosts are as they were"
 
+        // Which door is the proxy's admission, nothing else: a backend the proxy admits gets
+        // no `insteadOf`, and one it never admits (its egress is its policy) keeps one.
+        testCase "a container's git reaches the gateway through the credential proxy" <| fun () ->
+            Expect.equal
+                (GitHubAccess.gitDoor DockerBackend (Some { Host = "host.docker.internal"; Port = 4321 }))
+                (Some GitGateway.Door.Proxy)
+                "through the proxy, whatever listener it could reach"
+
+        testCase "an srt sandbox's git reaches the gateway's own listener" <| fun () ->
+            let listener : Sandboxes.HostDoor = { Host = "127.0.0.2"; Port = 4321 }
+            Expect.equal (GitHubAccess.gitDoor SrtBackend (Some listener)) (Some (GitGateway.Door.Listener listener)) "by the insteadOf"
+
         testCase "a block behind the proxy is told its loan for github.com alone" <| fun () ->
             let key, _ = GitGateway.loanConfig GitGateway.Door.Proxy "s3cret"
             Expect.equal key "http.https://github.com/.extraheader" "the proxy hands it to the gateway, and withholds it from everything else"

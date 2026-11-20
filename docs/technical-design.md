@@ -503,6 +503,12 @@ names the ROUTES that forward it, each its own grant (`conn:github/git`): `git` 
 gateway and `api` is the credential proxy (`ConnectionRoute`). The session refuses a sandbox
 that needs a route the provider does not offer.
 
+A container's `git` route needs nothing declared: the session tells its git, scoped to
+github.com, to go through the credential proxy and trust the proxy's bundle, and git keeps
+`https://github.com/` (`GitHubAccess.provideGit`,
+[ADR](decisions/2026-11-20-a-container-reaches-github-git-through-the-credential-proxy.md)).
+An srt sandbox's git is rewritten to the gateway's own listener.
+
 `${env.NAME}` in a value is what NAME would be in this sandbox without that line (under
 docker, the image's own `ENV`). The backend resolves it (`Sandboxes.environment`).
 `EnvTemplate.fs` holds the grammar.
@@ -708,9 +714,13 @@ Update this list before a change that breaks a rule, in the same PR, and say why
     The session keeps only the name and the description of each skill, and it records each
     change of the list (`RepoSkillsChanged`).
 21. No git process holds a GitHub credential. git reaches github.com only through the git
-    gateway (`GitGateway`), which adds the credential of a loan on the way. A request with no
-    live loan goes up with no credential. A work sandbox's git and the session's own clone and
-    fetch take the same route.
+    gateway's handler (`GitGateway`), which adds the credential of a loan on the way. A request
+    with no live loan goes up with no credential. The handler has two doors
+    (`GitGateway.Door`): a sandbox the credential proxy admits (a container) keeps
+    `https://github.com/`, and the proxy hands git's three requests on github.com to the
+    handler and every other github.com path up with no credential (`GitHubAccess.gitRoute`).
+    An srt or seatbelt sandbox and the session's own clone and fetch reach the gateway's
+    listener by one `insteadOf`. Both doors name the same handler, loans and refusals.
 22. A string the agent supplied reaches a program only as an operand, never as an option. It
     stands after `--` or as an option's own argument, and a path operand is a `PathOperand`,
     which starts with `/` or `.`. A read-only tool never meets the gate, so this is what keeps

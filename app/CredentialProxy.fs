@@ -8,9 +8,11 @@ module Yession.Host.CredentialProxy
 // host. So `gh`, `curl` and anything else that reads a token from its environment work
 // unchanged, and the credential itself never enters the sandbox, its terminal, or the log.
 //
-// It is the git gateway's idea (`GitGateway.fs`) moved down a layer. The gateway rewrites
-// git's URLs to a plain-HTTP route of its own, which only works for a client that can be told
-// a different URL; a proxy works for any client that honours `HTTPS_PROXY`.
+// It is the git gateway's idea (`GitGateway.fs`) moved down a layer. The gateway's own
+// listener takes git's URLs rewritten to a plain-HTTP route of its own, which only works for a
+// client that can be told a different URL and does not refuse one; a proxy works for any
+// client that honours a proxy. So a container's git reaches the gateway's handler through here
+// too (`HandledRoute` below).
 //
 // Nothing here knows a provider. A provider DECLARES a route — its name for sentences, the
 // hosts its credential is spent on, the variables its tools read one from — and
