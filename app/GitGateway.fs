@@ -20,6 +20,16 @@ module Yession.Host.GitGateway
 // only thing in the sandbox is a capability that names this session's gateway and dies with
 // the sandbox. Full git, no token.
 //
+// That is one of two DOORS to the same handler (`Door`). A sandbox the credential proxy admits
+// (a container, the unconfined host) gets no `insteadOf`: its git keeps `https://github.com/`,
+// is told in config scoped to github.com to go through the proxy and trust its bundle, and the
+// proxy hands git's three requests on github.com to this handler (`Serve`,
+// `GitHubAccess.gitRoute`), naming the sandbox by its admission where the URL above names it
+// by a cap. A client that refuses a rewrite of github.com to another host (apm since 0.29.1)
+// sees none. srt and seatbelt sandboxes, which the proxy never admits, and the session's own
+// git keep the `insteadOf`. docs/decisions/2026-11-20-a-container-reaches-github-git-through-
+// the-credential-proxy.md has the measurements.
+//
 // What that buys beyond hiding a value: the credential is resolved on EVERY request, so a
 // refresh reaches a running sandbox; and a refusal is written in words. Git cannot show a
 // person an HTTP error body — a 401 from github.com becomes a credential prompt, and under
@@ -87,8 +97,9 @@ open Node.Buffer
 open Yession.Domain
 open Yession.Host.Interop
 
-/// The one host this gateway speaks for. A sandbox's git names it in the rewritten URL, and
-/// nothing else is admitted — the gateway is a route to github.com, not a proxy.
+/// The one host this gateway speaks for: named in the listener's rewritten URL, or the host
+/// whose git the credential proxy hands here. Nothing else is admitted — the gateway is a
+/// route to github.com's git, not a proxy.
 let remoteHost = "github.com"
 
 /// The path prefix a sandbox's git rewrites `https://github.com/` to, under this gateway.

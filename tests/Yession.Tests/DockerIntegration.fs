@@ -96,6 +96,87 @@ let private label (name: string) = sprintf "yession-session=%s" name
 
 module DK = Fable.Dockerode
 
+// --- github's git through the credential proxy --------------------------------------------
+
+/// Ubuntu 24.04's git and libcurl, which read their compiled-in bundle and not
+/// `SSL_CERT_FILE`: the git the trust config is for.
+let private ubuntuGitSpec =
+    { EnvironmentSpec.defaults with Runtime = Container { ContainerSpec.defaults with Image = Some { Name = "buildpack-deps"; Tag = Some "noble-scm" } } }
+
+/// A container's view of github's `git` route, as a session composes it: a gateway and a
+/// credential proxy whose github.com is `upstream`, both opened where its containers reach
+/// this host, and what `GitHubAccess.provideGit` gives a docker sandbox — the git config in
+/// `GIT_CONFIG_*`, and the proxy's bundle mounted where that config names it. The trust
+/// bundle sits under $HOME, for the reason `mkdtemp` says.
+let private withContainerGit
+    (upstream: string)
+    (body: GitGateway.Gateway -> CredentialProxy.Proxy -> Sandbox -> Map<string, string> -> Async<unit>)
+    : Async<unit> =
+    async {
+        let dir = mkdtemp ()
+        let! gateway = GitGateway.start (Sandboxes.hostDoorsHere ()) upstream ignore
+        let! proxy =
+            CredentialProxy.start
+                (Sandboxes.hostDoorsHere ())
+                []
+                [ GitHubAccess.gitRoute gateway ]
+                CredentialProxy.Egress.internet
+                (fun _ -> upstream)
+                (dir + "/trust.pem")
+                ignore
+        try
+            let doorOf (portAt: string -> int option) = Sandboxes.hostDoorHere (Interop.hostname ()) portAt DockerBackend
+            let provision =
+                GitHubAccess.provideGit gateway proxy DockerBackend (doorOf proxy.PortAt) (doorOf gateway.PortAt) SandboxRef.defaultRef
+                |> Result.defaultWith failwith
+            let mounts =
+                provision.Binds |> List.map (fun bind -> { Source = HostPath bind.From; Target = bind.At; Mode = ReadOnly })
+            let spec = ubuntuGitSpec |> withContainer (fun c -> { c with Mounts = c.Mounts @ mounts })
+            let reached (address: string) =
+                async {
+                    match! gateway.Open address with
+                    | Error reason -> return Error reason
+                    | Ok () -> return! proxy.Open address
+                }
+            let! _, sandbox = startOrFailOn (DockerFixture.network reached) spec
+            // Disposed and awaited before the case ends, so the fixture's own sweep never
+            // races a removal already in progress.
+            let! outcome = Async.Catch (body gateway proxy sandbox (Sandboxes.withGitConfig provision.GitConfig Map.empty))
+            do! sandbox.Dispose ()
+            match outcome with
+            | Choice1Of2 () -> ()
+            | Choice2Of2 e -> raise e
+        finally
+            Async.StartImmediate (
+                async {
+                    do! proxy.Close ()
+                    do! gateway.Close ()
+                    TestFiles.removeTree dir
+                }
+            )
+    }
+
+/// A clone of a small public repository on the real github.com, by the address a person
+/// writes, through `withContainerGit`; curl's trace on, so the TLS it spoke can be read.
+let private cloneThroughProxy : Async<SandboxRun * string> =
+    async {
+        let ran = ref None
+        do!
+            withContainerGit "https://github.com" (fun _ _ sandbox env ->
+                async {
+                    let! run, _, err =
+                        runInSandbox
+                            sandbox
+                            "git"
+                            [ "clone"; "--depth"; "1"; "https://github.com/octocat/Hello-World.git"; "/tmp/hello" ]
+                            (Map.add "GIT_CURL_VERBOSE" "1" env)
+                            None
+                    ran.Value <- Some (run, err)
+                })
+        return ran.Value |> Option.defaultWith (fun () -> failwith "git did not run")
+    }
+
+
 // --- The suite ---------------------------------------------------------------------------
 
 let tests =
@@ -601,6 +682,83 @@ let tests =
             // — the host's loopback under Colima and Docker Desktop, the bridge under a
             // native daemon — and this is the one place a wrong answer shows: a git in a
             // container that cannot reach its own session's gateway.
+            // apm refuses any `insteadOf` that moves github.com elsewhere, so a container's
+            // git keeps github.com's own address and reaches the gateway's handler through
+            // the credential proxy. Against the real github.com: a public repository reads
+            // with no loan, as it does anywhere.
+            testCaseAsync "a container's git clones a public github.com repository through the credential proxy" (async {
+                let! run, err = cloneThroughProxy
+                Expect.equal run (SandboxExited 0) (sprintf "the clone succeeded: %s" err)
+            })
+
+            testCaseAsync "a container's clone of github.com speaks TLS to the credential proxy, not around it" (async {
+                let! _, err = cloneThroughProxy
+                Expect.stringContains err "yession credential proxy" "the certificate git verified was the proxy's"
+            })
+
+            testCaseAsync "a container's git is told no insteadOf for github.com" (async {
+                do!
+                    withContainerGit "https://github.com" (fun _ _ sandbox env ->
+                        async {
+                            let! _, out, _ = runInSandbox sandbox "git" [ "config"; "--get-regexp"; "^url\\..*\\.insteadof$" ] env None
+                            Expect.equal (out.Trim ()) "" "no rewrite in effect"
+                        })
+            })
+
+            // The handler's scope is git's three requests. Anything else on github.com (an
+            // archive, LFS, the web) goes up as it came: a stand-in is not swapped there and
+            // the loan header is withheld. Against a recording github.com.
+            testCaseAsync "a non-git github.com path from a container carries no credential" (async {
+                let seen = ResizeArray<string option * string option> ()
+                let upstream =
+                    createServer (fun req res ->
+                        seen.Add (Interop.headerOf req "authorization", Interop.headerOf req GitGateway.loanHeader)
+                        res.writeHead (200, [ ResponseHeader.ContentType "text/plain" ])
+                        res.``end`` "an archive")
+                do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
+                try
+                    do!
+                        withContainerGit (sprintf "http://127.0.0.1:%d" (serverPort upstream)) (fun gateway proxy sandbox env ->
+                            async {
+                                let terminal = TerminalId.create "term-docker" |> expect
+                                let lender owner =
+                                    { CredentialProxy.Lender.Owner = owner
+                                      CredentialProxy.Lender.Resolve = fun () -> async { return Some "ghu_real" }
+                                      CredentialProxy.Lender.Refused = fun () -> async { () } }
+                                let standIn = proxy.Lend GitHubAccess.route terminal (lender CredentialFor.Deployment)
+                                let loan =
+                                    gateway.Lend
+                                        (GitGateway.Routed.Sandbox SandboxRef.defaultRef)
+                                        (GitGateway.Borrower.Terminal terminal)
+                                        { Owner = CredentialFor.Deployment
+                                          Resolve = fun () -> async { return Some "ghu_real" }
+                                          Refused = fun () -> async { () }
+                                          Spent = fun _ -> async { () } }
+                                // The proxy and the bundle the container's git was told.
+                                let told (suffix: string) =
+                                    env
+                                    |> Map.tryPick (fun key value ->
+                                        if key.StartsWith "GIT_CONFIG_KEY_" && value.EndsWith suffix then Map.tryFind (key.Replace ("KEY", "VALUE")) env
+                                        else None)
+                                let proxyUrl = told ".proxy" |> Option.get
+                                let bundle = told ".sslCAInfo" |> Option.get
+                                let! run, _, err =
+                                    runInSandbox
+                                        sandbox
+                                        "curl"
+                                        [ "-sS"; "--proxy"; proxyUrl; "--cacert"; bundle
+                                          "-H"; sprintf "Authorization: token %s" standIn
+                                          "-H"; sprintf "X-Yession-Loan: %s" loan
+                                          "https://github.com/octo/hello/archive/refs/heads/main.tar.gz" ]
+                                        Map.empty
+                                        None
+                                Expect.equal run (SandboxExited 0) (sprintf "curl reached github.com through the proxy: %s" err)
+                                Expect.equal (List.ofSeq seen) [ Some ("token " + standIn), None ] "the stand-in as it was sent, and no loan"
+                            })
+                finally
+                    upstream.close ignore
+            })
+
             testCaseAsync "a container reaches the session's git gateway by the name the backend promises" (async {
                 // github.com, played by a listener that answers anything with one line —
                 // seeing that line inside the container is the whole proof.

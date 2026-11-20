@@ -1507,30 +1507,18 @@ Async.StartImmediate (
                             let api =
                                 if List.contains ConnectionRoute.Api routes then CredentialProxy.forwardApi (sandboxBackend sandbox)
                                 else WorkSandboxes.CredentialForwarding.Forwarded WorkSandboxes.Provision.empty
+                            // The gateway's handler, through the door this sandbox's
+                            // backend has (`GitHubAccess.gitDoor`).
                             let git () =
                                 if not (List.contains ConnectionRoute.Git routes) then Ok WorkSandboxes.Provision.empty
                                 else
-                                    match gatewayDoorFor sandbox with
-                                    | None ->
-                                        let backend = backendOf sandbox
-                                        Error (
-                                            sprintf
-                                                "github cannot be forwarded by git into a %s sandbox: its git would have no route to this session's gateway"
-                                                (SandboxBackend.describe backend))
-                                    | Some door ->
-                                        let cap = gitGateway.Grant (GitGateway.Routed.Sandbox sandbox)
-                                        Ok
-                                            { WorkSandboxes.Provision.empty with
-                                                GitConfig = GitGateway.gitConfig door cap
-                                                // The route's host, for a backend whose egress
-                                                // would otherwise refuse it (srt) — at the
-                                                // gateway's port, by name and by address
-                                                // where srt's proxy re-judges the name.
-                                                Domains =
-                                                    Sandboxes.hostRouteHere
-                                                        (Interop.ownAddresses ())
-                                                        (sandboxBackend sandbox)
-                                                        door }
+                                    GitHubAccess.provideGit
+                                        gitGateway
+                                        credentialProxy
+                                        (sandboxBackend sandbox)
+                                        (doorFor credentialProxy.PortAt sandbox)
+                                        (gatewayDoorFor sandbox)
+                                        sandbox
                             match api with
                             | WorkSandboxes.CredentialForwarding.Unforwardable reason ->
                                 return WorkSandboxes.CredentialForwarding.Unforwardable reason
@@ -1575,7 +1563,7 @@ Async.StartImmediate (
                                         return BlockEnv.none
                                     else
                                         let! identity = identityFor owner
-                                        match gatewayDoorFor sandbox with
+                                        match GitHubAccess.gitDoor (sandboxBackend sandbox) (gatewayDoorFor sandbox) with
                                         | None -> return identity
                                         | Some door ->
                                             let secret =
@@ -1603,7 +1591,7 @@ Async.StartImmediate (
                                                                               Actor = Authority.author authority })
                                                                 return ()
                                                             } }
-                                            return { identity with GitConfig = Some (GitGateway.loanConfig (GitGateway.Door.Listener door) secret) }
+                                            return { identity with GitConfig = Some (GitGateway.loanConfig door secret) }
                                 }
                             // By `api`: the API's stand-in, lent to the same act as the push,
                             // so a block's `gh` and its `git push` spend one person's

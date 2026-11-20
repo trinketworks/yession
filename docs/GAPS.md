@@ -1312,7 +1312,8 @@ After the fixes land, one pass rewrites it to what still reproduces.
     the queue stays visible and editable, refusals stay recorded and attributed, and the seam is
     where the real classifier plugs in.
   - **A forwarded credential is a route, and the route's cap lives in the sandbox's env for that
-    sandbox's lifetime** (Plan 15 stage 2, reshaped by the git gateway). The header of
+    sandbox's lifetime** (Plan 15 stage 2, reshaped by the git gateway). In a container the cap
+    is the proxy admission in git's `http.https://github.com/.proxy`. The header of
     `app/GitGateway.fs` describes the route, the per-sandbox cap, the per-block loan (`__y_env`)
     and why a block can read another's live loan from `/proc`. On a Mac the same read is the
     sysctl `kern.procargs2`, and a profile of version 1 that has only `(deny default)` does
@@ -1335,7 +1336,8 @@ After the fixes land, one pass rewrites it to what still reproduces.
     credential or none, and a push otherwise gets a refusal in words. A person's acts with a
     credential are blocks, sent from the command line, like everyone's. Only `github` is
     forwardable so far. The gateway admits only git's three smart-HTTP requests to a repository
-    path, so a cap is not a token for the rest of github.com.
+    path, so a cap is not a token for the rest of github.com. Through the credential proxy the
+    same holds: every other github.com path goes up with no credential.
 
     A request with no live loan goes up with no credential, and github.com answers it as it
     answers anybody. So each process in a sandbox that forwards github by `git` reads a public
@@ -1347,7 +1349,9 @@ After the fixes land, one pass rewrites it to what still reproduces.
     and nothing else, and never under srt ([technical-design.md
     §4](technical-design.md#4-repo-local-configuration) has the `${proxy.…}` and
     `${github.token}` references). Nothing sets the trust bundle or the stand-in on a sandbox's
-    behalf: only an operator's resource `env` or a repo's declaration binds them. A sandbox that
+    behalf: only an operator's resource `env` or a repo's declaration binds them. The `git`
+    route is the exception for git alone: a container's git is told the proxy and its bundle
+    in git's own config, scoped to github.com. A sandbox that
     binds neither reaches the API through the proxy unauthenticated. The stand-in sits in the
     block's environment like the git loan, with the same transcript caveat. Unlike the gateway,
     the proxy admits every request to a declared host, so a live stand-in is the lender's whole
