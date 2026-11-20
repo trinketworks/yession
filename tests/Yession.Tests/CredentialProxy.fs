@@ -89,13 +89,19 @@ let private carryTests =
                       "connection", "keep-alive"
                       "proxy-authorization", "Basic cHJveHk="
                       "transfer-encoding", "chunked" ]
-            Expect.equal (names (upstreamHeaders sent None)) [ "user-agent"; "accept" ] "only what describes the request"
+            Expect.equal (names (upstreamHeaders [] sent None)) [ "user-agent"; "accept" ] "only what describes the request"
 
         // Whatever arrived in `authorization` is replaced, never joined: two would leave the
         // provider to choose, and the one it chose might be the stand-in.
         testCase "the authorization that goes up is the one decided, and it is the only one" <| fun () ->
-            let carried = upstreamHeaders (headers [ "authorization", "token ysn_1" ]) (Some "token ghu_real")
+            let carried = upstreamHeaders [] (headers [ "authorization", "token ysn_1" ]) (Some "token ghu_real")
             Expect.equal (Array.toList carried) [ "authorization", HeaderValue.Single "token ghu_real" ] "one, decided here"
+
+        // A handled host's handler can name something in a header (the git gateway's loan),
+        // and what it leaves to the proxy goes up without it, however the client cased it.
+        testCase "a header a handled route withholds does not go up" <| fun () ->
+            let sent = headers [ "x-held", "secret"; "accept", "*/*" ]
+            Expect.equal (names (upstreamHeaders [ "X-Held" ] sent None)) [ "accept" ] "the rest, as it came"
 
         testCase "the answer keeps every header but the three that described the upstream hop" <| fun () ->
             let received =
@@ -290,13 +296,13 @@ let private anywhere : Egress = { Egress.internet with Refuse = fun _ _ -> None 
 
 /// A proxy for both routes in front of `upstream`, on a port of its own, for `body`, with
 /// `egress` as its tunnel policy.
-let private withProxyTo (egress: Egress) (upstream: Upstream) (body: Proxy -> Async<unit>) : Async<unit> =
+let private withProxyHandling (handled: HandledRoute list) (egress: Egress) (upstream: Upstream) (body: Proxy -> Async<unit>) : Async<unit> =
     async {
         // Canonical, as the session's own is (`SessionLayout.prepareTrustBundle`).
         let dir =
             let made = TestFiles.tempDir "yession-credproxy-"
             Fs.canonical made |> Option.defaultValue made
-        let! proxy = CredentialProxy.start [ [ "127.0.0.1" ] ] [ route; other ] egress (fun _ -> upstream.Origin) (dir + "/trust.pem") ignore
+        let! proxy = CredentialProxy.start [ [ "127.0.0.1" ] ] [ route; other ] handled egress (fun _ -> upstream.Origin) (dir + "/trust.pem") ignore
         try
             do! body proxy
         finally
@@ -309,8 +315,23 @@ let private withProxyTo (egress: Egress) (upstream: Upstream) (body: Proxy -> As
             )
     }
 
+let private withProxyTo (egress: Egress) (upstream: Upstream) (body: Proxy -> Async<unit>) : Async<unit> =
+    withProxyHandling [] egress upstream body
+
 /// The same, tunnelling anywhere.
 let private withProxy (upstream: Upstream) (body: Proxy -> Async<unit>) : Async<unit> = withProxyTo anywhere upstream body
+
+/// A host whose provider takes every request (`takes`), answering with the sandbox it was
+/// told, or leaves every one to the proxy.
+let private handledBy (takes: bool) : HandledRoute =
+    { Host = "git.example.test"
+      Serve =
+        fun sandbox _ res ->
+            if takes then
+                res.writeHead (200, [ ResponseHeader.ContentType "text/plain" ])
+                res.``end`` ("handled for " + SandboxRef.render sandbox)
+            takes
+      Withheld = [] }
 
 let private reply (outcome: Result<Reply, string>) : Reply =
     match outcome with
@@ -513,6 +534,39 @@ let private portsTests =
                     async {
                         let standIn = proxy.Lend route terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
                         let! _ = request proxy "api.other.test" (Some ("token " + standIn))
+                        Expect.equal (List.ofSeq upstream.Authorizations) [ Some ("token " + standIn) ] "the stand-in, not the credential"
+                    })
+        }
+
+        testCaseAsync "a handled host's request its provider takes is answered by it, for the admitted sandbox" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxyHandling [ handledBy true ] anywhere upstream (fun proxy ->
+                    async {
+                        let! answered = request proxy "git.example.test" None
+                        Expect.stringContains (reply answered).Text (SandboxRef.render admitted) "the handler answered, naming the sandbox the capability admitted"
+                    })
+        }
+
+        testCaseAsync "a handled host's request its provider takes is not carried up" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxyHandling [ handledBy true ] anywhere upstream (fun proxy ->
+                    async {
+                        let! _ = request proxy "git.example.test" None
+                        Expect.isEmpty upstream.Authorizations "the host was never asked"
+                    })
+        }
+
+        // The handler's scope is the whole of what a credential reaches on its host: what it
+        // leaves goes up as it came, and a stand-in in it is the worthless value it looks like.
+        testCaseAsync "a handled host's request its provider leaves goes up with no stand-in swapped" <| async {
+            let! upstream = startUpstream ()
+            do!
+                withProxyHandling [ handledBy false ] anywhere upstream (fun proxy ->
+                    async {
+                        let standIn = proxy.Lend route terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
+                        let! _ = request proxy "git.example.test" (Some ("token " + standIn))
                         Expect.equal (List.ofSeq upstream.Authorizations) [ Some ("token " + standIn) ] "the stand-in, not the credential"
                     })
         }

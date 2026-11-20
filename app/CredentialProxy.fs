@@ -18,6 +18,12 @@ module Yession.Host.CredentialProxy
 // route's hosts, so a stand-in carried to another provider's host goes out as the worthless
 // value it is, and never as the credential behind it.
 //
+// A provider can also HANDLE a host (`HandledRoute`): TLS is terminated for it as for a declared
+// host, and each request is offered to the provider's own handler, with the sandbox its
+// admission names. What the handler leaves goes up as it came, with no credential and no
+// stand-in swapped. `GitHubAccess.gitRoute` is the one: github.com, whose three git requests
+// go to the git gateway's handler, so a container's git keeps github.com's own address.
+//
 // It has one door, a TCP port, for a sandbox that reaches the network directly — a container,
 // or the unconfined host — and is told `HTTPS_PROXY`. It binds where those reach this host,
 // as the git gateway does and for its reason (`Interop.Doors`): loopback, and a native
@@ -71,6 +77,20 @@ type CredentialRoute =
       /// `${<connection>.token}`, in a resource the operator wrote or a repo's declaration —
       /// and never by the provider on everybody's behalf.
       Hosts : string list }
+
+/// A host a provider answers itself, in part: TLS terminated here as for a declared host, and
+/// each request offered to the provider's own handler first. What the handler does not take
+/// goes up to the host as it came, with NO credential added and no stand-in swapped, so the
+/// handler's scope is the whole of what a credential reaches on this host. Data, as a
+/// `CredentialRoute` is: the proxy knows that a provider handles a host, and nothing of how.
+type HandledRoute =
+    { /// The one host, compared as DNS names are.
+      Host : string
+      /// Answer one decrypted request from the admitted sandbox: `true` when the handler took
+      /// it (and answers on `res`), `false` to leave it to the proxy.
+      Serve : SandboxRef -> IncomingMessage -> ServerResponse -> bool
+      /// Headers that mean something only to `Serve`, and never go up on what it leaves.
+      Withheld : string list }
 
 /// Whose credential answers a stand-in, resolved PER REQUEST — never captured, so a refresh
 /// reaches a sandbox already running.
@@ -265,11 +285,15 @@ let private droppedUpstream =
 /// this process terminated, and that Node decides for itself on the response it writes.
 let private droppedDownstream = set [ "connection"; "keep-alive"; "transfer-encoding" ]
 
-/// The headers carried UP: what the client sent, less the set above, then `authorization` as
-/// decided — the client's own, the stand-in swapped, or none.
-let upstreamHeaders (sent: (string * HeaderValue)[]) (authorization: string option) : (string * HeaderValue)[] =
+/// The headers carried UP: what the client sent, less the set above and less what a handled
+/// route withholds (`HandledRoute.Withheld`), then `authorization` as decided — the client's
+/// own, the stand-in swapped, or none.
+let upstreamHeaders (withheld: string list) (sent: (string * HeaderValue)[]) (authorization: string option) : (string * HeaderValue)[] =
     Array.append
-        (sent |> Array.filter (fun (name, _) -> not (Set.contains name droppedUpstream)))
+        (sent
+         |> Array.filter (fun (name, _) ->
+             not (Set.contains name droppedUpstream)
+             && not (withheld |> List.exists (fun w -> String.Equals (w, name, StringComparison.OrdinalIgnoreCase)))))
         (authorization |> Option.map (fun value -> "authorization", HeaderValue.Single value) |> Option.toArray)
 
 /// The headers carried back DOWN: the upstream's, less the three above.
@@ -458,6 +482,7 @@ let presentedCapability (proxyAuthorization: string) : string option =
 let start
     (addresses: string list list)
     (routes: CredentialRoute list)
+    (handled: HandledRoute list)
     (egress: Egress)
     (upstream: string -> string)
     (trustFile: string)
@@ -504,7 +529,7 @@ let start
 
     /// Carry one request up and its answer back, with `authorization` as decided. Answers
     /// the upstream's status, or `None` when no answer came and nothing has been written.
-    let forward (host: string) (req: IncomingMessage) (res: ServerResponse) (authorization: string option) : Async<int option> =
+    let forward (host: string) (withheld: string list) (req: IncomingMessage) (res: ServerResponse) (authorization: string option) : Async<int option> =
         Async.FromContinuations (fun (cont, _, _) ->
             // ONE answer, whatever arrives first: an upstream that errors after its response
             // ended would otherwise resume the caller twice.
@@ -517,7 +542,7 @@ let start
                 httpRequest
                     (upstream host + req.url)
                     req.``method``
-                    (upstreamHeaders (req.headerEntries ()) authorization)
+                    (upstreamHeaders withheld (req.headerEntries ()) authorization)
                     (fun reply ->
                         res.relayHead (reply.statusCode, downstreamHeaders (reply.headerEntries ()))
                         reply.pipe res
@@ -535,27 +560,32 @@ let start
             req.onError (fun _ -> up.destroy ())
             req.pipe up)
 
+    /// Carry one request up with `authorization` as decided, then `after` its status; a host
+    /// that did not answer is said in words.
+    let carry (host: string) (withheld: string list) (req: IncomingMessage) (res: ServerResponse) (authorization: string option) (after: int -> Async<unit>) =
+        async {
+            match! forward host withheld req res authorization with
+            | None -> answer res 502 (sprintf "%s could not be reached from this session" host)
+            | Some status -> do! after status
+        }
+
+    /// One carry, its fault said to the client while it still can be, and reported after.
+    let run (host: string) (res: ServerResponse) (work: Async<unit>) =
+        Async.StartImmediate (
+            async {
+                try
+                    do! work
+                with e ->
+                    if not res.headersSent then answer res 502 (sprintf "the credential proxy failed: %s" e.Message)
+                    else report (sprintf "the credential proxy failed after answering a request to %s: %s" host e.Message)
+            }
+        )
+
     /// One decrypted request to `host`, on `route`.
     let handle (host: string) (route: CredentialRoute) (req: IncomingMessage) (res: ServerResponse) =
         let authorization = headerOf req "authorization"
-        let unreachable () =
-            answer res 502 (sprintf "%s could not be reached from this session" host)
-        let carry (authorization: string option) (after: int -> Async<unit>) =
-            async {
-                match! forward host req res authorization with
-                | None -> unreachable ()
-                | Some status -> do! after status
-            }
-        let run (work: Async<unit>) =
-            Async.StartImmediate (
-                async {
-                    try
-                        do! work
-                    with e ->
-                        if not res.headersSent then answer res 502 (sprintf "the credential proxy failed: %s" e.Message)
-                        else report (sprintf "the credential proxy failed after answering a request to %s: %s" host e.Message)
-                }
-            )
+        let carry = carry host [] req res
+        let run = run host res
         // A stand-in counts only on the route it was lent for: carried anywhere else it is the
         // worthless value it looks like, and goes up as one.
         let onRoute (loan: Loan) = loan.Route = route
@@ -597,16 +627,22 @@ let start
         )
         client.finish ()
 
-    /// A declared host's `CONNECT`: terminated here, and each request inside it answered on
-    /// its route.
-    let intercept (host: string) (route: CredentialRoute) (client: Duplex) (head: Buffer) =
+    /// A handled host's request from `sandbox`: the provider's, or up as it came, with no
+    /// credential and without what the provider withholds.
+    let handOver (host: string) (handled: HandledRoute) (sandbox: SandboxRef) (req: IncomingMessage) (res: ServerResponse) =
+        if not (handled.Serve sandbox req res) then
+            run host res (carry host handled.Withheld req res (headerOf req "authorization") (fun _ -> async.Zero ()))
+
+    /// A declared or handled host's `CONNECT`: terminated here, and each request inside it
+    /// answered by `serve`.
+    let intercept (host: string) (serve: IncomingMessage -> ServerResponse -> unit) (client: Duplex) (head: Buffer) =
         client.writeText "HTTP/1.1 200 Connection Established\r\n\r\n"
         if head.length > 0 then client.unshift head
         let tls = Tls.terminate client (contextFor host)
         tls.onError ignore
         // One server per tunnel, so the host a request is answered for is the one the
         // CONNECT named — never the `Host` header the client put inside it.
-        (createServer (handle host route)).serve tls
+        (createServer serve).serve tls
 
     /// Carry the bytes both ways to `address`, the one `host` was judged by. Answered only
     /// once the upstream is open, so an address that cannot be reached is a refusal the client
@@ -650,6 +686,9 @@ let start
                     | None, [] -> refuseConnect client "502 Bad Gateway" "" (sprintf "%s resolved to no address" host)
             })
 
+    let handledFor (host: string) =
+        handled |> List.tryFind (fun h -> String.Equals (h.Host, host, StringComparison.OrdinalIgnoreCase))
+
     /// Capabilities admitted through the TCP door, by sandbox.
     let mutable admitted : Map<SandboxRef, string> = Map.empty
 
@@ -661,14 +700,16 @@ let start
                 match value with
                 | HeaderValue.Single text when name = "proxy-authorization" -> presentedCapability text
                 | _ -> None)
-        match capability with
-        | Some held when admitted |> Map.exists (fun _ capability -> capability = held) ->
+        let sandbox = capability |> Option.bind (fun held -> admitted |> Map.tryFindKey (fun _ capability -> capability = held))
+        match sandbox with
+        | Some sandbox ->
             match authority request.url with
             | None -> refuseConnect client "400 Bad Request" "" (sprintf "not a CONNECT target: %s" request.url)
             | Some (host, port) ->
-                match routeFor routes host with
-                | Some route -> intercept host route client head
-                | None -> tunnel host port client head
+                match routeFor routes host, handledFor host with
+                | Some route, _ -> intercept host (handle host route) client head
+                | None, Some handled -> intercept host (handOver host handled sandbox) client head
+                | None, None -> tunnel host port client head
         | _ ->
             refuseConnect
                 client
