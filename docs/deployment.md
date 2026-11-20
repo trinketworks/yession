@@ -892,9 +892,10 @@ let
           # each other session builds from. `read` does not, and cannot be maintained.
           mode: write
           maintain: { pin: /nix/var/yession/pin, every: 10m }
-      # For a repo's CONTAINER sandboxes: the gateway, and the credential proxy's URL,
-      # trust bundle (every root, so replacing the image's loses nothing) and a token
-      # lent per command.
+      # For a repo's CONTAINER sandboxes: the gateway (its git goes through the credential
+      # proxy, told so by the session; an image that sets GIT_SSL_CAINFO must name a bundle
+      # that holds the proxy's authority), and the credential proxy's URL, trust bundle
+      # (every root, so replacing the image's loses nothing) and a token lent per command.
       github:
         connection: { github: [ git, api ] }
         env:
