@@ -1757,11 +1757,20 @@ module Style =
     /// title by it (so the title starts where the words do). Zero except on a wide screen with
     /// the pane SHUT — why then, and why a `calc` off `100vw` rather than `mx-auto`, is
     /// `chatColumn`'s doc.
+    ///
+    /// `--side-open` is the room the sidebar takes from `100vw`: its width while it is open and
+    /// nothing while it is shut, so the column centres on the room actually left. It was the
+    /// sidebar's width always, and a shut sidebar left the column 280px right of centre. It
+    /// eases over the sidebar's own 200ms (`sidebar`), so the words follow the sidebar's edge
+    /// as it moves rather than jumping on the frame the class lands. Registered as a length in
+    /// app/tailwind.css, which is what lets a custom property transition at all.
     let mainColumn =
         "flex-1 flex flex-col min-w-0 h-full " + degradedBarRoomPad
-        + " phone:transition-[padding-top] phone:duration-200 phone:ease-out motion-reduce:transition-none"
+        + " phone:transition-[padding-top] phone:duration-200 phone:ease-out"
         + " [--column-gutter:0px]"
-        + " wide:[.term-closed_&]:[--column-gutter:max(0px,calc((100vw-var(--spacing-side)-(var(--spacing-measure)+var(--spacing-rail)*4))/2))]"
+        + " wide:[--side-open:var(--spacing-side)] wide:[.nav-alt_&]:[--side-open:0px]"
+        + " wide:transition-[--side-open] wide:duration-200 wide:ease-out " + reduceColumnMotion
+        + " wide:[.term-closed_&]:[--column-gutter:max(0px,calc((100vw-var(--side-open)-(var(--spacing-measure)+var(--spacing-rail)*2))/2))]"
 
     /// The part of `mainColumn` that is actually read or typed into — the timeline and the
     /// composer, wrapped together so one margin holds both to the same edges. The header, the
@@ -1772,13 +1781,14 @@ module Style =
     /// On a wide screen with the pane SHUT, nothing else claims the row, so `flex-1` alone
     /// would hand this column the whole width the sidebar leaves — a timeline and a composer
     /// band both stretched to whatever the monitor happens to be. Capped and centered instead,
-    /// near the measure the open pane already holds it to (`PaneSplit.chatReadable`, Model.fs:
-    /// the reading column's 38rem plus the 32px rail on each side) with one more rail's worth
-    /// of room on each side again, so the timeline still has somewhere to show a row's ground
-    /// stopping short of the column's own edge — flush to the measure, every row's highlight
-    /// would reach exactly as far as the text, which reads as a box drawn round the words
-    /// rather than as the row (the invariant `Browser.fs`'s "a message's ground stops at the
-    /// reading column, not the window" holds desktop to). `[.term-closed_&]` only: the open
+    /// at the measure the open pane already holds it to (`PaneSplit.chatReadable`, Model.fs:
+    /// the reading column's 38rem plus the 32px rail on each side), so the measure has equal
+    /// room either side. It had one more rail each side, and since the measure and the dock
+    /// both stand on the LEFT rail, that rail's worth sat on the right alone and the words ran
+    /// 64px left of centre. A row's ground still stops short of the scroller's edge: the
+    /// timeline reaches back out across the gutter (`timeline`) and keeps the rail as padding
+    /// (the invariant `Browser.fs`'s "a message's ground stops at the reading column, not the
+    /// window" holds desktop to). `[.term-closed_&]` only: the open
     /// pane already derives this column's width from the same number, through room a reader
     /// can drag past it on purpose (`PaneSplit.resolve`), and a static cap here would fight
     /// that drag.
