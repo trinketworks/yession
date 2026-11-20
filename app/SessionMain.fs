@@ -1444,6 +1444,7 @@ Async.StartImmediate (
             CredentialProxy.start
                 doors
                 [ GitHubAccess.route ]
+                [ GitHubAccess.gitRoute gitGateway ]
                 CredentialProxy.Egress.internet
                 CredentialProxy.direct
                 (Sandboxes.SessionLayout.prepareTrustBundle dataDir)
@@ -1602,7 +1603,7 @@ Async.StartImmediate (
                                                                               Actor = Authority.author authority })
                                                                 return ()
                                                             } }
-                                            return { identity with GitConfig = Some (GitGateway.loanConfig door secret) }
+                                            return { identity with GitConfig = Some (GitGateway.loanConfig (GitGateway.Door.Listener door) secret) }
                                 }
                             // By `api`: the API's stand-in, lent to the same act as the push,
                             // so a block's `gh` and its `git push` spend one person's

@@ -328,7 +328,7 @@ module GitRoute =
             fun lender ->
                 let borrower = GitGateway.Borrower.Verb (Guid.NewGuid ())
                 let secret = gateway.Lend GitGateway.Routed.SessionGit borrower lender
-                let key, value = GitGateway.loanConfig door secret
+                let key, value = GitGateway.loanConfig (GitGateway.Door.Listener door) secret
                 [ key, value ], (fun () -> gateway.Retire borrower) }
 
 type ReposConfig =

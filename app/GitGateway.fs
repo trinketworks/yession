@@ -107,12 +107,11 @@ type Lender =
       Spent : RepoRef -> Async<unit> }
 
 /// One request the gateway will carry, parsed off a path. Only the three requests git's
-/// smart HTTP transport makes are requests here; everything else 404s, so a cap admits git to
-/// a repository and admits nothing to the rest of github.com.
+/// smart HTTP transport makes are requests here; everything else is not, so a route admits git
+/// to a repository and admits nothing to the rest of github.com.
 [<RequireQualifiedAccess>]
 type GitRequest =
-    { Cap : string
-      /// `owner/repo.git/info/refs` and the like — the path under the upstream origin.
+    { /// `owner/repo.git/info/refs` and the like — the path under the upstream origin.
       Path : string
       /// The repository, as a sentence names it — parsed by the same rule `add_repo`
       /// applies, which is what takes the `.git` a URL carries off and refuses a name no
@@ -134,44 +133,83 @@ let private segmentOk (segment: string) =
         || c = '.' || c = '-' || c = '_'
     segment <> "" && segment <> "." && segment <> ".." && Seq.forall ok segment
 
-/// The git request a method, path and `?service=` name, or none. The path is
-/// `/git/<cap>/github.com/<owner>/<repo>/…`, where `…` is what git's transport asks for:
-/// the advertisement (`GET info/refs?service=…`) and the two service posts.
-let route (method: string) (path: string) (service: string option) : GitRequest option =
+/// The git request a method, the path segments under github.com's origin and `?service=`
+/// name, or none: the advertisement (`GET <owner>/<repo>/info/refs?service=…`) and the two
+/// service posts.
+let private requestOf (method: string) (segments: string list) (service: string option) : GitRequest option =
     let service' (name: string) =
         if name = "git-upload-pack" || name = "git-receive-pack" then Some name else None
-    match path.Trim('/').Split '/' |> Array.toList with
-    | [ p; cap; host; owner; repo; "info"; "refs" ] when
-        p = prefix && method = "GET" && host = remoteHost && segmentOk cap && segmentOk owner && segmentOk repo
-        ->
+    match segments with
+    | [ owner; repo; "info"; "refs" ] when method = "GET" && segmentOk owner && segmentOk repo ->
         match repoOf owner repo, service |> Option.bind service' with
-        | Some r, Some s -> Some { GitRequest.Cap = cap; Path = sprintf "%s/%s/info/refs" owner repo; Repo = r; Service = s }
+        | Some r, Some s -> Some { GitRequest.Path = sprintf "%s/%s/info/refs" owner repo; Repo = r; Service = s }
         | _ -> None
-    | [ p; cap; host; owner; repo; posted ] when
-        p = prefix && method = "POST" && host = remoteHost && segmentOk cap && segmentOk owner && segmentOk repo
-        ->
+    | [ owner; repo; posted ] when method = "POST" && segmentOk owner && segmentOk repo ->
         match repoOf owner repo, service' posted with
-        | Some r, Some s -> Some { GitRequest.Cap = cap; Path = sprintf "%s/%s/%s" owner repo s; Repo = r; Service = s }
+        | Some r, Some s -> Some { GitRequest.Path = sprintf "%s/%s/%s" owner repo s; Repo = r; Service = s }
         | _ -> None
     | _ -> None
 
-/// The git config a sandbox is given so that its git reaches github.com through the gateway
-/// at `door` under `cap`. One `insteadOf`, which is what makes it full git: every
+let private segments (path: string) : string list = path.Trim('/').Split '/' |> Array.toList
+
+/// The cap and the git request a method, path and `?service=` name at the gateway's own
+/// listener, or none. The path is `/git/<cap>/github.com/<owner>/<repo>/…`.
+let route (method: string) (path: string) (service: string option) : (string * GitRequest) option =
+    match segments path with
+    | p :: cap :: host :: rest when p = prefix && host = remoteHost && segmentOk cap ->
+        requestOf method rest service |> Option.map (fun request -> cap, request)
+    | _ -> None
+
+/// The git request a method, path and `?service=` name on github.com itself, as a request
+/// the credential proxy decrypted arrives (`GitHubAccess.gitRoute`). The path is
+/// `/<owner>/<repo>/…`.
+let proxiedRoute (method: string) (path: string) (service: string option) : GitRequest option =
+    requestOf method (segments path) service
+
+/// Where a sandbox's git reaches this gateway's handler. Two doors to one handler.
+[<RequireQualifiedAccess>]
+type Door =
+    /// The gateway's own listener, at a host door, under a cap (`gitConfig`). For a sandbox
+    /// the credential proxy does not admit (srt, seatbelt) and for the session's own git.
+    | Listener of Sandboxes.HostDoor
+    /// The credential proxy, which hands git's three requests on github.com to this handler
+    /// (`GitHubAccess.gitRoute`) and names the sandbox by its admission (`proxiedGitConfig`).
+    /// For a sandbox the proxy admits.
+    | Proxy
+
+/// The git config a sandbox is given so that its git reaches github.com through the gateway's
+/// own listener at `door` under `cap`. One `insteadOf`, which is what makes it full git: every
 /// transport operation rewrites its URL through this, and nothing else about git changes.
 let gitConfig (door: Sandboxes.HostDoor) (cap: string) : (string * string) list =
     [ sprintf "url.http://%s:%d/%s/%s/%s/.insteadOf" door.Host door.Port prefix cap remoteHost, sprintf "https://%s/" remoteHost ]
+
+/// The git config a sandbox the credential proxy admits is given instead: git keeps
+/// `https://github.com/`, and reaches it through `proxy` (the sandbox's proxy URL, its
+/// admission in the credentials) trusting what `trust` names (the proxy's bundle). No
+/// `insteadOf`, so a client that refuses a rewrite of github.com to another host (apm) sees
+/// none. Both are scoped to github.com, so nothing about git's other hosts changes. The trust
+/// file is named to git itself: libcurl as Ubuntu builds it reads its compiled-in bundle and
+/// ignores `SSL_CERT_FILE`.
+let proxiedGitConfig (proxy: string) (trust: string) : (string * string) list =
+    [ sprintf "http.https://%s/.proxy" remoteHost, proxy
+      sprintf "http.https://%s/.sslCAInfo" remoteHost, trust ]
 
 /// The header a block's git carries its loan in. Dropped on the way up with the rest of what
 /// described this hop (`droppedUpstream`): it names a loan at THIS gateway and means nothing
 /// at github.com.
 let loanHeader = "x-yession-loan"
 
-/// The git config a block's line exports so that its git carries `secret` to this gateway on
-/// every request — scoped to the gateway's origin (git matches `http.<url>.*` against the URL
-/// it connects to, which after the `insteadOf` above is this one), so it goes to no other
-/// host. One pair, which is what `__y_env` has a slot for.
-let loanConfig (door: Sandboxes.HostDoor) (secret: string) : string * string =
-    sprintf "http.http://%s:%d/.extraheader" door.Host door.Port, sprintf "X-Yession-Loan: %s" secret
+/// The git config a block's line exports so that its git carries `secret` to this gateway's
+/// handler on every request — scoped to the URL git connects to through `door` (git matches
+/// `http.<url>.*` against it): the gateway's origin behind the `insteadOf`, or github.com
+/// itself behind the proxy, which withholds the header from every request it does not hand
+/// here (`GitHubAccess.gitRoute`). One pair, which is what `__y_env` has a slot for.
+let loanConfig (door: Door) (secret: string) : string * string =
+    let scope =
+        match door with
+        | Door.Listener door -> sprintf "http://%s:%d/" door.Host door.Port
+        | Door.Proxy -> sprintf "https://%s/" remoteHost
+    sprintf "http.%s.extraheader" scope, sprintf "X-Yession-Loan: %s" secret
 
 // --- the wire ------------------------------------------------------------------------------
 
@@ -361,6 +399,14 @@ type Gateway =
       /// route adds no credential by itself. The credential that goes up is the one of the loan
       /// that a request carries.
       Grant : Routed -> string
+      /// Open a sandbox's route with no cap: for a sandbox whose git reaches this handler
+      /// through the credential proxy (`Door.Proxy`), which names the sandbox itself.
+      Route : Routed -> unit
+      /// Answer one request the credential proxy decrypted on github.com, from the sandbox
+      /// `routed` names: `true` when it is one of git's three requests on an open route, and
+      /// answered here as the gateway's own listener answers it; `false` for anything else,
+      /// which the proxy carries up with no credential.
+      Serve : Routed -> IncomingMessage -> ServerResponse -> bool
       /// Lend a borrower's requests a credential: the secret its git carries, live until the
       /// borrower's next loan or `Retire`. One live loan per borrower — lending the next
       /// returns the last.
@@ -389,6 +435,9 @@ type private Loan =
 /// a push that went out on somebody's credential with no line saying so.
 let start (doors: string list list) (upstream: string) (report: string -> unit) : Async<Gateway> =
     let mutable grants : Map<string, Routed> = Map.empty
+    /// Every route open, through either door: the caps above, and the routes of sandboxes
+    /// whose git arrives through the credential proxy (`Route`).
+    let mutable routes : Set<Routed> = Set.empty
     /// Live loans, by secret.
     let mutable live : Map<string, Loan> = Map.empty
     /// The last loan each terminal returned, by terminal — so a request still carrying it
@@ -412,103 +461,108 @@ let start (doors: string list list) (upstream: string) (report: string -> unit) 
     /// The loan a request carries, if git sent one.
     let loanOf (req: IncomingMessage) : string option = headerOf req loanHeader
 
+    /// One git request on `routed`'s route, through whichever door it arrived at.
+    let carry (routed: Routed) (request: GitRequest) (req: IncomingMessage) (res: ServerResponse) =
+        let url = req.url
+        let isAdvertisement = req.``method`` = "GET"
+        let contentType =
+            sprintf "application/x-%s-%s" request.Service (if isAdvertisement then "advertisement" else "result")
+        let refuse (message: string) =
+            answer res 200 contentType (errorBody request isAdvertisement message)
+        let target () = upstream.TrimEnd '/' + "/" + request.Path + (requestUrl url).search
+        let unreachable (error: string) =
+            refuse (sprintf "%s could not be reached from this session: %s" remoteHost error)
+        // One carry. A fault before the head of the answer goes to git in words. A
+        // fault after it goes to `report`, because no `ERR` channel remains by then.
+        let run (work: Async<unit>) =
+            Async.StartImmediate (
+                async {
+                    try
+                        do! work
+                    with e ->
+                        if not (res.headersSent) then refuse (sprintf "the git gateway failed: %s" e.Message)
+                        else report (sprintf "the git gateway failed after answering a request for %s: %s" (RepoRef.value request.Repo) e.Message)
+                })
+        // A request that no live loan answers for: up with no credential, and
+        // github.com answers it as it answers anybody. `why` is what git prints when
+        // github.com then wants a credential (`unlent`).
+        let carryBare (why: string) =
+            run (
+                async {
+                    match! forward req res (target ()) None with
+                    | Forwarded.Unauthorized -> refuse (unlent why)
+                    | Forwarded.Unreachable error -> unreachable error
+                    | Forwarded.Answered -> ()
+                })
+        match loanOf req with
+        | None ->
+            carryBare
+                "Nothing lends one to it. Git here spends the credential of the command it runs in. Run git as a command in this terminal."
+        | Some secret ->
+            // A loan answers on the route of the sandbox it was lent in, and on no
+            // other. Carried down another sandbox's route it is a secret THAT route
+            // never minted, and is answered like one: every process in a sandbox
+            // shares one uid, so what this bounds is how far a loan read out of a
+            // neighbour's environment can travel — one sandbox, not the session.
+            let onThisRoute (loan: Loan) = loan.Routed = routed
+            match Map.tryFind secret live |> Option.filter onThisRoute with
+            | None ->
+                match
+                    returned
+                    |> Map.tryPick (fun _ (held, loan) -> if held = secret && onThisRoute loan then Some loan else None)
+                with
+                | Some loan ->
+                    carryBare (
+                        sprintf
+                            "The github credential lent to %s for that command has been returned. Run the push as its own command."
+                            (ownerLabel loan.Lender.Owner))
+                | None -> notFound res
+            | Some loan ->
+                let lender = loan.Lender
+                run (
+                    async {
+                        match! lender.Resolve () with
+                        | None ->
+                            refuse (
+                                sprintf
+                                    "%s has not connected github. Connect it on the settings panel, then run the command again."
+                                    (ownerLabel lender.Owner))
+                        | Some token ->
+                            match! forward req res (target ()) (Some (basicAuthorization token)) with
+                            | Forwarded.Unauthorized ->
+                                do! lender.Refused ()
+                                refuse (
+                                    sprintf
+                                        "github rejected %s's credential. Sign in again on the settings panel."
+                                        (ownerLabel lender.Owner))
+                            | Forwarded.Unreachable error -> unreachable error
+                            | Forwarded.Answered ->
+                                // The push itself, not its advertisement: one
+                                // sentence per push, however many requests it took.
+                                // The push has already gone out, so a record that
+                                // cannot be written is reported rather than allowed
+                                // to read as a gateway fault git never sees.
+                                if request.Service = "git-receive-pack" && not isAdvertisement then
+                                    try
+                                        do! lender.Spent request.Repo
+                                    with e ->
+                                        report (
+                                            sprintf
+                                                "a push to %s used %s's github credential. The record of that push could not be written: %s"
+                                                (RepoRef.value request.Repo)
+                                                (ownerLabel lender.Owner)
+                                                e.Message)
+                    })
+
+    /// The gateway's own listener: the `insteadOf` door, which names its route by a cap.
     let handler (req: IncomingMessage) (res: ServerResponse) =
         let url = req.url
         match route req.``method`` (pathnameOf url) (queryParamOf url "service") with
         | None -> notFound res
-        | Some request ->
-            match Map.tryFind request.Cap grants with
+        | Some (cap, request) ->
+            match Map.tryFind cap grants with
             | None -> notFound res
-            | Some routed ->
-                let isAdvertisement = req.``method`` = "GET"
-                let contentType =
-                    sprintf "application/x-%s-%s" request.Service (if isAdvertisement then "advertisement" else "result")
-                let refuse (message: string) =
-                    answer res 200 contentType (errorBody request isAdvertisement message)
-                let target () = upstream.TrimEnd '/' + "/" + request.Path + (requestUrl url).search
-                let unreachable (error: string) =
-                    refuse (sprintf "%s could not be reached from this session: %s" remoteHost error)
-                // One carry. A fault before the head of the answer goes to git in words. A
-                // fault after it goes to `report`, because no `ERR` channel remains by then.
-                let run (work: Async<unit>) =
-                    Async.StartImmediate (
-                        async {
-                            try
-                                do! work
-                            with e ->
-                                if not (res.headersSent) then refuse (sprintf "the git gateway failed: %s" e.Message)
-                                else report (sprintf "the git gateway failed after answering a request for %s: %s" (RepoRef.value request.Repo) e.Message)
-                        })
-                // A request that no live loan answers for: up with no credential, and
-                // github.com answers it as it answers anybody. `why` is what git prints when
-                // github.com then wants a credential (`unlent`).
-                let carryBare (why: string) =
-                    run (
-                        async {
-                            match! forward req res (target ()) None with
-                            | Forwarded.Unauthorized -> refuse (unlent why)
-                            | Forwarded.Unreachable error -> unreachable error
-                            | Forwarded.Answered -> ()
-                        })
-                match loanOf req with
-                | None ->
-                    carryBare
-                        "Nothing lends one to it. Git here spends the credential of the command it runs in. Run git as a command in this terminal."
-                | Some secret ->
-                    // A loan answers on the route of the sandbox it was lent in, and on no
-                    // other. Carried down another sandbox's route it is a secret THAT route
-                    // never minted, and is answered like one: every process in a sandbox
-                    // shares one uid, so what this bounds is how far a loan read out of a
-                    // neighbour's environment can travel — one sandbox, not the session.
-                    let onThisRoute (loan: Loan) = loan.Routed = routed
-                    match Map.tryFind secret live |> Option.filter onThisRoute with
-                    | None ->
-                        match
-                            returned
-                            |> Map.tryPick (fun _ (held, loan) -> if held = secret && onThisRoute loan then Some loan else None)
-                        with
-                        | Some loan ->
-                            carryBare (
-                                sprintf
-                                    "The github credential lent to %s for that command has been returned. Run the push as its own command."
-                                    (ownerLabel loan.Lender.Owner))
-                        | None -> notFound res
-                    | Some loan ->
-                        let lender = loan.Lender
-                        run (
-                            async {
-                                match! lender.Resolve () with
-                                | None ->
-                                    refuse (
-                                        sprintf
-                                            "%s has not connected github. Connect it on the settings panel, then run the command again."
-                                            (ownerLabel lender.Owner))
-                                | Some token ->
-                                    match! forward req res (target ()) (Some (basicAuthorization token)) with
-                                    | Forwarded.Unauthorized ->
-                                        do! lender.Refused ()
-                                        refuse (
-                                            sprintf
-                                                "github rejected %s's credential. Sign in again on the settings panel."
-                                                (ownerLabel lender.Owner))
-                                    | Forwarded.Unreachable error -> unreachable error
-                                    | Forwarded.Answered ->
-                                        // The push itself, not its advertisement: one
-                                        // sentence per push, however many requests it took.
-                                        // The push has already gone out, so a record that
-                                        // cannot be written is reported rather than allowed
-                                        // to read as a gateway fault git never sees.
-                                        if request.Service = "git-receive-pack" && not isAdvertisement then
-                                            try
-                                                do! lender.Spent request.Repo
-                                            with e ->
-                                                report (
-                                                    sprintf
-                                                        "a push to %s used %s's github credential. The record of that push could not be written: %s"
-                                                        (RepoRef.value request.Repo)
-                                                        (ownerLabel lender.Owner)
-                                                        e.Message)
-                            })
+            | Some routed -> carry routed request req res
 
     async {
         let! doors = openDoors "the git gateway" (fun () -> createServer handler) doors
@@ -519,7 +573,17 @@ let start (doors: string list list) (upstream: string) (report: string -> unit) 
                 fun routed ->
                     let cap = randomSecret ()
                     grants <- grants |> Map.filter (fun _ held -> held <> routed) |> Map.add cap routed
+                    routes <- Set.add routed routes
                     cap
+              Route = fun routed -> routes <- Set.add routed routes
+              Serve =
+                fun routed req res ->
+                    let url = req.url
+                    match Set.contains routed routes, proxiedRoute req.``method`` (pathnameOf url) (queryParamOf url "service") with
+                    | true, Some request ->
+                        carry routed request req res
+                        true
+                    | _ -> false
               Lend =
                 fun routed borrower lender ->
                     retire borrower
@@ -531,6 +595,7 @@ let start (doors: string list list) (upstream: string) (report: string -> unit) 
                 fun sandbox ->
                     let routed = Routed.Sandbox sandbox
                     grants <- grants |> Map.filter (fun _ held -> held <> routed)
+                    routes <- Set.remove routed routes
                     live <- live |> Map.filter (fun _ loan -> loan.Routed <> routed)
                     returned <- returned |> Map.filter (fun _ (_, loan) -> loan.Routed <> routed)
               Close = doors.Close }
