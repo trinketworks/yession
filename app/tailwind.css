@@ -19,6 +19,12 @@
 @property --visual-top { syntax: "*"; inherits: false; }
 @property --shell-position { syntax: "*"; inherits: false; }
 
+/* The room the sidebar takes from the chat column's centring (`Style.mainColumn`). A length,
+   because only a registered type can transition, and the column eases with the sidebar
+   instead of jumping. Not inherited: the column computes its gutter from it on its own box,
+   and the gutter carries the value down. */
+@property --side-open { syntax: "<length>"; inherits: false; initial-value: 0px; }
+
 /* The asciinema player's own stylesheet is NOT here: it is `app/player.css`, built beside this
    one and linked inert in the shell until a replay is mounted. It is 16KB that most sessions
    never render, and this sheet is render-blocking.
