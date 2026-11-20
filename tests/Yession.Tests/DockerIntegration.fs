@@ -139,10 +139,13 @@ let private withContainerGit
                     | Ok () -> return! proxy.Open address
                 }
             let! _, sandbox = startOrFailOn (DockerFixture.network reached) spec
-            try
-                do! body gateway proxy sandbox (Sandboxes.withGitConfig provision.GitConfig Map.empty)
-            finally
-                sandbox.Dispose () |> Async.StartImmediate
+            // Disposed and awaited before the case ends, so the fixture's own sweep never
+            // races a removal already in progress.
+            let! outcome = Async.Catch (body gateway proxy sandbox (Sandboxes.withGitConfig provision.GitConfig Map.empty))
+            do! sandbox.Dispose ()
+            match outcome with
+            | Choice1Of2 () -> ()
+            | Choice2Of2 e -> raise e
         finally
             Async.StartImmediate (
                 async {
