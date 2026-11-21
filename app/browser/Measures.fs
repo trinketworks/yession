@@ -278,14 +278,18 @@ let private askCardColumn (column: int) : string list =
         let inside selector =
             first (Root.Under card) selector
             |> Option.map (fun e -> int (floor (e.getBoundingClientRect().left + paddingLeft e + 0.5)))
-        [ "the question", box "#repo-picker-title"
-          "the search field", inside "[data-repo-picker-search]"
-          "a row’s name", box "[data-repo-candidate-name]" ]
-        |> List.choose (fun (what, left) ->
-            match left with
-            | Some left when left = column -> None
-            | Some left -> Some (sprintf "%s starts at %dpx, the conversation at %dpx" what left column)
-            | None -> Some (sprintf "%s is missing" what))
+        // The search field starts on the column by its box on a wide screen, where it stands on
+        // the rail like START and its own padding puts the words inside it, and by its words on
+        // a phone, where it carries the inset as padding.
+        let field = "[data-repo-picker-search]"
+        [ "the question", [ box "#repo-picker-title" ]
+          "the search field", [ box field; inside field ]
+          "a row’s name", [ box "[data-repo-candidate-name]" ] ]
+        |> List.choose (fun (what, lefts) ->
+            match List.choose id lefts with
+            | [] -> Some (sprintf "%s is missing" what)
+            | lefts when List.contains column lefts -> None
+            | left :: _ -> Some (sprintf "%s starts at %dpx, the conversation at %dpx" what left column))
 
 /// Nothing the conversation DRAWS is out of a press's reach, and a column with less room than
 /// one item is not drawn at all (docs/visual-design.md, Space).

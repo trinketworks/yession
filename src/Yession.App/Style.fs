@@ -2920,7 +2920,8 @@ module Style =
     /// The list, and the only thing in a pane that scrolls. `min-h-0` is what lets it: a flex
     /// child's floor is its content, so without it the column grows past the card's cap and
     /// the rows are cut rather than scrolled.
-    let askScroll = "flex-1 min-h-0 overflow-y-auto"
+    /// Its bar is the timeline's (`timeline`): thin, on a clear track, in `edge`.
+    let askScroll = "flex-1 min-h-0 overflow-y-auto [scrollbar-width:thin] [scrollbar-color:var(--color-edge)_transparent]"
     /// On screen. `min-w-0` so a long repo name in the subtitle truncates rather than widening
     /// the pane.
     /// `flex-1` so the in-flow pane fills the track, which fills the fixed card — the way the
@@ -2937,6 +2938,13 @@ module Style =
     /// reading. `askInset` is the rail, and the rail is for WORDS; a block that has no word to
     /// land on it has nothing to buy with those 64 pixels and only ends up shoved off centre.
     let private askEdge = "px-8 max-md:px-4 wide:pl-0"
+
+    /// The margin a CONTROL with a rim stands in — the search field and START. Not `askEdge`:
+    /// that edge gives its left rail to the gutter mark the head leads with, and a field or a
+    /// button has no mark, so on a wide screen they stood flush on the blue lead with 32px
+    /// spare on the right. The same rail either side, which on a wide screen is the rail the
+    /// names stand on.
+    let private askControlEdge = "px-8 max-md:px-4"
 
     /// The question and the way out, on one line — there is no author line above it any more.
     /// A caps `session asks` over `Which repository is this session for?` spent two lines
@@ -3000,11 +3008,12 @@ module Style =
     let askLineWho = cls [ askSubtitle; "shrink-0 max-w-[40%]" ]
     let askLineQuestion = "font-extralight text-body lowercase text-ink truncate min-w-0"
 
-    /// The way in that is not the list — a search, or a link pasted. Its BLOCK, on the card's
-    /// edge margin beside START, because what sits in it is a control with a rim and a rim held
-    /// one rail off one edge and the edge margin off the other is a slab pushed sideways rather
-    /// than a margin — the reason START sits here too (`askActions`).
-    let askField = cls [ askEdge; "mt-6 phone:mt-4" ]
+    /// The way in that is not the list — a search, or a link pasted. Its BLOCK, on the control
+    /// margin beside START, because what sits in it is a control with a rim and a rim held one
+    /// rail off one edge and the edge margin off the other is a slab pushed sideways rather
+    /// than a margin — the reason START sits here too (`askActions`). `wide:mb-2` keeps the
+    /// first row's ground off the field's rim; on a wide screen the list began on it.
+    let askField = cls [ askControlEdge; "mt-6 phone:mt-4 wide:mb-2" ]
 
     /// And the field itself: THE field face, the one every input in the product wears — the
     /// surface tone in a hairline ring that brightens under the hand and goes blue on focus.
@@ -3023,13 +3032,13 @@ module Style =
     /// Space); the measure is the card's, because a search box run across a desktop column is
     /// a line the eye loses its place returning from.
     ///
-    /// `pl-rail` is what puts the TEXT in it on the card's rail while the BOX stands on the
-    /// card's edge: the rail is one `spacing-rail` in from that edge, so the gutter inside the
-    /// field is the same gutter every other line in the card has, and a reader sees one left
-    /// edge for the question, the placeholder and the names. It is the face's `px-3` written
-    /// longhand on one side rather than a second answer to it — Tailwind emits `pl-*` after
-    /// `px-*` by construction, and the trailing inset stays the face's.
-    let askSearch = cls [ field; readingColumn; "phone:h-touch pl-rail" ]
+    /// `phone:pl-rail` is what puts the TEXT in it on the card's rail while the BOX stands on
+    /// the card's edge: on a phone the rail is one `spacing-rail` in from that edge, so a reader
+    /// sees one left edge for the question, the placeholder and the names. It is the face's
+    /// `px-3` written longhand on one side rather than a second answer to it — Tailwind emits
+    /// `pl-*` after `px-*` by construction. On a wide screen the BOX stands on the rail
+    /// (`askControlEdge`), so the face's own inset is the text's.
+    let askSearch = cls [ field; readingColumn; "phone:h-touch phone:pl-rail" ]
 
     /// A line the card says rather than one it offers — looking, cloning, a refusal, a clone
     /// that failed. Where the first row would have been, so an answer and the absence of one
@@ -3125,10 +3134,10 @@ module Style =
     /// height, because that is what it stands in for — the rows still to come.
     let askFoot = cls [ askInset; "h-12 flex items-center" ]
     let askFootLine = cls [ askMeasure; "flex items-center gap-3" ]
-    /// On the card's edge margin rather than the reading rail. START is a control, not a line —
+    /// On the control margin rather than the reading rail. START is a control, not a line —
     /// it has a rim, and a rim held 48px off one edge and 16 off the other is not a margin, it
     /// is a slab pushed sideways. Full width on a phone, that asymmetry is the whole button.
-    let askActions = cls [ askEdge; "shrink-0 pt-6 phone:pt-4" ]
+    let askActions = cls [ askControlEdge; "shrink-0 pt-6 phone:pt-4" ]
     /// At the card's own measure, like everything else on it. Without it the row was the band,
     /// and the button that fills it on a phone (`askStartWidth`) filled 780px of an 844-wide
     /// sideways phone — a slab, and the loudest thing on a card whose question it dwarfed.

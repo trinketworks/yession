@@ -4629,14 +4629,12 @@ let editorTests =
 
                     // Two ways to ask where a line starts, because the card's blocks run edge
                     // to edge (so a row's ground can) and carry the reading inset as PADDING.
-                    // An element a block positions starts at its own box; an element carrying
-                    // the inset itself — the search field — starts inside its padding.
+                    // An element a block positions starts at its own box; the search field
+                    // starts at its box on a wide screen, where it stands on the rail, and
+                    // inside its padding on a phone, where it carries the inset itself.
                     //
-                    // START is not among them, and was: the rail is where a LINE starts, and a
-                    // button is not a line. It has a rim, and a rim on the rail is held 48px
-                    // off one edge of the card and 16 off the other, which reads as a slab
-                    // pushed sideways rather than as a margin. What holds for it instead is
-                    // the case below.
+                    // START is not among them: the rail is where a LINE starts, and a button
+                    // is not a line. What holds for it instead is the case below.
                     let! adrift = Probe.verdictWith page Yession.App.Probes.Measure.AskCardColumn column
                     Expect.isEmpty
                         adrift
