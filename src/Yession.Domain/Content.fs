@@ -105,6 +105,7 @@ module ContentMedia =
         | "webp" -> Some "image/webp"
         | "svg" -> Some "image/svg+xml"
         | "avif" -> Some "image/avif"
+        | "md" | "markdown" -> Some "text/markdown"
         | _ -> None
 
 // Deliberately no `ofRef`: which segment of a path carries the name depends on what kind of
@@ -112,12 +113,13 @@ module ContentMedia =
 // `ContentName` at the bottom of this file — the one that answered `fileName` here typed a
 // shared picture as a download.
 
-/// What the pane can MAKE of a piece of content. Two cases now and a third (text, a repo file)
-/// when it is needed: a kind the pane cannot draw is a download, which is the fallback that
-/// keeps "unsupported" from meaning "broken".
+/// What the pane can MAKE of a piece of content. A kind the pane cannot draw is a download,
+/// which is the fallback that keeps "unsupported" from meaning "broken".
 [<RequireQualifiedAccess>]
 type ContentKind =
     | Image of mediaType: string
+    /// Read as text, and shown either as its source or formatted like a message body.
+    | Markdown
     | Download
 
 module ContentKind =
@@ -125,6 +127,7 @@ module ContentKind =
     let ofMediaType (mediaType: string option) : ContentKind =
         match mediaType with
         | Some m when m.StartsWith "image/" -> ContentKind.Image m
+        | Some "text/markdown" -> ContentKind.Markdown
         | Some _ | None -> ContentKind.Download
 
 /// A size as a person reads it. Decimal units, because the cap a refusal quotes is decimal

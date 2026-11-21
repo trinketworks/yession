@@ -3898,6 +3898,27 @@ let private tabTests =
                 |> Support.step ClosePreviewMsg
             Expect.equal (model.FileTabs, model.Pane) ([ chart ], Some (OnTerminal (Reading terminalA))) "the tab stays"
 
+        testCase "a markdown file's text is asked for once, and flips between source and formatted" <| fun () ->
+            let notes = Content.ContentRef.create "artifacts/notes.md/0000-ab12cd" |> expect
+            let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            let opening = Preview.ofSubject (PreviewSubject.Content notes)
+            let shown, asked = ClientModel.update (OpenPreviewMsg opening) (clientOf [ at 1L 0.0 (opened terminalA "build") ])
+            Expect.isTrue (List.contains (ClientEffect.FetchContentText notes) asked) "opening it asks for its text"
+            Expect.equal (Map.tryFind notes shown.ContentTexts) (Some ContentText.Loading) "and says so"
+            let again, askedAgain = ClientModel.update (ShowPreviewMsg opening) shown
+            Expect.isFalse (List.contains (ClientEffect.FetchContentText notes) askedAgain) "a second look does not ask while the first is out"
+            let read = again |> Support.step (ContentTextMsg (notes, Some "# Title"))
+            Expect.equal (Map.tryFind notes read.ContentTexts) (Some (ContentText.Loaded "# Title")) "the text arrives"
+            Expect.isFalse (Set.contains notes read.PlainContent) "formatted until the reader says otherwise"
+            let flipped = read |> Support.step (ToggleContentPlainMsg notes)
+            Expect.isTrue (Set.contains notes flipped.PlainContent) "flipped to source"
+            Expect.isFalse (Set.contains notes (flipped |> Support.step (ToggleContentPlainMsg notes)).PlainContent) "and back"
+            let failed = shown |> Support.step (ContentTextMsg (notes, None))
+            let _, retried = ClientModel.update (OpenPreviewMsg opening) failed
+            Expect.isTrue (List.contains (ClientEffect.FetchContentText notes) retried) "a read that failed is asked again on opening"
+            let _, picture = ClientModel.update (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content chart))) (clientOf [ at 1L 0.0 (opened terminalA "build") ])
+            Expect.isFalse (List.exists (function ClientEffect.FetchContentText _ -> true | _ -> false) picture) "a picture has no text to read"
+
         testCase "putting a file's tab away takes its preview down" <| fun () ->
             let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
             let model =

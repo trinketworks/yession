@@ -603,6 +603,12 @@ module Dom =
         /// with `download`, so it works without script and names the file the way a person knows
         /// it rather than by the version leaf it is addressed as.
         let contentDownload = "data-content-download"
+        /// A markdown file's text in the pane, whose value is the content path and which says
+        /// how it is read: `formatted` or `plain` (`Dom.Values`).
+        let contentText = "data-content-text"
+        /// The action that flips a markdown file between its source and its formatted read.
+        /// Pressed (`aria-pressed`) while the source is showing.
+        let contentPlain = "data-content-plain"
         /// The live screen of a terminal in live mode (Plan 14, stage 6). Its value is the
         /// terminal's id; the holder's copy is the one that takes keystrokes, and every other
         /// peer's is the same screen read-only.
@@ -1039,6 +1045,12 @@ module Dom =
         /// The way to HAVE a file the pane is showing — beside a picture, and instead of one
         /// for a kind this build cannot draw.
         let download = "Download"
+        /// The action that shows a markdown file as its source instead of formatted.
+        let contentPlain = "Plain text"
+        /// What a markdown file's pane says while its text is on its way, and when it is not
+        /// to be had.
+        let contentLoading = "Loading"
+        let contentUnreadable = "This file could not be read."
         /// Taking the keyboard of a terminal nobody holds. The STEAL — taking it from somebody
         /// — is the lease bar's `Take over`, which names who it would be taken from; this one
         /// takes nothing from anyone, and the two are not the same act. Said as what it LETS

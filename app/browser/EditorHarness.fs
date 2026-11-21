@@ -1516,6 +1516,17 @@ let private openingModel : ClientModel =
     elif search.StartsWith "?mixed=" then filled "?mixed=" Mixed
     elif search = "?surface" then surfaceModel
     elif search.StartsWith "?surface=" then surfaceModelIn (search.Substring "?surface=".Length)
+    elif search = "?markdown" || search = "?markdown=plain" then
+        let file = ContentRef.create "artifacts/README.md" |> expect
+        let body =
+            "# Release notes\n\nThe **content viewer** now opens markdown, with `inline code` and a [link](https://example.com).\n\n"
+            + "## Changes\n\n- Flip between source and formatted\n- Same renderer as the transcript\n\n"
+            + "```fsharp\nlet answer = 6 * 7\n```\n\n> Formatted is the default.\n"
+        { shellModel with
+            Pane = Some (PaneMode.Previewing (Preview.ofSubject (PreviewSubject.Content file), Some (TerminalMode.Reading harnessTerminal)))
+            TerminalsOpen = true
+            ContentTexts = Map.ofList [ file, ContentText.Loaded body ]
+            PlainContent = if search = "?markdown=plain" then Set.singleton file else Set.empty }
     else shellModel
 
 let private launchModel : ClientModel =
@@ -2127,6 +2138,7 @@ do
         | ClientEffect.ReadEvents _
         // No session to ask for a keyframe: the replay plays without one.
         | ClientEffect.FetchKeyframe _
+        | ClientEffect.FetchContentText _
         | ClientEffect.Remember _
         | ClientEffect.Copy _
         | ClientEffect.RetryNow -> ()

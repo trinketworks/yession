@@ -3770,9 +3770,11 @@ let frames (args: string list) =
                 | Some "lines" -> "/"
                 | Some "replies" -> "/?replies=24"
                 | Some page when page.StartsWith "replies=" -> "/?" + page
+                | Some "markdown" -> "/?markdown"
+                | Some "markdown=plain" -> "/?markdown=plain"
                 | Some "surface" -> "/?surface"
                 | Some page when page.StartsWith "surface=" -> "/?" + page
-                | _ -> failwith "frames --harness: give lines, replies, replies=<n>, surface or surface=<state>"
+                | _ -> failwith "frames --harness: give lines, replies, replies=<n>, markdown, markdown=plain, surface or surface=<state>"
             Some page, List.take at args @ List.skip (at + 2) args
     withBuildSlot "frames" (fun () ->
         make [ Target.Tools; Target.Packages ]

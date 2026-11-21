@@ -1335,6 +1335,13 @@ let private start () =
                         | Error _ -> return None
                         | Ok answer -> return Codec.fromString Transcripts.keyframe answer.Body |> Result.toOption
                     }
+              Client.Ports.ContentText =
+                fun file ->
+                    async {
+                        match! httpGet (Page.href (SessionRoute.Content file)) with
+                        | Error _ -> return None
+                        | Ok answer -> return Some answer.Body
+                    }
               Client.Ports.Uploads =
                 Some { Client.UploadPort.Send = sendUpload peerId; Client.UploadPort.Forget = forgetUpload } }
             doc
