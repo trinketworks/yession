@@ -217,6 +217,8 @@ let private representativeModel : ClientModel =
       ReadsAsked = 0
       TerminalKeyframes = Map.empty
       KeyframesAsked = Set.empty
+      ContentTexts = Map.empty
+      PlainContent = Set.empty
       TerminalScreens = Map.empty
       TerminalViewports = Map.empty
       // The terminal this client opened, as the events fold leaves it: the strip is `Tabs`

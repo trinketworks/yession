@@ -4885,6 +4885,8 @@ let private contentTests =
             Expect.equal (ContentMedia.ofName "notes.tar.gz") None "not a type this build shows"
             Expect.equal (ContentMedia.ofName "chart") None "no extension is no claim"
             Expect.equal (ContentKind.ofMediaType (Some "image/webp")) (ContentKind.Image "image/webp") "an image is shown"
+            Expect.equal (ContentMedia.ofName "Notes.MD") (Some "text/markdown") "markdown, either extension"
+            Expect.equal (ContentKind.ofMediaType (Some "text/markdown")) ContentKind.Markdown "is read as text"
             Expect.equal (ContentKind.ofMediaType (Some "application/pdf")) ContentKind.Download "anything else downloads"
             Expect.equal (ContentKind.ofMediaType None) ContentKind.Download "and so does a type nobody knows"
 
@@ -4901,7 +4903,7 @@ let private contentTests =
             Expect.equal (ContentName.kind resolving) (ContentKind.Image "image/png") "and means the same kind"
             let repoFile = ContentRef.create "repos/octo/hello/README.md" |> expect
             Expect.equal (ContentName.ofRef repoFile) "README.md" "a path that is not an artifact is its leaf"
-            Expect.equal (ContentName.kind repoFile) ContentKind.Download "markdown is not a kind this pane draws"
+            Expect.equal (ContentName.kind repoFile) ContentKind.Markdown "markdown is read as text, whichever path holds it"
             // A leaf that is not a version leaves the path un-artifact-like, and then the leaf
             // IS the name: nothing here quietly reinterprets a directory called `artifacts`.
             let notAVersion = ContentRef.create "artifacts/chart.png/notes.txt" |> expect

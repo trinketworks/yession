@@ -199,6 +199,8 @@ module Client =
           /// One keyframe, by terminal and the transcript line it paints. `None` is any way of
           /// not having one: the replay plays without it.
           Keyframe : TerminalId -> int -> Async<TranscriptKeyframe option>
+          /// One content file's text. `None` is any way of not having it.
+          ContentText : Content.ContentRef -> Async<string option>
           /// Keep a preference for this browser's next load. Best effort: storage refused (a
           /// private window) is a preference that works now and is not remembered.
           Remember : Preference -> unit
@@ -208,7 +210,7 @@ module Client =
     module Ports =
 
         /// A client with no session to ask: every request goes nowhere.
-        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None; Ports.Moves = ignore; Ports.Clipboard = (fun _ -> async.Return false); Ports.Retry = ignore; Ports.Keyframe = (fun _ _ -> async.Return None); Ports.Remember = ignore; Ports.Uploads = None }
+        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None; Ports.Moves = ignore; Ports.Clipboard = (fun _ -> async.Return false); Ports.Retry = ignore; Ports.Keyframe = (fun _ _ -> async.Return None); Ports.ContentText = (fun _ -> async.Return None); Ports.Remember = ignore; Ports.Uploads = None }
 
         /// This peer's caret moved within its field (`Carets.Report`'s `positionMoved`): the
         /// frame, over the connection there is, when the model says the page is linked
@@ -316,6 +318,12 @@ module Client =
                         match! ports.Keyframe terminal seq with
                         | Some keyframe -> dispatch (TerminalKeyframeMsg (terminal, keyframe))
                         | None -> ()
+                    })
+            | ClientEffect.FetchContentText file ->
+                Async.StartImmediate (
+                    async {
+                        let! text = ports.ContentText file
+                        dispatch (ContentTextMsg (file, text))
                     })
             | ClientEffect.Copy (box, text) ->
                 Async.StartImmediate (

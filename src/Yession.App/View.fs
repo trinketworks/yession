@@ -4160,7 +4160,8 @@ module View =
                 | Ok ref ->
                     match ContentName.kind ref with
                     | ContentKind.Download -> ()
-                    | ContentKind.Image _ ->
+                    | ContentKind.Image _
+                    | ContentKind.Markdown ->
                         mouse.preventDefault ()
                         dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content ref)))
         // `tabindex="-1"`: never a Tab stop, but somewhere for focus to land when the jump
@@ -5057,7 +5058,7 @@ module View =
             <a class="{Style.paneToolbarAct}" href="{url}" download="{ContentName.ofRef ref}" target="_blank"
                data-content-download="{ContentRef.value ref}">{Dom.Text.download}</a>"""
 
-    let private paneContentView (ref: ContentRef) : TemplateResult =
+    let private paneContentView (model: ClientModel) (ref: ContentRef) : TemplateResult =
         let url = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative (SessionRoute.Content ref))
         let name = ContentName.ofRef ref
         // The download is NOT here: it is a verb about the thing on screen, and those are the
@@ -5071,6 +5072,26 @@ module View =
                     <img class="{Style.contentImage}" src="{url}" alt="{name}" data-content-image="{ContentRef.value ref}">
                   </div>
                 </section>"""
+        // Formatted by the timeline's own renderer, so a README reads as a message does. A
+        // reference inside it is the chip a message would draw; pressing one downloads, since
+        // the pane's interception is the conversation's (`contentOpen`).
+        | ContentKind.Markdown ->
+            let plain = Set.contains ref model.PlainContent
+            let chip = Entity.render (ClientModel.people model) (ActorRef.PeerRef model.Peer.PeerId) << EntityRef.Content
+            let inBox (shape: string) (how: string) (body: TemplateResult) =
+                html $"""
+                    <section class="{Style.paneBody}" data-pane-content="{ContentRef.value ref}">
+                      <div class="{shape}" data-content-text="{ContentRef.value ref}" data-content-read="{how}">{body}</div>
+                    </section>"""
+            match Map.tryFind ref model.ContentTexts with
+            | None
+            | Some ContentText.Loading ->
+                inBox Style.contentDownload "loading" (html $"""<span class="{Style.small}" role="status">{Dom.Text.contentLoading}</span>""")
+            | Some ContentText.Failed ->
+                inBox Style.contentDownload "failed" (html $"""<span class="{Style.small}" role="alert">{Dom.Text.contentUnreadable}</span>""")
+            | Some (ContentText.Loaded text) when plain -> inBox Style.contentSource "plain" (html $"""{text}""")
+            | Some (ContentText.Loaded text) ->
+                inBox Style.contentMarkdown "formatted" (html $"""<div class="{Style.contentMarkdownColumn}">{RichText.render chip text}</div>""")
         | ContentKind.Download ->
             html $"""
                 <section class="{Style.paneBody}" data-pane-content="{ContentRef.value ref}">
@@ -5120,14 +5141,24 @@ module View =
     /// What a preview on screen affords, for the action row: a command's recording and its
     /// place in its terminal's history, a file's download. A stretch is always its recording
     /// and plays without being asked, so it has nothing to offer and nothing to step out to.
-    let private previewVerbs (preview: Preview) : TemplateResult list =
+    let private previewVerbs (dispatch: ClientMsg -> unit) (model: ClientModel) (preview: Preview) : TemplateResult list =
         match preview.Subject with
         // A command's preview has one control, its close, which settles it back into its
         // terminal (`View.contentPane`): it is the command lifted out of its history, and its
         // recording and its place in that history are the terminal's to give.
         | PreviewSubject.Block _ -> []
         | PreviewSubject.Stretch _ -> []
-        | PreviewSubject.Content ref -> [ contentDownloadLink ref ]
+        | PreviewSubject.Content ref ->
+            // Only a file with a source to show has the flip: a picture's bytes are not text.
+            let flip =
+                match ContentName.kind ref with
+                | ContentKind.Markdown ->
+                    [ html $"""
+                        <button type="button" class="{Style.paneToolbarAct}" data-content-plain="{ContentRef.value ref}"
+                                aria-pressed="{if Set.contains ref model.PlainContent then "true" else "false"}"
+                                @click={Ev(fun _ -> dispatch (ToggleContentPlainMsg ref))}>{Dom.Text.contentPlain}</button>""" ]
+                | ContentKind.Image _ | ContentKind.Download -> []
+            flip @ [ contentDownloadLink ref ]
 
     /// A terminal's stop (P0-5; P2-2): one press ends it (`ClientModel.killPress`). It wears
     /// the stop mark and the word `stop`, the interrupt's face, because it is the same act on
@@ -5780,7 +5811,7 @@ module View =
             match preview.Subject with
             | PreviewSubject.Block (terminalId, blockId) -> paneBlockView model preview terminalId blockId
             | PreviewSubject.Stretch stretch -> paneStretchView model preview stretch
-            | PreviewSubject.Content ref -> paneContentView ref
+            | PreviewSubject.Content ref -> paneContentView model ref
         // The way back to a terminal's newest output, for a reader who scrolled up through
         // it: the chat's float, over the scroller it brings back. On screen while that reader
         // is far back from the end (`ClientModel.offersLatest`).
@@ -5980,7 +6011,7 @@ module View =
                         <span class="{Style.panePreviewName}" id="{Dom.panePreviewNameId}" data-pane-preview-name="{key}"
                               title="{hint}">{label}</span>
                       </div>
-                      {paneActionsView key (previewVerbs preview)}
+                      {paneActionsView key (previewVerbs dispatch model preview)}
                       {close}
                     </div>"""
             | None, Some terminal ->

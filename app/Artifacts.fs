@@ -438,6 +438,7 @@ let private headersFor (ref: ArtifactRef) (bytes: int64) =
     let contentType, disposition =
         match ContentKind.ofMediaType (ArtifactRef.mediaType ref) with
         | ContentKind.Image media -> media, sprintf "inline; filename=\"%s\"" name
+        | ContentKind.Markdown -> "text/markdown; charset=utf-8", sprintf "inline; filename=\"%s\"" name
         | ContentKind.Download -> "application/octet-stream", sprintf "attachment; filename=\"%s\"" name
     [ ResponseHeader.ContentType contentType
       ResponseHeader.ContentLength bytes

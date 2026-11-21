@@ -298,6 +298,7 @@ module Icon =
     let ofContent (kind: ContentKind) =
         match kind with
         | ContentKind.Image _ -> imageSm
+        | ContentKind.Markdown
         | ContentKind.Download -> fileSm
 
     /// What a cube turns: the tip and its six faces (`.agent-think` in `app/tailwind.css` says

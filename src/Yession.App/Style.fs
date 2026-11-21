@@ -4712,7 +4712,9 @@ module Style =
     let private paneToolbarFace =
         cls [ "h-touch px-1.5 shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer no-underline"
               caps; "whitespace-nowrap text-ink-dim hover:text-ink transition-colors motion-reduce:transition-none" ]
-    let paneToolbarAct = cls [ paneToolbarFace; focusRingInset ]
+    /// A flip that is on (`aria-pressed`, the markdown file's plain text) wears the full ink, so
+    /// the state shows by more than the word.
+    let paneToolbarAct = cls [ paneToolbarFace; focusRingInset; "aria-pressed:text-ink aria-pressed:underline" ]
     /// An act inside a line of the command band (the lease bar, the cannot-run notice): the same word
     /// at the size of the line it sits in, so it reads as part of the sentence it ends.
     let bandAct = cls [ paneActBase; "text-body text-ink-dim hover:text-ink phone:min-h-touch" ]
@@ -4816,6 +4818,14 @@ module Style =
     /// The picture itself: fitted to the box, never upscaled past its own pixels — a 16px icon
     /// stretched across a desktop pane is a blur presented as a fact.
     let contentImage = "max-w-full max-h-full object-contain"
+    /// A markdown file read formatted: the timeline's own prose (`messageBody` and the `prose*`
+    /// elements `RichText` draws), in a scrolling box, held to the reading column.
+    let contentMarkdown = "flex-1 min-h-0 overflow-auto px-4 py-3 text-body text-ink"
+    let contentMarkdownColumn = readingColumn
+    /// The same file as its source: the terminal's face, lines kept as written and wrapped
+    /// rather than scrolled sideways, because a long line of prose is the common one here.
+    let contentSource =
+        "flex-1 min-h-0 overflow-auto px-4 py-3 font-terminal text-code leading-5 text-ink whitespace-pre-wrap break-words"
     /// What a file the pane cannot draw gets instead: its name, its size, and the way to have
     /// it. Centred like the empty pane, because it IS an empty pane — of this kind.
     let contentDownload = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"

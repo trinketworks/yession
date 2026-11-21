@@ -1037,6 +1037,13 @@ module PreviewSubject =
         | PreviewSubject.Stretch stretch -> ViewingTerminal stretch.TerminalId
         | PreviewSubject.Content ref -> ViewingFile ref
 
+/// A markdown file's text as the pane has it: asked for, here, or not to be had.
+[<RequireQualifiedAccess>]
+type ContentText =
+    | Loading
+    | Loaded of string
+    | Failed
+
 /// One preview, and which read of it is up: its text, or its recording because the reader
 /// asked (`Plays`). A stretch plays without being asked and a file never does — both rules
 /// about the subject, asked where they are decided (`ClientModel.previewPlays`).
@@ -1891,6 +1898,13 @@ type ClientModel =
       /// being asked again on every message after: the range still rebases and plays without
       /// one, as the naive slice, so asking again would be a spin with nothing to gain.
       KeyframesAsked : Set<TerminalId * int>
+      /// The text of each markdown file this client has opened in the pane, with the read's
+      /// state. An entry is made when the read is asked for, so it is also what stops a second
+      /// read while the first is out (`wantedContentText`).
+      ContentTexts : Map<ContentRef, ContentText>
+      /// The markdown files the reader chose to see as source rather than formatted. Formatted
+      /// is the default, so the set holds the exceptions and a file nobody touched is formatted.
+      PlainContent : Set<ContentRef>
       /// The live SCREEN of each terminal, as this client has composed it (Plan 14, stage
       /// 6): the serialized output of an emulator fed the Process's snapshot and every
       /// record since.
@@ -2619,6 +2633,11 @@ type ClientMsg =
     /// starts from. Fetched when a tab needs one, never streamed — a keyframe is read by
     /// somebody opening a recording, not by everybody watching one grow.
     | TerminalKeyframeMsg of TerminalId * TranscriptKeyframe
+    /// The text of a markdown file, or `None` where it could not be read
+    /// (`ClientEffect.FetchContentText`).
+    | ContentTextMsg of ContentRef * string option
+    /// Flip a markdown file between its source and its formatted read.
+    | ToggleContentPlainMsg of ContentRef
     /// The live screen, recomposed (Plan 14, stage 6). Dispatched by the platform half,
     /// which owns the emulator: a screen is a projection an emulator maintains, and the
     /// reducer is pure.
@@ -2916,6 +2935,9 @@ type ClientEffect =
     /// The screen a ranged replay starts from (`ClientModel.missingKeyframe`), answered as a
     /// `TerminalKeyframeMsg`.
     | FetchKeyframe of TerminalId * seq: int
+    /// The text of a markdown file in the pane (`ClientModel.wantedContentText`), answered as a
+    /// `ContentTextMsg`.
+    | FetchContentText of ContentRef
     /// Tell the Session the size of a pty this peer holds the lease on, so the program drawing
     /// on it lays its screen out to the box the holder is looking at (`ClientModel.ptyResizes`).
     | ResizeTerminal of TerminalId * Size
@@ -3207,6 +3229,8 @@ module ClientModel =
           ReadsAsked = 0
           TerminalKeyframes = Map.empty
           KeyframesAsked = Set.empty
+          ContentTexts = Map.empty
+          PlainContent = Set.empty
           TerminalScreens = Map.empty
           TerminalViewports = Map.empty
           Tabs = []
@@ -4233,6 +4257,14 @@ module ClientModel =
             // A file is not a replay: it has no screen to start from.
             | Some (PreviewSubject.Content _) | None -> None
         wanted |> Option.filter (fun key -> not (Map.containsKey key model.TerminalKeyframes))
+
+    /// The markdown file on screen whose text this client has not asked for. Asked for once:
+    /// the entry the ask makes is what the next message finds.
+    let wantedContentText (model: ClientModel) : ContentRef option =
+        match preview model |> Option.map (fun preview -> preview.Subject) with
+        | Some (PreviewSubject.Content file) when ContentName.kind file = ContentKind.Markdown ->
+            if Map.containsKey file model.ContentTexts then None else Some file
+        | Some (PreviewSubject.Content _) | Some (PreviewSubject.Block _) | Some (PreviewSubject.Stretch _) | None -> None
 
     /// Whether this client is watching a terminal behind its live edge (Plan 14, stage 7).
     let isRewound (terminal: TerminalId) (model: ClientModel) : bool =
@@ -5946,6 +5978,14 @@ module ClientModel =
                         model.TerminalFeeds }
         | TerminalKeyframeMsg (terminal, keyframe) ->
             { model with TerminalKeyframes = Map.add (terminal, keyframe.Seq) keyframe model.TerminalKeyframes }
+        | ContentTextMsg (file, text) ->
+            let state = match text with | Some body -> ContentText.Loaded body | None -> ContentText.Failed
+            { model with ContentTexts = Map.add file state model.ContentTexts }
+        | ToggleContentPlainMsg file ->
+            { model with
+                PlainContent =
+                    if Set.contains file model.PlainContent then Set.remove file model.PlainContent
+                    else Set.add file model.PlainContent }
         | TerminalScreenMsg (terminal, screen) ->
             { model with TerminalScreens = Map.add terminal screen model.TerminalScreens }
         | TerminalViewportMsg (terminal, size) ->
@@ -5997,6 +6037,12 @@ module ClientModel =
                     | Some mode -> withTab (openOrder model.Terminals) (TerminalMode.terminal mode) model.Tabs
                     | None -> model.Tabs
                 FileTabs = filesFor preview.Subject model.FileTabs
+                // A read that failed is asked again when the reader opens the file again.
+                ContentTexts =
+                    match preview.Subject with
+                    | PreviewSubject.Content file when Map.tryFind file model.ContentTexts = Some ContentText.Failed ->
+                        Map.remove file model.ContentTexts
+                    | PreviewSubject.Content _ | PreviewSubject.Block _ | PreviewSubject.Stretch _ -> model.ContentTexts
                 Pane = Some (Previewing (preview, under))
                 Switcher = false
                 TerminalsOpen = true }
@@ -6734,7 +6780,11 @@ module ClientModel =
             | Some key when not (Set.contains key next.KeyframesAsked) ->
                 { next with KeyframesAsked = Set.add key next.KeyframesAsked }, [ ClientEffect.FetchKeyframe key ]
             | Some _ | None -> next, []
-        next, effects @ answered @ unnoticed @ swapped @ landing @ leased @ revealed @ resized @ present @ kept @ fetching @ offering @ connecting @ reading
+        let next, fetchingText =
+            match wantedContentText next with
+            | Some file -> { next with ContentTexts = Map.add file ContentText.Loading next.ContentTexts }, [ ClientEffect.FetchContentText file ]
+            | None -> next, []
+        next, effects @ fetchingText @ answered @ unnoticed @ swapped @ landing @ leased @ revealed @ resized @ present @ kept @ fetching @ offering @ connecting @ reading
 
     /// A file attached to `author`'s draft: the doc's attachment entry and this browser's upload,
     /// in one update, so nothing can see the one without the other. The entry names the draft's
