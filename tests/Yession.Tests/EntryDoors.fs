@@ -52,7 +52,7 @@ let private someFrames : EntryWire.Frame list =
       EntryWire.Frame.Exited 7 ]
 
 let private aHello : EntryWire.Hello =
-    { ToSandbox = "octo/hello:dev"; AsSubject = "ada"; Label = "ssh"; Argv = [ "/run/yession-ssh/serve"; "-e" ] }
+    { ToSandbox = "octo/hello:dev"; AsSubject = "ada"; Label = "ssh"; Argv = [ "/run/yession-ssh/serve"; "-e" ]; Bare = false }
 
 let private parsedOptions (options: string list) : Cli.Parsed =
     match Cli.outcome EntryWire.enterSpec "test" (Array.ofList options) with
@@ -171,6 +171,29 @@ let wireTests =
                 (EntryWire.enterRequest parsed (Some "octo/hello:dev") [ "/run/yession-ssh/serve"; "-e" ])
                 (Ok { EntryWire.EnterRequest.DoorPath = "/run/d.sock"; EntryWire.EnterRequest.Request = aHello })
                 "the door and the first line"
+
+        testCase "a command line with --bare asks for a bare start" <| fun () ->
+            let parsed = parsedOptions [ "--door"; "/run/d.sock"; "--as"; "ada"; "--via"; "ssh"; "--bare" ]
+            Expect.equal
+                (EntryWire.enterRequest parsed (Some "octo/hello:dev") [ "/run/yession-ssh/serve"; "-e" ])
+                (Ok
+                    { EntryWire.EnterRequest.DoorPath = "/run/d.sock"
+                      EntryWire.EnterRequest.Request = { aHello with Bare = true } })
+                "the same first line, bare"
+
+        testCase "a bare first line reads back as it was written" <| fun () ->
+            let bare = { aHello with Bare = true }
+            Expect.equal (EntryWire.readHello (EntryWire.hello bare)) (Ok bare) "a round trip"
+
+        testCase "a first line that is not bare is the line of an earlier build" <| fun () ->
+            // A session of an earlier build reads the line of this build, and the reverse.
+            Expect.isFalse ((EntryWire.hello aHello).Contains "bare") "no field for the ordinary start"
+
+        testCase "a bare first line starts its command with no entrypoint before it" <| fun () ->
+            Expect.equal
+                (EntryDoor.request { aHello with Bare = true } |> Result.map (fun (_, exec) -> exec.Via))
+                (Ok Direct)
+                "bare"
 
         testCase "a command line with no command is refused" <| fun () ->
             let parsed = parsedOptions [ "--door"; "/run/d.sock"; "--as"; "ada"; "--via"; "ssh" ]

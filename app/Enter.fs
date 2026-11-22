@@ -2,12 +2,13 @@ module Yession.Host.Enter
 
 // The `yession-enter` bin: run one command in one sandbox of one session, from the host.
 //
-//     yession-enter --door <socket> --as <subject> --via <label> <sandbox> -- <command> [argument ...]
+//     yession-enter --door <socket> --as <subject> --via <label> [--bare] <sandbox> -- <command> [argument ...]
 //
 // The input, the output and the error output of this process are those of the command, and
 // no byte changes on the way. This process ends with the exit code of the command. It dials
 // the door of the session (`EntryDoor`), which starts the command behind the entrypoint of
-// the sandbox. When this process ends, the session ends the command.
+// the sandbox, or with no entrypoint for `--bare`. When this process ends, the session ends
+// the command.
 //
 // This bin is the contract of the door. The bytes on the socket are private (`EntryWire`).
 // A deployment that gives a person a way into a sandbox calls this bin: for SSH, it runs
