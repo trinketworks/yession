@@ -160,6 +160,24 @@ type NetworkCreateOptions =
     abstract Driver: string with get, set
     abstract Labels: Labels with get, set
 
+/// `pruneNetworks`' filters: each a list of values.
+[<AllowNullLiteral>]
+type NetworkPruneFilters =
+    /// `name=value` (or bare `name`) label matches.
+    abstract label: string array with get, set
+    /// Only a network made before this: a time back from now ("10m"), or a timestamp.
+    abstract until: string array with get, set
+
+/// `pruneNetworks`' options.
+[<AllowNullLiteral>]
+type NetworkPruneOptions =
+    abstract filters: NetworkPruneFilters with get, set
+
+/// What `pruneNetworks` answers with, of it.
+type [<AllowNullLiteral>] NetworksPruned =
+    /// The names of the networks it removed. Absent when it removed none.
+    abstract NetworksDeleted: string array option
+
 /// A container's or a volume's `remove`.
 [<AllowNullLiteral>]
 type RemoveOptions =
@@ -359,6 +377,8 @@ type [<AllowNullLiteral>] Docker =
     abstract getVolume: name: string -> Volume
     abstract createNetwork: options: NetworkCreateOptions -> JS.Promise<Network>
     abstract getNetwork: name: string -> Network
+    /// Remove each network that no container is on, of those the filters match.
+    abstract pruneNetworks: options: NetworkPruneOptions -> JS.Promise<NetworksPruned>
     abstract getImage: name: string -> Image
     /// Pull an image; resolves to the progress stream to drain before use.
     abstract pull: tag: string -> JS.Promise<Stream>

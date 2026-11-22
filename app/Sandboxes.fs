@@ -1614,7 +1614,8 @@ module DockerSandbox =
 
     /// What every docker object this module makes is labelled with: the session it belongs
     /// to, which is what the cleanup sweep and `countByLabel` find it by.
-    let private sessionLabels (name: string) : DK.Labels = DK.Labels.ofList [ "yession-session", name ]
+    let private sessionLabelName = "yession-session"
+    let private sessionLabels (name: string) : DK.Labels = DK.Labels.ofList [ sessionLabelName, name ]
 
     /// Removed even while it runs.
     let private forced () : DK.RemoveOptions = jsOptions<DK.RemoveOptions> (fun o -> o.force <- true)
@@ -1658,6 +1659,36 @@ module DockerSandbox =
             probe.onceError (fun _ -> cont false)
             probe.listen (0, address, fun () -> probe.close (fun _ -> cont true)) |> ignore)
 
+    /// How old a network with no container must be before another session may remove it.
+    /// A session makes its network and then starts the first container on it, so a new
+    /// network has no container for a moment. Ten minutes is much longer than that moment.
+    let private reclaimAge = "10m"
+
+    /// Remove each network that has one of `labels`, has no container on it, and is older
+    /// than `age` (a time back from now, as the daemon reads one: "10m"). The answer is the
+    /// names that the daemon removed.
+    ///
+    /// For a session that ended with no chance to remove its network: one that the Manager
+    /// killed, or one that crashed. Such a network holds one of the daemon's subnets, of which
+    /// there are about 30. The session that owns a removed network loses nothing: it makes the
+    /// network again at its next container (`ensureNetwork`).
+    let reclaimNetworks (labels: string list) (age: string) : Async<string list> =
+        async {
+            let client = DK.create ()
+            try
+                let! pruned =
+                    client.pruneNetworks (
+                        jsOptions<DK.NetworkPruneOptions> (fun o ->
+                            o.filters <-
+                                jsOptions<DK.NetworkPruneFilters> (fun f ->
+                                    f.label <- List.toArray labels
+                                    f.until <- [| age |]))
+                    )
+                    |> Interop.awaitPromise
+                return pruned.NetworksDeleted |> Option.map List.ofArray |> Option.defaultValue []
+            with _ -> return []
+        }
+
     /// The session's network, made on the first container that needs it, and its gateway.
     /// Two sandboxes that start at once both ask; the second one's create is refused as a
     /// duplicate, and it reads the network the first made.
@@ -1668,37 +1699,50 @@ module DockerSandbox =
                     let! inspected = client.getNetwork(network.Name).inspect () |> Interop.awaitPromise
                     return DK.NetworkInspect.gateway inspected
                 }
+            // The daemon's own words for a create that it refused, kept for the error. This
+            // used to discard them. A daemon with no subnet left then read as "could not be
+            // made, or has no IPv4 gateway", which named no cause.
+            let made () : Async<Result<string, string>> =
+                async {
+                    let! refused =
+                        async {
+                            try
+                                do!
+                                    client.createNetwork (
+                                        jsOptions<DK.NetworkCreateOptions> (fun o ->
+                                            o.Name <- network.Name
+                                            o.Driver <- "bridge"
+                                            o.Labels <- sessionLabels network.Name)
+                                    )
+                                    |> Interop.awaitPromise
+                                    |> Async.Ignore
+                                return None
+                            with ex -> return Some ex.Message
+                        }
+                    // Read again after a refusal too: the refusal can be the duplicate of the
+                    // doc comment above, and the network is then there.
+                    match! async { try return! gatewayOf () with _ -> return None } with
+                    | Some gateway -> return Ok gateway
+                    | None ->
+                        match refused with
+                        | Some reason ->
+                            return Error (sprintf "docker network '%s' could not be made. The daemon said: %s" network.Name reason)
+                        | None -> return Error (sprintf "docker network '%s' has no IPv4 gateway" network.Name)
+                }
             let! existing = async { try return! gatewayOf () with _ -> return None }
             match existing with
             | Some gateway -> return Ok gateway
             | None ->
-                // The daemon's own words for a create that it refused, kept for the error
-                // below. This used to discard them. A daemon with no subnet left then read as
-                // "could not be made, or has no IPv4 gateway", which named no cause.
-                let! refused =
-                    async {
-                        try
-                            do!
-                                client.createNetwork (
-                                    jsOptions<DK.NetworkCreateOptions> (fun o ->
-                                        o.Name <- network.Name
-                                        o.Driver <- "bridge"
-                                        o.Labels <- sessionLabels network.Name)
-                                )
-                                |> Interop.awaitPromise
-                                |> Async.Ignore
-                            return None
-                        with ex -> return Some ex.Message
-                    }
-                // Read again after a refusal too: the refusal can be the duplicate of the
-                // doc comment above, and the network is then there.
-                match! async { try return! gatewayOf () with _ -> return None } with
-                | Some gateway -> return Ok gateway
-                | None ->
-                    match refused with
-                    | Some reason ->
-                        return Error (sprintf "docker network '%s' could not be made. The daemon said: %s" network.Name reason)
-                    | None -> return Error (sprintf "docker network '%s' has no IPv4 gateway" network.Name)
+                match! made () with
+                | Ok gateway -> return Ok gateway
+                | Error refusal ->
+                    // The usual cause is a daemon with no subnet left, and the usual holders
+                    // are networks of sessions that ended with no chance to remove them. So
+                    // remove those and ask once more. When there was none to remove, the
+                    // first refusal is the answer.
+                    match! reclaimNetworks [ sessionLabelName ] reclaimAge with
+                    | [] -> return Error refusal
+                    | _ -> return! made ()
         }
 
     /// Drain a build/pull progress stream; resolves when Docker signals completion.
