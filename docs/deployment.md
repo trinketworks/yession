@@ -262,6 +262,37 @@ one that `wants:` it starts without the device. `/dev/kvm` lets a repository's t
 VM. On a virtual machine, the host has `/dev/kvm` only when its hypervisor offers nested
 virtualization.
 
+A resource can add capabilities of the Linux kernel to a container, under `capability:`. Write
+one name, or a list of them. Write each name as docker does, without the prefix `CAP_`:
+
+```yaml
+resources:
+  remote-ssh:
+    capability: [ SETUID, SETGID, SYS_CHROOT ]
+```
+
+A container starts with three capabilities only: `CHOWN`, `FOWNER` and `DAC_OVERRIDE`. Yession
+adds each name in the resource to those three. Yession still drops each other capability, and
+`no-new-privileges` stays. A capability changes what root in the container can ask of the
+kernel of the host, so only you grant one. A file of a repository cannot name a capability. A
+repository selects the resource by name, and its user is not asked.
+
+Yession checks the shape of a name when it reads the profile. It refuses a name with the
+prefix `CAP_`, a name with a character that is not an upper case letter, a digit or `_`, and
+the name `ALL`. Yession keeps no list of the names of the kernel. The daemon refuses a name
+that its kernel does not have, and the sandbox then does not start. The refusal shows what
+the daemon said.
+
+Only the docker backend adds a capability. A sandbox on another backend that `uses:` the
+resource refuses to start, and one that `wants:` it starts without the capability. So do not
+list such a resource under `always:` on a host that also runs sandboxes on another backend.
+
+The example above is what an `sshd` that runs as root needs. We measured OpenSSH 10.3 in the
+`nixos/nix` image. With the three usual capabilities, `sshd` stops at
+`chroot("/var/empty"): Operation not permitted`. With `SETGID` and `SYS_CHROOT` added, it
+stops at `setresuid 74: Operation not permitted`. With all three names added, `sshd` reaches
+the login. An `sshd` that runs as a different user than root needs none of them.
+
 The same file may declare `sandboxes:` in the form a repo's `yession.yaml` uses
 (`ConfigFile.parseSandboxes` in `src/Yession.Domain/Config.fs`). Boot prints the notes of
 `ConfigAnalysis.fs` on what is legal but likely unmeant.

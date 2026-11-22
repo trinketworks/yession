@@ -522,6 +522,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
               Volumes = []
               SeatbeltRules = []
               Devices = []
+              LinuxCapabilities = []
               Realisation = []
               Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
               WorkingDirectory = Some reposDir

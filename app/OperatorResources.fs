@@ -71,7 +71,9 @@ let private canonicalPaths (file: ProfileFile) : Result<ProfileFile, string> =
         | Seatbelt _ -> None
         // A device is a path of the host, and docker refuses one that is not a device
         // node. A symlink to one is still one, so there is nothing for this check to add.
-        | Device _ -> None)
+        | Device _ -> None
+        // A capability is a name of the kernel's, not a path.
+        | Capability _ -> None)
     |> function
         | Some reason -> Error reason
         | None -> Ok file

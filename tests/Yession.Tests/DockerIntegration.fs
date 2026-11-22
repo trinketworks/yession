@@ -817,5 +817,34 @@ let tests =
                     gateway.Close () |> Async.StartImmediate
                     upstream.close ignore
             })
+
+            // A capability the operator grants is in the set of the container. The backend
+            // drops SYS_CHROOT, so `chroot` is refused without the grant and works with it.
+            testCaseAsync "a granted capability is added to the ones the backend gives" (async {
+                let sandboxWith (leaves: ResourceLeaf list) =
+                    async {
+                        let createSandbox =
+                            Sandboxes.forBackend None DockerBackend (DockerFixture.quietNetwork ()) (DockerFixture.name ()) alpineSpec
+                            |> expect
+                        let policy =
+                            Sandboxes.policyFor
+                                DockerBackend (Sandboxes.limitsFor DockerBackend Node.Base.Platform.Linux) Map.empty Map.empty None None None None
+                                leaves
+                                Set.empty
+                                EnvironmentSpec.defaults
+                            |> expect
+                        match! createSandbox policy with
+                        | Error reason -> return failwithf "docker sandbox failed: %s" reason
+                        | Ok sandbox -> return sandbox
+                    }
+                let! plain = sandboxWith []
+                let! refused, _, _ = runInSandbox plain "chroot" [ "/"; "true" ] Map.empty None
+                do! plain.Dispose ()
+                Expect.isFalse (refused = SandboxExited 0) "without the grant, the kernel refuses chroot"
+                let! granted = sandboxWith [ Capability (LinuxCapability.parse "SYS_CHROOT" |> expect) ]
+                let! allowed, _, err = runInSandbox granted "chroot" [ "/"; "true" ] Map.empty None
+                do! granted.Dispose ()
+                Expect.equal allowed (SandboxExited 0) (sprintf "with the grant, chroot works: %s" err)
+            })
         ]
         |> DockerFixture.owned)

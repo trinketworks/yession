@@ -131,7 +131,40 @@ module SeatbeltAllow =
                         | _ -> scan (index + 1) depth false false
             scan 0 0 false false
 
-/// The nine primitives, and there is no tenth.
+/// One capability of the Linux kernel, by the name that docker takes: `SETUID`, not
+/// `CAP_SETUID`.
+///
+/// Private, so `parse` is the only way to hold one. `parse` checks the shape of the name
+/// and not its meaning. The daemon knows the names of its kernel, and it refuses one that
+/// it does not know when it makes the container.
+type LinuxCapability = private LinuxCapability of string
+
+module LinuxCapability =
+
+    /// The name as docker takes it.
+    let text (LinuxCapability name) : string = name
+
+    /// One name, or why the text is not one.
+    ///
+    /// `ALL` is refused. A grant names what it gives, and `ALL` gives each capability that a
+    /// later kernel adds.
+    let parse (raw: string) : Result<LinuxCapability, string> =
+        let name = raw.Trim ()
+        let allowed (c: char) : bool = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c = '_'
+        if name = "" then
+            Error "a capability is a name, like SETUID. This one is empty"
+        elif name.StartsWith "CAP_" then
+            Error (sprintf "the capability '%s' has the prefix CAP_. Remove the prefix: write %s" name (name.Substring 4))
+        elif not (name |> Seq.forall allowed) then
+            Error (
+                sprintf
+                    "the capability '%s' is not a name. A name has upper case letters, digits and '_' only, like SYS_CHROOT"
+                    name)
+        elif name = "ALL" then
+            Error "the capability 'ALL' is refused. Name each capability that the sandbox needs"
+        else Ok (LinuxCapability name)
+
+/// The ten primitives, and there is no eleventh.
 type ResourceLeaf =
     | Mount of ResourceMount
     | Socket of path: string
@@ -194,6 +227,18 @@ type ResourceLeaf =
     /// The same path on both sides, so there is no `at`: a tool looks for a device where the
     /// kernel puts it, and a device somewhere else is one nothing finds.
     | Device of path: string
+    /// One capability of the Linux kernel, added to a container sandbox. Only a container
+    /// backend takes it. Every other backend withholds it, because none of them drops and
+    /// adds capabilities.
+    ///
+    /// The operator's alone, as a device is. A container starts with the capabilities that
+    /// the backend chose, and each one more is a decision about the kernel of the host. A
+    /// repository cannot write one in its file. The session's user is not asked
+    /// (`ResourceClosure.asksItsUser`): the harm lands on the host, not on them.
+    ///
+    /// ONE name, for the reason a variable is one leaf: a set of name lists does not
+    /// deduplicate.
+    | Capability of LinuxCapability
 
 /// One resource as the operator declared it: either a thing, or a name for several things.
 [<RequireQualifiedAccess>]
@@ -219,6 +264,9 @@ type ResourceTarget =
     /// differ never collide.
     | RuleTarget of SeatbeltAllow
     | DeviceTarget of path: string
+    /// A capability occupies itself. A container holds the union of its capabilities, so
+    /// two names that differ never collide.
+    | CapabilityTarget of LinuxCapability
 
 module ResourceLeaf =
 
@@ -235,6 +283,7 @@ module ResourceLeaf =
         | Connection (name, route) -> ConnectionTarget (name, route)
         | Seatbelt rule -> RuleTarget rule
         | Device path -> DeviceTarget path
+        | Capability name -> CapabilityTarget name
         // A volume occupies the same axis a mount does — a container path — so a volume
         // and a mount at one target collide like two mounts would.
         | Volume (_, at, _) -> MountTarget at
@@ -287,6 +336,7 @@ module ResourceLeaf =
         // parenthesis, and the parenthesis that closes it says where the grant ends.
         | Seatbelt rule -> sprintf "sb:%s" (SeatbeltAllow.text rule)
         | Device path -> sprintf "dev:%s" path
+        | Capability name -> sprintf "cap:%s" (LinuxCapability.text name)
 
     /// Every colliding pair in a set of leaves.
     ///
@@ -343,7 +393,8 @@ module ResourceClosure =
         | Variable _
         | Exec _
         | Seatbelt _
-        | Device _ -> false
+        | Device _
+        | Capability _ -> false
 
     /// Whether this selection waits for a person to approve it: exactly when it holds a
     /// connection.
@@ -423,6 +474,9 @@ type HostDistinction =
     /// the host backend allows everything and still has no device node to give a sandbox
     /// that the host does not already show it.
     | Devices
+    /// A capability of the Linux kernel added to the sandbox. A provision, as `Devices` is:
+    /// only a backend that makes a container has a set of capabilities to add to.
+    | KernelCapabilities
 
 /// What this host can express. The THIRD author of a grant, after the operator who named it
 /// and the repo that selected it, and the only one that is not a person.
@@ -446,7 +500,8 @@ module HostLimits =
                   HostDistinction.OverlayMounts
                   HostDistinction.NamedVolumes
                   HostDistinction.SeatbeltRules
-                  HostDistinction.Devices ])
+                  HostDistinction.Devices
+                  HostDistinction.KernelCapabilities ])
 
     let of' (distinctions: HostDistinction list) : HostLimits = HostLimits (Set.ofList distinctions)
 
@@ -528,6 +583,11 @@ module RealisedClosure =
                 HostDistinction.Devices,
                 LeafRealisation.Withheld
                     "only a container backend passes a device through. Grant this where the sandbox is a container, not here")
+        | Capability _ ->
+            Some (
+                HostDistinction.KernelCapabilities,
+                LeafRealisation.Withheld
+                    "only a container backend adds a capability. Grant this where the sandbox is a container, not here")
         | Variable _
         | Exec _
         // Whether this backend can be reached by the connection's route is the credential
@@ -669,6 +729,10 @@ module GrantNotation =
             "dev:PATH",
             "a device of the host, at the same path in the sandbox. It reaches the host's \
              kernel, and every sandbox that holds it shares it. Only a container holds it"
+        | Capability _ ->
+            "cap:NAME",
+            "a capability of the Linux kernel, added to the sandbox. Root in the sandbox can \
+             then do what the name allows. Only a container holds it"
 
     /// One leaf per kind. What makes `kind` a total match over the vocabulary rather than a
     /// list somebody keeps in step with it.
@@ -681,7 +745,8 @@ module GrantNotation =
           Exec "/usr/bin/git"
           Connection ("github", ConnectionRoute.Git)
           Seatbelt (SeatbeltAllow "(allow mach-lookup (global-name \"com.apple.sysmond\"))")
-          Device "/dev/kvm" ]
+          Device "/dev/kvm"
+          Capability (LinuxCapability "SYS_CHROOT") ]
 
     /// Whether a written grant is of this kind, by the token the RENDERER emits for it —
     /// everything up to its first colon, read off `describe` rather than off the shape

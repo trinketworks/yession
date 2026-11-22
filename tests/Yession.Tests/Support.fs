@@ -107,6 +107,7 @@ let emptyPolicy : SandboxPolicy =
       Volumes = []
       SeatbeltRules = []
       Devices = []
+      LinuxCapabilities = []
       Realisation = []
       Env = Map.empty
       WorkingDirectory = None
