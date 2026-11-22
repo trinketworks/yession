@@ -365,6 +365,22 @@ let private storeTests =
                 "an attribution this build cannot name is not read as shared access"
             Expect.equal (Yession.Session.SignInStore.ofJson """{"version":1,"signIns":[]}""") (Ok []) "none kept"
 
+        testCase "sealed sign-ins round-trip, and a file in the clear is refused" <| fun () ->
+            let envelope = Yession.Session.SealedSignIns.create "iv" "ciphertext"
+            Expect.equal
+                (Yession.Session.SealedSignIns.toJson envelope |> Yession.Session.SealedSignIns.ofJson)
+                (Ok envelope)
+                "what is written is what is read"
+            // The first build that kept sign-ins wrote this. It names a person.
+            Expect.isError
+                (Yession.Session.SealedSignIns.ofJson
+                    """{"version":1,"signIns":[{"digest":"d","subject":"ada@example.com","attribution":{"kind":"unattributed"},"expiresAt":"5"}]}""")
+                "sign-ins in the clear are not read"
+            Expect.isError (Yession.Session.SealedSignIns.ofJson "not json") "text that is not JSON"
+
+        testCase "a sign-in lasts one day" <| fun () ->
+            Expect.equal Cookies.signInLifetimeSeconds 86_400L "one day, in seconds"
+
         testCase "the session cookie lasts as long as the sign-in it carries" <| fun () ->
             Expect.isTrue
                 ((Cookies.set CookieScheme.AnyScheme "yession_auth_x" "" "v").Contains
@@ -377,8 +393,15 @@ let private wireTests =
         testCase "DCR request/response and token response round-trip" <| fun () ->
             let request = { RegisterClientRequest.RedirectUri = "http://127.0.0.1:9001/callback" }
             Expect.equal (Wire.toString Wire.registerClientRequest request |> Wire.fromString Wire.registerClientRequest) (Ok request) "request"
-            let response = { ClientId = "c"; ClientSecret = "s"; Issuer = "http://127.0.0.1:8321" }
+            let response = { ClientId = "c"; ClientSecret = "s"; Issuer = "http://127.0.0.1:8321"; SignInKey = Some "key" }
             Expect.equal (Wire.toString Wire.registerClientResponse response |> Wire.fromString Wire.registerClientResponse) (Ok response) "response"
+            // A Manager with no durable key gives none, and so does one older than the field.
+            let keyless = { response with SignInKey = None }
+            Expect.equal (Wire.toString Wire.registerClientResponse keyless |> Wire.fromString Wire.registerClientResponse) (Ok keyless) "response without a key"
+            Expect.equal
+                (Wire.fromString Wire.registerClientResponse """{"clientId":"c","clientSecret":"s","issuer":"http://127.0.0.1:8321"}""")
+                (Ok keyless)
+                "an older Manager's response"
             let tokens = { AccessToken = "a"; TokenType = "Bearer"; IdToken = "jwt"; ExpiresIn = 600 }
             Expect.equal (Wire.toString Wire.tokenResponse tokens |> Wire.fromString Wire.tokenResponse) (Ok tokens) "token response"
             Expect.equal (Wire.toString Wire.tokenError "invalid_grant" |> Wire.fromString Wire.tokenError) (Ok "invalid_grant") "error body"

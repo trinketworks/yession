@@ -22,7 +22,13 @@ type RegisterClientResponse =
       ClientSecret : string
       /// The provider's issuer URL — everything else (endpoints, JWKS) is discovered
       /// from `<issuer>/.well-known/openid-configuration`.
-      Issuer : string }
+      Issuer : string
+      /// The key this session seals its kept sign-ins with (`Yession.Session.SealedSignIns`):
+      /// 32 bytes, base64url. The Manager makes it from the key that seals its secrets store,
+      /// so it is the same key at each launch of one session. `None` when the Manager holds
+      /// no durable key, and from a Manager older than this field. The session then keeps no
+      /// sign-ins.
+      SignInKey : string option }
 
 type Discovery =
     { Issuer : string
@@ -109,14 +115,18 @@ module Wire =
         { Encode =
             fun (r: RegisterClientResponse) ->
                 Encode.object
-                    [ "clientId", Encode.string r.ClientId
-                      "clientSecret", Encode.string r.ClientSecret
-                      "issuer", Encode.string r.Issuer ]
+                    [ yield "clientId", Encode.string r.ClientId
+                      yield "clientSecret", Encode.string r.ClientSecret
+                      yield "issuer", Encode.string r.Issuer
+                      match r.SignInKey with
+                      | Some key -> yield "signInKey", Encode.string key
+                      | None -> () ]
           Decode =
             Decode.object (fun get ->
                 { RegisterClientResponse.ClientId = get.Required.Field "clientId" Decode.string
                   RegisterClientResponse.ClientSecret = get.Required.Field "clientSecret" Decode.string
-                  RegisterClientResponse.Issuer = get.Required.Field "issuer" Decode.string }) }
+                  RegisterClientResponse.Issuer = get.Required.Field "issuer" Decode.string
+                  RegisterClientResponse.SignInKey = get.Optional.Field "signInKey" Decode.string }) }
 
     /// The discovery document. Encoding also asserts what the provider supports —
     /// `code` + PKCE `S256` + `EdDSA`, nothing else — per OIDC Discovery §3; the decoder

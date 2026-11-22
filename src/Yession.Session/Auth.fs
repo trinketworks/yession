@@ -138,6 +138,45 @@ module SignInStore =
     let ofJson (json: string) : Result<KeptSignIn list, string> =
         Decode.fromString (Decode.field "signIns" (Decode.list decodeSignIn)) json
 
+/// The kept sign-ins as they are on disk: the text of `SignInStore.toJson`, sealed with
+/// AES-256-GCM under the key the Manager gives this session (`RegisterClientResponse`). The
+/// file holds no name, no address and no digest in the clear, and a file that somebody
+/// changed does not open.
+type SealedSignIns =
+    { /// base64url, 12 random bytes, new at each write.
+      Iv : string
+      /// base64url, the ciphertext and its 16-byte tag.
+      Ciphertext : string }
+
+[<RequireQualifiedAccess>]
+module SealedSignIns =
+
+    /// Version 1 was the sign-ins in the clear, which no build reads now.
+    let version = 2
+
+    let create (iv: string) (ciphertext: string) : SealedSignIns = { Iv = iv; Ciphertext = ciphertext }
+
+    let toJson (envelope: SealedSignIns) : string =
+        Encode.object
+            [ "version", Encode.int version
+              "iv", Encode.string envelope.Iv
+              "ciphertext", Encode.string envelope.Ciphertext ]
+        |> Encode.toString 0
+
+    /// The sealed sign-ins a file's text holds. A file of another version is an `Error`:
+    /// the caller removes it, and each browser signs in one more time.
+    let ofJson (json: string) : Result<SealedSignIns, string> =
+        let decoder =
+            Decode.field "version" Decode.int
+            |> Decode.andThen (fun found ->
+                if found <> version then
+                    Decode.fail (sprintf "sign-ins file version %d, and this build reads %d" found version)
+                else
+                    Decode.object (fun get ->
+                        { Iv = get.Required.Field "iv" Decode.string
+                          Ciphertext = get.Required.Field "ciphertext" Decode.string }))
+        Decode.fromString decoder json
+
 /// Established browser sessions: opaque cookie value → authenticated identity.
 ///
 /// A sign-in lasts `Cookies.signInLifetimeSeconds`, across launches of the session. The

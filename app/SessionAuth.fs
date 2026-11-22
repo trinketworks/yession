@@ -26,7 +26,11 @@ open Yession.Host.Interop
 type Auth =
     { /// Complete the RP configuration after dynamic client registration: run OIDC
       /// discovery against the issuer and bind the client credentials + redirect URI.
-      Configure : string -> string -> string -> string -> Async<Result<unit, string>>
+      ///
+      /// The registration is the Manager's answer (`RegisterClientResponse`). Its sign-in
+      /// key opens the sign-ins that the last launch kept, so a browser that signed in
+      /// then is signed in from here on.
+      Configure : RegisterClientResponse -> string -> Async<Result<unit, string>>
       /// Does the request carry the cookie of a sign-in this session holds?
       IsAuthenticated : IncomingMessage -> bool
       /// The authenticated identity behind the request's cookie, when any: the subject
@@ -45,28 +49,39 @@ type Auth =
 /// siblings on the same host. `scheme` says whether the cookie is `Secure`
 /// (`Cookies.schemeFor`).
 ///
-/// `signIns` is where the session keeps its sign-ins between launches (`SignInStore`). A
-/// browser that signed in before this launch does not sign in again.
-let create (sessionId: SessionId) (mount: string) (scheme: CookieScheme) (signIns: SignInStore) : Auth =
+/// `signIns` opens the place where the session keeps its sign-ins between launches
+/// (`SignInStore`), with the key the Manager gave at registration, or with none. A browser
+/// that signed in before this launch does not sign in again.
+let create
+    (sessionId: SessionId)
+    (mount: string)
+    (scheme: CookieScheme)
+    (signIns: string option -> Async<SignInStore>)
+    : Auth =
     let cookieName = Cookies.sessionCookieName sessionId
     let nowUnix () = System.DateTimeOffset.UtcNow.ToUnixTimeSeconds ()
     let pendingLogins = PendingLogins (nowUnix)
-    let cookies = CookieSessions (randomSecret, sha256Base64Url, nowUnix, signIns)
+    // Replaced once, in `Configure`, by the sessions that read what the last launch kept.
+    // No sign-in is made before then: a callback needs the configuration.
+    let mutable cookies = CookieSessions (randomSecret, sha256Base64Url, nowUnix, SignInStore.none)
     let mutable configuration : (Configuration * string) option = None
 
     let identityOf (req: IncomingMessage) : CookieIdentity option =
         Cookies.tryFind cookieName (headerOf req "cookie")
-        |> Option.bind cookies.IdentityOf
+        |> Option.bind (fun value -> cookies.IdentityOf value)
 
     { Configure =
-        fun issuer clientId clientSecret redirectUri ->
+        fun registration redirectUri ->
             async {
+                let issuer = registration.Issuer
+                let! store = signIns registration.SignInKey
+                cookies <- CookieSessions (randomSecret, sha256Base64Url, nowUnix, store)
                 try
                     let! resolved =
                         discovery
                             (newUrl issuer)
-                            clientId
-                            clientSecret
+                            registration.ClientId
+                            registration.ClientSecret
                             // Loopback HTTP issuer (RFC 8252 pattern) — see the binding.
                             (jsOptions<DiscoveryOptions> (fun o -> o.execute <- [| allowInsecureRequests |]))
                         |> Interop.awaitPromise

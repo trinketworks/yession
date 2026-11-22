@@ -48,10 +48,10 @@ module Cookies =
         else
             CookieScheme.AnyScheme
 
-    /// How long a sign-in lasts, in seconds: 30 days. The browser keeps the cookie this long
+    /// How long a sign-in lasts, in seconds: one day. The browser keeps the cookie this long
     /// (`Max-Age`), and the session keeps its side of the sign-in this long
     /// (`Yession.Session.CookieSessions`). One number, so the two ends cannot disagree.
-    let signInLifetimeSeconds = 2_592_000L
+    let signInLifetimeSeconds = 86_400L
 
     /// A `Set-Cookie:` value for an HttpOnly session cookie, scoped to the path the
     /// session is served under (`""` at an origin root ⇒ `Path=/`).
