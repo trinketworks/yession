@@ -901,6 +901,11 @@ let
         env:
           HTTPS_PROXY: ''${proxy.https}
           SSL_CERT_FILE: ''${proxy.ca-file}
+          # git ignores SSL_CERT_FILE. git obeys GIT_SSL_CAINFO before the
+          # `http.<url>.sslCAInfo` that the session tells it. The nixos/nix image sets
+          # GIT_SSL_CAINFO to its own bundle. Without this line, git in that image
+          # refuses github.com.
+          GIT_SSL_CAINFO: ''${proxy.ca-file}
           GH_TOKEN: ''${github.token}
           GITHUB_TOKEN: ''${github.token}
       # For `default`, which runs under srt: srt takes a connection by git alone.
