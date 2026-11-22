@@ -1091,6 +1091,32 @@ let private onStdinClosed (handler: unit -> unit) : unit =
     stdin.on ("end", fun () -> handler ()) |> ignore
     stdin.resume () |> ignore
 
+/// How long a session that is stopping waits for its Host to stop. The Manager kills a
+/// session that has not ended `StopGraceMs` (3 s) after its SIGTERM, so this is less.
+let private hostStopDeadline = System.TimeSpan.FromSeconds 2.0
+
+/// `work`, over when it is done, when it fails, or when `deadline` has passed, whichever is
+/// first. It never throws: the caller's next act is to end the process.
+let private within (deadline: System.TimeSpan) (work: Async<unit>) : Async<unit> =
+    Async.FromContinuations (fun (resolve, _, _) ->
+        let settled = ref false
+        let settle () =
+            if not settled.Value then
+                settled.Value <- true
+                resolve ()
+        Async.StartImmediate (
+            async {
+                try
+                    do! work
+                with _ -> ()
+                settle ()
+            })
+        Async.StartImmediate (
+            async {
+                do! clock.After deadline
+                settle ()
+            }))
+
 Async.StartImmediate (
     async {
         let log =
@@ -1811,19 +1837,36 @@ Async.StartImmediate (
                     Interop.exit 1
                 | Ok () -> ()
         | _ -> ()
+        // A session that stops takes its sandboxes down, and then ships its telemetry.
+        // `host.Stop` is where a sandbox ends ("Sandbox lifetime = session lifetime").
+        // Before this, no session process called it. A stop ended the process, and each
+        // container and the session's docker network stayed on the daemon. A daemon has
+        // about 30 subnets for bridge networks. After about 30 sessions, no session could
+        // make its network, and no container sandbox started.
+        //
+        // `Stop` takes the sandboxes down before it closes the connections. So the
+        // deadline cuts the sandboxes short only when the daemon itself is slow.
+        // Once only: the Manager's death and its signal can arrive together.
+        let ending = ref false
+        let endThen (finish: unit -> unit) : unit =
+            if not ending.Value then
+                ending.Value <- true
+                Async.StartImmediate (
+                    async {
+                        do! within hostStopDeadline (host.Stop ())
+                        do! Telemetry.shutdownWithin clock Telemetry.shutdownDeadline telemetry
+                        finish ()
+                    })
         // Sessions never outlive their Manager: spawned under the guard, the Manager's
         // death closes our stdin (the kernel does this even on SIGKILL) and we exit.
         if launch.ParentGuard then
-            // Flush buffered telemetry before exiting (the Manager's death closes stdin).
-            onStdinClosed (fun () ->
-                Async.StartImmediate (
-                    async {
-                        do! Telemetry.shutdownWithin clock Telemetry.shutdownDeadline telemetry
-                        Interop.exit 0
-                    }))
-        // The Manager stops a session with SIGTERM, and a session it stops ships its
-        // telemetry first, like one whose Manager died.
-        Telemetry.endOnSignal clock telemetry
+            onStdinClosed (fun () -> endThen (fun () -> Interop.exit 0))
+        // The Manager stops a session with SIGTERM. The session then sends itself the
+        // same signal with nothing listening for it, so the Manager reads a process that
+        // the signal stopped (`Telemetry.endOnSignal` says why).
+        for signal in [ "SIGTERM"; "SIGINT" ] do
+            Fable.NodeExtras.Processes.onceSignalled signal (fun () ->
+                endThen (fun () -> Fable.NodeExtras.Processes.signalSelf signal))
         // The boot, timed in its two parts at the moment it is over. Only a boot that got
         // here is recorded: one that failed is the Manager's `SessionLaunch false`.
         telemetry.Time (Telemetry.Timing.SessionBoot Telemetry.BootPhase.Load) loadedAfter
