@@ -1864,9 +1864,10 @@ Async.StartImmediate (
         // The Manager stops a session with SIGTERM. The session then sends itself the
         // same signal with nothing listening for it, so the Manager reads a process that
         // the signal stopped (`Telemetry.endOnSignal` says why).
-        for signal in [ "SIGTERM"; "SIGINT" ] do
+        [ "SIGTERM"; "SIGINT" ]
+        |> List.iter (fun signal ->
             Fable.NodeExtras.Processes.onceSignalled signal (fun () ->
-                endThen (fun () -> Fable.NodeExtras.Processes.signalSelf signal))
+                endThen (fun () -> Fable.NodeExtras.Processes.signalSelf signal)))
         // The boot, timed in its two parts at the moment it is over. Only a boot that got
         // here is recorded: one that failed is the Manager's `SessionLaunch false`.
         telemetry.Time (Telemetry.Timing.SessionBoot Telemetry.BootPhase.Load) loadedAfter
