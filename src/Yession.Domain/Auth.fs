@@ -48,10 +48,17 @@ module Cookies =
         else
             CookieScheme.AnyScheme
 
+    /// How long a sign-in lasts, in seconds: 30 days. The browser keeps the cookie this long
+    /// (`Max-Age`), and the session keeps its side of the sign-in this long
+    /// (`Yession.Session.CookieSessions`). One number, so the two ends cannot disagree.
+    let signInLifetimeSeconds = 2_592_000L
+
     /// A `Set-Cookie:` value for an HttpOnly session cookie, scoped to the path the
-    /// session is served under (`""` at an origin root ⇒ `Path=/`). No `Max-Age`/`Expires`:
-    /// the cookie lives with the browser session, matching the server side (auth state is
-    /// in-memory and dies with the process).
+    /// session is served under (`""` at an origin root ⇒ `Path=/`).
+    ///
+    /// `Max-Age` is the sign-in's lifetime. Without it the cookie died with the browser
+    /// session. A page that opened from this device's own copy then found itself signed out,
+    /// left for the sign-in, and loaded a second time.
     ///
     /// Scoping is a real narrowing where sessions share a host: a path-mounted session's
     /// cookie is no longer sent to its siblings. At an origin root the behaviour is
@@ -63,7 +70,7 @@ module Cookies =
             match scheme with
             | CookieScheme.HttpsOnly -> "; Secure"
             | CookieScheme.AnyScheme -> ""
-        sprintf "%s=%s; Path=%s; HttpOnly; SameSite=Lax%s" name value path secure
+        sprintf "%s=%s; Path=%s; Max-Age=%d; HttpOnly; SameSite=Lax%s" name value path signInLifetimeSeconds secure
 
     /// The session's auth-cookie name. Cookies on 127.0.0.1 are NOT port-scoped — the
     /// Manager and every Session share one browser cookie jar — so each session's

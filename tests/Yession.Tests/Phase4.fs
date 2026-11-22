@@ -4097,11 +4097,11 @@ let private publicAccessTests =
         testCase "the auth cookie is Secure where the sessions are served over https" <| fun () ->
             let scheme = PublicAccess.create "https://example.com" "https://example.com/s/{id}" |> Result.map Cookies.schemeFor
             let cookie = scheme |> Result.map (fun s -> Cookies.set s "yession_auth_x" "/s/x" "v")
-            Expect.equal cookie (Ok "yession_auth_x=v; Path=/s/x/; HttpOnly; SameSite=Lax; Secure") "https carries Secure"
+            Expect.equal cookie (Ok "yession_auth_x=v; Path=/s/x/; Max-Age=2592000; HttpOnly; SameSite=Lax; Secure") "https carries Secure"
 
         testCase "the auth cookie is not Secure on loopback" <| fun () ->
             let cookie = Cookies.set (Cookies.schemeFor Loopback) "yession_auth_x" "" "v"
-            Expect.equal cookie "yession_auth_x=v; Path=/; HttpOnly; SameSite=Lax" "loopback http carries no Secure"
+            Expect.equal cookie "yession_auth_x=v; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax" "loopback http carries no Secure"
 
         testCase "the auth cookie is not Secure where the sessions are fronted over http" <| fun () ->
             let scheme = PublicAccess.create "https://example.com" "http://example.com:{port}" |> Result.map Cookies.schemeFor
