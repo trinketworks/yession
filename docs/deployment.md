@@ -558,7 +558,7 @@ YESSION_SESSION_DOORS=/run/yession/doors yession-manager …
 `yession-enter` dials the door:
 
 ```sh
-yession-enter --door <socket> --as <subject> --via <label> <sandbox> -- <command> [argument ...]
+yession-enter --door <socket> --as <subject> --via <label> [--bare] <sandbox> -- <command> [argument ...]
 ```
 
 - `<socket>` is the `door` field of the sandbox's announcement
@@ -570,6 +570,10 @@ yession-enter --door <socket> --as <subject> --via <label> <sandbox> -- <command
 - `--as` names who enters, and `--via` says how they came (`ssh`, for example). The session
   records the two words (`sandboxEntered` and `sandboxLeft` in its log) and does not check
   them. Take the subject from a source that the sandbox cannot write.
+- `--bare` starts the command with no entrypoint before it. The command then has the
+  environment of the sandbox and not what the entrypoint adds, for example the `PATH` of a
+  development shell. Use it for a command that starts many times and finds its tools by
+  their full paths. A session of a build before this option ignores it.
 - The session refuses a sandbox that does not run. An entry does not start a sandbox.
 - One session has 16 open entries at most.
 - When `yession-enter` ends, the session ends the command.

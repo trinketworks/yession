@@ -50,7 +50,11 @@ module EntryWire =
           /// How the caller came, as the deployment labels it.
           Label : string
           /// The command and its arguments.
-          Argv : string list }
+          Argv : string list
+          /// True when the command starts with no entrypoint of the sandbox before it
+          /// (`ProcessEntry.Direct`). The entrypoint of a sandbox can take seconds, and a
+          /// caller that makes one entry for each connection of a person pays it each time.
+          Bare : bool }
 
     /// The answer to the first line.
     [<RequireQualifiedAccess>]
@@ -62,13 +66,18 @@ module EntryWire =
 
     /// The first line of a caller, with its line feed.
     let hello (hello: Hello) : string =
+        // The field `bare` is written only when it is true. A line with no such field is
+        // thus the line that each earlier build wrote.
+        let bare : (string * JsonValue) list = if hello.Bare then [ "bare", Encode.bool true ] else []
         let value : JsonValue =
-            Encode.object
+            Encode.object (
                 [ "v", Encode.int version
                   "sandbox", Encode.string hello.ToSandbox
                   "as", Encode.string hello.AsSubject
                   "via", Encode.string hello.Label
                   "command", hello.Argv |> List.map Encode.string |> Encode.list ]
+                @ bare
+            )
         Encode.toString 0 value + "\n"
 
     /// Read the first line of a caller. The error is a sentence for the caller.
@@ -90,7 +99,8 @@ module EntryWire =
                     { ToSandbox = get.Required.Field "sandbox" Decode.string
                       AsSubject = get.Required.Field "as" Decode.string
                       Label = get.Required.Field "via" Decode.string
-                      Argv = get.Required.Field "command" (Decode.list Decode.string) })
+                      Argv = get.Required.Field "command" (Decode.list Decode.string)
+                      Bare = get.Optional.Field "bare" Decode.bool |> Option.defaultValue false })
             match Decode.fromString decoder line with
             | Ok read -> Ok read
             | Error _ -> Error "The first line does not name a sandbox, a subject, a label and a command."
@@ -283,13 +293,19 @@ module EntryWire =
     let private viaOption : Cli.Opt<string option> =
         Cli.value "via" "label" "how the caller came, for the record of the session (for example ssh)"
 
+    let private bareOption : Cli.Opt<bool> =
+        Cli.flag "bare" None "start the command with no entrypoint of the sandbox before it"
+
     /// The options of `yession-enter`. The sandbox and the command are bare words, which
     /// `Cli` does not read: `words` takes them off first.
     let enterSpec : Cli.Spec =
-        Cli.spec "yession-enter" |> Cli.accepts doorOption |> Cli.accepts asOption |> Cli.accepts viaOption
+        Cli.spec "yession-enter" |> Cli.accepts doorOption
+        |> Cli.accepts asOption
+        |> Cli.accepts viaOption
+        |> Cli.accepts bareOption
 
     /// The form of the command line, for a refusal.
-    let enterForm = "yession-enter --door <socket> --as <subject> --via <label> <sandbox> -- <command> [argument ...]"
+    let enterForm = "yession-enter --door <socket> --as <subject> --via <label> [--bare] <sandbox> -- <command> [argument ...]"
 
     /// The three parts of a command line: the options, the sandbox, and the command after
     /// `--`. The sandbox is the last word before `--`, when that word is not an option and is
@@ -321,7 +337,12 @@ module EntryWire =
         | Some door, Some subject, Some label, Some sandbox, command ->
             Ok
                 { DoorPath = door
-                  Request = { ToSandbox = sandbox; AsSubject = subject; Label = label; Argv = command } }
+                  Request =
+                    { ToSandbox = sandbox
+                      AsSubject = subject
+                      Label = label
+                      Argv = command
+                      Bare = Cli.valueOf bareOption parsed } }
 
 /// Where the door of a session is: the rules for the directory that an operator gives
 /// (`YESSION_SESSION_DOORS`), and the socket of one session in it.

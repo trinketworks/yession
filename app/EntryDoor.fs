@@ -122,7 +122,7 @@ let request (hello: EntryWire.Hello) : Result<SandboxRef * SandboxExec, string> 
                       Arguments = arguments
                       Env = Map.empty
                       WorkingDirectory = None
-                      Via = Entrypoint }
+                      Via = if hello.Bare then Direct else Entrypoint }
                 )
 
 /// Where one connection is.
