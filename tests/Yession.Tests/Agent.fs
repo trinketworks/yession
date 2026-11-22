@@ -1948,6 +1948,8 @@ module private Stream =
 
 module private Renewal =
 
+    open Fable.ClaudeAgentSdk
+
     /// The message the CLI writes in place of the model's when a request fails, as its own
     /// transcript of that session holds it.
     let failedRequest (error: string) (conversation: string) : Message =
@@ -1967,6 +1969,9 @@ module private Renewal =
     let first = "CLAUDE_CODE_OAUTH_TOKEN", "the token the turn started on"
     let renewed = "CLAUDE_CODE_OAUTH_TOKEN", "the token after the renewal"
 
+    let refusedFirst : Yession.Host.Agent.Attempt =
+        { Answer = Error "Failed to authenticate"; Usage = spending 10; Refused = Some "c1" }
+
     /// A turn whose first attempt the provider refuses in conversation `c1`, and whose later
     /// attempts answer as `later` says. Answers what each attempt was run on.
     let run
@@ -1979,12 +1984,7 @@ module private Renewal =
             let attempt credential conversation =
                 async {
                     attempts.Add (credential, conversation)
-                    if attempts.Count = 1 then
-                        return
-                            { Yession.Host.Agent.Attempt.Answer = Error "Failed to authenticate"
-                              Usage = spending 10
-                              Refused = Some "c1" }
-                    else return later
+                    if attempts.Count = 1 then return refusedFirst else return later
                 }
             let! answer =
                 Yession.Host.Agent.renewedOnce attempt (fun () -> async { return renew }) (fun () -> stopped) (Some first)
