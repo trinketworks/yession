@@ -285,7 +285,8 @@ let private storeTests =
             let mutable counter = 0
             let mint () = counter <- counter + 1; sprintf "value-%d" counter
             let user = UserId.create "nick@example.com" |> expect
-            let cookies = Yession.Session.CookieSessions (mint)
+            let cookies =
+                Yession.Session.CookieSessions (mint, id, (fun () -> 0L), Yession.Session.SignInStore.none)
             let localIdentity : Yession.Session.CookieIdentity =
                 { Subject = "local"; DisplayName = None; Attribution = Yession.Session.UnattributedAccess }
             let value = cookies.Mint localIdentity
@@ -304,6 +305,71 @@ let private storeTests =
                 (Some (Yession.Session.AttributedUser user))
                 "an attributed token carries its user"
             Expect.equal (tokens.Validate "forged") None "a forged token does not validate"
+
+        // The page of a session that stopped while it was idle opened from the browser's own
+        // copy, found itself signed out, left for the sign-in, and loaded a second time. A
+        // sign-in now outlasts the process that made it.
+        testCase "a sign-in outlasts the session process, for as long as its cookie lasts" <| fun () ->
+            let mutable now = 1_000L
+            let mutable file : string option = None
+            let store : Yession.Session.SignInStore =
+                { Kept =
+                    fun () ->
+                        file
+                        |> Option.map (Yession.Session.SignInStore.ofJson >> expect)
+                        |> Option.defaultValue []
+                  Keep = fun kept -> file <- Some (Yession.Session.SignInStore.toJson kept) }
+            // The value backwards: a digest that does not contain what it is a digest of.
+            let digest (value: string) = value |> Seq.rev |> Seq.map string |> String.concat ""
+            let launch (values: string list) =
+                let mutable left = values
+                let mint () =
+                    let value = List.head left
+                    left <- List.tail left
+                    value
+                Yession.Session.CookieSessions (mint, digest, (fun () -> now), store)
+            let ada : Yession.Session.CookieIdentity =
+                { Subject = "ada@example.com"
+                  DisplayName = Some "Ada"
+                  Attribution = Yession.Session.AttributedUser (UserId.create "ada@example.com" |> expect) }
+            let shared : Yession.Session.CookieIdentity =
+                { Subject = "local"; DisplayName = None; Attribution = Yession.Session.UnattributedAccess }
+            let first = launch [ "cookie-a"; "cookie-b" ]
+            let adas = first.Mint ada
+            let shareds = first.Mint shared
+            Expect.isFalse (file.Value.Contains adas) "the cookie's value is not what is kept"
+            Expect.isTrue (file.Value.Contains (digest adas)) "its digest is"
+            // The process stops, and the next launch reads what the last one kept.
+            let second = launch [ "cookie-c" ]
+            Expect.equal (second.IdentityOf adas) (Some ada) "a user is still signed in after a relaunch"
+            Expect.equal (second.IdentityOf shareds) (Some shared) "and so is unattributed access"
+            Expect.equal (second.IdentityOf (digest adas)) None "the kept digest is not a cookie"
+            Expect.equal (second.IdentityOf "forged") None "a forged cookie has no identity"
+            // One second before the cookie runs out, and then the second it does.
+            now <- 1_000L + Cookies.signInLifetimeSeconds - 1L
+            Expect.equal (second.IdentityOf adas) (Some ada) "good until its lifetime ends"
+            now <- 1_000L + Cookies.signInLifetimeSeconds
+            Expect.equal (second.IdentityOf adas) None "and not after"
+            // A sign-in that ran out is dropped from what is kept when the next one is added.
+            let later = second.Mint ada
+            Expect.isFalse (file.Value.Contains (digest adas)) "the old sign-in is no longer kept"
+            let third = launch []
+            Expect.equal (third.IdentityOf later) (Some ada) "the new one is"
+            Expect.equal (third.IdentityOf adas) None "the old one stays out"
+
+        testCase "kept sign-ins this build cannot read are refused whole" <| fun () ->
+            Expect.isError (Yession.Session.SignInStore.ofJson "not json") "text that is not JSON"
+            Expect.isError
+                (Yession.Session.SignInStore.ofJson
+                    """{"version":1,"signIns":[{"digest":"d","subject":"s","attribution":{"kind":"admin"},"expiresAt":"5"}]}""")
+                "an attribution this build cannot name is not read as shared access"
+            Expect.equal (Yession.Session.SignInStore.ofJson """{"version":1,"signIns":[]}""") (Ok []) "none kept"
+
+        testCase "the session cookie lasts as long as the sign-in it carries" <| fun () ->
+            Expect.isTrue
+                ((Cookies.set CookieScheme.AnyScheme "yession_auth_x" "" "v").Contains
+                    (sprintf "Max-Age=%d" Cookies.signInLifetimeSeconds))
+                "the browser keeps the cookie after it quits"
     ]
 
 let private wireTests =

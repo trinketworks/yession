@@ -27,7 +27,7 @@ type Auth =
     { /// Complete the RP configuration after dynamic client registration: run OIDC
       /// discovery against the issuer and bind the client credentials + redirect URI.
       Configure : string -> string -> string -> string -> Async<Result<unit, string>>
-      /// Does the request carry a cookie this process minted?
+      /// Does the request carry the cookie of a sign-in this session holds?
       IsAuthenticated : IncomingMessage -> bool
       /// The authenticated identity behind the request's cookie, when any: the subject
       /// plus the attribution the validated ID token carried.
@@ -44,11 +44,14 @@ type Auth =
 /// auth cookie is scoped to it, so a path-mounted session's cookie is not sent to its
 /// siblings on the same host. `scheme` says whether the cookie is `Secure`
 /// (`Cookies.schemeFor`).
-let create (sessionId: SessionId) (mount: string) (scheme: CookieScheme) : Auth =
+///
+/// `signIns` is where the session keeps its sign-ins between launches (`SignInStore`). A
+/// browser that signed in before this launch does not sign in again.
+let create (sessionId: SessionId) (mount: string) (scheme: CookieScheme) (signIns: SignInStore) : Auth =
     let cookieName = Cookies.sessionCookieName sessionId
     let nowUnix () = System.DateTimeOffset.UtcNow.ToUnixTimeSeconds ()
     let pendingLogins = PendingLogins (nowUnix)
-    let cookies = CookieSessions (randomSecret)
+    let cookies = CookieSessions (randomSecret, sha256Base64Url, nowUnix, signIns)
     let mutable configuration : (Configuration * string) option = None
 
     let identityOf (req: IncomingMessage) : CookieIdentity option =

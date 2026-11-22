@@ -482,8 +482,34 @@ let private managerOrigin =
 
 // User authorization: with a Manager, this session is an OIDC client of it; the RP
 // configuration completes after listen (the redirect URI needs the bound port).
+//
+// The sign-ins are kept in a file beside the event log, so they outlast this process. A
+// session stops when it is idle. Without the file, each browser that came back after a stop
+// was signed out: its page opened from the browser's own copy, left for the sign-in, and
+// loaded a second time. The file holds digests of the cookie values, not the values. It is in
+// the root of the data directory, which no sandbox sees.
+let private signIns : SignInStore =
+    let path = sprintf "%s/sign-ins.json" dataDir
+    let said (what: string) = eprintfn "[session %s] sign-ins: %s" (SessionId.value sessionId) what
+    { Kept =
+        fun () ->
+            if not (Fs.exists path) then []
+            else
+                match Fs.readTextSafely path |> Result.bind SignInStore.ofJson with
+                | Ok kept -> kept
+                | Error reason ->
+                    said (sprintf "%s is not readable, so each browser signs in again: %s" path reason)
+                    []
+      // A write that fails loses nothing now: this process still holds the sign-in. The
+      // browser signs in once more after the next launch, which is what happened before.
+      Keep =
+        fun kept ->
+            try Fs.writeTextAtomic path (SignInStore.toJson kept)
+            with error -> said (sprintf "%s was not written: %s" path error.Message) }
+
 let private auth =
-    controlChannel |> Option.map (fun _ -> SessionAuth.create sessionId sessionMount (Cookies.schemeFor publicAccess))
+    controlChannel
+    |> Option.map (fun _ -> SessionAuth.create sessionId sessionMount (Cookies.schemeFor publicAccess) signIns)
 
 // Telemetry: this session is a direct OTel emitter — one OTel log record per completed turn.
 // Destination (stdout / a collector / both / off) comes from the standard OTEL_* env the
