@@ -344,3 +344,22 @@ module FramePieces =
                 Some whole
             else
                 Some message
+
+    /// What a carrier hands its consumer for each message of the channel: the frame, once
+    /// its last piece is here, and `Control Pong` for each piece before that.
+    ///
+    /// A piece is proof that the link lives, and `Link.supervise` hears only frames. Before
+    /// this, a long frame said nothing until its last piece. The session's first frames to a
+    /// client are its state, and on a slow path they took more than the three ticks that a
+    /// quiet link is given. The answers to the client's probes were behind them in the same
+    /// ordered channel. So the client ended a link that was carrying data, opened a new one,
+    /// and got the same frames again, for as long as the page was open.
+    ///
+    /// `Control Pong` is the frame that the supervisor already takes as proof of life and
+    /// shows to nobody. A consumer with no supervisor sees it as a pong that nobody asked for.
+    let reader (decode: string -> Result<SessionFrame<'State>, string>) : string -> Result<SessionFrame<'State>, string> =
+        let take = assembler ()
+        fun (message: string) ->
+            match take message with
+            | None -> Ok (Control Pong)
+            | Some whole -> decode whole

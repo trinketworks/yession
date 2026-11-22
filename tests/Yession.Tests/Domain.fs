@@ -357,6 +357,15 @@ let private frameSerializationTests =
             let longest = FramePieces.split (String.replicate 100_000 "y") |> List.map String.length |> List.max
             Expect.isTrue (longest <= FramePieces.length + 1) "the piece and its mark fit"
 
+        // The receiving end of a carrier. A long frame used to say nothing until its last
+        // piece, and a link that was carrying it read as quiet.
+        testCase "each piece of a long frame before the last is read as proof of life" <| fun () ->
+            let codec = Yession.App.Codecs.Frames.session Codec.string
+            let frame : SessionFrame<string> = State (StateSync (String.replicate (FramePieces.length * 2) "y"))
+            let read = FramePieces.reader (Codec.fromString codec)
+            let heard = FramePieces.split (Codec.toString codec frame) |> List.map read
+            Expect.equal heard [ Ok (Control Pong); Ok (Control Pong); Ok frame ] "two pieces, then the frame"
+
         testCase "a frame that fits one message goes as it is" <| fun () ->
             let text = """{"State":["StateSync","short"]}"""
             Expect.equal (FramePieces.split text) [ text ] "unchanged"

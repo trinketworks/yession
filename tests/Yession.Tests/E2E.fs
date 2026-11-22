@@ -153,6 +153,9 @@ let private answeringTests =
             async {
                 let peers = WebRtc.Answering.create ()
                 let! client, received, session = answered WebRtc.Answering.shipped peers "e2e-long-frame"
+                // Supervised, as each real end of this transport is. A carrier reads each piece
+                // before the last as proof of life, and only a supervisor takes that away.
+                let received = Yession.Domain.Link.Link.supervise Yession.Domain.Link.Link.LinkPolicy.shipped received
                 let document = String.replicate 300_000 "y"
                 do! session.Send (State (StateSync document))
                 let! frame = received.Receive ()
