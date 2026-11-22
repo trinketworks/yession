@@ -1261,20 +1261,12 @@ let createWithUi
                     | _ -> respondHtml 400 "Sign-in failed" "The provider's redirect is missing its code or state."
             true
 
-    // A session registers at each launch, and the answer carries the key it seals its kept
-    // sign-ins with. So the key is in the session's memory, and not in its launch command,
-    // its environment or a file.
-    let registerClient (controlSecret: string) (sessionId: SessionId) (redirectUri: string) =
-        let registration = provider.RegisterClient controlSecret sessionId redirectUri
-        { registration with
-            SignInKey = secretStore |> Option.bind (fun store -> store.SignInKey) |> Option.map (fun keyFor -> keyFor sessionId) }
-
     let! controlServer =
         async {
             let handler (req: IncomingMessage) (res: ServerResponse) =
                 let handled =
                     WebhookRelay.tryHandle hookRelay req res
-                    || Control.tryHandle resolveCaller reportName reportActivity reportStatus reportAnnouncements notifications.Register mcp.Register registerClient secretsApi connectionsApi recordsApi connectionsHub.Register hookRelay.Subscribe hookRelay.Unsubscribe (fun path -> audit (SecretStore.Audit.controlUnauthorized path)) req res
+                    || Control.tryHandle resolveCaller reportName reportActivity reportStatus reportAnnouncements notifications.Register mcp.Register provider.RegisterClient secretsApi connectionsApi recordsApi connectionsHub.Register hookRelay.Subscribe hookRelay.Unsubscribe (fun path -> audit (SecretStore.Audit.controlUnauthorized path)) req res
                     || handleConnectionsCallback req res
                     || provider.TryHandle req res
                     || (match ui, self with

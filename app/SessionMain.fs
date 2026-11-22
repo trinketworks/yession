@@ -503,84 +503,8 @@ let private managerOrigin =
 
 // User authorization: with a Manager, this session is an OIDC client of it; the RP
 // configuration completes after listen (the redirect URI needs the bound port).
-//
-// The sign-ins are kept in a file beside the event log, so they outlast this process. A
-// session stops when it is idle. Without the file, each browser that came back after a stop
-// was signed out: its page opened from the browser's own copy, left for the sign-in, and
-// loaded a second time.
-//
-// The file is sealed (`SealedSignIns`) under a key that the Manager gives at registration.
-// The Manager makes that key from the key in the OS credential manager, so nothing on disk
-// opens the file. Without a key the session keeps no sign-ins, which is the rule the secrets
-// store has: no credential manager, no persistence.
-let private signIns (key: string option) : Async<SignInStore> =
-    let path = sprintf "%s/sign-ins.json" dataDir
-    let said (what: string) = eprintfn "[session %s] sign-ins: %s" (SessionId.value sessionId) what
-    // A file that this launch cannot open is of no use to a later one, and the first build
-    // that kept sign-ins wrote them in the clear. So it does not stay on disk.
-    let remove (why: string) =
-        said (sprintf "%s is removed, and each browser signs in again: %s" path why)
-        try Node.Api.fs.unlinkSync (U2.Case1 path) with _ -> ()
-    async {
-        match key with
-        | None ->
-            if Fs.exists path then remove "the Manager gave no key to open it with"
-            return SignInStore.none
-        | Some key ->
-            try
-                let! cipher = SecretsCipher.importKey key
-                let aad = SecretsCipher.signInsAadFor sessionId
-                let! kept =
-                    async {
-                        if not (Fs.exists path) then return []
-                        else
-                            match Fs.readTextSafely path |> Result.bind SealedSignIns.ofJson with
-                            | Error reason ->
-                                remove reason
-                                return []
-                            | Ok envelope ->
-                                let! opened = cipher.Decrypt aad envelope.Iv envelope.Ciphertext
-                                match opened |> Result.bind SignInStore.ofJson with
-                                | Ok kept -> return kept
-                                | Error reason ->
-                                    remove reason
-                                    return []
-                    }
-                // One write at a time, and the newest list wins: a list that arrives during
-                // a write replaces the one that waits, because each list is the whole file.
-                let mutable waiting : KeptSignIn list option = None
-                let mutable writing = false
-                let rec write () =
-                    async {
-                        match waiting with
-                        | None -> writing <- false
-                        | Some kept ->
-                            waiting <- None
-                            // A write that fails loses nothing now: this process still holds
-                            // the sign-in. The browser signs in once more after the next
-                            // launch.
-                            try
-                                let! iv, ciphertext = cipher.Encrypt aad (SignInStore.toJson kept)
-                                Fs.writeTextAtomic path (SealedSignIns.toJson (SealedSignIns.create iv ciphertext))
-                            with error -> said (sprintf "%s was not written: %s" path error.Message)
-                            return! write ()
-                    }
-                return
-                    { Kept = fun () -> kept
-                      Keep =
-                        fun kept ->
-                            waiting <- Some kept
-                            if not writing then
-                                writing <- true
-                                Async.StartImmediate (write ()) }
-            with error ->
-                said (sprintf "the key from the Manager is not usable, so no sign-in is kept: %s" error.Message)
-                return SignInStore.none
-    }
-
 let private auth =
-    controlChannel
-    |> Option.map (fun _ -> SessionAuth.create sessionId sessionMount (Cookies.schemeFor publicAccess) signIns)
+    controlChannel |> Option.map (fun _ -> SessionAuth.create sessionId sessionMount (Cookies.schemeFor publicAccess))
 
 // Telemetry: this session is a direct OTel emitter — one OTel log record per completed turn.
 // Destination (stdout / a collector / both / off) comes from the standard OTEL_* env the
@@ -2016,7 +1940,7 @@ Async.StartImmediate (
                 eprintfn "client registration with the manager failed: %s" e
                 Interop.exit 1
             | Ok registration ->
-                match! auth.Configure registration redirectUri with
+                match! auth.Configure registration.Issuer registration.ClientId registration.ClientSecret redirectUri with
                 | Error e ->
                     eprintfn "%s" e
                     Interop.exit 1

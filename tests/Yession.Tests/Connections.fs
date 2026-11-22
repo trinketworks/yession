@@ -1349,7 +1349,7 @@ let private startConnectionsServer (callers: (string * Control.ControlCaller) li
         let api = ProcessManager.connectionsApiFor (fun _ -> ()) store.Connections store.Offline broadcast broker
         apiRef.Value <- Some api
         let dummyRegister (_: string) (_: SessionId) (_: string) : Yession.Oidc.RegisterClientResponse =
-            { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused"; SignInKey = None }
+            { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused" }
         let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (Control.tryHandle
                         resolveCaller
@@ -1986,7 +1986,7 @@ let private startStubGitHub () : Async<StubGitHub> =
 /// Stands in for the OIDC round trip, which Oidc.fs already covers — what is under test
 /// here is what the routes DO with an identity, not how one is established.
 let private stubAuth () : SessionAuth.Auth =
-    { Configure = fun _ _ -> async { return Ok () }
+    { Configure = fun _ _ _ _ -> async { return Ok () }
       IsAuthenticated = fun req -> (Interop.headerOf req "cookie").IsSome
       IdentityOf =
         fun req ->

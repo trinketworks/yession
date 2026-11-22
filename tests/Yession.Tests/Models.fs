@@ -183,7 +183,7 @@ let private lookupTests =
 /// `who=<name>` is an identity; anything else is nobody — the same stub the query route's
 /// suite uses, and for the same reason: what is under test is what the ROUTE does with one.
 let private stubAuth () : SessionAuth.Auth =
-    { Configure = fun _ _ -> async { return Ok () }
+    { Configure = fun _ _ _ _ -> async { return Ok () }
       IsAuthenticated = fun req -> (Interop.headerOf req "cookie").IsSome
       IdentityOf =
         fun req ->

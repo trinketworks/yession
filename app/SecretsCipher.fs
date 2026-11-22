@@ -107,21 +107,6 @@ let connectionAadFor (id: ConnectionId) : string =
 let recordAadFor (id: RecordId) : string =
     sprintf "yession-record:1:%s" (RecordId.describe id)
 
-/// The AAD that binds a session's sealed sign-ins to that session. A sealed file moved into
-/// another session's directory does not open there.
-let signInsAadFor (session: SessionId) : string =
-    sprintf "yession-sign-ins:1:%s" (SessionId.value session)
-
-/// The value each session's sign-in key is made from: HMAC-SHA256 of a fixed label under
-/// the store's key. The Manager keeps this value and not the store's key.
-let signInRoot (kekB64u: string) : string =
-    Interop.hmacSha256 kekB64u "yession-sign-ins:1" BinaryToTextEncoding.Base64url
-
-/// One session's sign-in key: HMAC-SHA256 of the session's id under `signInRoot`. 32 bytes
-/// as base64url, which is what `importKey` takes.
-let signInKeyFor (root: string) (session: SessionId) : string =
-    Interop.hmacSha256 root (SessionId.value session) BinaryToTextEncoding.Base64url
-
 /// Import a raw KEK as a NON-EXTRACTABLE AES-GCM key and return the cipher over it.
 let importKey (kekB64u: string) : Async<Cipher> =
     async {

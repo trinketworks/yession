@@ -275,7 +275,7 @@ let private lookupTests =
 // --- the route ---------------------------------------------------------------------------------
 
 let private stubAuth () : SessionAuth.Auth =
-    { Configure = fun _ _ -> async { return Ok () }
+    { Configure = fun _ _ _ _ -> async { return Ok () }
       IsAuthenticated = fun req -> (Interop.headerOf req "cookie").IsSome
       IdentityOf =
         fun req ->

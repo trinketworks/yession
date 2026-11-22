@@ -557,7 +557,7 @@ let private startControlServerOver
         let mcp = KeyedRetainedHub.create McpServerSet.empty
         // This bare control server has no OIDC provider; the DCR route is not under test.
         let registerClient _ (sessionId: SessionId) _ : Yession.Oidc.RegisterClientResponse =
-            { ClientId = SessionId.value sessionId; ClientSecret = "unused"; Issuer = "http://unused"; SignInKey = None }
+            { ClientId = SessionId.value sessionId; ClientSecret = "unused"; Issuer = "http://unused" }
         // Ids are sequential rather than random so a test can name the subscription it
         // just made; nothing in the relay depends on them being unguessable.
         let mutable minted = 0
@@ -4252,11 +4252,11 @@ let private publicAccessTests =
         testCase "the auth cookie is Secure where the sessions are served over https" <| fun () ->
             let scheme = PublicAccess.create "https://example.com" "https://example.com/s/{id}" |> Result.map Cookies.schemeFor
             let cookie = scheme |> Result.map (fun s -> Cookies.set s "yession_auth_x" "/s/x" "v")
-            Expect.equal cookie (Ok "yession_auth_x=v; Path=/s/x/; Max-Age=86400; HttpOnly; SameSite=Lax; Secure") "https carries Secure"
+            Expect.equal cookie (Ok "yession_auth_x=v; Path=/s/x/; HttpOnly; SameSite=Lax; Secure") "https carries Secure"
 
         testCase "the auth cookie is not Secure on loopback" <| fun () ->
             let cookie = Cookies.set (Cookies.schemeFor Loopback) "yession_auth_x" "" "v"
-            Expect.equal cookie "yession_auth_x=v; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax" "loopback http carries no Secure"
+            Expect.equal cookie "yession_auth_x=v; Path=/; HttpOnly; SameSite=Lax" "loopback http carries no Secure"
 
         testCase "the auth cookie is not Secure where the sessions are fronted over http" <| fun () ->
             let scheme = PublicAccess.create "https://example.com" "http://example.com:{port}" |> Result.map Cookies.schemeFor
