@@ -1349,7 +1349,7 @@ let private startConnectionsServer (callers: (string * Control.ControlCaller) li
         let api = ProcessManager.connectionsApiFor (fun _ -> ()) store.Connections store.Offline broadcast broker
         apiRef.Value <- Some api
         let dummyRegister (_: string) (_: SessionId) (_: string) : Yession.Oidc.RegisterClientResponse =
-            { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused" }
+            { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused"; SignInKey = None }
         let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (Control.tryHandle
                         resolveCaller
