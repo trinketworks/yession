@@ -5,11 +5,15 @@
 # It starts `sshd -i`, which is the mode of sshd for one connection that is already open. No
 # daemon runs in the sandbox, and nothing in the sandbox listens on a port.
 #
-#   serve [--for LOGIN] [AUTHORIZED_KEYS]
+#   serve [--for LOGIN] [--prepared] [AUTHORIZED_KEYS]
+#   serve --prepare
 #
 #   --for LOGIN       the person that the host named for this connection. When the directory
 #                     `authorized_keys.d` is beside this script, only the keys in the file
 #                     `authorized_keys.d/LOGIN` can log in. See "the keys of one person".
+#   --prepare         make the host key and keep the PATH of this run, then stop. See "a
+#                     sandbox with a slow entrypoint".
+#   --prepared        use the PATH that `--prepare` kept, and not the PATH of this run.
 #   AUTHORIZED_KEYS   the public keys that can log in. Default: $YESSION_SSH_AUTHORIZED_KEYS,
 #                     then the file `authorized_keys` beside this script.
 #   YESSION_SSH_STATE the directory for the host key of this user. Default:
@@ -34,13 +38,51 @@ has_entry() {
 }
 
 login=
-if [ "${1:-}" = --for ]; then
-    if [ $# -lt 2 ]; then
-        say '--for needs a login.'
-        exit 64
+prepare=no
+prepared=no
+while [ $# -gt 0 ]; do
+    case $1 in
+        --for)
+            if [ $# -lt 2 ]; then
+                say '--for needs a login.'
+                exit 64
+            fi
+            login=$2
+            shift 2
+            ;;
+        --prepare)
+            prepare=yes
+            shift
+            ;;
+        --prepared)
+            prepared=yes
+            shift
+            ;;
+        *) break ;;
+    esac
+done
+
+state=${YESSION_SSH_STATE:-${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/yession-ssh}
+
+# --- a sandbox with a slow entrypoint ----------------------------------------------------
+#
+# Each entry runs behind the entrypoint of the sandbox, and an entrypoint can take seconds
+# (`nix develop`, for example). An SSH connection is one entry, so each connection waited.
+# The entrypoint gives this script one thing that it needs: the PATH, which finds sshd and
+# which the person gets. So the deployment runs `serve --prepare` one time behind the
+# entrypoint, which keeps the PATH in a file. Each connection then runs `serve --prepared`
+# with no entrypoint (`yession-enter --bare`), and reads the PATH from the file.
+#
+# The file is as old as the listener of the deployment. A change of the entrypoint shows
+# after the sandbox starts again.
+kept=$state/path
+if [ "$prepared" = yes ]; then
+    if [ -r "$kept" ]; then
+        IFS= read -r PATH < "$kept" || true
+        export PATH
+    else
+        say "no PATH at $kept. Run serve --prepare behind the entrypoint first. This run uses its own PATH."
     fi
-    login=$2
-    shift 2
 fi
 
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -66,8 +108,6 @@ if [ -n "$login" ] && [ -d "$here/authorized_keys.d" ]; then
         exit 78
     fi
 fi
-state=${YESSION_SSH_STATE:-${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/yession-ssh}
-
 # sshd finds the home and the shell of the user in the password database.
 if ! id -un >/dev/null 2>&1; then
     say "the user $(id -u) has no entry in the password database of this sandbox."
@@ -99,7 +139,7 @@ if [ -z "$keygen" ]; then
     exit 78
 fi
 
-if [ ! -r "$keys" ]; then
+if [ "$prepare" != yes ] && [ ! -r "$keys" ]; then
     say "no authorized keys at $keys. The resource of the operator supplies this file."
     exit 78
 fi
@@ -117,6 +157,13 @@ if [ ! -f "$key" ]; then
     # Two entries can start at the same time. The rename makes one of the two keys the key.
     mv -f "$key.$$" "$key"
     rm -f "$key.$$.pub"
+fi
+
+if [ "$prepare" = yes ]; then
+    # Written beside its name and then renamed, so a connection never reads a part of it.
+    printf '%s\n' "${PATH:-}" > "$kept.$$"
+    mv -f "$kept.$$" "$kept"
+    exit 0
 fi
 
 # --- a sandbox that runs as root ---------------------------------------------------------
