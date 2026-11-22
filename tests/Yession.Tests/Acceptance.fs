@@ -1405,6 +1405,38 @@ let private uiChecklistTests =
             for label, marker in required do
                 Expect.isTrue (html.Contains marker) (sprintf "%s (`%s`) must render" label marker)
 
+        testCase "a visit to a sandbox is a line where it started and a line where it ended" <| fun () ->
+            // A person came through the door of the session (SSH, for example). The chat has
+            // one line for each end of the visit, however many entries the visit had.
+            let visit : SandboxVisit =
+                { VisitOffset = EventOffset.create 3L |> expect
+                  VisitedSandbox = SandboxRef.parse "octo/hello:dev" |> expect
+                  Visitor = "nick"
+                  VisitorCame = "ssh"
+                  VisitStarted = DateTimeOffset (2026, 8, 8, 0, 0, 0, TimeSpan.Zero)
+                  VisitEntries = [] }
+            let ended : VisitEnd =
+                { EndedVisit = visit
+                  VisitEndOffset = EventOffset.create 4L |> expect
+                  VisitEnded = DateTimeOffset (2026, 8, 8, 0, 12, 0, TimeSpan.Zero)
+                  LastExitCode = Some 0
+                  LastReason = SandboxVisit.commandEnded }
+            let visitModel =
+                { representativeModel with
+                    Timeline =
+                        { representativeModel.Timeline with
+                            TerminalItems =
+                                representativeModel.Timeline.TerminalItems
+                                @ [ TimelineVisitStarted visit; TimelineVisitEnded ended ] } }
+            let html = Support.render visitModel
+            let required =
+                [ "the line of the start", Dom.attr Dom.Hooks.chatVisit "3"
+                  "the line of the end", Dom.attr Dom.Hooks.chatVisitEnd "3"
+                  "who came, where and how", "nick entered octo/hello:dev through ssh"
+                  "for how long", "nick left octo/hello:dev after 12 minutes" ]
+            for label, marker in required do
+                Expect.isTrue (html.Contains marker) (sprintf "%s (`%s`) must render" label marker)
+
         testCase "live mode shows the SCREEN, and every peer sees the same one" <| fun () ->
             // Plan 14, stage 6. A program is running here, and what it displays is a
             // projection of what it emitted — the block history is block mode's view of a
@@ -2928,6 +2960,23 @@ let private paneNewTests =
             Expect.isTrue
                 (html.Contains (Dom.Text.newTerminalIn "octo/hello:dev"))
                 "and every row says the whole act"
+
+        testCase "a place in the list says who is in it now" <| fun () ->
+            // A person who came through the door of the session is in the repo's sandbox.
+            let model = withSandbox "octo/hello:dev"
+            let visit : SandboxVisit =
+                { VisitOffset = EventOffset.create 3L |> expect
+                  VisitedSandbox = SandboxRef.parse "octo/hello:dev" |> expect
+                  Visitor = "nick"
+                  VisitorCame = "ssh"
+                  VisitStarted = DateTimeOffset (2026, 8, 8, 0, 0, 0, TimeSpan.Zero)
+                  VisitEntries = [ EntryId.create "e1" |> expect ] }
+            let visited = { model with Timeline = { model.Timeline with Visits = { OpenVisits = [ visit ] } } }
+            let html = sheet visited |> Support.step (ChoosingStartInMsg true) |> Support.render
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.startInVisitor "nick")) "the row of the sandbox has the person"
+            Expect.isTrue (html.Contains "nick is here through ssh") "in words"
+            let empty = sheet model |> Support.step (ChoosingStartInMsg true) |> Support.render
+            Expect.isFalse (empty.Contains Dom.Hooks.startInVisitor) "and a place with nobody in it says nothing"
 
         testCase "a place chosen is where New terminal starts the next one" <| fun () ->
             let dev = SandboxRef.parse "octo/hello:dev" |> expect

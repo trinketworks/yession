@@ -59,6 +59,9 @@
     <Compile Include="Events.fs" />
     <!-- The entries that are open now, folded from the events above. -->
     <Compile Include="Entries.fs" />
+    <!-- The entries of one person that are open at the same time, as one visit. After
+         Entries.fs, whose events it folds, and before Timeline.fs, which shows a visit. -->
+    <Compile Include="Visits.fs" />
     <!-- How long a turn took, folded from the events above. -->
     <Compile Include="TurnTimings.fs" />
     <Compile Include="SandboxTimings.fs" />

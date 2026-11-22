@@ -108,7 +108,9 @@ let private shapes (items: TimelineItem list) : string list =
         | TimelineBlock (_, _, blockId) -> "ran:" + BlockId.value blockId
         | TimelineStretch stretch -> "held:" + TerminalId.value stretch.TerminalId
         | TimelineToolUse (_, id) -> "used:" + ToolUseId.value id
-        | TimelineThought (_, thought) -> "thought:" + thought.Thought)
+        | TimelineThought (_, thought) -> "thought:" + thought.Thought
+        | TimelineVisitStarted visit -> "entered:" + visit.Visitor
+        | TimelineVisitEnded ended -> "left:" + ended.EndedVisit.Visitor)
 
 let private stretchesOf (items: TimelineItem list) : TerminalStretch list =
     items |> List.choose (function TimelineStretch s -> Some s | _ -> None)

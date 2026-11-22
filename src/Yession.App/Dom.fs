@@ -376,6 +376,9 @@ module Dom =
         /// One per place in that list, carrying that sandbox's rendered ref — which is what
         /// makes two repos both declaring `dev` tellable apart in a selector.
         let startInChoice = "data-start-in-choice"
+        /// On a place in that list, once for each person who is in the sandbox now through
+        /// the door of the session. It carries the name that the person came with.
+        let startInVisitor = "data-start-in-visitor"
         /// The list of places itself: a page on a phone, unfolded under the heading on a wide
         /// screen.
         let startInList = "data-start-in-list"
@@ -485,6 +488,12 @@ module Dom =
         let chatBlockStatus = "data-chat-block-status"
         let chatStretch = "data-chat-stretch"
         let chatStretchEnd = "data-chat-stretch-end"
+        /// A visit to a sandbox through the door of the session, in the CHAT: one line where
+        /// the visit started and one where it ended. Each carries the offset that started the
+        /// visit, which is the name of the visit. They are lines and not buttons: an entry
+        /// has no recording to open.
+        let chatVisit = "data-chat-visit"
+        let chatVisitEnd = "data-chat-visit-end"
         /// A turn's tool calls in the CHAT (Plan 16, part C). A `<details>` per RUN of
         /// consecutive calls from one turn — expandable by construction, so it is keyboard-
         /// operable without a handler — carrying the turn id; and one row inside it per

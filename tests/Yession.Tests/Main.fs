@@ -170,6 +170,8 @@ let all =
         // socket and runs the `yession-enter` bin and real commands.
         Tag.needs "The entry wire" [] (fun () -> EntryDoors.wireTests)
         Tag.needs "The door of a session" [ Tag.Ports ] (fun () -> EntryDoors.doorTests)
+        // The entries of one person that are open at the same time, as one visit.
+        Tag.needs "The visits to a sandbox" [] (fun () -> Visits.tests)
         Tag.needs "Volume leases" [] (fun () -> VolumeLeases.tests)
         Tag.needs "seeded files" [] (fun () -> SeededFiles.tests)
         Tag.needs "Properties" [] (fun () -> Properties.tests)
