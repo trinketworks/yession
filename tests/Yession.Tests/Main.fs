@@ -166,6 +166,10 @@ let all =
         Tag.needs "the Seatbelt supervisor, with real processes" [ Tag.Ports ] (fun () -> Supervisor.processTests)
         // The spawn that carries bytes, on the host backend. It starts real processes.
         Tag.needs "The byte spawn on the host" [ Tag.Ports ] (fun () -> ByteSpawn.tests)
+        // The door of a session. The first list starts nothing. The second listens on a real
+        // socket and runs the `yession-enter` bin and real commands.
+        Tag.needs "The entry wire" [] (fun () -> EntryDoors.wireTests)
+        Tag.needs "The door of a session" [ Tag.Ports ] (fun () -> EntryDoors.doorTests)
         Tag.needs "Volume leases" [] (fun () -> VolumeLeases.tests)
         Tag.needs "seeded files" [] (fun () -> SeededFiles.tests)
         Tag.needs "Properties" [] (fun () -> Properties.tests)

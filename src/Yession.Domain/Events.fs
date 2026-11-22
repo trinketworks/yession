@@ -119,6 +119,11 @@ type SessionEvent =
     // message to a request at github.com, and the one hop nothing above records.
     | GitCredentialSpent of GitCredentialSpent
     | WorkSandboxStopped of WorkSandboxStopped
+    // An entry: a command that a program on the host runs in a sandbox, through the door of
+    // the session. The start and the end are durable, as a terminal's are. The bytes of the
+    // command are not recorded.
+    | SandboxEntered of SandboxEntered
+    | SandboxLeft of SandboxLeft
     // A declaration that did NOT become a sandbox (Plan 27). The sibling above announces the
     // starts; until this, only the starts were announced — so a file with a typo in it read
     // on the timeline exactly like a file nobody had written.

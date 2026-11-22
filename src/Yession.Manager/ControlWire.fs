@@ -119,7 +119,10 @@ module ControlWire =
           /// The backend that the sandbox runs on.
           Backend : string
           /// The names of the operator's resources that the sandbox holds.
-          Resources : string list }
+          Resources : string list
+          /// The socket of the session's door, when the session has one: the `--door` of
+          /// `yession-enter`, which runs a command in this sandbox.
+          Door : string option }
 
     module SandboxAnnouncement =
 
@@ -136,9 +139,11 @@ module ControlWire =
               Announcement.Name = sandbox.Sandbox
               Announcement.Data =
                 Encode.object
-                    [ "state", Encode.string (if sandbox.Running then running else notRunning)
-                      "backend", Encode.string sandbox.Backend
-                      "resources", sandbox.Resources |> List.map Encode.string |> Encode.list ]
+                    ([ "state", Encode.string (if sandbox.Running then running else notRunning)
+                       "backend", Encode.string sandbox.Backend
+                       "resources", sandbox.Resources |> List.map Encode.string |> Encode.list ]
+                     // A session with no door writes no field, as each build before the door did.
+                     @ (sandbox.Door |> Option.map (fun door -> "door", Encode.string door) |> Option.toList))
                 |> Encode.toString 0 }
 
         /// Read one announcement as a sandbox. `None` for a different kind. A state that
@@ -151,7 +156,8 @@ module ControlWire =
                         { Sandbox = announcement.Name
                           Running = get.Required.Field "state" Decode.string = running
                           Backend = get.Required.Field "backend" Decode.string
-                          Resources = get.Required.Field "resources" (Decode.list Decode.string) })
+                          Resources = get.Required.Field "resources" (Decode.list Decode.string)
+                          Door = get.Optional.Field "door" Decode.string })
                 Some (Decode.fromString data announcement.Data)
 
     /// A Manager→Session notification (the reverse leg, Manager-pushed): the payload of the

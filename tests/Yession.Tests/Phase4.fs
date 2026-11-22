@@ -4072,7 +4072,7 @@ let private registryTests =
 
         testCase "the sandbox kind reads back what it announced, and ignores a different kind" <| fun () ->
             let sandbox : ControlWire.SandboxAnnouncement =
-                { Sandbox = "octo/hello:dev"; Running = true; Backend = "docker"; Resources = [ "ca"; "remote-ssh" ] }
+                { Sandbox = "octo/hello:dev"; Running = true; Backend = "docker"; Resources = [ "ca"; "remote-ssh" ]; Door = None }
             let announcement = ControlWire.SandboxAnnouncement.announce sandbox
             Expect.equal announcement.Kind "sandbox" "the kind"
             Expect.equal announcement.Name "octo/hello:dev" "the name of the announcement is the sandbox"
@@ -4082,9 +4082,19 @@ let private registryTests =
                 "the data that a follower reads"
             Expect.equal (ControlWire.SandboxAnnouncement.read announcement) (Some (Ok sandbox)) "a round trip"
             Expect.equal
-                (ControlWire.SandboxAnnouncement.read { announcement with Data = """{"state":"running","backend":"docker","resources":[],"door":"/run/x.sock"}""" })
+                (ControlWire.SandboxAnnouncement.read { announcement with Data = """{"state":"running","backend":"docker","resources":[],"port":8080}""" })
                 (Some (Ok { sandbox with Resources = [] }))
                 "a field from a newer build is ignored"
+
+        testCase "the sandbox kind carries the door of a session that has one" <| fun () ->
+            let sandbox : ControlWire.SandboxAnnouncement =
+                { Sandbox = "octo/hello:dev"; Running = true; Backend = "docker"; Resources = []; Door = Some "/run/yession/doors/S1.sock" }
+            let announcement = ControlWire.SandboxAnnouncement.announce sandbox
+            Expect.equal
+                announcement.Data
+                """{"state":"running","backend":"docker","resources":[],"door":"/run/yession/doors/S1.sock"}"""
+                "the data that a follower reads"
+            Expect.equal (ControlWire.SandboxAnnouncement.read announcement) (Some (Ok sandbox)) "a round trip"
             Expect.equal (ControlWire.SandboxAnnouncement.read { announcement with Kind = "port" }) None "not a sandbox"
     ]
 

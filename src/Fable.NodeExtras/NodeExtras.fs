@@ -1962,6 +1962,16 @@ type NetServer =
     /// it closes one server, once, having just watched it listen.
     abstract close : onClosed: (unit -> unit) -> unit
 
+    /// The server listens. For a server on a UNIX socket, the socket file exists from here.
+    [<Emit("$0.once('listening', $1)")>]
+    abstract onceListening : handler: (unit -> unit) -> unit
+
+    /// The server could not listen: the path is in use, or its directory is not there. An
+    /// `error` that nobody listens for ends the PROCESS, so a server whose address somebody
+    /// else chose listens here before it binds.
+    [<Emit("$0.on('error', $1)")>]
+    abstract onError : handler: (StreamError -> unit) -> unit
+
     /// Stop listening, without waiting to be told it has stopped. For a caller tearing a
     /// fixture down after its verdict is already in: Node THROWS here for a server that never
     /// bound or has already closed, so a caller that cannot know which state it is in catches
@@ -2061,6 +2071,20 @@ module NetClients =
     /// that cannot be reached is an `error` on the stream instead.
     [<Import("connect", "node:net")>]
     let connectTcp (port: int, host: string) : Duplex = jsNative
+
+[<AutoOpen>]
+module NetConnections =
+
+    /// A server that hands each connection to `onConnection` as bytes in both directions.
+    /// For a protocol of this repository's own on a socket, where the server reads what the
+    /// caller sends.
+    [<Import("createServer", "node:net")>]
+    let createNetServerServing (onConnection: Duplex -> unit) : NetServer = jsNative
+
+    /// The connection closed, in both directions, for any reason: the far side ended it, an
+    /// error ended it, or this side destroyed it. One time for each connection.
+    [<Emit("$0.once('close', $1)")>]
+    let onceConnectionClosed (connection: Duplex) (handler: unit -> unit) : unit = jsNative
 
 /// Where `node:tls` keeps the certificates it trusts: the Mozilla set Node was built with,
 /// or what the operating system trusts — which is where a site's own root lives.

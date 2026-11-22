@@ -176,6 +176,9 @@
     <Compile Include="SupervisorRehearsalMain.fs" />
     <Compile Include="Supervisor.fs" />
     <Compile Include="ByteSpawn.fs" />
+    <!-- The door of a session: its wire, its record, and the `yession-enter` bin through a
+         real socket. After ByteSpawn.fs, whose spawn it stands on. -->
+    <Compile Include="EntryDoors.fs" />
     <Compile Include="VolumeLeases.fs" />
     <Compile Include="SeededFiles.fs" />
     <Compile Include="Properties.fs" />

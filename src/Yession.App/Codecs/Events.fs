@@ -1429,6 +1429,40 @@ module Events =
                   WorkSandboxStopped.Sandbox = get.Required.Field "sandbox" Codec.sandboxRef.Decode
                   WorkSandboxStopped.Actor = get.Required.Field "actor" Codec.actor.Decode }) }
 
+    let private entryId : Codec<EntryId> =
+        { Encode = EntryId.value >> Encode.string
+          Decode = Codec.viaSmartCtor EntryId.create Decode.string }
+
+    let private sandboxEntered : Codec<SandboxEntered> =
+        { Encode =
+            fun (p: SandboxEntered) ->
+                Encode.object
+                    [ "entry", entryId.Encode p.Entry
+                      "sandbox", Codec.sandboxRef.Encode p.EnteredSandbox
+                      "as", Encode.string p.EnteredAs
+                      "via", Encode.string p.ViaLabel
+                      "command", p.EnteredCommand |> List.map Encode.string |> Encode.list ]
+          Decode =
+            Decode.object (fun get ->
+                { SandboxEntered.Entry = get.Required.Field "entry" entryId.Decode
+                  SandboxEntered.EnteredSandbox = get.Required.Field "sandbox" Codec.sandboxRef.Decode
+                  SandboxEntered.EnteredAs = get.Required.Field "as" Decode.string
+                  SandboxEntered.ViaLabel = get.Required.Field "via" Decode.string
+                  SandboxEntered.EnteredCommand = get.Required.Field "command" (Decode.list Decode.string) }) }
+
+    let private sandboxLeft : Codec<SandboxLeft> =
+        { Encode =
+            fun (p: SandboxLeft) ->
+                Encode.object
+                    [ "entry", entryId.Encode p.LeftEntry
+                      "exitCode", Encode.option Encode.int p.ExitCode
+                      "ended", Encode.string p.EndedBecause ]
+          Decode =
+            Decode.object (fun get ->
+                { SandboxLeft.LeftEntry = get.Required.Field "entry" entryId.Decode
+                  SandboxLeft.ExitCode = get.Optional.Field "exitCode" Decode.int
+                  SandboxLeft.EndedBecause = get.Required.Field "ended" Decode.string }) }
+
     let private shellProfileSet : Codec<ShellProfileSet> =
         { Encode =
             fun (p: ShellProfileSet) ->
@@ -1855,6 +1889,10 @@ module Events =
                     Encode.object [ "type", Encode.string "gitCredentialSpent"; "payload", gitCredentialSpent.Encode p ]
                 | WorkSandboxStopped p ->
                     Encode.object [ "type", Encode.string "workSandboxStopped"; "payload", workSandboxStopped.Encode p ]
+                | SessionEvent.SandboxEntered p ->
+                    Encode.object [ "type", Encode.string "sandboxEntered"; "payload", sandboxEntered.Encode p ]
+                | SessionEvent.SandboxLeft p ->
+                    Encode.object [ "type", Encode.string "sandboxLeft"; "payload", sandboxLeft.Encode p ]
                 | RepoConfigRefused p ->
                     Encode.object [ "type", Encode.string "repoConfigRefused"; "payload", repoConfigRefused.Encode p ]
                 | RepoConfigWarned p ->
@@ -1983,6 +2021,8 @@ module Events =
                 | "repoTrusted" -> Decode.field "payload" repoTrusted.Decode |> Decode.map RepoTrusted
                 | "repoAwaitsPerson" -> Decode.field "payload" repoAwaitsPerson.Decode |> Decode.map RepoAwaitsPerson
                 | "workSandboxStopped" -> Decode.field "payload" workSandboxStopped.Decode |> Decode.map WorkSandboxStopped
+                | "sandboxEntered" -> Decode.field "payload" sandboxEntered.Decode |> Decode.map SessionEvent.SandboxEntered
+                | "sandboxLeft" -> Decode.field "payload" sandboxLeft.Decode |> Decode.map SessionEvent.SandboxLeft
                 | "shellProfileSet" -> Decode.field "payload" shellProfileSet.Decode |> Decode.map ShellProfileSet
                 | "fileChanged" -> Decode.field "payload" fileChanged.Decode |> Decode.map SessionEvent.FileChanged
                 | "tabOpened" -> Decode.field "payload" tabOpened.Decode |> Decode.map SessionEvent.TabOpened

@@ -40,6 +40,9 @@
     <Compile Include="LinkFacts.fs" />
     <Compile Include="ToolsFacts.fs" />
     <Compile Include="SandboxesFacts.fs" />
+    <!-- A command that a program on the host runs in a sandbox, through the door of the
+         session: the start and the end. After SandboxesFacts.fs, beside the facts of a sandbox. -->
+    <Compile Include="EntryFacts.fs" />
     <!-- A file changed through the file verbs: the act, its phrase and its diff excerpt. -->
     <Compile Include="FilesFacts.fs" />
     <!-- An artifact version shared into the session: the act, and what the log keeps of it. -->
@@ -54,6 +57,8 @@
     <Compile Include="AgentFacts.fs" />
     <Compile Include="TerminalsFacts.fs" />
     <Compile Include="Events.fs" />
+    <!-- The entries that are open now, folded from the events above. -->
+    <Compile Include="Entries.fs" />
     <!-- How long a turn took, folded from the events above. -->
     <Compile Include="TurnTimings.fs" />
     <Compile Include="SandboxTimings.fs" />
