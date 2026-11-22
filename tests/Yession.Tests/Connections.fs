@@ -1986,7 +1986,7 @@ let private startStubGitHub () : Async<StubGitHub> =
 /// Stands in for the OIDC round trip, which Oidc.fs already covers — what is under test
 /// here is what the routes DO with an identity, not how one is established.
 let private stubAuth () : SessionAuth.Auth =
-    { Configure = fun _ _ _ _ -> async { return Ok () }
+    { Configure = fun _ _ -> async { return Ok () }
       IsAuthenticated = fun req -> (Interop.headerOf req "cookie").IsSome
       IdentityOf =
         fun req ->
