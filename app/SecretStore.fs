@@ -97,11 +97,6 @@ type SecretStore =
       /// Why the records file could not be opened, when it could not: then every records call
       /// answers this, and the file is left as it is. The credential families are unaffected.
       RecordsRefused : string option
-      /// The key a session seals its kept sign-ins with, 32 bytes as base64url. It comes from
-      /// the store's key and the session's id, so each launch of one session gets the same key
-      /// and no two sessions share one. `None` for an in-memory store: its key ends with this
-      /// process, and a sign-in sealed under it could not be read by the next one.
-      SignInKey : (SessionId -> string) option
       /// True when backed by the encrypted file; false when in-memory only.
       Durable : bool
       /// True when the KEK was minted at this open (first run); false when loaded.
@@ -264,10 +259,6 @@ let openStore (files: StoreFiles option) (keyStore: KeyStore.KeyStore) : Async<R
             | Ok () ->
 
             let! cipher = SecretsCipher.importKey kekB64u
-            // Made here and kept in place of the store's key, which nothing below holds as
-            // text. A session that has its own sign-in key cannot work back to this value,
-            // or to the store's key.
-            let signInRoot = SecretsCipher.signInRoot kekB64u
 
             // The envelope: the file read above, or a fresh one.
             let initial : Result<SecretsFile, OpenError> =
@@ -465,8 +456,6 @@ let openStore (files: StoreFiles option) (keyStore: KeyStore.KeyStore) : Async<R
                             match recordsLoaded with
                             | Error reason -> Some reason
                             | Ok _ -> None
-                          SignInKey =
-                            files |> Option.map (fun _ -> SecretsCipher.signInKeyFor signInRoot)
                           Durable = Option.isSome files
                           KekMinted = minted
                           EntriesAtOpen = loaded.Entries.Length + loaded.Connections.Length

@@ -195,9 +195,6 @@ let create
                     let client = registry.Register controlSecret sessionId redirectUri
                     { ClientId = client.ClientId
                       ClientSecret = client.ClientSecret
-                      Issuer = issuerOf ()
-                      // The provider holds no store. The Manager adds the key where it
-                      // serves the route (`ProcessManager`).
-                      SignInKey = None }
+                      Issuer = issuerOf () }
               RevokeByControlSecret = registry.RevokeByControlSecret }
     }

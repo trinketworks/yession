@@ -118,7 +118,7 @@ let private reportServer (allowed: bool option) =
         let auth =
             allowed
             |> Option.map (fun allowed ->
-                { (SessionAuth.create (SessionId.create "e2e-open-report" |> expect) "" Yession.Domain.Access.CookieScheme.AnyScheme (fun _ -> async { return Yession.Session.SignInStore.none })) with
+                { (SessionAuth.create (SessionId.create "e2e-open-report" |> expect) "" Yession.Domain.Access.CookieScheme.AnyScheme) with
                     IsAuthenticated = fun _ -> allowed })
         let route = Telemetry.openReports (fun () -> (System.DateTimeOffset.FromUnixTimeMilliseconds 0L)) emitter auth ""
         let server =

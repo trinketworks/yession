@@ -581,39 +581,6 @@ let private storeTests =
                 Expect.isTrue reopened.Durable "durable mode"
             }
 
-        testCaseAsync "a session's sign-in key is the same after a restart, and no other session's" <|
-            async {
-                let files = freshFiles "sign-in-key"
-                let keyStore = KeyStore.inMemory ()
-                let! store = openDurable files keyStore
-                let keyFor = store.SignInKey |> Option.defaultWith (fun () -> failwith "a durable store gives sign-in keys")
-                let! reopened = openDurable files keyStore
-                let keyAfter = reopened.SignInKey |> Option.defaultWith (fun () -> failwith "a durable store gives sign-in keys")
-                Expect.equal (keyAfter sessionA) (keyFor sessionA) "a Manager restart gives the session the same key"
-                Expect.notEqual (keyFor sessionB) (keyFor sessionA) "another session has another key"
-                let! kek = keyStore.Get ()
-                let _, kekB64u = KeyStore.splitPayload (expect kek).Value |> expect
-                Expect.notEqual (keyFor sessionA) kekB64u "the session's key is not the store's key"
-                // What one session seals, that session opens after the restart, and no other does.
-                let! mine = SecretsCipher.importKey (keyFor sessionA)
-                let! mineAfter = SecretsCipher.importKey (keyAfter sessionA)
-                let! theirs = SecretsCipher.importKey (keyFor sessionB)
-                let aad = SecretsCipher.signInsAadFor sessionA
-                let! iv, ciphertext = mine.Encrypt aad "kept sign-ins"
-                let! opened = mineAfter.Decrypt aad iv ciphertext
-                Expect.equal opened (Ok "kept sign-ins") "opens after the restart"
-                let! byAnother = theirs.Decrypt aad iv ciphertext
-                Expect.isError byAnother "another session's key does not open it"
-                let! elsewhere = mineAfter.Decrypt (SecretsCipher.signInsAadFor sessionB) iv ciphertext
-                Expect.isError elsewhere "and it does not open as another session's file"
-            }
-
-        testCaseAsync "a store with no durable key gives no sign-in key" <|
-            async {
-                let! store = openEphemeral ()
-                Expect.isTrue store.SignInKey.IsNone "a sign-in sealed now could not be opened by the next Manager"
-            }
-
         testCaseAsync "the value on disk is ciphertext only" <|
             async {
                 let files = freshFiles "atrest"
@@ -1104,7 +1071,7 @@ let private startControlServerWith
     async {
         let table = Map.ofList callers
         let dummyRegister (_: string) (_: SessionId) (_: string) : Yession.Oidc.RegisterClientResponse =
-            { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused"; SignInKey = None }
+            { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused" }
         let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (Control.tryHandle
                         (fun secret -> Map.tryFind secret table)

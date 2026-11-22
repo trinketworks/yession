@@ -342,7 +342,7 @@ let private codecTests =
 /// `who=<name>` is an identity; anything else is nobody. The OIDC round trip is Oidc.fs's
 /// subject — what is under test here is what the ROUTE does with an identity.
 let private stubAuth () : SessionAuth.Auth =
-    { Configure = fun _ _ -> async { return Ok () }
+    { Configure = fun _ _ _ _ -> async { return Ok () }
       IsAuthenticated = fun req -> (Interop.headerOf req "cookie").IsSome
       IdentityOf =
         fun req ->
