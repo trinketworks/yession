@@ -617,6 +617,10 @@ module ConversationProjection =
         | SessionEvent.TerminalIntegrationRestored _
         | SessionEvent.TerminalMarkedLate _
         | SessionEvent.TerminalTranscriptTruncated _ -> proj
+        // An entry does not fold here. This projection builds the context of the agent, and
+        // an entry is not a thing that the agent did. `EntryProjection` holds the open ones.
+        | SessionEvent.SandboxEntered _
+        | SessionEvent.SandboxLeft _ -> proj
         // Tool use (Plan 16, part C) does not fold here either, and for the same hazard in
         // a sharper form: the agent MADE the call and already has the result in its own
         // transcript, so feeding it back would be pure duplication. It folds into

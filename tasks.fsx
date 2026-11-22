@@ -630,6 +630,10 @@ let private yessionSessionBinJs = """#!/usr/bin/env node
 import('../session.js')
 """
 
+let private yessionEnterBinJs = """#!/usr/bin/env node
+import('../enter.js')
+"""
+
 /// The commands the package offers, and the entry each one runs.
 ///
 /// ONE list: the manifest's `bin` map is rendered from it and every smoke walks it, so a command
@@ -638,7 +642,9 @@ import('../session.js')
 /// shipped by two packages and booted by neither.
 let private packagedBins =
     [ "yession-manager", "bin/yession-manager.js"
-      "yession-session", "bin/yession-session.js" ]
+      "yession-session", "bin/yession-session.js"
+      // The far end of a session's door (`app/Enter.fs`): one command in one sandbox.
+      "yession-enter", "bin/yession-enter.js" ]
 
 // package.json — runtime deps are exactly the externals; npm resolves their platform-native
 // optionalDependencies (node-datachannel's addon, the SDK's native `claude`) on install.
@@ -652,7 +658,7 @@ let private packageJson (version: string) =
   "bin": {
 %s
   },
-  "files": ["bin/", "manager.js", "session.js", "SandboxHost.js", "SandboxSupervisor.js", "assets/", "README.md", "npm-shrinkwrap.json"],
+  "files": ["bin/", "manager.js", "session.js", "enter.js", "SandboxHost.js", "SandboxSupervisor.js", "assets/", "README.md", "npm-shrinkwrap.json"],
   "engines": { "node": ">=24.14" },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "%s",
@@ -684,8 +690,8 @@ let private assemble (version: string) =
     if String.IsNullOrWhiteSpace version then
         failwith "stage: no version (pass one, or set YESSION_VERSION)"
 
-    // The two bins. The asset set checks itself, in `buildAssets`, against its declaration.
-    for required in [ "app/out/Main.js"; "app/SessionMain.js"; "app/SandboxHost.js"; "app/SandboxSupervisor.js" ] do
+    // The entries of the bins. The asset set checks itself, in `buildAssets`, against its declaration.
+    for required in [ "app/out/Main.js"; "app/SessionMain.js"; "app/Enter.js"; "app/SandboxHost.js"; "app/SandboxSupervisor.js" ] do
         if not (File.Exists (Path.Combine (repoRoot, required))) then
             failwithf "missing %s after compile" required
 
@@ -696,6 +702,9 @@ let private assemble (version: string) =
 
     bundle version "app/out/Main.js" "manager.js"
     bundle version "app/SessionMain.js" "session.js"
+    // The `yession-enter` bin. It dials a session's door, so it is a bundle of its own and
+    // not a part of the session's.
+    bundle version "app/Enter.js" "enter.js"
     // A session's srt host, one process per srt sandbox. Not a bin — a session starts it, found
     // BESIDE the session's own file (`SrtSandbox.hostEntry`), which is why it keeps the name
     // its Fable output has: the unbundled session finds `app/SandboxHost.js` the same way.
@@ -720,6 +729,7 @@ let private assemble (version: string) =
     // in one install), so it spawns `node session.js` with no PATH assumptions.
     File.WriteAllText (Path.Combine (pkg, "bin/yession-manager.js"), managerBinJs)
     File.WriteAllText (Path.Combine (pkg, "bin/yession-session.js"), yessionSessionBinJs)
+    File.WriteAllText (Path.Combine (pkg, "bin/yession-enter.js"), yessionEnterBinJs)
     File.WriteAllText (Path.Combine (pkg, "package.json"), packageJson version)
     File.Copy (Path.Combine (repoRoot, "README.md"), Path.Combine (pkg, "README.md"), true)
     File.Copy (Path.Combine (repoRoot, "LICENSE"), Path.Combine (pkg, "LICENSE"), true)

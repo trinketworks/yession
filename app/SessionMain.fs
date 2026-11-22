@@ -146,6 +146,24 @@ let private resourceProfile =
             read |> Option.map (fun r -> r.Profile)
         | Error e -> failwith e
 
+// The door of this session (`YESSION_SESSION_DOORS`): a socket in the operator's directory
+// through which a program on the host runs a command in a sandbox (`EntryDoor`). No variable
+// is ordinary, and the session then has no door. A directory that cannot hold the door
+// stops the session, as a profile that cannot be read does: the operator asked for a door,
+// and a session that started without one would look the same as one that has it.
+let private doorSocket : string option =
+    match Interop.envOr "YESSION_SESSION_DOORS" "" with
+    | "" -> None
+    | directory ->
+        let longest = DoorPlace.longestPath (Node.Api.``process``.platform = Node.Base.Platform.Darwin)
+        match DoorPlace.socket longest ownRoot directory sessionId with
+        | Ok path -> Some path
+        | Error reason -> failwith reason
+
+/// The socket of the door, from the moment the door listens. The `sandbox` announcements
+/// carry it.
+let mutable private doorListensAt : string option = None
+
 /// What the operator grants every work sandbox without it asking: the profile's `always`,
 /// flattened once at boot.
 ///
@@ -719,7 +737,8 @@ let private sandboxAnnouncements () : Announcement list =
             { Sandbox = SandboxRef.render sandbox.Ref
               Running = Option.isSome (sandbox.Environment.CurrentRef ())
               Backend = sandbox.Backend
-              Resources = held |> List.map ResourceName.value })
+              Resources = held |> List.map ResourceName.value
+              Door = doorListensAt })
 
 /// The set that the Manager has, as far as this session knows.
 let mutable private announced : Announcement list option = None
@@ -1710,6 +1729,32 @@ Async.StartImmediate (
         // capabilities and the `work_sandboxes` query read is filled here — before the
         // readiness line, and therefore before any turn or any browser can ask.
         workSandboxes <- host.Sandboxes
+        // The entries of the last process, then the door of this one. An entry is a command
+        // that a program on the host runs in a sandbox, and the process that held the old
+        // ones is gone. The door opens before the first announcement, which names it.
+        let recordEntry (event: SessionEvent) : Async<unit> =
+            async {
+                let! _ = log.Append ActorRef.Session event
+                return ()
+            }
+        let! written = log.Read None System.Int32.MaxValue
+        do! EntryDoor.closeLeftOpen (written.Events |> List.map (fun envelope -> envelope.Event)) recordEntry
+        match doorSocket with
+        | None -> ()
+        | Some socket ->
+            let config : EntryDoor.Config =
+                { SocketPath = socket
+                  Limit = EntryDoor.entryLimit
+                  SpawnIn = EntryDoor.spawnIn (fun () -> workSandboxes)
+                  Record = recordEntry
+                  MintEntry =
+                    fun () -> EntryId.create (string (System.Guid.NewGuid ())) |> Result.defaultWith failwith }
+            match! EntryDoor.start config with
+            | Error reason -> failwith reason
+            | Ok door ->
+                doorListensAt <- Some door.ListensAt
+                // The socket goes with the process, whatever ends it.
+                Fable.NodeExtras.Processes.onEnding "exit" door.Close
         // The first set, and then a look after each append. The registry stream of the
         // Manager thus shows each sandbox from boot.
         publishAnnouncements ()

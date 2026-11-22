@@ -290,6 +290,10 @@ let startFull
         // construction — and it is what `execute_command`'s wait observes, which is why the
         // wait holds no state of its own.
         let mutable terminalProjection = Projection.empty
+        // The entries that are open now (`EntryProjection`): commands that a program on the
+        // host runs in a sandbox through the door of the session. Folded as the terminal
+        // projection is, and read by the busy check below.
+        let mutable entryProjection : EntryProjection = EntryProjection.empty
         /// How far the log has got, kept as it moves. What a reader needs to ask "has
         /// anything been said since I last looked" without reading the log to find out —
         /// which is the difference between a naming pass costing one structural read of the
@@ -320,6 +324,7 @@ let startFull
                 recordAttribution appended.Event
                 latestOffset <- Some appended.Offset
                 terminalProjection <- Projection.applyEvent terminalProjection appended.Timestamp appended.Event
+                entryProjection <- EntryProjection.applyEvent entryProjection appended.Timestamp appended.Event
                 broadcastEventsAvailable appended.Offset
                 notifyChanged ())
 
@@ -342,6 +347,12 @@ let startFull
             replayed.Events
             |> List.fold (fun proj e -> Projection.applyEvent proj e.Timestamp e.Event) Projection.empty
         terminalProjection <- replayedTerminals
+        // An entry that the last process left open stays open here until the composition
+        // root closes it (`EntryDoor.closeLeftOpen`), which it does before the session is
+        // ready.
+        entryProjection <-
+            replayed.Events
+            |> List.fold (fun proj e -> EntryProjection.applyEvent proj e.Timestamp e.Event) EntryProjection.empty
         // Where a shell opened in each sandbox starts (Plan 25), from the same replay — which
         // is what makes a restarted session open its next terminal where the last one started.
         let replayedProfiles =
@@ -954,6 +965,10 @@ let startFull
             // watching — a long build is exactly the case an outside observer would get
             // wrong, and reaping the session would kill the build.
             || not (Set.isEmpty (terminals.Busy ()))
+            // A person who works in a sandbox through the door is not a connected peer and
+            // runs no terminal of the session. An open entry is that person, so it keeps the
+            // session in use.
+            || EntryProjection.anyOpen entryProjection
             || hasQueuedWork ()
 
         // Transitions go out at once, so idleness starts counting the moment the last peer

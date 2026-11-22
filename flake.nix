@@ -34,7 +34,7 @@
       packages = forAllSystems (system:
         let p = packagesFor system;
         in {
-          default = p.nix;   # the installable bins: `yession-manager` + `yession-session`
+          default = p.nix;   # the installable bins: `yession-manager`, `yession-session`, `yession-enter`
           yession = p.nix;   # `nix build .#yession`
           npm = p.npm;       # the npm tarball: `nix build .#npm`
           # The examples, built on their own terms — NOT part of `yession`. See examples/.

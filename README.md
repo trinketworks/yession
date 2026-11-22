@@ -9,8 +9,8 @@ says why Yession has its shape: the principles, the components and the invariant
 
 ## Using Yession
 
-Yession installs two commands: `yession-manager` (the Manager) and `yession-session` (one
-Session). The Manager serves a management UI, by default at http://127.0.0.1:8321, where you
+Yession installs three commands: `yession-manager` (the Manager), `yession-session` (one
+Session) and `yession-enter` (one command in a sandbox of a session, from the host). The Manager serves a management UI, by default at http://127.0.0.1:8321, where you
 create, launch, resume and stop sessions. Each session runs in its own process.
 
 ### Install with npm

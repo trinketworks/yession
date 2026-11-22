@@ -380,7 +380,7 @@ let
         --set-default YESSION_BIN_RIPGREP ${pkgs.ripgrep}/bin/rg \
         --set-default YESSION_BIN_SETSID ${lib.getExe' pkgs.util-linux "setsid"}'';
 
-  # nix — the installable: the two wrapped Node bins over tasks.fsx's shims, the runtime
+  # nix — the installable: the wrapped Node bins over tasks.fsx's shims, the runtime
   # node_modules, and the Nix node-datachannel addon, with the agent pointed at claude-code.
   nix = pkgs.stdenv.mkDerivation {
     pname = "yession";

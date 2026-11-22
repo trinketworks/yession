@@ -6,6 +6,9 @@
 
   <ItemGroup>
     <Compile Include="McpRpc.fs" />
+    <!-- The bytes on the door of a session, and the command line of the bin that dials it.
+         It depends on the domain only. -->
+    <Compile Include="EntryWire.fs" />
     <!-- What a repo (`yession.yaml`) and an operator (`resources.yaml`) write, read into the
          domain's declarations. -->
     <Compile Include="ConfigFile.fs" />

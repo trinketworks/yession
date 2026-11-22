@@ -1531,6 +1531,43 @@ After the fixes land, one pass rewrites it to what still reproduces.
   from a secret, for as long as the session's data exists. Terminal access already equals
   session access, but anything that widens who may read a session (a link scope, a public view,
   an export) widens this with it.
+- **The session does not record the bytes of an entry.** An entry is a command that a program
+  on the host runs in a sandbox through the door of the session
+  ([the decision record](decisions/2026-11-22-a-sandbox-has-a-door-on-a-socket.md)). The log has
+  who entered, when, and for how long (`SandboxEntered`, `SandboxLeft`). It has no transcript.
+  - Why the terminal recorder does not apply: the session records a terminal because the session
+    holds the pty and sees each byte. For SSH through the door, `sshd` in the sandbox holds the
+    pty, and the door carries the encrypted stream. `scp`, `sftp` and a port forward have no pty.
+  - Cost: a person who enters over SSH leaves no record of what they ran. The timeline of a
+    terminal has that record.
+  - Candidate 1: the deployment's `sshd` wraps each shell on a pty in a recorder
+    (`ForceCommand`). It records interactive shells. The recorder runs in the sandbox, so the
+    sandbox can change the recording or stop it.
+  - Candidate 2: `sshd` runs on the host, and a shell is a terminal of the session that the
+    session opens through the door. It records interactive shells with the recorder that the
+    session has, and each `exec` command line is known. A port forward then ends on the host and
+    not in the sandbox, and an editor on a remote computer needs port forwards.
+  - `yession-enter` has no form that opens a shell on a pty. When that form comes, it must open
+    a terminal of the session (`TerminalOpened`, with a recording), not a second type of shell.
+- **An entry has no backpressure in the session.** The spawn that carries bytes
+  (`Sandbox.SpawnBytes`) takes input with no answer and gives output with no wait. The session
+  holds in memory what the command did not read yet, and what the caller of the door did not
+  read yet. `yession-enter` itself waits: it stops reading its input while the door is behind,
+  and stops reading the door while its output is behind.
+  - Cost: a large upload to a command that reads slowly (`scp` to a slow disk), or a large
+    download to a caller that reads slowly, grows the memory of the session process.
+  - Open: a write on the seam that says when the backend is behind, and a way to stop a
+    backend's output. The seatbelt backend sends each byte as base64 in a line of JSON, so it
+    needs the same signal on its wire.
+- **Who entered is the word of the caller of the door.** `yession-enter --as` names the
+  subject, and the session records the name without a check. The permissions of the socket are
+  the trust: a process that can dial the door can claim each name. A deployment that takes the
+  name from its network (the login of a tailnet peer, for example) gives a true name. A name
+  from a process in the sandbox is not one.
+- **Nothing shows an entry on the session page yet.** The events are in the log and
+  `EntryProjection` holds the open entries. The conversation does not show them, and a sandbox
+  does not show who is in it. The agent does not learn that a person is in a sandbox, and that
+  person can change files that the agent works on.
 - **`renewable` is a provider's claim about its own tool, and nothing verifies it** (Plan 19,
   step 4). A closed stream offers a way back when the provider said asking again is safe.
   Pressing it replays that tool call with its original arguments, so a provider that marks a

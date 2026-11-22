@@ -41,7 +41,7 @@ tar -xzf yession-<version>.tgz --strip-components=1 -C ~/.local/share/yession
 npm i -g ~/.local/share/yession
 ```
 
-The directory is the install. `npm i -g` links the two commands to it, so do not delete the
+The directory is the install. `npm i -g` links the commands to it, so do not delete the
 directory. To upgrade, delete the directory, then run the same steps with the new tarball.
 
 Do not run `npm i -g yession-<version>.tgz`. npm honours a dependency's shrinkwrap only when
@@ -76,7 +76,7 @@ examples use the prefix too (`YESSION_PROXY_PORT`, `YESSION_SERIAL_PORT`).
 | an option | you, the operator, for this Manager | `--port`, `--idle-timeout`, `--data-dir` |
 | `YESSION_MANAGER_URL` / `YESSION_SESSION_URL` | you, and every session reads them too | see §Addressing |
 | `YESSION_BIN_*` | you or the package. It names an executable a session runs | `YESSION_BIN_GIT`, `YESSION_BIN_BWRAP` |
-| `YESSION_SESSION_*` | you. It is per-session policy, today set once per host | `YESSION_SESSION_WORK_BACKEND`, `YESSION_SESSION_GIT_BACKEND`, `YESSION_SESSION_RESOURCES` |
+| `YESSION_SESSION_*` | you. It is per-session policy, today set once per host | `YESSION_SESSION_WORK_BACKEND`, `YESSION_SESSION_GIT_BACKEND`, `YESSION_SESSION_RESOURCES`, `YESSION_SESSION_DOORS` |
 | `YESSION_LAUNCH` | nobody — the Manager mints it per launch | — |
 
 The Manager **refuses** a variable that moved onto the command line. The boot stops and names
@@ -517,7 +517,8 @@ yession-manager --idle-timeout 30m       # or 90s, 2h; absent means never
 ```
 
 The Manager stops sessions that nobody uses. A session reports busy or idle over its control
-channel (a connected peer, a running turn, a command, a non-empty queue). The Manager reaps on
+channel (a connected peer, a running turn, a command, a non-empty queue, an open entry through
+[its door](#the-door-of-a-session)). The Manager reaps on
 **silence**, so no single report has to arrive. Two costs:
 
 - A reaped launch loses its OAuth client registration and user bindings, so the next visitor
@@ -528,6 +529,60 @@ Reaping also gives rolling upgrades. Point `--spawn-bin` at a path that floats w
 and sessions upgrade as they idle out, without the Manager restart that evicts everybody. A
 [MAJOR](../AGENTS.md#versioning) version difference refuses the launch, since the control
 protocol may disagree. The refusal drains the running set and hands you that moment.
+
+### The door of a session
+
+A session can have a **door**: a UNIX socket on the host. A program on the host that dials the
+door runs one command in one sandbox of the session, with the bytes of the command connected
+([decision](decisions/2026-11-22-a-sandbox-has-a-door-on-a-socket.md)). A deployment uses the
+door to give a person a way into a sandbox that Yession does not know, for example SSH.
+
+```sh
+YESSION_SESSION_DOORS=/run/yession/doors yession-manager …
+```
+
+- Each session listens at `<directory>/<session id>.sock`, with mode 0660. The session makes
+  the socket when it starts and removes it when it ends. You make the directory.
+- With no variable, a session has no door.
+- The owner and the mode of the directory are the trust of the door. A process that can dial
+  the socket can run a command in each sandbox of the session, with the environment of that
+  sandbox. Give the directory to the account that runs the Manager and to nobody else.
+- Keep the directory out of `--data-dir` and out of each path that a resource grants. A sandbox
+  that can see the socket can dial it. A session refuses to start with a directory in the data
+  directory.
+- Keep the path short. A socket path has 103 bytes at most on macOS and 107 on Linux, and a
+  session id has 26 characters. A session refuses to start with a longer path.
+- The Manager reads its environment when it starts. A change of the variable needs a Manager
+  restart.
+
+`yession-enter` dials the door:
+
+```sh
+yession-enter --door <socket> --as <subject> --via <label> <sandbox> -- <command> [argument ...]
+```
+
+- `<socket>` is the `door` field of the sandbox's announcement
+  ([§The registry stream](#the-registry-stream)).
+- `<sandbox>` is the name of the announcement: `default`, or `owner/repo:dev`.
+- The input, the output and the error output of `yession-enter` are those of the command. No
+  byte changes. The command runs behind the entrypoint of the sandbox, in its directory, with
+  its environment.
+- `--as` names who enters, and `--via` says how they came (`ssh`, for example). The session
+  records the two words (`sandboxEntered` and `sandboxLeft` in its log) and does not check
+  them. Take the subject from a source that the sandbox cannot write.
+- The session refuses a sandbox that does not run. An entry does not start a sandbox.
+- One session has 16 open entries at most.
+- When `yession-enter` ends, the session ends the command.
+
+| Exit code | Meaning |
+| --- | --- |
+| the code of the command | The command ended. |
+| 2 | The command line is wrong. |
+| 125 | `yession-enter` cannot reach the door, or the door closed before the command ended. |
+| 126 | The session refused the entry. The error output has the reason. |
+| 255 | The command ended with no exit code: a signal ended it, or it could not run. |
+
+The session does not record the bytes of an entry (docs/GAPS.md).
 
 ### Addressing
 
@@ -623,6 +678,7 @@ A session announces the kind `sandbox` for each sandbox that it has:
 | `state` | `running`, or `not-running` for a sandbox that the session has and that does not run now. |
 | `backend` | The backend of the sandbox, for example `docker` or `seatbelt`. |
 | `resources` | The names of the operator's resources that the sandbox holds on this host. |
+| `door` | The socket of the session's door, for `yession-enter --door`. Absent when the session has no door ([§The door of a session](#the-door-of-a-session)). |
 
 A program that follows announcements obeys these rules:
 
@@ -912,7 +968,7 @@ Any reconciler against the stream should keep three rules:
 
 ### Nix
 
-`packages.<system>.default` is `yession-manager` and `yession-session`
+`packages.<system>.default` is `yession-manager`, `yession-session` and `yession-enter`
 ([`nix/packages.nix`](../nix/packages.nix)). The package wraps them with the native WebRTC
 addon, which it builds from source, and defaults `YESSION_BIN_CLAUDE` and `YESSION_BIN_GIT` to
 store paths.
