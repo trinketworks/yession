@@ -196,9 +196,10 @@ let tests =
             })
 
             // A daemon refuses a network for a reason, and only the daemon knows it: no
-            // subnet left, a name it does not take. The name here is one it does not take.
+            // subnet left, a name that is taken. `host` is the daemon's own network on each
+            // daemon. It has no gateway, and the daemon refuses a second network of that name.
             testCaseAsync "a network that the daemon refuses fails the start in the daemon's own words" (async {
-                let network = { DockerFixture.quietNetwork () with Name = "not a network name" }
+                let network = { DockerFixture.quietNetwork () with Name = "host" }
                 let! started = startOn network envSecrets alpineSpec
                 let reason =
                     match started with
