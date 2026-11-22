@@ -609,6 +609,55 @@ let private controlRpcTests =
             }
     ]
 
+// A session's containers and its docker network are the session's own. Before the stop
+// took them down, each stopped session left its network on the daemon, and the daemon ran
+// out of subnets after about 30 sessions. Only a real session process can show this: the
+// in-process Manager of the other suites stops a Host directly, and that path always took
+// the sandboxes down.
+let private stopLeavesNothingTests =
+    testList "A stopped session's docker objects" [
+        testCaseAsync "a session that the Manager stops leaves no container and no network on the daemon" <|
+            async {
+                let dataDir =
+                    sprintf "tests/Yession.Tests/out/.data/stop-%d" (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+                let! pm =
+                    ProcessManager.create
+                        { ProcessManager.Options.defaults dataDir nodePath [ "app/SessionMain.js" ] with
+                            Strategy = Some Strategy.localhost }
+                // The session's `default` sandbox takes the bare session id as its
+                // container name and label (`SandboxRef.objectName`).
+                let id = DockerFixture.name ()
+                let network = DockerFixture.sessionNetwork id
+                let record = pm.CreateSession id "Stop leaves nothing" |> expect
+                let! launched =
+                    Support.withEnv
+                        [ "YESSION_SESSION_AGENT", Some "diagnostic"
+                          "YESSION_SESSION_WORK_BACKEND", Some "docker" ]
+                        (fun () -> pm.Launch record.SessionId)
+                let port = launched |> expect
+
+                let! opened = OidcHttp.openSession (sprintf "http://127.0.0.1:%d" port)
+                let! a = connectClient (sprintf "http://127.0.0.1:%d/signal" port) opened.PeerToken "ada" "Ada"
+                do! compose a a.Hello.PeerId "run the diagnostic"
+                a.Connection.SendDraft a.Hello.PeerId
+                // The diagnostic agent's command starts the sandbox. What the command
+                // answers does not matter here.
+                do! a.Runner.WaitFor (fun m -> match m.Environment with EnvironmentRunning _ -> true | _ -> false)
+                let label = sprintf "yession-session=%s" id
+                let! before = Sandboxes.DockerSandbox.countByLabel label
+
+                do! a.Channel.Close ()
+                let! stopped = pm.Stop record.SessionId
+                stopped |> expect
+                do! pm.StopAll ()
+
+                let! after = Sandboxes.DockerSandbox.countByLabel label
+                let! networkLeft = Sandboxes.DockerSandbox.networkExists network
+                Expect.equal (before, after, networkLeft) (1, 0, false) "one container while it ran, and nothing after the stop"
+            }
+    ]
+    |> DockerFixture.owned
+
 // -----------------------------------------------------------------------------
 // Step 25 — the management UI (server-side rendered Lit, swapped by a tiny inline
 // script — no htmx). Fragment rendering is pure (cheap tier); the flow over real HTTP +
@@ -4362,6 +4411,7 @@ let tests =
         // fails to start and the suite's `WaitFor` fails at once, quoting the sandbox's own
         // reason (`Peer.environmentRefusal`) — a red where the tag makes it a skip.
         Tag.needs "Session-owned environment across real processes" [ Tag.Ports; Tag.Native; Tag.Sandbox ] (fun () -> controlRpcTests)
+        Tag.needs "A stopped session's docker objects" [ Tag.Ports; Tag.Native; Tag.Docker ] (fun () -> stopLeavesNothingTests)
         // `Ports` only: one bare `node:http` server writing two strings, and the SSE client
         // reading them. Nothing spawns, so nothing here needs `Native`.
         Tag.needs "SSE consumption across read boundaries" [ Tag.Ports ] (fun () -> sseStreamTests)

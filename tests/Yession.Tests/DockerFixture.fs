@@ -33,6 +33,14 @@ let name () : string =
     minted.Add fresh |> ignore
     fresh
 
+/// The network that a real session process of that id makes (`dockerNetwork` in
+/// `SessionMain`). This run owns it from now on, so `owned` removes it after a case that
+/// left it there.
+let sessionNetwork (session: string) : string =
+    let made = sprintf "yession-%s" session
+    minted.Add made |> ignore
+    made
+
 /// A session network this run owns, as the product names one per session, told the
 /// host's address on it through `reached` (a listener's `Open`, or nothing to open).
 let network (reached: string -> Async<Result<unit, string>>) : Sandboxes.DockerSandbox.Network =
