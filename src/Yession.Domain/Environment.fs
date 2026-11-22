@@ -121,7 +121,8 @@ module SelectionGrant =
             | Volume _
             | Connection _
             | Seatbelt _
-            | Device _ -> None
+            | Device _
+            | Capability _ -> None
         { SelectionGrant.Connections = ForwardedConnections.ofGrant (leaves, wantedOnly)
           SelectionGrant.Bound = leaves |> List.choose bound |> Map.ofList
           SelectionGrant.WantedOnly = wantedOnly |> Set.toList |> List.choose bound |> List.map fst |> Set.ofList }

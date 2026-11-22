@@ -474,6 +474,26 @@ let private sandboxPolicyTests =
                     Sandboxes.limitsFor backend Node.Base.Platform.Linux |> HostLimits.can HostDistinction.Devices)
             Expect.equal passes [ DockerBackend ] "docker, and no other backend"
 
+        // A capability is a provision too: only docker makes a container whose set of
+        // capabilities it can add to.
+        testCase "only docker adds a capability to a sandbox" <| fun () ->
+            let adds =
+                [ DockerBackend; SrtBackend; HostBackend; SeatbeltBackend ]
+                |> List.filter (fun backend ->
+                    Sandboxes.limitsFor backend Node.Base.Platform.Linux |> HostLimits.can HostDistinction.KernelCapabilities)
+            Expect.equal adds [ DockerBackend ] "docker, and no other backend"
+
+        testCase "a granted capability reaches the policy of a docker sandbox by its name" <| fun () ->
+            let granted =
+                Sandboxes.grantsFrom
+                    [ Capability (LinuxCapability.parse "SETUID" |> expect)
+                      Capability (LinuxCapability.parse "SYS_CHROOT" |> expect) ]
+                |> expect
+            Expect.equal
+                (granted.LinuxCapabilities |> List.map LinuxCapability.text)
+                [ "SETUID"; "SYS_CHROOT" ]
+                "each name, in the order of the leaves"
+
         // The backend's own consequences ride its baseline, not every repo's file. The
         // session bind-mounts checkouts owned by the operator's uid into a container
         // running as the image's user, and git refuses a repository its caller does not

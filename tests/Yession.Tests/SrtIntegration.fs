@@ -66,6 +66,7 @@ let private policyIn (workspace: string) (domains: string list) : SandboxPolicy 
       Volumes = []
       SeatbeltRules = []
       Devices = []
+      LinuxCapabilities = []
       Realisation = []
       Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
       WorkingDirectory = Some workspace

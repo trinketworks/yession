@@ -180,6 +180,10 @@ type SandboxPolicy =
       /// backend passes one through. Every other backend has the leaf withheld before a
       /// policy exists, as for `Volumes`.
       Devices : string list
+      /// Granted capabilities of the Linux kernel, added to the ones the backend always
+      /// gives. Only a container backend adds one. Every other backend has the leaf withheld
+      /// before a policy exists, as for `Volumes`.
+      LinuxCapabilities : LinuxCapability list
       Env : Map<string, string>
       /// Where this sandbox stands: an ABSOLUTE directory, and the two things that
       /// depend on it are why it has to be.

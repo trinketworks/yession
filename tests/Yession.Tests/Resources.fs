@@ -60,10 +60,11 @@ let private leafShapesFor (i: int) (mode: ResourceMountMode) : ResourceLeaf list
           Exec (sprintf "/bin/tool%d" i)
           Connection (sprintf "conn%d" i, ConnectionRoute.Git)
           Seatbelt (SeatbeltAllow.parse (sprintf "(allow mach-lookup (global-name \"svc%d\"))" i) |> expect)
-          Device (sprintf "/dev/d%d" i) ]
+          Device (sprintf "/dev/d%d" i)
+          Capability (LinuxCapability.parse (sprintf "CAPABILITY_%d" i) |> expect) ]
     for shape in shapes do
         match shape with
-        | Mount _ | Socket _ | Endpoint _ | Variable _ | Volume _ | Exec _ | Connection _ | Seatbelt _ | Device _ -> ()
+        | Mount _ | Socket _ | Endpoint _ | Variable _ | Volume _ | Exec _ | Connection _ | Seatbelt _ | Device _ | Capability _ -> ()
     shapes
 
 /// Every mount mode, proved total the same way.
@@ -89,7 +90,8 @@ let private distinctions : HostDistinction list =
           HostDistinction.OverlayMounts
           HostDistinction.NamedVolumes
           HostDistinction.SeatbeltRules
-          HostDistinction.Devices ]
+          HostDistinction.Devices
+          HostDistinction.KernelCapabilities ]
     for distinction in all do
         match distinction with
         | HostDistinction.SocketsByPath
@@ -97,7 +99,8 @@ let private distinctions : HostDistinction list =
         | HostDistinction.OverlayMounts
         | HostDistinction.NamedVolumes
         | HostDistinction.SeatbeltRules
-        | HostDistinction.Devices -> ()
+        | HostDistinction.Devices
+        | HostDistinction.KernelCapabilities -> ()
     all
 
 /// A host that can express some arbitrary subset of the distinctions.
@@ -509,6 +512,64 @@ let tests =
                 OperatorProfile.parse """{ "version": 1, "resources": { "vm": { "device": "/dev/../etc/shadow" } } }"""
             Expect.isError result "a path that climbs out of /dev is no device of the host"
 
+        // A capability is a name of the kernel's, as docker writes it. Each entry is one
+        // name, and the decoder refuses a name of the wrong shape at the entry that holds it.
+        testCase "a capability resource decodes to one leaf for each name" <| fun () ->
+            Expect.equal
+                (resolved """{ "capability": [ "SETUID", "SETGID", "SYS_CHROOT" ] }""" |> ResourceClosure.describe)
+                [ "cap:SETGID"; "cap:SETUID"; "cap:SYS_CHROOT" ]
+                "three names, three grants"
+
+        testCase "one capability may be written bare" <| fun () ->
+            Expect.equal
+                (resolved """{ "capability": "SYS_CHROOT" }""" |> ResourceClosure.describe)
+                [ "cap:SYS_CHROOT" ]
+                "a list of one and a bare string mean the same"
+
+        testCase "two resources that name one capability grant it once" <| fun () ->
+            let profile =
+                OperatorProfile.parse
+                    """{ "version": 1, "resources": { "a": { "capability": [ "SETUID", "SETGID" ] }, "b": { "capability": [ "SETGID", "SYS_CHROOT" ] }, "both": [ "a", "b" ] } }"""
+                |> expect
+            Expect.equal
+                (ResourceProfile.resolve profile.Resources [ ResourceName.create "both" |> expect ] |> expect |> ResourceClosure.describe)
+                [ "cap:SETGID"; "cap:SETUID"; "cap:SYS_CHROOT" ]
+                "the union, with no name twice and no conflict"
+
+        testCase "a capability with the CAP_ prefix is refused, and the refusal gives the name to write" <| fun () ->
+            match LinuxCapability.parse "CAP_SETUID" with
+            | Ok _ -> failwith "a prefixed name was taken"
+            | Error reason ->
+                Expect.stringContains reason "Remove the prefix: write SETUID" "the refusal says what to write"
+
+        testCase "the capability ALL is refused" <| fun () ->
+            match LinuxCapability.parse "ALL" with
+            | Ok _ -> failwith "ALL was taken"
+            | Error reason -> Expect.stringContains reason "Name each capability" "the refusal says what to do"
+
+        testCase "a capability that is not a name is refused" <| fun () ->
+            for raw in [ ""; "setuid"; "SYS CHROOT"; "NET-RAW"; "SETUID,SETGID" ] do
+                Expect.isError (LinuxCapability.parse raw) (sprintf "'%s' is not a name" raw)
+
+        testCase "a capability of the wrong shape is refused at the resource that names it" <| fun () ->
+            let result =
+                OperatorProfile.parse """{ "version": 1, "resources": { "ssh": { "capability": [ "SETUID", "CAP_SETGID" ] } } }"""
+            Expect.isError result "one bad name refuses the profile"
+
+        // Only a container has a set of capabilities to add to. Each other host withholds
+        // the grant with a reason, and withholds nothing else of the same resource.
+        testCase "a host that adds no capability withholds one, with a reason" <| fun () ->
+            let leaf = Capability (LinuxCapability.parse "SYS_CHROOT" |> expect)
+            let asked = Set.ofList [ leaf; Variable ("CI", VariableValue.Text "1") ]
+            let without = RealisedClosure.of' (HostLimits.of' [ HostDistinction.SocketsByPath ]) asked
+            Expect.equal
+                (RealisedClosure.describeDifferences without)
+                [ "cap:SYS_CHROOT ~> nothing: only a container backend adds a capability. Grant this where the sandbox is a container, not here" ]
+                "the one difference, said"
+            Expect.isFalse (RealisedClosure.held without |> Set.contains leaf) "and the sandbox does not hold it"
+            let with' = RealisedClosure.of' (HostLimits.of' [ HostDistinction.KernelCapabilities ]) asked
+            Expect.isEmpty (RealisedClosure.differences with') "a host that adds one gives it as asked"
+
         testCase "one seatbelt rule may be written bare" <| fun () ->
             Expect.equal
                 (resolved """{ "seatbelt": "(allow process-info*)" }""" |> ResourceClosure.describe)
@@ -828,7 +889,8 @@ let tests =
                    Variable ("CI", VariableValue.Text "1")
                    Exec "/usr/bin/git"
                    Seatbelt (SeatbeltAllow.parse """(allow mach-lookup (global-name "com.apple.sysmond"))""" |> expect)
-                   Device "/dev/kvm" ]
+                   Device "/dev/kvm"
+                   Capability (LinuxCapability.parse "SYS_CHROOT" |> expect) ]
                  |> List.map ResourceLeaf.describe)
                 [ "path:/nix:ro"
                   "path:/h/.npm>/root/.npm:ovl"
@@ -839,7 +901,8 @@ let tests =
                   "env:CI=1"
                   "exec:/usr/bin/git"
                   """sb:(allow mach-lookup (global-name "com.apple.sysmond"))"""
-                  "dev:/dev/kvm" ]
+                  "dev:/dev/kvm"
+                  "cap:SYS_CHROOT" ]
                 "the notation"
 
         // A variable's value is the one part of a grant that is arbitrary text, so it is the
@@ -956,7 +1019,8 @@ let tests =
                     | Endpoint _
                     | Volume _
                     | Seatbelt _
-                    | Device _ -> ()
+                    | Device _
+                    | Capability _ -> ()
             }
 
         // Every difference is one of the two directions, and which one is not a detail: a

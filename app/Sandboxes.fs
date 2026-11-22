@@ -580,9 +580,14 @@ let limitsFor (backend: SandboxBackend) (platform: Node.Base.Platform) : HostLim
     // rule for it. srt on a Mac writes a profile of its own, and takes none.
     | SeatbeltBackend ->
         HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.EgressByHost; HostDistinction.SeatbeltRules ]
-    // `--device` passes a device of the host into the container at its own path.
+    // `--device` passes a device of the host into the container at its own path, and
+    // `--cap-add` adds a capability to the ones that the backend always gives.
     | DockerBackend ->
-        HostLimits.of' [ HostDistinction.SocketsByPath; HostDistinction.NamedVolumes; HostDistinction.Devices ]
+        HostLimits.of'
+            [ HostDistinction.SocketsByPath
+              HostDistinction.NamedVolumes
+              HostDistinction.Devices
+              HostDistinction.KernelCapabilities ]
 
 /// What a backend can distinguish on the host this process is running on.
 ///
@@ -745,7 +750,9 @@ type GrantedLeaves =
       /// Seatbelt rules, each as the operator wrote it. The seatbelt backend reads them.
       Rules : SeatbeltAllow list
       /// Devices of the host, by path. The docker backend reads them.
-      Devices : string list }
+      Devices : string list
+      /// Capabilities of the Linux kernel. The docker backend adds them.
+      LinuxCapabilities : LinuxCapability list }
 
 let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
     let rec fold (acc: GrantedLeaves) remaining =
@@ -760,7 +767,8 @@ let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
                     Binds = List.rev acc.Binds
                     Volumes = List.rev acc.Volumes
                     Rules = List.rev acc.Rules
-                    Devices = List.rev acc.Devices }
+                    Devices = List.rev acc.Devices
+                    LinuxCapabilities = List.rev acc.LinuxCapabilities }
         | leaf :: rest ->
             match leaf with
             | Mount mount ->
@@ -815,6 +823,9 @@ let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
             // Only the container backend passes one through. The realisation withheld it
             // from every other backend before this fold ran, as for a volume.
             | Device path -> fold { acc with Devices = path :: acc.Devices } rest
+            // Only the container backend adds one. The realisation withheld it from every
+            // other backend before this fold ran, as for a volume.
+            | Capability name -> fold { acc with LinuxCapabilities = name :: acc.LinuxCapabilities } rest
     fold
         { Reads = []
           Writes = []
@@ -824,7 +835,8 @@ let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
           Binds = []
           Volumes = []
           Rules = []
-          Devices = [] }
+          Devices = []
+          LinuxCapabilities = [] }
         leaves
 
 /// The directories of granted executables, for PATH.
@@ -1097,6 +1109,7 @@ let policyFor
           Volumes = granted'.Volumes
           SeatbeltRules = granted'.Rules
           Devices = granted'.Devices
+          LinuxCapabilities = granted'.LinuxCapabilities
           Realisation = differences
           Env = env
           // What the sandbox ASKED to start in, RESOLVED — the workspace when it asked
@@ -2144,7 +2157,9 @@ module DockerSandbox =
                                             // All three verified against a raw container;
                                             // still far below docker's own default set — no
                                             // NET_RAW, no SETUID/SETGID, no MKNOD — and
-                                            // no-new-privileges stays.
+                                            // no-new-privileges stays. An operator can
+                                            // grant one more to a sandbox by name (the
+                                            // `capability:` kind, `CapAdd` below).
                                             // The devices the operator granted, each at its
                                             // own path. `rw` and not `rwm`: the container
                                             // opens the node docker made, and makes none.
@@ -2159,7 +2174,16 @@ module DockerSandbox =
                                                         device.CgroupPermissions <- "rw"))
                                                 |> List.toArray
                                             host.CapDrop <- [| "ALL" |]
-                                            host.CapAdd <- [| "CHOWN"; "FOWNER"; "DAC_OVERRIDE" |]
+                                            // The three of the backend first, then each
+                                            // one that the operator granted this sandbox
+                                            // (`capability:` in the profile). The daemon
+                                            // refuses a name that its kernel does not
+                                            // have, and the create fails in its words.
+                                            host.CapAdd <-
+                                                [ "CHOWN"; "FOWNER"; "DAC_OVERRIDE" ]
+                                                @ (policy.LinuxCapabilities |> List.map LinuxCapability.text)
+                                                |> List.distinct
+                                                |> List.toArray
                                             host.SecurityOpt <- [| "no-new-privileges" |]
                                             // A memory ceiling, so a container that
                                             // overruns is the one the kernel kills
@@ -4028,6 +4052,7 @@ module AgentSandbox =
           Volumes = []
           SeatbeltRules = []
           Devices = []
+          LinuxCapabilities = []
           Realisation = []
           Env = env
           WorkingDirectory = None
