@@ -3629,16 +3629,17 @@ module View =
         // A visit to a sandbox through the door of the session: one line where it started and
         // one where it ended. A line and not a button, because an entry has no recording to
         // open. It has no author line: the person who came is not a member of the session,
-        // and the line names that person in its own words.
+        // so the line names that person as text. The deed follows, drawn as each other deed
+        // is (`Entity.phrase`).
         let visitStartedItem (visit: SandboxVisit) =
             html $"""
                 <div class="{Style.chatVisit}" data-chat-visit="{string (EventOffset.value visit.VisitOffset)}">
-                  <span class="{Style.chatChipText}">{SandboxVisit.entered visit}</span>
+                  <span class="{Style.chatChipText}">{visit.Visitor} {Entity.phrase people ActorRef.System (SandboxVisit.entered visit)}</span>
                 </div>"""
         let visitEndedItem (ended: VisitEnd) =
             html $"""
                 <div class="{Style.chatVisit}" data-chat-visit-end="{string (EventOffset.value ended.EndedVisit.VisitOffset)}">
-                  <span class="{Style.chatChipText}">{SandboxVisit.left ended}</span>
+                  <span class="{Style.chatChipText}">{ended.EndedVisit.Visitor} {Entity.phrase people ActorRef.System (SandboxVisit.left ended)}</span>
                 </div>"""
         // One call the agent made. No pane tab: unlike a block there is nothing recorded to
         // open — but there IS something to read: what the call was given and what it answered.

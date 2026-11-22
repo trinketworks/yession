@@ -67,8 +67,8 @@ let private lines (events: EventEnvelope<SessionEvent> list) : string list =
     TimelineProjection.items ConversationProjection.empty timeline
     |> List.choose (fun (item: TimelineItem) ->
         match item with
-        | TimelineVisitStarted visit -> Some (SandboxVisit.entered visit)
-        | TimelineVisitEnded ended -> Some (SandboxVisit.left ended)
+        | TimelineVisitStarted visit -> Some (SandboxVisit.said visit.Visitor (SandboxVisit.entered visit))
+        | TimelineVisitEnded ended -> Some (SandboxVisit.said ended.EndedVisit.Visitor (SandboxVisit.left ended))
         | _ -> None)
 
 let tests =
@@ -143,7 +143,8 @@ let tests =
         testCase "the words of a visit" <| fun () ->
             Expect.equal
                 (lines [ at 1L 0.0 (entered "e1" dev); at 2L 12.0 (left "e1") ])
-                [ "ada entered octo/hello:dev through ssh"; "ada left octo/hello:dev after 12 minutes" ]
+                [ "ada entered sandbox octo/hello:dev through ssh"
+                  "ada left sandbox octo/hello:dev after 12 minutes" ]
                 "who, where, how, and for how long"
 
         testCase "the time of a visit is from its first entry to the end of its last" <| fun () ->
@@ -153,7 +154,8 @@ let tests =
                       at 2L 10.0 (entered "e2" dev)
                       at 3L 20.0 (left "e1")
                       at 4L 90.0 (left "e2") ])
-                [ "ada entered octo/hello:dev through ssh"; "ada left octo/hello:dev after 1 hour" ]
+                [ "ada entered sandbox octo/hello:dev through ssh"
+                  "ada left sandbox octo/hello:dev after 1 hour" ]
                 "one line for each end of the visit"
 
         testCase "an end that is not an ordinary one says why" <| fun () ->
@@ -161,14 +163,15 @@ let tests =
                 (lines
                     [ at 1L 0.0 (entered "e1" dev)
                       at 2L 3.0 (leftBecause SandboxLeft.sessionRestarted None "e1") ])
-                [ "ada entered octo/hello:dev through ssh"
-                  "ada left octo/hello:dev after 3 minutes: session restarted" ]
+                [ "ada entered sandbox octo/hello:dev through ssh"
+                  "ada left sandbox octo/hello:dev after 3 minutes: session restarted" ]
                 "the reason follows the line"
 
         testCase "a caller that closes the door is an ordinary end" <| fun () ->
             Expect.equal
                 (lines [ at 1L 0.0 (entered "e1" dev); at 2L 2.0 (leftBecause SandboxVisit.callerClosed None "e1") ])
-                [ "ada entered octo/hello:dev through ssh"; "ada left octo/hello:dev after 2 minutes" ]
+                [ "ada entered sandbox octo/hello:dev through ssh"
+                  "ada left sandbox octo/hello:dev after 2 minutes" ]
                 "a person who closes an SSH connection left, and the line says no more"
 
         testCase "the ordinary reasons are the words that the door writes" <| fun () ->

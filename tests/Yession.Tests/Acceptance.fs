@@ -1432,8 +1432,9 @@ let private uiChecklistTests =
             let required =
                 [ "the line of the start", Dom.attr Dom.Hooks.chatVisit "3"
                   "the line of the end", Dom.attr Dom.Hooks.chatVisitEnd "3"
-                  "who came, where and how", "nick entered octo/hello:dev through ssh"
-                  "for how long", "nick left octo/hello:dev after 12 minutes" ]
+                  "where, as the reference that each other deed has", "data-entity=\"octo/hello:dev\""
+                  "how", "through ssh"
+                  "for how long", "after 12 minutes" ]
             for label, marker in required do
                 Expect.isTrue (html.Contains marker) (sprintf "%s (`%s`) must render" label marker)
 
