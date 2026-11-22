@@ -44,6 +44,8 @@ resources:
 
 - The directory holds `serve` and `authorized_keys`. One public key on each line, as
   `sshd` reads them. `https://github.com/<login>.keys` gives the keys of a GitHub account.
+- For more than one person, the directory holds `authorized_keys.d` with one file for each
+  person ("The keys of one person").
 - The Manager runs with `YESSION_SESSION_DOORS=<directory>`, so each session has a door.
 - `follow.mjs` runs as a service that restarts.
 
@@ -60,6 +62,31 @@ sandboxes:
 **The image** of that sandbox holds the OpenSSH server (`openssh-server` on Debian and
 Ubuntu, `pkgs.openssh` in a Nix shell). Nothing starts it. The user of the sandbox is the SSH
 login.
+
+### The keys of one person
+
+With one `authorized_keys` file, each key in it opens each sandbox, under each name. When
+the host names the person (`listen.mjs --whois`), give the name to `serve`:
+
+```sh
+node listen.mjs … --whois 'tailscale whois --json' -- /run/yession-ssh/serve --for '{subject}'
+```
+
+```
+share/
+  serve
+  authorized_keys.d/
+    ada@example.com      # the keys of this person, one on each line
+    bob@example.com
+```
+
+- `listen.mjs` puts the subject of the entry in the place of the argument `{subject}`.
+- When `authorized_keys.d` is there, `serve --for` reads only the file of that name. A name
+  with no file cannot log in, and `serve` says so on its error output.
+- When `authorized_keys.d` is not there, `serve` reads `authorized_keys`, with or without
+  `--for`.
+- The name in the log of the session is then a name whose private key the person has. A
+  process that gives the host a false name also needs the key of that person to log in.
 
 ### A sandbox that runs as root
 
@@ -122,7 +149,7 @@ ts serve --bg --tcp=22 --proxy-protocol=2 tcp://127.0.0.1:2200
 
 exec node listen.mjs --listen 127.0.0.1:2200 --proxy-protocol \
   --whois "tailscale --socket=$state/ts.sock whois --json" \
-  -- /run/yession-ssh/serve
+  -- /run/yession-ssh/serve --for '{subject}'
 ```
 
 - `--state=mem:` with an ephemeral key removes the node from the tailnet when the script stops.
@@ -145,8 +172,14 @@ tailscale serve --bg --tcp="$port" --proxy-protocol=2 "tcp://127.0.0.1:$port"
 
 node listen.mjs --listen "127.0.0.1:$port" --proxy-protocol \
   --whois 'tailscale whois --json' \
-  -- /run/yession-ssh/serve
+  -- /run/yession-ssh/serve --for '{subject}'
 ```
+
+- `tailscale serve` changes its configuration only for root when the configuration has a
+  UNIX socket target. In that deployment, root makes a fixed set of forwards one time, and
+  the script only chooses a port from the set.
+- `tailscale serve` does not send the PROXY header to a UNIX socket target. The listener
+  must thus be a loopback port, and not a socket in a private directory.
 
 `port-for` is a rule of the deployment that gives each sandbox a port and tells people which
 port it is. A person must look up the port, which is the cost of this recipe.
@@ -163,7 +196,13 @@ first event has the subject and the label that `yession-enter` got as `--as` and
 - With `--whois`, `listen.mjs` closes a connection whose peer the host does not know. With no
   `--whois`, each entry has the subject of `--as`.
 - The loopback port of `listen.mjs` has no PROXY header check of its own. Each process on
-  the host that can dial the port can write a header. The key login of `sshd` still applies.
+  the host that can dial the port can write a header, and thus a name. With one file of
+  keys for each person ("The keys of one person"), that process also needs the private key
+  of the person to log in. It can still make the session record that the person entered.
+- The exit code in `SandboxLeft` is the code of `serve`. It is 0 when a person logged in and
+  then disconnected. It is 255 when the login failed or the connection broke, and 78 when
+  `serve` could not start `sshd`. It is not the code of a command that the person ran: one
+  connection can run more than one command.
 
 ## What is not here
 

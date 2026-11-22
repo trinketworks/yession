@@ -5,8 +5,11 @@
 # It starts `sshd -i`, which is the mode of sshd for one connection that is already open. No
 # daemon runs in the sandbox, and nothing in the sandbox listens on a port.
 #
-#   serve [AUTHORIZED_KEYS]
+#   serve [--for LOGIN] [AUTHORIZED_KEYS]
 #
+#   --for LOGIN       the person that the host named for this connection. When the directory
+#                     `authorized_keys.d` is beside this script, only the keys in the file
+#                     `authorized_keys.d/LOGIN` can log in. See "the keys of one person".
 #   AUTHORIZED_KEYS   the public keys that can log in. Default: $YESSION_SSH_AUTHORIZED_KEYS,
 #                     then the file `authorized_keys` beside this script.
 #   YESSION_SSH_STATE the directory for the host key of this user. Default:
@@ -30,8 +33,39 @@ has_entry() {
     return 1
 }
 
+login=
+if [ "${1:-}" = --for ]; then
+    if [ $# -lt 2 ]; then
+        say '--for needs a login.'
+        exit 64
+    fi
+    login=$2
+    shift 2
+fi
+
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 keys=${1:-${YESSION_SSH_AUTHORIZED_KEYS:-$here/authorized_keys}}
+
+# --- the keys of one person --------------------------------------------------------------
+#
+# With one file of keys, each key opens each sandbox under each name. The host names the
+# person (`listen.mjs --whois`) and gives the name here as `--for`. When the operator
+# supplies a directory `authorized_keys.d`, a name opens the sandbox only with a key from
+# its own file. A process that gives a false name to the host thus also needs the private
+# key of that person. A name with no file can not log in.
+if [ -n "$login" ] && [ -d "$here/authorized_keys.d" ]; then
+    case $login in
+        */* | .* | '')
+            say "the login '$login' is not a name of a file of keys."
+            exit 78
+            ;;
+    esac
+    keys=$here/authorized_keys.d/$login
+    if [ ! -r "$keys" ]; then
+        say "no keys for $login at $keys. The operator adds a file for each person who can enter."
+        exit 78
+    fi
+fi
 state=${YESSION_SSH_STATE:-${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/yession-ssh}
 
 # sshd finds the home and the shell of the user in the password database.
@@ -169,14 +203,21 @@ case ${PATH:-} in
 esac
 
 # -i   one connection, on the input and the output
-# -e   the log goes to the error output, which the host of the deployment keeps
+# -E   the log goes to a file, and then to the error output, which the host of the
+#      deployment keeps
 # -f /dev/null   no configuration file of the image changes what this script decides
 #
 # StrictModes is off for one reason: the authorized keys are a file of the operator on a
 # read-only mount, so its owner is not the user of the sandbox, and sshd in strict mode
 # refuses a key file that the user does not own. The mount is read-only, so the sandbox can
 # not add a key.
-exec "$sshd" -i -e -f /dev/null \
+#
+# The log goes to a file first (-E), and this script copies it to the error output when sshd
+# ends. This script reads the log to find how the connection ended, see below.
+log=$state/sshd.$$.log
+mkdir -p "$state"
+code=0
+"$sshd" -i -E "$log" -f /dev/null \
     -o "HostKey=$key" \
     -o "AuthorizedKeysFile=$keys" \
     -o "PermitRootLogin=$root_login" \
@@ -189,4 +230,29 @@ exec "$sshd" -i -e -f /dev/null \
     -o PrintMotd=no \
     -o PrintLastLog=no \
     ${set_path:+-o "SetEnv=PATH=$PATH"} \
-    -o 'Subsystem=sftp internal-sftp'
+    -o 'Subsystem=sftp internal-sftp' || code=$?
+
+# --- how the connection ended ------------------------------------------------------------
+#
+# `sshd -i` ends with the code 255 when the client disconnects, which is how each SSH
+# connection ends. The session records the code of this script as the code of the entry, so
+# each visit read as a failure. An ordinary end has two lines in the log: a login that sshd
+# accepted, and a disconnect that the client asked for (reason 11 of the SSH protocol). This
+# script gives the code 0 for that end. Each other end keeps the code of sshd: a login that
+# failed, a connection that broke.
+accepted=no
+asked=no
+if [ -r "$log" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s\n' "$line" >&2
+        case $line in
+            'Accepted '*) accepted=yes ;;
+            'Received disconnect from '*:11:*) asked=yes ;;
+        esac
+    done < "$log"
+    rm -f "$log"
+fi
+if [ "$code" = 255 ] && [ "$accepted" = yes ] && [ "$asked" = yes ]; then
+    exit 0
+fi
+exit "$code"

@@ -588,6 +588,79 @@ The session does not record the bytes of an entry (docs/GAPS.md).
 into SSH access to a sandbox. It has a follower that keeps one process for each announcement,
 which a deployment can use for other kinds too.
 
+#### Example: SSH into a sandbox across a tailnet
+
+This deployment runs on one host that is a node of a tailnet. A person runs
+`ssh -p 22005 root@host` and is in the sandbox. The person installs nothing. The three
+programs are those of [`examples/ssh`](../examples/ssh/), and its README has each detail.
+
+The operator offers one resource, and a repository selects it with `wants: [ remote-ssh ]`:
+
+```yaml
+# resources.yaml
+resources:
+  remote-ssh:
+    mount: { from: /var/lib/yession-ssh/share, at: /run/yession-ssh, mode: read }
+    capability: [ SETUID, SETGID, SYS_CHROOT ]   # only for a sandbox that runs as root
+```
+
+```
+/var/lib/yession-ssh/share/
+  serve                      # from examples/ssh
+  authorized_keys.d/
+    ada@example.com          # the public keys of one tailnet login
+```
+
+The Manager gives each session a door, and one service follows the registry stream:
+
+```sh
+YESSION_SESSION_DOORS=/var/lib/yession/doors yession-manager …
+
+node follow.mjs --manager unix:/var/lib/yession/manager.sock --as ssh-follow \
+  --kind sandbox --where state=running --where resources~remote-ssh \
+  --run /etc/yession-ssh/node
+```
+
+`/etc/yession-ssh/node` runs one time for each sandbox that selected the resource. It
+chooses a port and keeps a listener on it:
+
+```sh
+#!/bin/sh
+set -eu
+port=$(/etc/yession-ssh/port-for "$YESSION_SESSION_ID" "$YESSION_ANNOUNCEMENT_NAME")
+exec node listen.mjs --listen "127.0.0.1:$port" --proxy-protocol \
+  --whois 'tailscale whois --json' --via ssh \
+  -- /run/yession-ssh/serve --for '{subject}'
+```
+
+Root forwards a fixed set of tailnet ports to the same loopback ports, one time:
+
+```sh
+for port in $(seq 22000 22015); do
+  tailscale serve --bg --tcp="$port" --proxy-protocol=2 "tcp://127.0.0.1:$port"
+done
+```
+
+What each part gives:
+
+- **The tailnet** decides who can reach a port. `tailscale serve` sends the address of the
+  peer in a PROXY header.
+- **`listen.mjs`** reads the header and asks `tailscale whois` for the login. That login is
+  the subject that the session records. A peer that the tailnet does not know gets no entry.
+- **`serve --for`** lets that login in only with a key from its own file. The keys are on a
+  read-only mount, so the sandbox cannot add one.
+- **The session** records `sandboxEntered` and `sandboxLeft` for each connection, and its
+  page shows one line where a person entered and one where the person left.
+
+The limits of this example:
+
+- Each process on the host that can dial a loopback port can write a PROXY header, and thus
+  a login. It cannot log in without the private key of that login. It can make the session
+  record that the login entered. `tailscale serve` does not send the header to a UNIX socket,
+  so a socket in a private directory cannot replace the port.
+- The set of ports is the limit on the number of sandboxes that have SSH at one time.
+- A person must learn the port of a sandbox from the deployment.
+
 ### Addressing
 
 A deployment is either **loopback** (nothing set, everything on `127.0.0.1`) or **fronted**
