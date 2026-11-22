@@ -14,6 +14,7 @@ dotnet fsi tasks.fsx example serial        # Fable + esbuild
 dotnet fsi tasks.fsx example jumpstarter   # uv, and its own pytest suite
 dotnet fsi tasks.fsx example proxy         # plain Node; nothing to build, so it only parses it
 dotnet fsi tasks.fsx example nix-store     # shell scripts; nothing to build, so it only parses them
+dotnet fsi tasks.fsx example ssh           # Node and one shell script; it parses the script
 ```
 
 | | |
@@ -22,6 +23,7 @@ dotnet fsi tasks.fsx example nix-store     # shell scripts; nothing to build, so
 | [jumpstarter](jumpstarter/) | An MCP server that lends a [Jumpstarter](https://jumpstarter.dev) exporter to an agent. Shows a provider that owns a **service** and is written in the language of that service's SDK: Python here. |
 | [proxy](proxy/) | The other direction: a session does not talk to it. It feeds a deployment's **reverse proxy**. It renders the registry stream into the proxy's own config through a template. It also shows one complete Caddy composition, behind `tailscale serve`, that translates the Tailscale identity headers. |
 | [nix-store](nix-store/) | Not an integration but an operator's half of one. It has the `pin` that a session runs inside each sandbox holding a shared Nix store. It also has the `sweep` that collects the store without deleting the shell of any sandbox. |
+| [ssh](ssh/) | The registry stream again, for a different purpose: one process on the host for each sandbox that a session announces. With the door of the session and `sshd -i`, a person connects to a sandbox with a plain `ssh` client. Yession holds no SSH. |
 
 ## Why a provider rather than a feature
 

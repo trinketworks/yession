@@ -1,0 +1,90 @@
+#!/bin/sh
+# serve: one SSH connection, served on the input and the output of this script.
+#
+# This script runs IN a sandbox, as the command of one entry (`yession-enter ... -- serve`).
+# It starts `sshd -i`, which is the mode of sshd for one connection that is already open. No
+# daemon runs in the sandbox, and nothing in the sandbox listens on a port.
+#
+#   serve [AUTHORIZED_KEYS]
+#
+#   AUTHORIZED_KEYS   the public keys that can log in. Default: $YESSION_SSH_AUTHORIZED_KEYS,
+#                     then the file `authorized_keys` beside this script.
+#   YESSION_SSH_STATE the directory for the host key of this user. Default:
+#                     ${XDG_STATE_HOME:-$HOME/.local/state}/yession-ssh
+#   YESSION_SSH_SSHD  the sshd to run. Default: the first `sshd` on PATH, then /usr/sbin/sshd.
+#
+# The person logs in as the user that runs this script, which is the user of the sandbox.
+set -eu
+
+say() {
+    printf 'serve: %s\n' "$*" >&2
+}
+
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+keys=${1:-${YESSION_SSH_AUTHORIZED_KEYS:-$here/authorized_keys}}
+state=${YESSION_SSH_STATE:-${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/yession-ssh}
+
+# As root, sshd separates privileges: it needs a directory and a user that an image does not
+# have unless it installed the daemon to run it. As the user of the sandbox it needs neither.
+if [ "$(id -u)" = 0 ]; then
+    say 'this sandbox runs as root. Run the sandbox as a user that is not root.'
+    exit 78
+fi
+
+# sshd finds the home and the shell of the user in the password database.
+if ! id -un >/dev/null 2>&1; then
+    say "the user $(id -u) has no entry in the password database of this sandbox."
+    exit 78
+fi
+
+sshd=${YESSION_SSH_SSHD:-}
+if [ -z "$sshd" ]; then
+    sshd=$(command -v sshd 2>/dev/null || true)
+    if [ -z "$sshd" ] && [ -x /usr/sbin/sshd ]; then
+        sshd=/usr/sbin/sshd
+    fi
+fi
+if [ -z "$sshd" ] || [ ! -x "$sshd" ]; then
+    say 'sshd is not installed in this sandbox. Add the OpenSSH server to the image.'
+    exit 78
+fi
+
+if [ ! -r "$keys" ]; then
+    say "no authorized keys at $keys. The resource of the operator supplies this file."
+    exit 78
+fi
+
+# One host key for each user of each sandbox, made at the first entry. A sandbox that keeps
+# its home keeps its key, and the client of the person then knows the sandbox again.
+key=$state/ssh_host_ed25519_key
+if [ ! -f "$key" ]; then
+    mkdir -p "$state"
+    chmod 700 "$state"
+    if ! ssh-keygen -q -t ed25519 -N '' -f "$key.$$" </dev/null >&2; then
+        say 'ssh-keygen did not make a host key.'
+        exit 78
+    fi
+    # Two entries can start at the same time. The rename makes one of the two keys the key.
+    mv -f "$key.$$" "$key"
+    rm -f "$key.$$.pub"
+fi
+
+# -i   one connection, on the input and the output
+# -e   the log goes to the error output, which the host of the deployment keeps
+# -f /dev/null   no configuration file of the image changes what this script decides
+#
+# StrictModes is off for one reason: the authorized keys are a file of the operator on a
+# read-only mount, so its owner is not the user of the sandbox, and sshd in strict mode
+# refuses a key file that the user does not own. The mount is read-only, so the sandbox can
+# not add a key.
+exec "$sshd" -i -e -f /dev/null \
+    -o "HostKey=$key" \
+    -o "AuthorizedKeysFile=$keys" \
+    -o PubkeyAuthentication=yes \
+    -o PasswordAuthentication=no \
+    -o KbdInteractiveAuthentication=no \
+    -o UsePAM=no \
+    -o StrictModes=no \
+    -o PidFile=none \
+    -o PrintMotd=no \
+    -o 'Subsystem=sftp internal-sftp'
