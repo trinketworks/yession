@@ -1657,6 +1657,17 @@ module DockerSandbox =
             return arr.Length
         }
 
+    /// Whether the daemon has a network of that name. A test uses it to show that a
+    /// stopped session leaves no network.
+    let networkExists (name: string) : Async<bool> =
+        async {
+            let client = DK.create ()
+            try
+                do! client.getNetwork(name).inspect () |> Interop.awaitPromise |> Async.Ignore
+                return true
+            with _ -> return false
+        }
+
     /// Every mount this container gets, decided in ONE place: what the spec declared,
     /// what the operator granted (host binds, socket paths, named volumes), and — only
     /// where none of those already provides the workspace path — the sandbox's own
