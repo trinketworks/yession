@@ -206,15 +206,15 @@ module EntryWire =
 
     /// The bytes that a reader of frames holds between two chunks: the start of a frame whose
     /// end did not come yet.
-    type FrameReader = private { Held : byte [] }
+    type FrameReader = private { PartialFrame : byte [] }
 
     module FrameReader =
 
         /// A reader that holds nothing.
-        let empty : FrameReader = { Held = noBytes }
+        let empty : FrameReader = { PartialFrame = noBytes }
 
         /// How many bytes the reader holds.
-        let held (reader: FrameReader) : int = reader.Held.Length
+        let held (reader: FrameReader) : int = reader.PartialFrame.Length
 
         let private read (tag: byte) (payload: byte []) : Result<Frame, string> =
             if tag = inputTag then Ok (Frame.Input payload)
@@ -235,8 +235,8 @@ module EntryWire =
         /// for the next chunk. An error is a stream that is not this wire, and the stream is
         /// of no more use.
         let feed (reader: FrameReader) (chunk: byte []) : Result<Frame list * FrameReader, string> =
-            let all : byte [] = if reader.Held.Length = 0 then chunk else Array.append reader.Held chunk
-            let rest (from: int) : FrameReader = { Held = Array.sub all from (all.Length - from) }
+            let all : byte [] = if reader.PartialFrame.Length = 0 then chunk else Array.append reader.PartialFrame chunk
+            let rest (from: int) : FrameReader = { PartialFrame = Array.sub all from (all.Length - from) }
             let rec go (at: int) (frames: Frame list) : Result<Frame list * FrameReader, string> =
                 if all.Length - at < 5 then Ok (List.rev frames, rest at)
                 else
