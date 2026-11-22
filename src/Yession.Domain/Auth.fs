@@ -15,6 +15,34 @@ type CookieScheme =
     /// localhost`) or a deployment that fronts its sessions at an `http://` template.
     | AnyScheme
 
+/// The words of a sign-in that the page does in the background, with no navigation.
+///
+/// A session keeps its sign-ins for one launch. The page of a session that relaunched opens
+/// from the browser's own copy and finds itself signed out. A navigation to the sign-in loads
+/// the page a second time. In the background the page asks three times and stays where it is:
+///
+/// 1. The session, for the address of the Manager's authorize endpoint (`loginQuery`).
+/// 2. The Manager, at that address. The address asks for the code in the body of the answer
+///    and not in a redirect (`responseMode`), so the page can read it. This request goes from
+///    the session's origin to the Manager's, and the Manager answers it with the CORS headers
+///    for the one origin it registered for that session.
+/// 3. The session's callback, with that body as its query. The session sets the cookie.
+///
+/// A redirect chain cannot do this across origins: after a second cross-origin hop the
+/// browser sends `Origin: null`, and no honest CORS answer exists for that.
+module BackgroundSignIn =
+
+    /// The query that asks the session's login route for the authorize address as text.
+    let loginQuery = "mode=background"
+
+    /// The name and the value of the authorize parameter that asks for the code in the body.
+    let responseModeName = "response_mode"
+    let responseMode = "body"
+
+    /// The body of the Manager's answer, which is also the query of the callback.
+    let grant (encode: string -> string) (code: string) (state: string) : string =
+        sprintf "code=%s&state=%s" (encode code) (encode state)
+
 /// Pure HTTP authorization primitives: cookie and form parsing for the session's
 /// auth-gated surfaces. Deliberately small — the protocol itself (JWT, PKCE, discovery,
 /// the code exchange) lives in the standard `jose` / `openid-client` libraries; only the

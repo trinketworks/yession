@@ -104,6 +104,23 @@ let create
                 let stateSuffix = state |> Option.map (fun s -> "&state=" + urlEncode s) |> Option.defaultValue ""
                 redirect res (sprintf "%s?error=%s%s" redirectUri (urlEncode error) stateSuffix)
             | Ok request ->
+                // A page that signs in in the background asks for the code in the body
+                // (`BackgroundSignIn`). It asks from the session's origin, which is not this
+                // one, so the answer names the one origin that may read it: the origin of the
+                // redirect address that this Manager registered for the client. No other
+                // origin reads a code, and the code is of no use without the PKCE verifier
+                // that only the session holds.
+                let inBackground =
+                    queryParamOf req.url BackgroundSignIn.responseModeName = Some BackgroundSignIn.responseMode
+                let toThePage (status: int) (body: string) =
+                    res.writeHead (
+                        status,
+                        [ ResponseHeader.ContentType "text/plain"
+                          ResponseHeader.CacheControl "no-store"
+                          ResponseHeader.AccessControlAllowOrigin (requestUrl request.Client.RedirectUri).origin
+                          ResponseHeader.AccessControlAllowCredentials
+                          ResponseHeader.Vary "Origin" ])
+                    res.``end`` body
                 Async.StartImmediate (
                     async {
                         let context =
@@ -114,7 +131,10 @@ let create
                         match GrantedIdentity.ofOutcome outcome with
                         | None ->
                             let reason = match outcome with Denied r -> r | _ -> "denied"
-                            respond res 401 "text/plain" reason
+                            if inBackground then toThePage 401 reason else respond res 401 "text/plain" reason
+                        | Some identity when inBackground ->
+                            let code = codes.Issue request.Client request.Challenge identity
+                            toThePage 200 (BackgroundSignIn.grant urlEncode code request.State)
                         | Some identity ->
                             let code = codes.Issue request.Client request.Challenge identity
                             redirect

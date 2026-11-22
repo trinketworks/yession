@@ -581,6 +581,21 @@ let private opTests =
 
 let private nodePath : string = Node.Api.``process``.execPath
 
+/// A Manager under the localhost strategy and one launched session of it, for the cases of
+/// the sign-in in the background. Answers the session's address.
+let private backgroundHost (name: string) =
+    async {
+        let dataDir =
+            sprintf "tests/Yession.Tests/out/.data/%s-%d" name (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+        let! pm =
+            ProcessManager.create
+                { ProcessManager.Options.defaults dataDir nodePath [ "app/SessionMain.js" ] with
+                    Strategy = Some Strategy.localhost }
+        let record = pm.CreateSession name name |> expect
+        let! launched = pm.Launch record.SessionId
+        return pm, sprintf "http://127.0.0.1:%d" (launched |> expect)
+    }
+
 let private flowTests =
     testList "Composed authorization flow" [
         testCaseAsync "a real child session gates its data surfaces behind the manager's OIDC bounce; the shell stays ungated, revalidated, and names immutable assets" <|
@@ -711,6 +726,41 @@ let private flowTests =
                 let! me = OidcHttp.getWithJar opened.Jar (sessionUrl + "/me")
                 Expect.equal me.Status 200 "the identity it arrived with is the one it keeps"
 
+                do! pm.StopAll ()
+            }
+
+        // The sign-in a page does with no navigation (`BackgroundSignIn`): three requests
+        // that a page can read, and no redirect between two origins.
+        testCaseAsync "a browser that signs in in the background holds a good cookie, and followed no redirect to get it" <|
+            async {
+                let! pm, sessionUrl = backgroundHost "oidc-behind"
+                let! begun = TestHttp.get (sessionUrl + "/login?" + BackgroundSignIn.loginQuery)
+                let! granted = TestHttp.getNoStore [ "origin", sessionUrl ] begun.Body
+                let jar = OidcHttp.newJar ()
+                let! _ = OidcHttp.getWithJar jar (sessionUrl + "/callback?" + granted.Body)
+                let! me = OidcHttp.getWithJar jar (sessionUrl + "/me")
+                Expect.equal me.Status 200 "the cookie from the callback is good"
+                do! pm.StopAll ()
+            }
+
+        testCaseAsync "the Manager lets the origin of the session read a background sign-in, and names no other origin" <|
+            async {
+                let! pm, sessionUrl = backgroundHost "oidc-behind-origin"
+                let! begun = TestHttp.get (sessionUrl + "/login?" + BackgroundSignIn.loginQuery)
+                let! granted = TestHttp.getNoStore [ "origin", "https://elsewhere.example" ] begun.Body
+                Expect.equal
+                    (TestHttp.header "access-control-allow-origin" granted)
+                    (Some sessionUrl)
+                    "a page of a different origin cannot read the code"
+                do! pm.StopAll ()
+            }
+
+        testCaseAsync "a browser that is signed in already is told so when it asks to sign in in the background" <|
+            async {
+                let! pm, sessionUrl = backgroundHost "oidc-behind-held"
+                let! opened = OidcHttp.openSession sessionUrl
+                let! again = OidcHttp.getWithJar opened.Jar (sessionUrl + "/login?" + BackgroundSignIn.loginQuery)
+                Expect.equal again.Status 204 "nothing to do, and no address to ask"
                 do! pm.StopAll ()
             }
     ]

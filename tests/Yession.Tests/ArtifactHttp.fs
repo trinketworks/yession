@@ -41,6 +41,7 @@ let private stubAuth () : SessionAuth.Auth =
             | _ -> None
       BeginLogin = fun _ -> async { return None }
       HandleCallback = fun _ -> async { return Error (500, "not under test") }
+      Provider = (fun () -> None)
       CookieName = "who" }
 
 let private ada = [ "cookie", "who=ada" ]

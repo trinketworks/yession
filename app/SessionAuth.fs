@@ -23,6 +23,14 @@ open Fable.OpenIdClient
 open Yession.Oidc
 open Yession.Host.Interop
 
+/// How the browser carries a sign-in to the Manager and back.
+[<RequireQualifiedAccess>]
+type SignInBy =
+    /// The browser navigates, and each step is a redirect.
+    | Navigation
+    /// The page asks in the background and stays where it is (`BackgroundSignIn`).
+    | Background
+
 type Auth =
     { /// Complete the RP configuration after dynamic client registration: run OIDC
       /// discovery against the issuer and bind the client credentials + redirect URI.
@@ -34,10 +42,13 @@ type Auth =
       IdentityOf : IncomingMessage -> CookieIdentity option
       /// Start a login: mint state + PKCE verifier, return the authorize URL.
       /// None until `Configure` has completed.
-      BeginLogin : unit -> Async<string option>
+      BeginLogin : SignInBy -> Async<string option>
       /// Handle the callback request URL. Ok = the `Set-Cookie` value to send with the
       /// redirect back to `/`; Error = (status, message).
       HandleCallback : string -> Async<Result<string, int * string>>
+      /// The issuer this session signs people in at: the Manager's public address. `None`
+      /// until `Configure` has completed.
+      Provider : unit -> string option
       CookieName : string }
 
 /// `mount` is the path this session is served under (`""` at an origin root): the
@@ -50,6 +61,7 @@ let create (sessionId: SessionId) (mount: string) (scheme: CookieScheme) : Auth 
     let pendingLogins = PendingLogins (nowUnix)
     let cookies = CookieSessions (randomSecret)
     let mutable configuration : (Configuration * string) option = None
+    let mutable provider : string option = None
 
     let identityOf (req: IncomingMessage) : CookieIdentity option =
         Cookies.tryFind cookieName (headerOf req "cookie")
@@ -68,6 +80,7 @@ let create (sessionId: SessionId) (mount: string) (scheme: CookieScheme) : Auth 
                             (jsOptions<DiscoveryOptions> (fun o -> o.execute <- [| allowInsecureRequests |]))
                         |> Interop.awaitPromise
                     configuration <- Some (resolved, redirectUri)
+                    provider <- Some issuer
                     return Ok ()
                 with e ->
                     return Error (sprintf "OIDC discovery against %s failed: %s" issuer e.Message)
@@ -75,7 +88,7 @@ let create (sessionId: SessionId) (mount: string) (scheme: CookieScheme) : Auth 
       IsAuthenticated = identityOf >> Option.isSome
       IdentityOf = identityOf
       BeginLogin =
-        fun () ->
+        fun by ->
             async {
                 match configuration with
                 | None -> return None
@@ -92,7 +105,10 @@ let create (sessionId: SessionId) (mount: string) (scheme: CookieScheme) : Auth 
                                 p.scope <- "openid"
                                 p.state <- state
                                 p.code_challenge <- challenge
-                                p.code_challenge_method <- "S256"))
+                                p.code_challenge_method <- "S256"
+                                match by with
+                                | SignInBy.Navigation -> ()
+                                | SignInBy.Background -> p.response_mode <- BackgroundSignIn.responseMode))
                     return Some url.href
             }
       HandleCallback =
@@ -141,4 +157,5 @@ let create (sessionId: SessionId) (mount: string) (scheme: CookieScheme) : Auth 
                         with e ->
                             return Error (401, sprintf "authorization failed: %s" e.Message)
             }
+      Provider = (fun () -> provider)
       CookieName = cookieName }

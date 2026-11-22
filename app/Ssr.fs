@@ -166,7 +166,8 @@ let renderModel (model: ClientModel) : string =
 /// write (`View.fs`): a policy cannot allow an attribute by nonce. `script-src` has no
 /// `'unsafe-inline'` and no `'unsafe-eval'`. `frame-ancestors 'none'` is the one framing
 /// defence, so no response carries `X-Frame-Options` beside it. WebRTC is outside any policy;
-/// the event streams and `fetch` are `connect-src 'self'`.
+/// the event streams and `fetch` are `connect-src 'self'`, plus the Manager's origin on the
+/// session shell.
 [<RequireQualifiedAccess>]
 module ContentPolicy =
 
@@ -179,7 +180,10 @@ module ContentPolicy =
     [<RequireQualifiedAccess>]
     type Document =
         | ManagerDocument
-        | SessionShell
+        /// With the origin of the Manager's authorize endpoint, once the session knows it.
+        /// The page asks that one address when it signs in in the background
+        /// (`BackgroundSignIn`), so the policy lets `fetch` reach that origin and no other.
+        | SessionShell of provider: string option
 
     /// The policy for `document` that admits the inline script carrying `nonce`, as the header
     /// that says it.
@@ -187,7 +191,12 @@ module ContentPolicy =
         let scripts =
             match document with
             | Document.ManagerDocument -> sprintf "script-src 'self' 'nonce-%s'" nonce
-            | Document.SessionShell -> sprintf "script-src 'self' 'nonce-%s' 'wasm-unsafe-eval'" nonce
+            | Document.SessionShell _ -> sprintf "script-src 'self' 'nonce-%s' 'wasm-unsafe-eval'" nonce
+        let connects =
+            match document with
+            | Document.SessionShell (Some provider) -> sprintf "connect-src 'self' %s" provider
+            | Document.SessionShell None
+            | Document.ManagerDocument -> "connect-src 'self'"
         ResponseHeader.ContentSecurityPolicy (
             String.concat "; " [
                 "default-src 'self'"
@@ -195,7 +204,7 @@ module ContentPolicy =
                 "style-src 'self' 'unsafe-inline'"
                 "img-src 'self' data: blob:"
                 "font-src 'self'"
-                "connect-src 'self'"
+                connects
                 "worker-src 'self'"
                 "frame-ancestors 'none'"
                 "base-uri 'self'"

@@ -866,6 +866,36 @@ let private persisted (key: string) (minted: string) : string =
 
 let private urlEncode (value: string) : string = JS.encodeURIComponent value
 
+// --- The sign-in in the background ---------------------------------------------------------
+
+/// Sign this browser in to the session with no navigation (`BackgroundSignIn` says the three
+/// requests and why they are three). `true` when the browser holds a good cookie at the end.
+///
+/// `false` is each other end: the session has no provider, the Manager wants a person to do
+/// something this page cannot do for them, a proxy between the two refused the request, or
+/// the network failed. The caller then navigates to the sign-in, as the page did before, so
+/// this path can only remove a page load and cannot lose a sign-in.
+///
+/// The second request carries credentials, because a deployment can put its Manager behind
+/// a proxy that knows the person by a cookie.
+let private signInInTheBackground () : Async<bool> =
+    async {
+        let fresh = Fetch.Types.RequestProperties.Cache Fetch.Types.RequestCache.Nostore
+        let! begun = answered [ fresh ] (Page.href Login + "?" + Access.BackgroundSignIn.loginQuery)
+        if begun.Status = 204 then return true
+        elif not begun.Ok then return false
+        else
+            let! granted =
+                answered
+                    [ fresh
+                      Fetch.Types.RequestProperties.Credentials Fetch.Types.RequestCredentials.Include ]
+                    begun.Body
+            if not granted.Ok then return false
+            else
+                let! back = answered [ fresh ] (Page.href Callback + "?" + granted.Body)
+                return back.Ok
+    }
+
 // --- Claude connection panel round-trips (Plan 08) --------------------------------------
 // Thin fetches against the session's /claude* routes; the same-origin auth cookie rides
 // each one, and IS the whole identity — the browser asserts nothing about who it is.
@@ -1428,8 +1458,22 @@ let private start () =
                 | Error detail -> return Error (Client.ChannelFault.describe (Client.ChannelUnreachable detail))
                 | Ok answer -> return Ok answer
             }
-        let! reached =
+        let reach () =
             Client.SessionLifecycle.reach (Client.SessionLifecycle.supervision jsRandom) ask waitBeforeRetry (fun msg -> dispatchRef msg)
+        let! first = reach ()
+        // A session keeps its sign-ins for one launch, so the page of a session that
+        // relaunched is signed out here. It signs in again in the background and asks
+        // again, and the person sees one page and no second load. Where that does not
+        // work, the page leaves for the sign-in as it did before.
+        let! reached =
+            async {
+                match first with
+                | Some ProbeUnauthorized ->
+                    match! signInInTheBackground () with
+                    | true -> return! reach ()
+                    | false -> return first
+                | other -> return other
+            }
         match reached with
         | None -> ()
         | Some ProbeUnauthorized -> renavigateTo (Page.href Login)
