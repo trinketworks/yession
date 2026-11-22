@@ -76,6 +76,84 @@ module ControlWire =
         { Encode = fun standings -> Encode.object [ "standings", standings |> List.map standing.Encode |> Encode.list ]
           Decode = Decode.field "standings" (Decode.list standing.Decode) }
 
+    /// A JSON object, and nothing else. The decoder refuses an array, a bare value and a `null`.
+    let private anObject : Decoder<JsonValue> = Decode.keys |> Decode.andThen (fun _ -> Decode.value)
+
+    /// One announcement. `data` is a JSON object on the wire and text in the type: the
+    /// Manager keeps the text and does not read it. Text that is not an object cannot come
+    /// in through `Decode`, and `Encode` writes an empty object for it.
+    let announcement : Codec<Announcement> =
+        { Encode =
+            fun (a: Announcement) ->
+                Encode.object
+                    [ "kind", Encode.string a.Kind
+                      "name", Encode.string a.Name
+                      "data",
+                      (match Decode.fromString anObject a.Data with
+                       | Ok value -> value
+                       | Error _ -> Encode.object []) ]
+          Decode =
+            Decode.object (fun get ->
+                { Announcement.Kind = get.Required.Field "kind" Decode.string
+                  Announcement.Name = get.Required.Field "name" Decode.string
+                  Announcement.Data = get.Required.Field "data" anObject |> Encode.toString 0 }) }
+
+    /// What a session tells the hosts of the deployment, reported child→Manager: the whole
+    /// set each time, so an empty list clears it. The Manager checks the limits
+    /// (`Announcement.check`), stores the set for the launch and relays it in the registry
+    /// stream. The Manager does not read the data of an announcement.
+    let sessionAnnounceReport : Codec<Announcement list> =
+        { Encode =
+            fun announcements ->
+                Encode.object [ "announcements", announcements |> List.map announcement.Encode |> Encode.list ]
+          Decode = Decode.field "announcements" (Decode.list announcement.Decode) }
+
+    /// The `sandbox` kind: one sandbox that a session has. The session writes it and a
+    /// follower of the registry stream reads it. The Manager relays it and knows nothing
+    /// about it.
+    type SandboxAnnouncement =
+        { /// The sandbox, as `SandboxRef.render` writes it: `default`, `owner/repo:dev`.
+          Sandbox : string
+          /// False for a sandbox that the session has and that does not run now.
+          Running : bool
+          /// The backend that the sandbox runs on.
+          Backend : string
+          /// The names of the operator's resources that the sandbox holds.
+          Resources : string list }
+
+    module SandboxAnnouncement =
+
+        let kind = "sandbox"
+
+        let private running = "running"
+        let private notRunning = "not-running"
+
+        /// The announcement of one sandbox. The name of the announcement is the sandbox.
+        /// A field that a later build adds goes into `data` here, and a reader that does
+        /// not know the field ignores it.
+        let announce (sandbox: SandboxAnnouncement) : Announcement =
+            { Announcement.Kind = kind
+              Announcement.Name = sandbox.Sandbox
+              Announcement.Data =
+                Encode.object
+                    [ "state", Encode.string (if sandbox.Running then running else notRunning)
+                      "backend", Encode.string sandbox.Backend
+                      "resources", sandbox.Resources |> List.map Encode.string |> Encode.list ]
+                |> Encode.toString 0 }
+
+        /// Read one announcement as a sandbox. `None` for a different kind. A state that
+        /// this build does not know is a sandbox that does not run.
+        let read (announcement: Announcement) : Result<SandboxAnnouncement, string> option =
+            if announcement.Kind <> kind then None
+            else
+                let data =
+                    Decode.object (fun get ->
+                        { Sandbox = announcement.Name
+                          Running = get.Required.Field "state" Decode.string = running
+                          Backend = get.Required.Field "backend" Decode.string
+                          Resources = get.Required.Field "resources" (Decode.list Decode.string) })
+                Some (Decode.fromString data announcement.Data)
+
     /// A Manager→Session notification (the reverse leg, Manager-pushed): the payload of the
     /// `/control/notifications` SSE stream. Tagged by `kind` like every other control shape,
     /// so new cases extend it without breaking older decoders. See `SessionNotification`.
@@ -621,7 +699,11 @@ module ControlWire =
           /// well as in the Manager: a consumer that meets a session from a bundle older
           /// than the field reads `None` and says nothing, rather than a placeholder it
           /// would then have to explain.
-          Build : string option }
+          Build : string option
+          /// What the session tells the hosts of the deployment (`Announcement`). Empty for a
+          /// session that announced nothing, and for a frame from a build older than the
+          /// field.
+          Announcements : Announcement list }
 
     /// A `/sessions/stream` SSE frame: the FULL current set of Running sessions.
     /// Snapshot semantics, never deltas — a consumer applies each frame wholesale, so
@@ -638,14 +720,18 @@ module ControlWire =
                       yield "pid", Encode.int e.Pid
                       match e.Build with
                       | Some build -> yield "build", Encode.string build
-                      | None -> () ]
+                      | None -> ()
+                      yield "announcements", e.Announcements |> List.map announcement.Encode |> Encode.list ]
           Decode =
             Decode.object (fun get ->
                 { SessionRegistryEntry.Id = get.Required.Field "id" Codec.sessionId.Decode
                   SessionRegistryEntry.Name = get.Required.Field "name" Decode.string
                   SessionRegistryEntry.Port = get.Required.Field "port" Decode.int
                   SessionRegistryEntry.Pid = get.Required.Field "pid" Decode.int
-                  SessionRegistryEntry.Build = get.Optional.Field "build" Decode.string }) }
+                  SessionRegistryEntry.Build = get.Optional.Field "build" Decode.string
+                  SessionRegistryEntry.Announcements =
+                    get.Optional.Field "announcements" (Decode.list announcement.Decode)
+                    |> Option.defaultValue [] }) }
 
     let sessionRegistryFrame : Codec<SessionRegistryFrame> =
         { Encode =

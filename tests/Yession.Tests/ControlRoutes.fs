@@ -37,6 +37,7 @@ let private ordinal (route: ControlRoute) : int =
     | ControlRoute.McpServers -> 20
     | ControlRoute.ConnectionStatuses -> 21
     | ControlRoute.SetConnectionOffline -> 22
+    | ControlRoute.Announce -> 23
 
 let private otherMethod (route: ControlRoute) : string =
     match ControlRoute.method route with
@@ -49,7 +50,7 @@ let tests =
         testCase "the list the parser reads names every route exactly once" <| fun () ->
             Expect.equal
                 (ControlRoute.all |> List.map ordinal |> List.sort)
-                [ 0 .. 22 ]
+                [ 0 .. 23 ]
                 "a route missing from `all` is a route the Manager answers 404 to, whatever the client sends"
 
         testCase "every control route parses back from its own method and path" <| fun () ->

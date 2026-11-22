@@ -140,6 +140,23 @@ let statusReporter (endpoint: ControlEndpoint) (secret: string) : Standing list 
             with _ -> return ()
         }
 
+/// Tell the Manager what this session announces to the hosts of the deployment: the whole
+/// set each time. Best-effort, as `statusReporter` is: a set that does not arrive leaves the
+/// registry stream with the last one.
+let announceReporter (endpoint: ControlEndpoint) (secret: string) : Announcement list -> Async<unit> =
+    fun announcements ->
+        async {
+            try
+                let! _ =
+                    postJson
+                        endpoint ControlRoute.Announce
+                        secret
+                        (ControlWire.toString ControlWire.sessionAnnounceReport announcements)
+                    |> Interop.awaitPromise
+                return ()
+            with _ -> return ()
+        }
+
 /// The same call, keeping the status beside the body rather than rejecting on it.
 let private postJsonReply (endpoint: ControlEndpoint) (route: ControlRoute) (secret: string) (body: string) : JS.Promise<{| status: int; body: string |}> =
     post endpoint route secret body

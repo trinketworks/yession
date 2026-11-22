@@ -1078,6 +1078,7 @@ let private startControlServerWith
                         (fun _ _ -> async { return Ok () })
                         (fun _ _ -> async { return Ok () })
                         (fun _ _ -> async { return Ok () })
+                        (fun _ _ -> async { return Ok () })
                         (fun _ _ -> Subscription.none)
                         (fun _ _ _ -> Subscription.none)
                         dummyRegister

@@ -11,6 +11,9 @@ module Yession.Host.Control
 // Routes (secret in the `x-yession-control` header). Each is a `ControlRoute` case, which owns
 // the method and path both ends use; what each carries and answers is below:
 //   Name             { name }         -> "ok" (updates the registry display name)
+//   Announce         { announcements } -> "ok" (replaces what this launch tells the hosts of
+//        the deployment through the registry stream. The Manager checks the limits and
+//        relays the set. It does not read the data of an announcement.)
 //   RegisterClient   { redirectUri }  -> { clientId, clientSecret, issuer }
 //   SetSecret        { scope, name, value } -> secret metadata (never a value)
 //   ListSecrets      { scope }        -> { secrets: metadata[] } (never values)
@@ -156,6 +159,9 @@ let tryHandle
     // What the session says about itself, for the roster. Keyed like the two above; the
     // Manager stores the standings and never learns what they are about.
     (reportStatus: string -> Standing list -> Async<Result<unit, string>>)
+    // What the session tells the hosts of the deployment. Keyed like the three above. The
+    // Manager stores the set and relays it, and does not read the data.
+    (reportAnnouncements: string -> Announcement list -> Async<Result<unit, string>>)
     (subscribeNotifications: string -> Subscribe<SessionNotification>)
     // Plan 17: keyed by session (what it resolves to) AND by launch secret (whose sink it
     // is), because the retained set outlives a launch and the sink must not.
@@ -252,6 +258,16 @@ let tryHandle
                     Async.StartImmediate (
                         async {
                             match! reportActivity launchSecret busy with
+                            | Ok () -> respond res 200 "ok"
+                            | Error e -> respond res 400 e
+                        }))
+            | Some ControlRoute.Announce ->
+                // The same shape as the status report. The secret names the session, and
+                // the body is the whole set, which replaces the last one.
+                decodeAnd (ControlWire.fromString ControlWire.sessionAnnounceReport) (fun announcements ->
+                    Async.StartImmediate (
+                        async {
+                            match! reportAnnouncements launchSecret announcements with
                             | Ok () -> respond res 200 "ok"
                             | Error e -> respond res 400 e
                         }))
