@@ -676,8 +676,9 @@ The limits of this example:
   record that the login entered. `tailscale serve` does not send the header to a UNIX socket,
   so a socket in a private directory cannot replace the port.
 - The set of ports is the limit on the number of sandboxes that have SSH at one time.
-- The page shows the address in its list of places, which a session with one place does
-  not have.
+- The page shows the address in its sidebar, under the environment. A person unfolds the
+  sandbox there and copies the address. The address is the text that the deployment gave
+  with `--address`, so the host name in it is the choice of the deployment.
 
 ### Addressing
 

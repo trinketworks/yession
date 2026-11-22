@@ -201,8 +201,8 @@ node listen.mjs --listen "127.0.0.1:$port" --proxy-protocol \
 `port-for` is a rule of the deployment that gives each sandbox a port.
 
 A person must know the port. `listen.mjs --address "ssh -p $port root@host"` tells the
-session, and the page of the session shows that text on the sandbox, in its list of places
-(`yession-enter --offer`). The address goes from the page when the listener stops.
+session, and the page of the session shows that text on the sandbox, in its sidebar under
+the environment (`yession-enter --offer`). A person unfolds the sandbox and copies the text. The address goes from the page when the listener stops.
 
 ## Who entered
 
