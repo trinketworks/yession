@@ -79,19 +79,19 @@ type KeptSignIn =
       /// Unix seconds. The sign-in is not honoured at or after this time.
       ExpiresAt : int64 }
 
-/// Where a session keeps its sign-ins between launches, as two functions. `Read` runs once,
-/// when the session starts. `Write` receives every sign-in that is still good, each time one
+/// Where a session keeps its sign-ins between launches, as two functions. `Kept` runs once,
+/// when the session starts. `Keep` receives every sign-in that is still good, each time one
 /// is added.
 type SignInStore =
-    { Read : unit -> KeptSignIn list
-      Write : KeptSignIn list -> unit }
+    { Kept : unit -> KeptSignIn list
+      Keep : KeptSignIn list -> unit }
 
 [<RequireQualifiedAccess>]
 module SignInStore =
 
     /// Keeps nothing: every sign-in ends with the process. For a session that has no data
     /// directory of its own to write to, and for tests that do not relaunch.
-    let none : SignInStore = { Read = (fun () -> []); Write = ignore }
+    let none : SignInStore = { Kept = (fun () -> []); Keep = ignore }
 
     let private attributionCodec : Codec<PeerAttribution> =
         { Encode =
@@ -151,7 +151,7 @@ type CookieSessions
 
     let mutable sessions : Map<string, KeptSignIn> =
         let now = nowUnix ()
-        store.Read ()
+        store.Kept ()
         |> List.filter (good now)
         |> List.map (fun kept -> kept.Digest, kept)
         |> Map.ofList
@@ -166,7 +166,7 @@ type CookieSessions
         // The sign-ins that ran out leave here, so neither the map nor the file grows with
         // every browser that ever signed in.
         sessions <- sessions |> Map.filter (fun _ existing -> good now existing) |> Map.add kept.Digest kept
-        store.Write (sessions |> Map.toList |> List.map snd)
+        store.Keep (sessions |> Map.toList |> List.map snd)
         value
 
     member _.IdentityOf (value: string) : CookieIdentity option =

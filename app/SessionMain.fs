@@ -486,7 +486,7 @@ let private managerOrigin =
 let private signIns : SignInStore =
     let path = sprintf "%s/sign-ins.json" dataDir
     let said (what: string) = eprintfn "[session %s] sign-ins: %s" (SessionId.value sessionId) what
-    { Read =
+    { Kept =
         fun () ->
             if not (Fs.exists path) then []
             else
@@ -497,7 +497,7 @@ let private signIns : SignInStore =
                     []
       // A write that fails loses nothing now: this process still holds the sign-in. The
       // browser signs in once more after the next launch, which is what happened before.
-      Write =
+      Keep =
         fun kept ->
             try Fs.writeTextAtomic path (SignInStore.toJson kept)
             with error -> said (sprintf "%s was not written: %s" path error.Message) }

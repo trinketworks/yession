@@ -313,12 +313,12 @@ let private storeTests =
             let mutable now = 1_000L
             let mutable file : string option = None
             let store : Yession.Session.SignInStore =
-                { Read =
+                { Kept =
                     fun () ->
                         file
                         |> Option.map (Yession.Session.SignInStore.ofJson >> expect)
                         |> Option.defaultValue []
-                  Write = fun kept -> file <- Some (Yession.Session.SignInStore.toJson kept) }
+                  Keep = fun kept -> file <- Some (Yession.Session.SignInStore.toJson kept) }
             // The value backwards: a digest that does not contain what it is a digest of.
             let digest (value: string) = value |> Seq.rev |> Seq.map string |> String.concat ""
             let launch (values: string list) =
