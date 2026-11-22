@@ -1940,6 +1940,111 @@ module private Stream =
         let _, answer, _ = threw reason messages
         answer
 
+// -----------------------------------------------------------------------------
+// A turn that outlives its credential. The Manager renews an OAuth token on its own clock
+// and the provider then refuses the token before it. A session lost a 69-minute turn that
+// way: "Failed to authenticate: OAuth token revoked", 55 seconds after a renewal.
+// -----------------------------------------------------------------------------
+
+module private Renewal =
+
+    /// The message the CLI writes in place of the model's when a request fails, as its own
+    /// transcript of that session holds it.
+    let failedRequest (error: string) (conversation: string) : Message =
+        jsOptions<AssistantMessage> (fun m ->
+            m.``type`` <- "assistant"
+            m.error <- Some error
+            m.session_id <- conversation)
+        :> Message
+
+    let refusedAfter (messages: Message list) : string option =
+        messages
+        |> List.fold (fun state message -> Turn.step state message |> fst) Turn.empty
+        |> Turn.refused
+
+    let spending (input: int) : AgentUsage = { Turn.empty.Usage with InputTokens = input }
+
+    let first = "CLAUDE_CODE_OAUTH_TOKEN", "the token the turn started on"
+    let renewed = "CLAUDE_CODE_OAUTH_TOKEN", "the token after the renewal"
+
+    /// A turn whose first attempt the provider refuses in conversation `c1`, and whose later
+    /// attempts answer as `later` says. Answers what each attempt was run on.
+    let run
+        (later: Yession.Host.Agent.Attempt)
+        (renew: (string * string) option)
+        (stopped: bool)
+        : Async<(Result<string, string> * AgentUsage) * ((string * string) option * string option) list> =
+        async {
+            let attempts = ResizeArray<(string * string) option * string option> ()
+            let attempt credential conversation =
+                async {
+                    attempts.Add (credential, conversation)
+                    if attempts.Count = 1 then
+                        return
+                            { Yession.Host.Agent.Attempt.Answer = Error "Failed to authenticate"
+                              Usage = spending 10
+                              Refused = Some "c1" }
+                    else return later
+                }
+            let! answer =
+                Yession.Host.Agent.renewedOnce attempt (fun () -> async { return renew }) (fun () -> stopped) (Some first)
+            return answer, List.ofSeq attempts
+        }
+
+    let completes : Yession.Host.Agent.Attempt =
+        { Answer = Ok "done"; Usage = spending 5; Refused = None }
+
+    let refusedAgain : Yession.Host.Agent.Attempt =
+        { Answer = Error "Failed to authenticate"; Usage = spending 5; Refused = Some "c1" }
+
+let private renewalTests =
+    testList "A turn that outlives its credential" [
+        testCase "a request the provider refused for its credential names the conversation to continue" <| fun () ->
+            Expect.equal
+                (Renewal.refusedAfter [ Stream.text "working"; Renewal.failedRequest "authentication_failed" "c1" ])
+                (Some "c1")
+                "the conversation of the refused request"
+
+        testCase "a request that failed for a different cause names no conversation to continue" <| fun () ->
+            Expect.equal
+                (Renewal.refusedAfter [ Renewal.failedRequest "rate_limit" "c1" ])
+                None
+                "only a refused credential is a reason to continue on a new one"
+
+        testCaseAsync "a refused turn continues its conversation on the renewed credential" <| async {
+            let! _, attempts = Renewal.run Renewal.completes (Some Renewal.renewed) false
+            Expect.equal
+                attempts
+                [ Some Renewal.first, None; Some Renewal.renewed, Some "c1" ]
+                "the second attempt runs on the new credential, in the same conversation"
+        }
+
+        testCaseAsync "a refused turn that continues answers with what the second attempt said" <| async {
+            let! (answer, _), _ = Renewal.run Renewal.completes (Some Renewal.renewed) false
+            Expect.equal answer (Ok "done") "the turn completes"
+        }
+
+        testCaseAsync "a turn that continues reports the spend of the two attempts together" <| async {
+            let! (_, usage), _ = Renewal.run Renewal.completes (Some Renewal.renewed) false
+            Expect.equal usage.InputTokens 15 "each attempt is a query of its own"
+        }
+
+        testCaseAsync "a refused turn does not run again on the credential that was refused" <| async {
+            let! _, attempts = Renewal.run Renewal.completes (Some Renewal.first) false
+            Expect.equal (List.length attempts) 1 "the same credential gets the same refusal"
+        }
+
+        testCaseAsync "a turn refused on the renewed credential too is not continued a second time" <| async {
+            let! _, attempts = Renewal.run Renewal.refusedAgain (Some Renewal.renewed) false
+            Expect.equal (List.length attempts) 2 "one continuation, then the person hears of it"
+        }
+
+        testCaseAsync "a refused turn that somebody interrupted does not run again" <| async {
+            let! _, attempts = Renewal.run Renewal.completes (Some Renewal.renewed) true
+            Expect.equal (List.length attempts) 1 "an interrupted turn stays stopped"
+        }
+    ]
+
 let private deltaTests =
     testList "What one delta is" [
         // The tag, and never which field holds a string. `typeof e.delta.thinking ===
@@ -2785,6 +2890,7 @@ let tests =
         schemaTests
         argumentTests
         failureReasonTests
+        renewalTests
         sessionTimeTests
         resumeTests
         wakeTests

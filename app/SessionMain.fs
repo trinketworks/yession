@@ -1058,7 +1058,13 @@ let private listModels : ListModels = modelCatalogue.List
 
 /// Per-turn credential dispatch (Plan 08): the turn runs on `resolveCredential`'s answer
 /// for its actor. With no credential at all the turn fails gracefully, saying so.
-let private dispatching (inner: (string * string) option -> RunAgent) : RunAgent =
+///
+/// `inner` also takes the way to ask for that credential again. The Manager renews an OAuth
+/// token on its own clock, and the provider then refuses the token before it, so a long turn
+/// can outlive the credential it started on. The runner asks again when that occurs
+/// (`Agent.renewedOnce`). A resolve that fails answers `None`: the turn then ends on the
+/// refusal it already has.
+let private dispatching (inner: (unit -> Async<(string * string) option>) -> (string * string) option -> RunAgent) : RunAgent =
     fun context capabilities signal onChunk ->
         async {
             // The command verbs are rebound to THIS turn's actor here (Plan 14, Plan 15
@@ -1091,8 +1097,15 @@ let private dispatching (inner: (string * string) option -> RunAgent) : RunAgent
             // said nothing failed into a silent red item — which by then meant every such
             // failure was printed twice, once as the body and once joined to it.
             let fail (reason: string) = AgentFailed (reason, None)
-            match! resolveCredential (CredentialFor.Person context.TurnActor) with
-            | Ok credential -> return! inner credential context capabilities signal onChunk
+            let actor = CredentialFor.Person context.TurnActor
+            let renew () =
+                async {
+                    match! resolveCredential actor with
+                    | Ok credential -> return credential
+                    | Error _ -> return None
+                }
+            match! resolveCredential actor with
+            | Ok credential -> return! inner renew credential context capabilities signal onChunk
             | Error reason -> return fail reason
         }
 
@@ -1100,7 +1113,7 @@ let private dispatching (inner: (string * string) option -> RunAgent) : RunAgent
 /// the env var the dispatcher resolved (or `env` for the ambient fallback) — the
 /// deterministic cross-process proof that per-actor credential dispatch worked, same
 /// convention as `diagnostic`/`usage-probe`.
-let private credentialProbe (credential: (string * string) option) : RunAgent =
+let private credentialProbe (_renew: unit -> Async<(string * string) option>) (credential: (string * string) option) : RunAgent =
     fun _ _ _ onChunk ->
         async {
             let body =
@@ -1165,7 +1178,7 @@ let private runAgent () : RunAgent option =
     | "credential-probe" ->
         if envCreds || connectedSomewhere () then Some (dispatching credentialProbe) else None
     | _ ->
-        if envCreds || connectedSomewhere () then Some (dispatching (Agent.runWith (resourceProfile |> Option.defaultValue ProfileFile.empty).Agent dataDir agentBackend)) else None
+        if envCreds || connectedSomewhere () then Some (dispatching (Agent.runRenewing (resourceProfile |> Option.defaultValue ProfileFile.empty).Agent dataDir agentBackend)) else None
 
 /// Both ways stdin can end, and the resume that makes either happen: a paused stdin never
 /// reaches either end, so the handlers are only ever called because of it.
