@@ -399,6 +399,30 @@ type SandboxProcessHandle =
 /// Start one process: what to run, and where each chunk of its output goes.
 type SandboxSpawn = SandboxExec -> (OutputStream * string -> unit) -> Async<Result<SandboxProcessHandle, string>>
 
+/// A live sandboxed process whose three streams carry bytes.
+///
+/// `SandboxProcessHandle` carries text: a backend decodes each output as UTF-8, and encodes
+/// each input as UTF-8. That changes the bytes of a protocol that is not text. This handle
+/// changes no byte, in each direction.
+///
+/// The field names are not those of `SandboxProcessHandle`, so that a record expression
+/// names one of the two types.
+type SandboxByteHandle =
+    { /// Bytes for the input of the process. The call does not wait, and a backend holds
+      /// in memory what the process did not read yet.
+      WriteBytes : byte [] -> unit
+      /// No more input comes.
+      CloseInput : unit -> unit
+      /// End the process now, as `SandboxProcessHandle.Kill` does.
+      Kill : unit -> unit
+      /// Resolves one time, when the process ends.
+      Exited : Async<SandboxRun> }
+
+/// Start one process whose streams carry bytes: what to run, and where each chunk of its
+/// output goes. A chunk is the bytes of one read. A chunk can end in the middle of a
+/// character.
+type SandboxSpawnBytes = SandboxExec -> (OutputStream * byte [] -> unit) -> Async<Result<SandboxByteHandle, string>>
+
 /// Telling a process the kernel killed for memory from one killed for any other reason.
 ///
 /// Both end in SIGKILL, exit 137. What tells them apart is the memory cgroup the sandbox's
@@ -668,6 +692,9 @@ type Sandbox =
       Ref : string
       /// Spawn a process, streaming its output through the callback in order.
       Spawn : SandboxSpawn
+      /// Spawn a process whose streams carry bytes, unchanged. The entry, the working
+      /// directory and the environment are those of `Spawn`.
+      SpawnBytes : SandboxSpawnBytes
       /// Spawn a process on a pty of the given size, streaming everything the terminal
       /// emits through the callback (Plan 13, stage 2c).
       ///

@@ -298,6 +298,7 @@ let private unknownSandbox (name: SandboxRef) (existing: SandboxRef list) : stri
 let private missing (reason: string) : SessionEnvironment.SessionEnvironment =
     { Ensure = fun _ _ -> async { return EnvironmentUnavailable reason }
       Spawn = fun _ _ -> async { return Error reason }
+      SpawnBytes = fun _ _ -> async { return Error reason }
       SpawnPty = fun _ _ _ _ -> async { return Error reason }
       Stop = fun () -> async { return () }
       CurrentRef = fun () -> None

@@ -169,6 +169,7 @@ let scriptedSandbox
                                           Kill = ignore
                                           Exited = script exec onChunk }
                             }
+                      SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
                       SpawnPty = None
                       Shell = None
                       Dispose = fun () -> async { recorder.Disposed <- recorder.Disposed + 1 } }
@@ -212,6 +213,62 @@ let runInSandbox
         | Ok handle ->
             let! run = handle.Exited
             return run, out.ToString (), err.ToString ()
+    }
+
+/// Bytes that a text stream changes: each byte value one time, then characters that are two,
+/// three and four bytes in UTF-8, then three bytes that are not UTF-8.
+let bytesThatTextChanges : byte [] =
+    Array.concat [ Array.init 256 byte; System.Text.Encoding.UTF8.GetBytes "é€😀"; [| 0xFFuy; 0xFEuy; 0x80uy |] ]
+
+/// Run one command in a sandbox with bytes on its streams (`Sandbox.SpawnBytes`). The pieces
+/// go to its input in order, and then the input closes. The answer is its end and the bytes
+/// of each output.
+let runBytesInSandbox
+    (sandbox: Sandbox)
+    (executable: string)
+    (args: string list)
+    (pieces: byte [] list)
+    : Async<SandboxRun * byte list * byte list> =
+    async {
+        let out = ResizeArray<byte> ()
+        let err = ResizeArray<byte> ()
+        let! spawned =
+            sandbox.SpawnBytes
+                { Executable = executable
+                  Arguments = args
+                  Env = Map.empty
+                  WorkingDirectory = None
+                  Via = Entrypoint }
+                (fun (stream, bytes) ->
+                    match stream with
+                    | Stdout -> out.AddRange bytes
+                    | Stderr -> err.AddRange bytes)
+        match spawned with
+        | Error reason -> return SandboxRunFailed reason, [], []
+        | Ok handle ->
+            for piece in pieces do
+                handle.WriteBytes piece
+            handle.CloseInput ()
+            let! run = handle.Exited
+            return run, List.ofSeq out, List.ofSeq err
+    }
+
+/// The case that each backend runs for its byte spawn: `head` reads the bytes of
+/// `bytesThatTextChanges` from its input, in two pieces that cut a character, and writes
+/// them to its output. `head` ends after that count of bytes, so the case does not need the
+/// end of the input to reach the process.
+let bytesGoThroughUnchanged (sandbox: Sandbox) : Async<unit> =
+    async {
+        let sent = bytesThatTextChanges
+        // 256 byte values, the two bytes of the first character, and one byte of the second.
+        let cut = 259
+        let! run, out, _ =
+            runBytesInSandbox
+                sandbox
+                "/bin/sh"
+                [ "-c"; sprintf "head -c %d" sent.Length ]
+                [ sent.[.. cut - 1]; sent.[cut ..] ]
+        Expect.equal (run, out) (SandboxExited 0, List.ofArray sent) "each byte came back as it went in"
     }
 
 // --- Who holds a terminal's keyboard ------------------------------------------------------

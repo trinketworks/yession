@@ -1253,6 +1253,10 @@ module private Children =
     let private writeStdin (child: ChildProcess) (text: string) : unit =
         try child.stdin.write text |> ignore with _ -> ()
 
+    /// The bytes as they are. `writeStdin` encodes its text as UTF-8.
+    let private writeStdinBytes (child: ChildProcess) (bytes: byte []) : unit =
+        try (ChildProcessStreams.stdin child).writeByteArray bytes |> ignore with _ -> ()
+
     let private endStdin (child: ChildProcess) : unit =
         try child.stdin.``end`` () with _ -> ()
 
@@ -1275,10 +1279,17 @@ module private Children =
         let mutable live : (int * (unit -> unit)) list = []
         let mutable next = 0
 
-        member _.Spawn
-            (executable: string, arguments: string list, cwd: string, env: Map<string, string>)
-            (onChunk: OutputStream * string -> unit)
-            : SandboxProcessHandle =
+        /// Start one child, keep it in the registry, and report its end. `read` attaches
+        /// the readers of its two outputs, as text or as bytes. The text spawn and the byte
+        /// spawn are this one start, so the kill, the registry and the end are the same for
+        /// the two.
+        let start
+            (executable: string)
+            (arguments: string list)
+            (cwd: string)
+            (env: Map<string, string>)
+            (read: ChildProcess -> unit)
+            : ChildProcess * Async<SandboxRun> =
             let child = spawnChild executable arguments cwd env
             // A write to a child that has gone can be an EPIPE on its input, and Node ends a
             // process for an `error` that nobody hears. The end of the child is what reports
@@ -1289,15 +1300,39 @@ module private Children =
             live <- (id, fun () -> killTree child) :: live
             let forget () = live <- live |> List.filter (fun (other, _) -> other <> id)
             let ended = OneShot<SandboxRun> ()
-            Readables.text (ChildProcessStreams.stdout child) (fun text -> onChunk (Stdout, text))
-            Readables.text (ChildProcessStreams.stderr child) (fun text -> onChunk (Stderr, text))
+            read child
             ChildProcessStreams.onError child (fun error -> forget (); ended.Settle (SandboxRunFailed (StreamError.describe error)))
             // -1, "the OS gave us none", for a child a signal took.
             ChildProcessStreams.onClose child (fun code -> forget (); ended.Settle (SandboxExited (code |> Option.defaultValue -1)))
+            child, ended.Await
+
+        member _.Spawn
+            (executable: string, arguments: string list, cwd: string, env: Map<string, string>)
+            (onChunk: OutputStream * string -> unit)
+            : SandboxProcessHandle =
+            let child, exited =
+                start executable arguments cwd env (fun child ->
+                    Readables.text (ChildProcessStreams.stdout child) (fun text -> onChunk (Stdout, text))
+                    Readables.text (ChildProcessStreams.stderr child) (fun text -> onChunk (Stderr, text)))
             { WriteStdin = writeStdin child
               CloseStdin = fun () -> endStdin child
               Kill = fun () -> killTree child
-              Exited = ended.Await }
+              Exited = exited }
+
+        /// `Spawn`, with bytes on the three streams. Nothing decodes an output, and nothing
+        /// encodes the input.
+        member _.SpawnBytes
+            (executable: string, arguments: string list, cwd: string, env: Map<string, string>)
+            (onChunk: OutputStream * byte [] -> unit)
+            : SandboxByteHandle =
+            let child, exited =
+                start executable arguments cwd env (fun child ->
+                    Readables.bytes (ChildProcessStreams.stdout child) (fun bytes -> onChunk (Stdout, bytes))
+                    Readables.bytes (ChildProcessStreams.stderr child) (fun bytes -> onChunk (Stderr, bytes)))
+            { WriteBytes = writeStdinBytes child
+              CloseInput = fun () -> endStdin child
+              Kill = fun () -> killTree child
+              Exited = exited }
 
         member _.KillAll () =
             live |> List.iter (fun (_, kill) -> kill ())
@@ -1486,19 +1521,25 @@ module HostSandbox =
             async {
                 policy.WorkingDirectory |> Option.iter Fs.ensureDir
                 let children = Children.Registry ()
+                // What a process of this sandbox starts as: the argv behind the entry, the
+                // directory and the environment. The text spawn and the byte spawn start
+                // the same process.
+                let started (exec: SandboxExec) =
+                    let env = mergeEnv (environment Map.empty policy) exec.Env
+                    let cwd =
+                        SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
+                        |> Option.toObj
+                    let executable, arguments = entered host exec
+                    executable, arguments, cwd, env
                 let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
-                    async {
-                        let env = mergeEnv (environment Map.empty policy) exec.Env
-                        let cwd =
-                            SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
-                            |> Option.toObj
-                        let executable, arguments = entered host exec
-                        return Ok (children.Spawn (executable, arguments, cwd, env) onChunk)
-                    }
+                    async { return Ok (children.Spawn (started exec) onChunk) }
+                let spawnBytes (exec: SandboxExec) (onChunk: OutputStream * byte [] -> unit) =
+                    async { return Ok (children.SpawnBytes (started exec) onChunk) }
                 return
                     Ok
                         { Ref = "host"
                           Spawn = spawn
+                          SpawnBytes = spawnBytes
                           SpawnPty =
                             if not (Pty.available ()) then None
                             else
@@ -2201,49 +2242,58 @@ module DockerSandbox =
                             |> Map.toList
                             |> List.map (fun (k, v) -> sprintf "%s=%s" k v)
                             |> List.toArray
+                        // One exec with pipes: the stream that carries its input, its two
+                        // outputs, and its end. Nothing reads the two outputs here: the text
+                        // spawn and the byte spawn each attach their own readers. An output
+                        // holds its chunks until a reader attaches.
+                        let piped (exec: SandboxExec) =
+                            async {
+                                let execOpts =
+                                    jsOptions<DK.ExecOptions> (fun o ->
+                                        o.Cmd <- List.toArray (argvFor entrypoint work exec)
+                                        o.AttachStdin <- true
+                                        o.AttachStdout <- true
+                                        o.AttachStderr <- true
+                                        o.Env <- execEnv exec
+                                        // Resolved against the container's own working
+                                        // directory, which is what it was CREATED with — so
+                                        // an exec naming nothing lands exactly where it
+                                        // always did, and one naming a relative directory
+                                        // means the same thing here as it does everywhere
+                                        // else in the session.
+                                        execWorkingDir exec |> Option.iter (fun w -> o.WorkingDir <- w))
+                                let! started = container.exec execOpts |> Interop.awaitPromise
+                                // Hijack the connection so stdin rides the same socket the
+                                // output is demuxed from.
+                                let! stream =
+                                    started.start (
+                                        jsOptions<DK.ExecStartOptions> (fun o ->
+                                            o.hijack <- true
+                                            o.stdin <- true)
+                                    )
+                                    |> Interop.awaitPromise
+                                let stdout = DK.createPassThrough ()
+                                let stderr = DK.createPassThrough ()
+                                client.modem.demuxStream (stream, stdout, stderr)
+                                let ended = OneShot<SandboxRun> ()
+                                let finish () =
+                                    Async.StartImmediate (
+                                        async {
+                                            try
+                                                let! inspect = started.inspect () |> Interop.awaitPromise
+                                                ended.Settle (SandboxExited (exitCodeOf inspect))
+                                            with ex -> ended.Settle (SandboxRunFailed ex.Message)
+                                        })
+                                stream.onEnd finish
+                                stream.onError (fun error -> ended.Settle (SandboxRunFailed (StreamError.describe error)))
+                                return stream, stdout, stderr, ended.Await
+                            }
                         let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
                             async {
                                 try
-                                    let execOpts =
-                                        jsOptions<DK.ExecOptions> (fun o ->
-                                            o.Cmd <- List.toArray (argvFor entrypoint work exec)
-                                            o.AttachStdin <- true
-                                            o.AttachStdout <- true
-                                            o.AttachStderr <- true
-                                            o.Env <- execEnv exec
-                                            // Resolved against the container's own working
-                                            // directory, which is what it was CREATED with — so
-                                            // an exec naming nothing lands exactly where it
-                                            // always did, and one naming a relative directory
-                                            // means the same thing here as it does everywhere
-                                            // else in the session.
-                                            execWorkingDir exec |> Option.iter (fun w -> o.WorkingDir <- w))
-                                    let! started = container.exec execOpts |> Interop.awaitPromise
-                                    // Hijack the connection so stdin rides the same socket the
-                                    // output is demuxed from.
-                                    let! stream =
-                                        started.start (
-                                            jsOptions<DK.ExecStartOptions> (fun o ->
-                                                o.hijack <- true
-                                                o.stdin <- true)
-                                        )
-                                        |> Interop.awaitPromise
-                                    let stdout = DK.createPassThrough ()
-                                    let stderr = DK.createPassThrough ()
-                                    client.modem.demuxStream (stream, stdout, stderr)
+                                    let! stream, stdout, stderr, exited = piped exec
                                     Readables.text stdout (fun text -> onChunk (Stdout, text))
                                     Readables.text stderr (fun text -> onChunk (Stderr, text))
-                                    let ended = OneShot<SandboxRun> ()
-                                    let finish () =
-                                        Async.StartImmediate (
-                                            async {
-                                                try
-                                                    let! inspect = started.inspect () |> Interop.awaitPromise
-                                                    ended.Settle (SandboxExited (exitCodeOf inspect))
-                                                with ex -> ended.Settle (SandboxRunFailed ex.Message)
-                                            })
-                                    stream.onEnd finish
-                                    stream.onError (fun error -> ended.Settle (SandboxRunFailed (StreamError.describe error)))
                                     return
                                         Ok
                                             { WriteStdin = fun text -> stream.write text |> ignore
@@ -2253,7 +2303,26 @@ module DockerSandbox =
                                               // caller's Kill can do (the container itself dies
                                               // with Dispose).
                                               Kill = fun () -> stream.``end`` ()
-                                              Exited = ended.Await }
+                                              Exited = exited }
+                                with ex -> return Error ex.Message
+                            }
+                        // The same exec, with bytes on the three streams. Docker frames the
+                        // two outputs on one connection, and `demuxStream` gives each frame
+                        // to its output as bytes. Nothing here decodes them.
+                        let spawnBytes (exec: SandboxExec) (onChunk: OutputStream * byte [] -> unit) =
+                            async {
+                                try
+                                    let! stream, stdout, stderr, exited = piped exec
+                                    Readables.bytes stdout (fun bytes -> onChunk (Stdout, bytes))
+                                    Readables.bytes stderr (fun bytes -> onChunk (Stderr, bytes))
+                                    return
+                                        Ok
+                                            { WriteBytes = fun bytes -> stream.writeBytes bytes |> ignore
+                                              CloseInput = fun () -> stream.``end`` ()
+                                              // As for the text spawn: the Engine API cannot
+                                              // signal the process of an exec.
+                                              Kill = fun () -> stream.``end`` ()
+                                              Exited = exited }
                                 with ex -> return Error ex.Message
                             }
 
@@ -2369,6 +2438,9 @@ module DockerSandbox =
                                           (fun () -> memoryEvents spawn)
                                           (eprintfn "[sandbox %s] %s" name)
                                           spawn
+                                  // No memory watch here. A caller of the byte spawn gets
+                                  // exit 137 for a process that the kernel killed for memory.
+                                  SpawnBytes = spawnBytes
                                   SpawnPty = Some spawnPty
                                   Shell = Some shell
                                   Dispose = dispose }
@@ -3273,10 +3345,23 @@ module SrtSandbox =
                                         return Ok (children.Spawn (executable, arguments, cwd, env) onChunk)
                                 with ex -> return Error ex.Message
                             }
+                        // srt confines by the argv that it writes. The pipes of the process
+                        // are those of the child, so the bytes go through unchanged.
+                        let spawnBytes (exec: SandboxExec) (onChunk: OutputStream * byte [] -> unit) =
+                            async {
+                                try
+                                    match! confined exec with
+                                    | Error reason -> return Error reason
+                                    | Ok ([], _, _) -> return Error "srt returned an empty argv"
+                                    | Ok (executable :: arguments, cwd, env) ->
+                                        return Ok (children.SpawnBytes (executable, arguments, cwd, env) onChunk)
+                                with ex -> return Error ex.Message
+                            }
                         return
                             Ok
                                 { Ref = "srt"
                                   Spawn = spawn
+                                  SpawnBytes = spawnBytes
                                   // srt confines by REWRITING the argv, so a pty costs little
                                   // extra here: wrap as `spawn` does, then open the pty on what
                                   // came back. The confinement is in the argv, not in how the
@@ -3458,11 +3543,27 @@ module SeatbeltSandbox =
             environmentFor proxy policy exec
         )
 
+    /// `requestFor`, for a command whose streams carry bytes: the same process, as a
+    /// `RunBytes`.
+    let bytesRequestFor
+        (proxy: SeatbeltProxy)
+        (policy: SandboxPolicy)
+        (host: HostSpec)
+        (id: int)
+        (exec: SandboxExec)
+        : Supervisor.Wire.Request =
+        match requestFor proxy policy host id exec with
+        | Supervisor.Wire.Run (id, executable, arguments, directory, environment) ->
+            Supervisor.Wire.RunBytes (id, executable, arguments, directory, environment)
+        | other -> other
+
     /// One sandbox's supervisor, as the session holds it.
     type private Supervised =
         { /// Start a command. The first argument makes the request from the id that the
           /// command gets.
           Run : (int -> Supervisor.Wire.Request) -> (OutputStream * string -> unit) -> Result<SandboxProcessHandle, string>
+          /// Start a command whose streams carry bytes. The request is a `RunBytes`.
+          RunBytes : (int -> Supervisor.Wire.Request) -> (OutputStream * byte [] -> unit) -> Result<SandboxByteHandle, string>
           /// Close the supervisor's input, which is the stop, and wait until it has gone.
           Stop : unit -> Async<unit> }
 
@@ -3554,6 +3655,9 @@ module SeatbeltSandbox =
         : Async<Result<Supervised, string>> =
         Async.FromContinuations (fun (cont, _, _) ->
             let commands = Collections.Generic.Dictionary<int, (OutputStream * string -> unit) * OneShot<SandboxRun>> ()
+            // The readers of the commands that carry bytes. Such a command is also in
+            // `commands`, which holds its end, with a reader of text that gets nothing.
+            let byteReaders = Collections.Generic.Dictionary<int, OutputStream * byte [] -> unit> ()
             let mutable nextId = 0
             let mutable gone : string option = None
             let mutable stopping = false
@@ -3579,6 +3683,7 @@ module SeatbeltSandbox =
                 match commands.TryGetValue id with
                 | true, (_, ended) ->
                     commands.Remove id |> ignore
+                    byteReaders.Remove id |> ignore
                     ended.Settle run
                 | _ -> ()
             // Nothing goes to the supervisor after its input closed: Node ends a process for
@@ -3588,28 +3693,50 @@ module SeatbeltSandbox =
                 | Some handle, None when not stopping -> handle.WriteStdin (line + "\n")
                 | _ -> ()
             let send (request: Supervisor.Wire.Request) = write (Supervisor.Wire.request request)
+            // Give a command its id, keep its reader of text and its end, and send its
+            // request. The answer is the id and the end.
+            let admit
+                (toRequest: int -> Supervisor.Wire.Request)
+                (onChunk: OutputStream * string -> unit)
+                : Result<int * OneShot<SandboxRun>, string> =
+                match gone with
+                | _ when stopping -> Error "this sandbox stops, and starts no command"
+                | Some reason -> Error reason
+                | None ->
+                    let id = nextId + 1
+                    match lineFor (toRequest id) with
+                    | Error refusal -> Error refusal
+                    | Ok line ->
+                        nextId <- id
+                        let ended = OneShot<SandboxRun> ()
+                        commands.[id] <- (onChunk, ended)
+                        write line
+                        Ok (id, ended)
             let supervised : Supervised =
                 { Run =
                     fun toRequest onChunk ->
-                        match gone with
-                        | _ when stopping -> Error "this sandbox stops, and starts no command"
-                        | Some reason -> Error reason
-                        | None ->
-                            let id = nextId + 1
-                            match lineFor (toRequest id) with
-                            | Error refusal -> Error refusal
-                            | Ok line ->
-                                nextId <- id
-                                let ended = OneShot<SandboxRun> ()
-                                commands.[id] <- (onChunk, ended)
-                                write line
-                                Ok
-                                    { // A large input goes as requests of a bounded size, so
-                                      // no line of the wire is as long as the input.
-                                      WriteStdin = fun text -> Supervisor.Wire.inputs id text |> List.iter send
-                                      CloseStdin = fun () -> send (Supervisor.Wire.EndInput id)
-                                      Kill = fun () -> send (Supervisor.Wire.Cancel id)
-                                      Exited = ended.Await }
+                        admit toRequest onChunk
+                        |> Result.map (fun (id, ended) ->
+                            { // A large input goes as requests of a bounded size, so
+                              // no line of the wire is as long as the input.
+                              WriteStdin = fun text -> Supervisor.Wire.inputs id text |> List.iter send
+                              CloseStdin = fun () -> send (Supervisor.Wire.EndInput id)
+                              Kill = fun () -> send (Supervisor.Wire.Cancel id)
+                              Exited = ended.Await })
+                  RunBytes =
+                    fun toRequest onChunk ->
+                        match admit toRequest ignore with
+                        | Error refusal -> Error refusal
+                        | Ok (id, ended) ->
+                            // The supervisor says nothing about a command before it reads
+                            // the request, and it reads no request in this turn. So the
+                            // reader is here before the first output.
+                            byteReaders.[id] <- onChunk
+                            Ok
+                                { WriteBytes = fun bytes -> Supervisor.Wire.inputsOfBytes id bytes |> List.iter send
+                                  CloseInput = fun () -> send (Supervisor.Wire.EndInput id)
+                                  Kill = fun () -> send (Supervisor.Wire.Cancel id)
+                                  Exited = ended.Await }
                   Stop =
                     fun () ->
                         async {
@@ -3655,6 +3782,16 @@ module SeatbeltSandbox =
                         match stream with
                         | Supervisor.Wire.Out -> onChunk (Stdout, text)
                         | Supervisor.Wire.Err -> onChunk (Stderr, text)
+                    | _ -> ()
+                | Some (Supervisor.Wire.OutputBytes (id, stream, base64)) ->
+                    match byteReaders.TryGetValue id with
+                    | true, onChunk ->
+                        // A line that is not base64 is not an output of this protocol.
+                        let bytes = try Some (Convert.FromBase64String base64) with _ -> None
+                        match bytes, stream with
+                        | Some bytes, Supervisor.Wire.Out -> onChunk (Stdout, bytes)
+                        | Some bytes, Supervisor.Wire.Err -> onChunk (Stderr, bytes)
+                        | None, _ -> ()
                     | _ -> ()
                 // -1, "the OS gave us none", for a command a signal took: what the registry
                 // of children answered when each command was a child of this process.
@@ -3797,10 +3934,20 @@ module SeatbeltSandbox =
                                             return supervised.Run (fun id -> requestFor egress.Proxy policy host id exec) onChunk
                                         with ex -> return Error ex.Message
                                     }
+                                // The supervisor holds the pipes of the command, and one line
+                                // of JSON carries each message. So base64 carries the bytes
+                                // on that wire (`Supervisor.Wire.RunBytes`).
+                                let spawnBytes (exec: SandboxExec) (onChunk: OutputStream * byte [] -> unit) =
+                                    async {
+                                        try
+                                            return supervised.RunBytes (fun id -> bytesRequestFor egress.Proxy policy host id exec) onChunk
+                                        with ex -> return Error ex.Message
+                                    }
                                 return
                                     Ok
                                         { Ref = "seatbelt"
                                           Spawn = spawn
+                                          SpawnBytes = spawnBytes
                                           SpawnPty = None
                                           Shell = None
                                           // The stop is the end of the supervisor's input: the

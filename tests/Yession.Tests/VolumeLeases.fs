@@ -68,6 +68,7 @@ type private Scripted () =
                                     ending.Settle (SandboxExited 137)
                               Exited = ending.Wait }
                 }
+          SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
           SpawnPty = None
           Shell = None
           Dispose = fun () -> async { this.Disposed <- true } }

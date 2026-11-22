@@ -164,6 +164,8 @@ let all =
         // no signal. The second starts real processes, and its entry runs with no profile.
         Tag.needs "the Seatbelt supervisor" [] (fun () -> Supervisor.tests)
         Tag.needs "the Seatbelt supervisor, with real processes" [ Tag.Ports ] (fun () -> Supervisor.processTests)
+        // The spawn that carries bytes, on the host backend. It starts real processes.
+        Tag.needs "The byte spawn on the host" [ Tag.Ports ] (fun () -> ByteSpawn.tests)
         Tag.needs "Volume leases" [] (fun () -> VolumeLeases.tests)
         Tag.needs "seeded files" [] (fun () -> SeededFiles.tests)
         Tag.needs "Properties" [] (fun () -> Properties.tests)

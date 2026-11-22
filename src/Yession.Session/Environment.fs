@@ -26,6 +26,10 @@ module SessionEnvironment =
           /// The environment is still the one gate — a spawn with nothing running is an
           /// error.
           Spawn : SandboxExec -> (OutputStream * string -> unit) -> Async<Result<SandboxProcessHandle, string>>
+          /// Spawn a process in the running environment, with bytes on its three streams
+          /// (`Sandbox.SpawnBytes`). As for `Spawn`, a spawn with nothing running is an
+          /// error, and the caller records what happened.
+          SpawnBytes : SandboxSpawnBytes
           /// Spawn on a pseudo-terminal, when the running backend has one (Plan 13, stage
           /// 2d). `Error` rather than an option, because whether a pty is available is a
           /// property of the RUNNING sandbox and there may not be one yet — a caller has to
@@ -55,6 +59,7 @@ module SessionEnvironment =
     let unavailable : SessionEnvironment =
         { Ensure = fun _ _ -> async { return EnvironmentUnavailable "this session has no environment" }
           Spawn = fun _ _ -> async { return Error "this session has no environment" }
+          SpawnBytes = fun _ _ -> async { return Error "this session has no environment" }
           SpawnPty = fun _ _ _ _ -> async { return Error "this session has no environment" }
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> None
@@ -386,6 +391,13 @@ module SessionEnvironment =
                 | Some (sandbox, _) -> return! sandbox.Spawn exec onChunk
             }
 
+        let spawnBytes (exec: SandboxExec) (onChunk: OutputStream * byte [] -> unit) =
+            async {
+                match running with
+                | None -> return Error "no running environment"
+                | Some (sandbox, _) -> return! sandbox.SpawnBytes exec onChunk
+            }
+
         let spawnPty (exec: SandboxExec) (cols: int) (rows: int) (onOutput: string -> unit) =
             async {
                 match running with
@@ -398,6 +410,7 @@ module SessionEnvironment =
 
         { Ensure = ensure
           Spawn = spawn
+          SpawnBytes = spawnBytes
           SpawnPty = spawnPty
           Stop = stop
           CurrentRef = fun () -> running |> Option.map (fun (sandbox, _) -> sandbox.Ref)

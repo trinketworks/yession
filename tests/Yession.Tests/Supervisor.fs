@@ -45,7 +45,7 @@ let private genEnvironment : Gen<Map<string, string>> =
 
 let private genRequest : Gen<Wire.Request> =
     gen {
-        let! kind = Gen.int32 (Range.linear 0 4)
+        let! kind = Gen.int32 (Range.linear 0 6)
         let! id = genId
         let! text = genText
         let! words = Gen.list (Range.linear 0 3) genText
@@ -58,12 +58,15 @@ let private genRequest : Gen<Wire.Request> =
             | 1 -> Wire.Run (id, "/bin/sh", words, directory, environment)
             | 2 -> Wire.Input (id, text)
             | 3 -> Wire.EndInput id
+            | 4 -> Wire.RunBytes (id, "/bin/sh", words, directory, environment)
+            // The wire carries base64 as text, and reads back each text.
+            | 5 -> Wire.InputBytes (id, text)
             | _ -> Wire.Cancel id
     }
 
 let private genEvent : Gen<Wire.Event> =
     gen {
-        let! kind = Gen.int32 (Range.linear 0 7)
+        let! kind = Gen.int32 (Range.linear 0 8)
         let! id = genId
         let! text = genText
         let! stream = Gen.item [ Wire.Out; Wire.Err ]
@@ -77,6 +80,7 @@ let private genEvent : Gen<Wire.Event> =
             | 3 -> Wire.Ended (id, code)
             | 4 -> Wire.NotStarted (id, text)
             | 5 -> Wire.Stopped pids
+            | 6 -> Wire.OutputBytes (id, stream, text)
             | _ -> Wire.NotStopped text
     }
 
@@ -149,6 +153,8 @@ type private Record =
     { Said : ResizeArray<Wire.Event>
       Left : ResizeArray<int>
       Started : ResizeArray<string * string list * string option * Map<string, string>>
+      /// What the streams of each started command carry, in the order of `Started`.
+      Carried : ResizeArray<Carries>
       /// What each started command was told, by its place in `Started`.
       Told : ResizeArray<int * string>
       Stop : StopRecord
@@ -170,6 +176,7 @@ let private supervisorPorts (parent: int) (answer: Answer) (nesting: int -> Nest
         { Said = ResizeArray<Wire.Event> ()
           Left = ResizeArray<int> ()
           Started = ResizeArray<string * string list * string option * Map<string, string>> ()
+          Carried = ResizeArray<Carries> ()
           Told = ResizeArray<int * string> ()
           Stop = stopRecord
           Warned = ResizeArray<string> ()
@@ -179,10 +186,11 @@ let private supervisorPorts (parent: int) (answer: Answer) (nesting: int -> Nest
       Uid = 501
       MaySignal = fun _ -> answer
       Start =
-        fun executable arguments directory environment onOutput onLeaderEnded onEnd ->
+        fun carries executable arguments directory environment onOutput onLeaderEnded onEnd ->
             if executable = "/throws" then failwith "spawn ENOTDIR"
             let place = record.Started.Count
             record.Started.Add ((executable, arguments, directory, environment))
+            record.Carried.Add carries
             record.Handlers.Add ((onOutput, onEnd))
             record.LeaderEnded.Add onLeaderEnded
             { Write = fun text -> record.Told.Add ((place, "input " + text))
@@ -508,6 +516,56 @@ let tests =
             onOutput (Wire.Err, "warned")
             Expect.equal (List.ofSeq record.Said) [ Wire.Ready; Wire.Output (7, Wire.Err, "warned") ] "with the stream that it came from"
 
+        testCase "a command of bytes starts as the same process, and its port carries bytes" <| fun () ->
+            let supervisor, record = readySupervisor ()
+            supervisor.Take (Wire.RunBytes (1, "/bin/tool", [ "one" ], Some "/work", Map.ofList [ "ONLY", "this" ]))
+            supervisor.Take (aCommand 2)
+            Expect.equal
+                (List.ofSeq record.Started |> List.head, List.ofSeq record.Carried)
+                (("/bin/tool", [ "one" ], Some "/work", Map.ofList [ "ONLY", "this" ]), [ Carries.Bytes; Carries.Text ])
+                "what the session gave it, and bytes only for the command that asked"
+
+        testCase "the output of a command of bytes goes to the session as bytes" <| fun () ->
+            let supervisor, record = readySupervisor ()
+            supervisor.Take (Wire.RunBytes (7, "/bin/tool", [], None, Map.empty))
+            let onOutput, _ = record.Handlers.[0]
+            onOutput (Wire.Out, "AAEC")
+            Expect.equal (List.ofSeq record.Said) [ Wire.Ready; Wire.OutputBytes (7, Wire.Out, "AAEC") ] "base64, under the name for bytes"
+
+        testCase "an input goes only to a command that carries its type" <| fun () ->
+            let supervisor, record = readySupervisor ()
+            supervisor.Take (Wire.RunBytes (1, "/bin/tool", [], None, Map.empty))
+            supervisor.Take (aCommand 2)
+            supervisor.Take (Wire.Input (1, "text for bytes"))
+            supervisor.Take (Wire.InputBytes (2, "AAEC"))
+            supervisor.Take (Wire.InputBytes (1, "AAEC"))
+            supervisor.Take (Wire.Input (2, "typed"))
+            Expect.equal (List.ofSeq record.Told) [ 0, "input AAEC"; 1, "input typed" ] "the two that named the right type"
+
+        testCase "a command of bytes that ended carries text again under its id" <| fun () ->
+            let supervisor, record = readySupervisor ()
+            supervisor.Take (Wire.RunBytes (1, "/bin/tool", [], None, Map.empty))
+            let _, onEnd = record.Handlers.[0]
+            onEnd (CommandEnd.Ended (Some 0))
+            supervisor.Take (aCommand 1)
+            supervisor.Take (Wire.Input (1, "typed"))
+            Expect.equal (List.ofSeq record.Told) [ 1, "input typed" ] "the id is that of a command of text now"
+
+        testCase "bytes for an input go as pieces that read back as the bytes" <| fun () ->
+            for count in [ 0; 1; Wire.inputBytesLimit - 1; Wire.inputBytesLimit; Wire.inputBytesLimit + 1; 3 * Wire.inputBytesLimit + 5 ] do
+                let bytes = Array.init count (fun at -> byte (at * 7))
+                let pieces =
+                    Wire.inputsOfBytes 4 bytes
+                    |> List.map (fun request ->
+                        match request with
+                        | Wire.InputBytes (4, base64) -> base64
+                        | other -> failwithf "not an input of bytes for command 4: %A" other)
+                Expect.isTrue (pieces |> List.forall (fun piece -> piece.Length <= Wire.inputLimit)) "no piece is longer than an input of text"
+                Expect.equal
+                    (pieces |> List.collect (fun piece -> List.ofArray (System.Convert.FromBase64String piece)))
+                    (List.ofArray bytes)
+                    (sprintf "%d bytes, in order" count)
+
         testCase "the end of a command goes to the session with its code" <| fun () ->
             let supervisor, record = readySupervisor ()
             supervisor.Take (aCommand 7)
@@ -764,6 +822,23 @@ let processTests =
                 ((printedBy 1 Wire.Out said).Trim (), (printedBy 1 Wire.Err said).Trim ())
                 ("to out", "to err")
                 "each stream under its own name"
+        })
+
+        testCaseAsync "a command of bytes gives back each byte that it got" (async {
+            let supervisor, said = supervisorOfRealCommands ()
+            supervisor.Take (Wire.RunBytes (1, node, [ "-e"; "process.stdin.pipe(process.stdout)" ], None, Map.empty))
+            Wire.inputsOfBytes 1 bytesThatTextChanges |> List.iter supervisor.Take
+            supervisor.Take (Wire.EndInput 1)
+            let! ended = settledWithin 20000 (fun () -> Option.isSome (endOf 1 said))
+            if not ended then failwithf "the command did not end, and the supervisor said: %A" (List.ofSeq said)
+            let back =
+                said
+                |> Seq.collect (fun event ->
+                    match event with
+                    | Wire.OutputBytes (1, Wire.Out, base64) -> List.ofArray (System.Convert.FromBase64String base64)
+                    | _ -> [])
+                |> List.ofSeq
+            Expect.equal back (List.ofArray bytesThatTextChanges) "each byte value, and bytes that are not text"
         })
 
         testCaseAsync "a command gives back the code that it ended with" (async {
