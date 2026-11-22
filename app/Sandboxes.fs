@@ -1618,20 +1618,33 @@ module DockerSandbox =
             match existing with
             | Some gateway -> return Ok gateway
             | None ->
-                try
-                    do!
-                        client.createNetwork (
-                            jsOptions<DK.NetworkCreateOptions> (fun o ->
-                                o.Name <- network.Name
-                                o.Driver <- "bridge"
-                                o.Labels <- sessionLabels network.Name)
-                        )
-                        |> Interop.awaitPromise
-                        |> Async.Ignore
-                with _ -> ()
+                // The daemon's own words for a create that it refused, kept for the error
+                // below. This used to discard them. A daemon with no subnet left then read as
+                // "could not be made, or has no IPv4 gateway", which named no cause.
+                let! refused =
+                    async {
+                        try
+                            do!
+                                client.createNetwork (
+                                    jsOptions<DK.NetworkCreateOptions> (fun o ->
+                                        o.Name <- network.Name
+                                        o.Driver <- "bridge"
+                                        o.Labels <- sessionLabels network.Name)
+                                )
+                                |> Interop.awaitPromise
+                                |> Async.Ignore
+                            return None
+                        with ex -> return Some ex.Message
+                    }
+                // Read again after a refusal too: the refusal can be the duplicate of the
+                // doc comment above, and the network is then there.
                 match! async { try return! gatewayOf () with _ -> return None } with
                 | Some gateway -> return Ok gateway
-                | None -> return Error (sprintf "docker network '%s' could not be made, or has no IPv4 gateway" network.Name)
+                | None ->
+                    match refused with
+                    | Some reason ->
+                        return Error (sprintf "docker network '%s' could not be made. The daemon said: %s" network.Name reason)
+                    | None -> return Error (sprintf "docker network '%s' has no IPv4 gateway" network.Name)
         }
 
     /// Drain a build/pull progress stream; resolves when Docker signals completion.

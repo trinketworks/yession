@@ -195,6 +195,18 @@ let tests =
                 Expect.equal remaining 0 "the sandbox's container is removed on dispose"
             })
 
+            // A daemon refuses a network for a reason, and only the daemon knows it: no
+            // subnet left, a name it does not take. The name here is one it does not take.
+            testCaseAsync "a network that the daemon refuses fails the start in the daemon's own words" (async {
+                let network = { DockerFixture.quietNetwork () with Name = "not a network name" }
+                let! started = startOn network envSecrets alpineSpec
+                let reason =
+                    match started with
+                    | Error reason -> reason
+                    | Ok _ -> "the sandbox started"
+                Expect.stringContains reason "could not be made. The daemon said: " "the refusal carries what the daemon said"
+            })
+
             // The memory ceiling (`ContainerMemory`), read where the kernel keeps it: the
             // container's own cgroup, which cgroup v2 mounts at /sys/fs/cgroup inside it.
             testCaseAsync "a container is created with the memory ceiling its declaration names" (async {
