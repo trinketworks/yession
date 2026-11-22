@@ -218,13 +218,20 @@ module Turn =
           /// The non-success ending the SDK YIELDED, if it yielded one.
           Failed : string option
           /// Plan 04, Step 28: the `result` message's usage block, kept instead of discarded.
-          Usage : AgentUsage }
+          Usage : AgentUsage
+          /// The CLI's id for this conversation, from the last message that carried one.
+          Conversation : string option
+          /// The provider refused the credential of this turn. The CLI says so in the `error`
+          /// of the assistant message that it writes for the failed request.
+          Refused : bool }
 
     let empty : State =
         { Body = ""
           Streamed = ""
           Thinking = ""
           Failed = None
+          Conversation = None
+          Refused = false
           Usage =
             { InputTokens = 0
               OutputTokens = 0
@@ -306,7 +313,15 @@ module Turn =
 
     /// Fold one message off the query into the turn, and say what the session forwards for it.
     let step (state: State) (message: Message) : State * AgentResponseChunk list =
+        let state =
+            if isNull message.session_id then state
+            else { state with Conversation = Some message.session_id }
         match Message.classify message with
+        // Read for one fact only. The words of the message arrive as deltas, above.
+        | MessageCase.Assistant said ->
+            match said.error with
+            | Some "authentication_failed" -> { state with Refused = true }, []
+            | _ -> state, []
         | MessageCase.StreamEvent partial ->
             match StreamEvent.classify partial.``event`` with
             // One `message_start` per API round: the model beginning its next message, which
@@ -356,6 +371,15 @@ module Turn =
         match state.Failed with
         | Some reason -> Error reason
         | None -> Ok (if state.Body = "" then state.Streamed else state.Body)
+
+    /// The conversation to continue, when the provider refused this turn's credential.
+    ///
+    /// A broker renews an OAuth token on its own clock, and the provider then refuses the
+    /// token before it. A turn holds its token from its start, so a long turn can outlive
+    /// it. The conversation is whole on disk at that moment: only the last request failed.
+    /// `None` when the turn was not refused, and when no message named the conversation.
+    let refused (state: State) : string option =
+        if state.Refused then state.Conversation else None
 
     /// How the stream ended, which is two ways and not one.
     type Ending =
@@ -435,6 +459,60 @@ let optionsFor
         o.env <- agentEnv
         o.spawnClaudeCodeProcess <- claudeSpawner)
 
+/// What one attempt at a turn answered: the body or the reason, what it spent, and the
+/// conversation to continue when the provider refused the credential (`Turn.refused`).
+type Attempt =
+    { Answer : Result<string, string>
+      Usage : AgentUsage
+      Refused : string option }
+
+/// The spend of two attempts at one turn, as one. Each attempt is a query of its own, so
+/// neither total holds the other.
+let private spentTogether (first: AgentUsage) (second: AgentUsage) : AgentUsage =
+    let models =
+        first.Models @ second.Models
+        |> List.groupBy (fun spend -> spend.Model)
+        |> List.map (fun (model, spends) ->
+            { Model = model
+              InputTokens = spends |> List.sumBy (fun spend -> spend.InputTokens)
+              OutputTokens = spends |> List.sumBy (fun spend -> spend.OutputTokens)
+              CacheReadTokens = spends |> List.sumBy (fun spend -> spend.CacheReadTokens)
+              CacheCreationTokens = spends |> List.sumBy (fun spend -> spend.CacheCreationTokens) })
+    { InputTokens = first.InputTokens + second.InputTokens
+      OutputTokens = first.OutputTokens + second.OutputTokens
+      CacheReadTokens = first.CacheReadTokens + second.CacheReadTokens
+      CacheCreationTokens = first.CacheCreationTokens + second.CacheCreationTokens
+      Models = models }
+
+/// Run a turn, and continue it one time on a renewed credential if the provider refused the
+/// credential it started on.
+///
+/// `attempt` runs one query on a credential: a new conversation for `None`, the named one
+/// continued for `Some`. `renew` answers the credential to use now. The turn continues only
+/// when that answer differs from the refused credential, because a second request on the
+/// same credential gets the same refusal. One time only: a renewed credential that the
+/// provider also refuses is a sign-in that stopped, and the person must hear that.
+///
+/// `stopped` is asked before the second attempt, so a turn that somebody interrupted does
+/// not start again.
+let renewedOnce
+    (attempt: (string * string) option -> string option -> Async<Attempt>)
+    (renew: unit -> Async<(string * string) option>)
+    (stopped: unit -> bool)
+    (credential: (string * string) option)
+    : Async<Result<string, string> * AgentUsage> =
+    async {
+        let! first = attempt credential None
+        match first.Answer, first.Refused, credential with
+        | Error _, Some conversation, Some spent when not (stopped ()) ->
+            match! renew () with
+            | Some renewed when renewed <> spent ->
+                let! second = attempt (Some renewed) (Some conversation)
+                return second.Answer, spentTogether first.Usage second.Usage
+            | _ -> return first.Answer, first.Usage
+        | _ -> return first.Answer, first.Usage
+    }
+
 /// Drive one query to its end: forward what the turn says as it says it, and answer with the
 /// body or the reason, and what it spent either way.
 let private runQuery
@@ -448,7 +526,9 @@ let private runQuery
     (claudeSpawner: Spawner)
     (registerAbort: (unit -> unit) -> unit)
     (forward: AgentResponseChunk -> unit)
-    : Async<Result<string, string> * AgentUsage> =
+    // The conversation to continue (`Options.resume`), or `None` for a new one.
+    (conversation: string option)
+    : Async<Attempt> =
     async {
         // Held OUTSIDE the try because a turn does not always end by returning: the SDK
         // reports a non-success ending by THROWING, and what the turn thought and spent
@@ -458,6 +538,9 @@ let private runQuery
             let controller = Fable.NodeExtras.Aborting.abortController ()
             registerAbort (fun () -> controller.abort ())
             let options = optionsFor systemPrompt model registry controller claudePath agentEnv home claudeSpawner
+            match conversation with
+            | Some id -> options.resume <- id
+            | None -> ()
             let running = query prompt options
             let mutable finished = false
             while not finished do
@@ -469,7 +552,7 @@ let private runQuery
                     chunks |> List.iter forward
             let pending, answer, usage = Turn.finish Turn.StreamEnded state
             pending |> List.iter forward
-            return answer, usage
+            return { Answer = answer; Usage = usage; Refused = Turn.refused state }
         with error ->
             // Where a real ending arrives. The `Result` branch of `Turn.step` reads the ending
             // the SDK YIELDS; the endings that happen — a step ceiling, a refused credential —
@@ -485,7 +568,7 @@ let private runQuery
             // the thinking of every turn that ended the way turns actually end was dropped.
             let pending, answer, usage = Turn.finish (Turn.Threw (Http.reasonOf error)) state
             pending |> List.iter forward
-            return answer, usage
+            return { Answer = answer; Usage = usage; Refused = Turn.refused state }
     }
 
 /// What the SDK threw, said as the reason a turn stopped.
@@ -502,6 +585,11 @@ let sdkFailureReason (raw: string) : string =
     let prefix = "Claude Code returned an error result:"
     let said = raw.Trim ()
     if said.StartsWith prefix then said.Substring(prefix.Length).Trim () else said
+
+/// What a turn is told when it continues after its sign-in was renewed. Simplified Technical
+/// English, like the other sentences the agent is told.
+let private continueAfterRenewal =
+    "The provider refused your last request because the sign-in of this session was renewed while you worked. The sign-in is good now. Your work before that request is complete and is recorded above. Continue the turn from where it stopped. Do not do again a step that is already done."
 
 /// Some sandboxes disallow the SDK's own vendored executable; `YESSION_BIN_CLAUDE`
 /// points the SDK at a system Claude Code install instead. Empty = SDK default.
@@ -548,20 +636,34 @@ let registryFor (capabilities: AgentCapabilities) : ToolRegistry =
 /// interrupt cancels the live query promptly (the returned failure is then discarded
 /// by the orchestrator); the spawner's own kill fires only on the SDK's forwarded
 /// signal, after the graceful stdin-EOF window.
-let runWith (profile: AgentProfile) (dataDir: string) (backend: SandboxBackend) (credential: (string * string) option) : RunAgent =
+///
+/// `renew` answers the credential of this turn as it is NOW. The turn continues on it one
+/// time when the provider refuses the credential the turn started on (`renewedOnce`).
+let runRenewing
+    (profile: AgentProfile)
+    (dataDir: string)
+    (backend: SandboxBackend)
+    (renew: unit -> Async<(string * string) option>)
+    (credential: (string * string) option)
+    : RunAgent =
     fun context capabilities signal onChunk ->
         async {
-            let cli = Sandboxes.AgentSandbox.prepare backend dataDir credential
             // What this turn can call, assembled where every driver of a tool call assembles
             // it — the registry, then the audit, in that order and only once.
             let registry = registryFor capabilities
             // What this turn is told: its strategy's plan over what the turn was handed and
             // what this host's operator wrote.
             let plan = Prompting.forTurn profile registry context
-            let! outcome, usage =
+            // One attempt. The second one continues the conversation that the CLI recorded
+            // in the same scratch HOME, so its prompt is the next message there and not the
+            // turn again.
+            let attempt (credential: (string * string) option) (conversation: string option) =
+                let cli = Sandboxes.AgentSandbox.prepare backend dataDir credential
                 runQuery
                     (Prompting.systemBlocks dynamicBoundary plan)
-                    plan.Turn
+                    (match conversation with
+                     | None -> plan.Turn
+                     | Some _ -> continueAfterRenewal)
                     // No choice is `None`, all the way down to the SDK option that is then
                     // not passed. The turn carries the choice rather than the runner holding
                     // one, so a person changing it changes the next turn and nothing else.
@@ -573,11 +675,17 @@ let runWith (profile: AgentProfile) (dataDir: string) (backend: SandboxBackend) 
                     cli.Spawner
                     signal.OnAbort
                     onChunk
+                    conversation
+            let! outcome, usage = renewedOnce attempt renew signal.IsAborted credential
             return
                 match outcome with
                 | Ok body -> AgentCompleted (body, Some usage)
                 | Error reason -> AgentFailed (sdkFailureReason reason, Some usage)
         }
+
+/// The runner on one credential that nothing renews: a refused credential ends the turn.
+let runWith (profile: AgentProfile) (dataDir: string) (backend: SandboxBackend) (credential: (string * string) option) : RunAgent =
+    runRenewing profile dataDir backend (fun () -> async { return None }) credential
 
 /// The ambient-credential runner over a given data directory (existing call sites and the
 /// env fallback), on the defaults a host that says nothing gets (`AgentProfile.defaults`): a

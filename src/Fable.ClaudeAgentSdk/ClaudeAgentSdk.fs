@@ -407,6 +407,10 @@ type [<AllowNullLiteral>] Options =
     /// `env`.
     abstract env : Environment with get, set
     abstract spawnClaudeCodeProcess : Spawner with get, set
+    /// The id of a conversation the CLI recorded earlier in the same HOME. The query then
+    /// continues that conversation and the prompt is its next message. Unset = a new
+    /// conversation.
+    abstract resume : string with get, set
 
 // --- what a query yields ------------------------------------------------------------------
 //
@@ -431,6 +435,17 @@ type [<AllowNullLiteral>] StreamEvent =
 /// and on a `result` by `subtype` as well. Narrow it with `Message.classify`.
 type [<AllowNullLiteral>] Message =
     abstract ``type`` : string with get, set
+    /// The CLI's own id for the conversation this message belongs to. It is the id that
+    /// `Options.resume` takes. The SDK sets it on each message that it builds.
+    abstract session_id : string with get, set
+
+/// A message from the model, or one the CLI wrote in its place. When a request to the
+/// provider fails, the CLI writes the failure as an assistant message and names the kind of
+/// failure in `error` (`SDKAssistantMessageError` in `sdk.d.ts`). `None` is a message with
+/// no failure.
+type [<AllowNullLiteral>] AssistantMessage =
+    inherit Message
+    abstract error : string option with get, set
 
 type [<AllowNullLiteral>] StreamEventMessage =
     inherit Message
@@ -509,10 +524,11 @@ module StreamEvent =
         | other -> StreamEventCase.Other other
 
 /// What one message off the query is. The SDK's union has thirty-odd members; these are the
-/// two this repository reads, and `Other` carries the tag of everything else.
+/// three this repository reads, and `Other` carries the tag of everything else.
 [<RequireQualifiedAccess>]
 type MessageCase =
     | StreamEvent of StreamEventMessage
+    | Assistant of AssistantMessage
     | Result of ResultMessage
     | Other of tag: string
 
@@ -521,6 +537,7 @@ module Message =
     let classify (message: Message) : MessageCase =
         match message.``type`` with
         | "stream_event" -> MessageCase.StreamEvent !!message
+        | "assistant" -> MessageCase.Assistant !!message
         | "result" -> MessageCase.Result !!message
         | other -> MessageCase.Other other
 
