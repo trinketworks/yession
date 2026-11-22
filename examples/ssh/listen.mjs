@@ -30,6 +30,7 @@ import { unlinkSync } from 'node:fs'
 
 const usage = `usage: node listen.mjs --listen ADDRESS [--door PATH] [--sandbox NAME] [--via LABEL]
                       [--as SUBJECT] [--proxy-protocol] [--whois COMMAND] [--enter PATH]
+                      [--bare] [--prepare COMMAND] [--address TEXT]
                       -- COMMAND [ARGUMENT ...]
 
   --listen ADDRESS   HOST:PORT on this host (port 0 lets the system choose), or unix:PATH
@@ -42,6 +43,11 @@ const usage = `usage: node listen.mjs --listen ADDRESS [--door PATH] [--sandbox 
                      prints JSON with UserProfile.LoginName (tailscale whois --json) or login.
                      Needs --proxy-protocol.
   --enter PATH       the yession-enter to run (default yession-enter)
+  --bare             each entry starts with no entrypoint of the sandbox before it
+  --prepare COMMAND  one entry behind the entrypoint, which runs this command one time before
+                     the first connection (serve --prepare)
+  --address TEXT     what a person runs to come this way. The page of the session shows it
+                     on the sandbox while this program runs.
   COMMAND            the command of each entry, which runs in the sandbox. An argument that
                      is {subject} becomes the subject of the entry.
 
@@ -77,12 +83,16 @@ const options = {
   'proxy-protocol': false,
   whois: null,
   enter: 'yession-enter',
+  bare: false,
+  prepare: null,
+  address: null,
 }
 const own = argv.slice(0, cut)
 for (let i = 0; i < own.length; i++) {
   const name = own[i]
   if (!name.startsWith('--') || !(name.slice(2) in options)) fail(`unknown option ${name}`)
   if (name === '--proxy-protocol') options['proxy-protocol'] = true
+  else if (name === '--bare') options.bare = true
   else if (own[i + 1] === undefined) fail(`${name} needs a value`)
   else options[name.slice(2)] = own[++i]
 }
@@ -171,7 +181,7 @@ function enter(socket, subject, first) {
     // The command can take the name that the host found, as the argument {subject}. A whole
     // argument and not a part of one: the name is never text in a longer word.
     [
-      '--door', options.door, '--as', subject, '--via', options.via, options.sandbox, '--',
+      '--door', options.door, '--as', subject, '--via', options.via, ...(options.bare ? ['--bare'] : []), options.sandbox, '--',
       ...command.map((word) => (word === '{subject}' ? subject : word)),
     ],
     { stdio: ['pipe', 'pipe', 'inherit'] },
@@ -226,6 +236,51 @@ function accept(socket) {
   socket.on('data', onData)
 }
 
+// --- before the first connection ---------------------------------------------------------
+
+/**
+ * Run the command of --prepare in the sandbox one time, behind the entrypoint. The entries
+ * of --bare then start with no entrypoint, and use what this command kept.
+ */
+function prepare() {
+  if (!options.prepare) return Promise.resolve()
+  const words = options.prepare.split(/\s+/).filter(Boolean)
+  return new Promise((resolve) => {
+    const child = spawn(
+      options.enter,
+      ['--door', options.door, '--as', options.as, '--via', options.via, options.sandbox, '--', ...words],
+      { stdio: ['ignore', 'ignore', 'inherit'] },
+    )
+    child.on('error', (error) => {
+      log(`the command of --prepare did not start: ${error.message}`)
+      resolve()
+    })
+    child.on('close', (code, signal) => {
+      if (code !== 0) log(`the command of --prepare ended with ${signal ?? code}. The entries start with what they find.`)
+      resolve()
+    })
+  })
+}
+
+/**
+ * Tell the session the address of this way. `yession-enter --offer` holds the door open, and
+ * the session shows the address for that time. A session of an earlier build refuses the
+ * offer: the listener then works, and the page shows no address.
+ */
+function offer() {
+  if (!options.address) return
+  const child = spawn(
+    options.enter,
+    ['--door', options.door, '--as', options.as, '--via', options.via, '--offer', options.address, options.sandbox],
+    { stdio: ['ignore', 'ignore', 'inherit'] },
+  )
+  child.on('error', (error) => log(`the address was not offered: ${error.message}`))
+  child.on('close', (code, signal) => log(`the offer of the address ended (${signal ?? code})`))
+  process.on('exit', () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
+  })
+}
+
 // --- the listener ------------------------------------------------------------------------
 
 // `allowHalfOpen`: a person who closes their side still gets the last output of the command.
@@ -236,23 +291,34 @@ server.on('error', (error) => {
 })
 
 const unixPath = options.listen.startsWith('unix:') ? options.listen.slice('unix:'.length) : null
-if (unixPath) {
-  try {
-    unlinkSync(unixPath)
-  } catch {
-    // No old socket.
+
+function listen() {
+  if (unixPath) {
+    try {
+      unlinkSync(unixPath)
+    } catch {
+      // No old socket.
+    }
+    server.listen(unixPath, () => {
+      log(`listening on unix:${unixPath}`)
+      offer()
+    })
+  } else {
+    const at = options.listen.lastIndexOf(':')
+    const port = Number(options.listen.slice(at + 1))
+    if (at <= 0 || !Number.isInteger(port) || port < 0 || port > 65535) fail('--listen is HOST:PORT or unix:PATH')
+    const host = options.listen.slice(0, at).replace(/^\[|\]$/g, '')
+    server.listen(port, host, () => {
+      const bound = server.address()
+      log(`listening on ${bound.family === 'IPv6' ? `[${bound.address}]` : bound.address}:${bound.port}`)
+      offer()
+    })
   }
-  server.listen(unixPath, () => log(`listening on unix:${unixPath}`))
-} else {
-  const at = options.listen.lastIndexOf(':')
-  const port = Number(options.listen.slice(at + 1))
-  if (at <= 0 || !Number.isInteger(port) || port < 0 || port > 65535) fail('--listen is HOST:PORT or unix:PATH')
-  const host = options.listen.slice(0, at).replace(/^\[|\]$/g, '')
-  server.listen(port, host, () => {
-    const bound = server.address()
-    log(`listening on ${bound.family === 'IPv6' ? `[${bound.address}]` : bound.address}:${bound.port}`)
-  })
 }
+
+// A person can not connect before the listener is there, so the command of --prepare is done
+// before the first entry.
+prepare().then(listen)
 
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {

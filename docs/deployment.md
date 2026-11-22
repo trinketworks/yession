@@ -634,7 +634,9 @@ set -eu
 port=$(/etc/yession-ssh/port-for "$YESSION_SESSION_ID" "$YESSION_ANNOUNCEMENT_NAME")
 exec node listen.mjs --listen "127.0.0.1:$port" --proxy-protocol \
   --whois 'tailscale whois --json' --via ssh \
-  -- /run/yession-ssh/serve --for '{subject}'
+  --address "ssh -p $port root@host" \
+  --prepare '/run/yession-ssh/serve --prepare' --bare \
+  -- /run/yession-ssh/serve --prepared --for '{subject}'
 ```
 
 Root forwards a fixed set of tailnet ports to the same loopback ports, one time:
@@ -655,6 +657,10 @@ What each part gives:
   read-only mount, so the sandbox cannot add one.
 - **The session** records `sandboxEntered` and `sandboxLeft` for each connection, and its
   page shows one line where a person entered and one where the person left.
+- **`--address`** puts the command line on the page of the session, on the sandbox, so a
+  person does not ask the operator for the port (`yession-enter --offer`).
+- **`--prepare` and `--bare`** keep the entrypoint of the sandbox out of each connection. The
+  entrypoint runs one time, and `serve --prepared` uses the `PATH` that it gave.
 
 The limits of this example:
 
@@ -663,7 +669,8 @@ The limits of this example:
   record that the login entered. `tailscale serve` does not send the header to a UNIX socket,
   so a socket in a private directory cannot replace the port.
 - The set of ports is the limit on the number of sandboxes that have SSH at one time.
-- A person must learn the port of a sandbox from the deployment.
+- The page shows the address in its list of places, which a session with one place does
+  not have.
 
 ### Addressing
 

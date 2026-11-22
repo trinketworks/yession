@@ -114,13 +114,28 @@ resources:
 
 ### A sandbox with an entrypoint
 
-Each entry runs behind the entrypoint of the sandbox, as each terminal does. When the
+An entry runs behind the entrypoint of the sandbox, as each terminal does. When the
 entrypoint is slow, each SSH connection is slow by the same time. The sandbox of this
-repository has the entrypoint `nix develop --impure --command`, so each connection first
-evaluates the dev shell. VS Code opens more than one connection.
+repository has the entrypoint `nix develop --impure --command`, which took about 3 seconds
+for each connection. VS Code opens more than one connection.
 
 `serve` gives the login the `PATH` that the entrypoint made, so a person has the tools of a
 terminal of the session. No other variable crosses, because a variable can hold a secret.
+
+The entrypoint thus gives `serve` one thing, the `PATH`. `listen.mjs` can get it one time:
+
+```sh
+node listen.mjs … --prepare '/run/yession-ssh/serve --prepare' --bare \
+  -- /run/yession-ssh/serve --prepared --for '{subject}'
+```
+
+- `--prepare` runs `serve --prepare` one time behind the entrypoint, before the first
+  connection. That run makes the host key and keeps the `PATH` in a file.
+- `--bare` starts each entry with no entrypoint (`yession-enter --bare`).
+- `serve --prepared` reads the `PATH` from the file. It finds `sshd` with it and gives it to
+  the login.
+- The file is as old as the listener. A change of the entrypoint shows after the sandbox
+  starts again.
 
 ## Recipe A: one tailnet node for each sandbox
 
@@ -172,7 +187,9 @@ tailscale serve --bg --tcp="$port" --proxy-protocol=2 "tcp://127.0.0.1:$port"
 
 node listen.mjs --listen "127.0.0.1:$port" --proxy-protocol \
   --whois 'tailscale whois --json' \
-  -- /run/yession-ssh/serve --for '{subject}'
+  --address "ssh -p $port root@host" \
+  --prepare '/run/yession-ssh/serve --prepare' --bare \
+  -- /run/yession-ssh/serve --prepared --for '{subject}'
 ```
 
 - `tailscale serve` changes its configuration only for root when the configuration has a
@@ -181,8 +198,11 @@ node listen.mjs --listen "127.0.0.1:$port" --proxy-protocol \
 - `tailscale serve` does not send the PROXY header to a UNIX socket target. The listener
   must thus be a loopback port, and not a socket in a private directory.
 
-`port-for` is a rule of the deployment that gives each sandbox a port and tells people which
-port it is. A person must look up the port, which is the cost of this recipe.
+`port-for` is a rule of the deployment that gives each sandbox a port.
+
+A person must know the port. `listen.mjs --address "ssh -p $port root@host"` tells the
+session, and the page of the session shows that text on the sandbox, in its list of places
+(`yession-enter --offer`). The address goes from the page when the listener stops.
 
 ## Who entered
 
