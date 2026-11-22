@@ -228,9 +228,11 @@ let private edgeTabOnBand (desktop: bool) : string list =
               "covered at its centre"
           if desktop then
               // The mark's middle is on the middle stroke of the title's lowercase `e`, as the
-              // sidebar's chevron across the band is (`Style.navReopen`), and the words stand on
-              // the title's baseline. At 28/32 in Noto Sans the stroke is 3px and the baseline
-              // 10.9px under the line's middle. The title is an input, so no marker can go in it.
+              // sidebar's chevron across the band is (`Style.navReopen`), and the words' lowercase
+              // middle is on the title's lowercase middle, so the small words do not sit low. At
+              // 28/32 in Noto Sans the stroke is 3px under the line's middle, the baseline 10.9px
+              // and the x-height 15px, so the lowercase middle is 3.4px under it. The title is an
+              // input, so no marker can go in it.
               match first (Root.Under tab) "svg", first (Root.Under tab) "[data-terminals-count] > span", first Root.Document "#shell [data-session-title]" with
               | Some mark, Some words, Some title ->
                   let m = mark.getBoundingClientRect ()
@@ -238,14 +240,14 @@ let private edgeTabOnBand (desktop: bool) : string list =
                   let middle = t.top + t.height / 2.0
                   let drift = (m.top + m.height / 2.0) - middle - 3.0
                   if abs drift > 0.75 then sprintf "off the title's e stroke by %gpx" drift
-                  // A zero-wide box one x-height tall, after the words: its bottom is their baseline.
+                  // A zero-wide box one x-height tall, after the words: it spans their lowercase.
                   let marker = document.createElement "span"
                   marker.setAttribute ("style", "display:inline-block;width:0;height:1ex")
                   words.appendChild marker |> ignore
-                  let baseline = marker.getBoundingClientRect().bottom
+                  let x = marker.getBoundingClientRect ()
                   marker.remove ()
-                  let off = baseline - middle - 10.9
-                  if abs off > 0.75 then sprintf "the words are %gpx off the title's baseline" off
+                  let off = (x.top + x.height / 2.0) - middle - 3.4
+                  if abs off > 0.75 then sprintf "the words' lowercase middle is %gpx off the title's" off
               | _ -> "the tab's mark, its words or the title is missing" ]
     | _ -> [ "the edge tab or the header is missing" ]
 

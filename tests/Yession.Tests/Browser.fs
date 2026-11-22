@@ -4432,8 +4432,8 @@ let editorTests =
         // The shut pane's edge tab (P1-4) is the one thing on the first screen that says
         // terminals exist, so it has to BE on that screen: inside the header band, inside the
         // viewport, and big enough to press. On a desktop its mark also stands on the title's
-        // line, as the sidebar chevron across the band does — measured as an equality of
-        // middles, never as pixels. A phone's band centres its whole row on one line
+        // line, as the sidebar chevron across the band does, and its words' lowercase middle
+        // is the title's — measured as equalities of middles, never as pixels. A phone's band centres its whole row on one line
         // (`Style.headerAside`), so there it is not asserted separately.
         let edgeTabOnTheBand (desktop: bool) (page: IPage) =
             async {

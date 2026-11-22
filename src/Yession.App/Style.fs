@@ -1853,11 +1853,11 @@ module Style =
     /// The header's right-hand group: the way back to the terminals. The session's standings
     /// are the sidebar's (`standingsSection`), and the band only wears the worst of them,
     /// under the chevron that opens it (`navReopenMark`). On a wide screen the door carries
-    /// words ("2 terminals", `View.contentReopen`), and `pb-[1px]` stands them on the title's
-    /// baseline (measured live at 1440: both at y=63; `pb-2` left the words 7px high). The
-    /// mark beside them then rises onto the title's x-height on its own (`terminalReopen`).
-    /// On a phone the group centres on the title's line.
-    let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-[1px] phone:items-center phone:gap-3 phone:pb-0"
+    /// words ("2 terminals", `View.contentReopen`), and `pb-[5px]` centres their lowercase on
+    /// the title's: 13px words stood on a 28px title's baseline read as sitting low, under the
+    /// stroke the mark beside them points at (`terminalReopen`). On a phone the group centres
+    /// on the title's line.
+    let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-[5px] phone:items-center phone:gap-3 phone:pb-0"
     let headerStatus = "shrink-0"
 
     /// The nav column's own mount of the connection report. Hidden on a phone, where the bar
@@ -5416,10 +5416,10 @@ module Style =
     ///
     /// Its glyph sits on the title's x-height, so the two marks either side of the title
     /// point at one stroke (`navReopen`). On a phone it drops by the chevron's own amount. On
-    /// a wide screen the button stands its words on the title's baseline (`headerAside`), which
-    /// leaves the glyph's middle below the stroke, so it rises instead.
+    /// a wide screen the button centres its words on that stroke (`headerAside`), and the
+    /// glyph's box sits a pixel above it, so it drops by that pixel.
     let terminalReopen =
-        navChevronBack + " shrink-0 *:first:-translate-y-[3px] phone:*:first:translate-y-[1.5px]"
+        navChevronBack + " shrink-0 *:first:translate-y-[1px] phone:*:first:translate-y-[1.5px]"
     /// Its face says what it opens on a wide screen ("2 terminals", `View.contentReopen`), and
     /// only the count on a phone, whose band has no room for the words. Exactly one of the two
     /// is drawn at any size, by the one pair of variants that split the screens.
