@@ -39,14 +39,11 @@ let frameChannel (dc: DataChannel) : FrameChannel<string> =
             cont item
         | None -> queue.Enqueue item
 
-    let take = FramePieces.assembler ()
+    let read = FramePieces.reader (Codec.fromString frameCodec)
     dc.onMessage (fun (msg: string) ->
-        match take msg with
-        | None -> ()
-        | Some whole ->
-            match Codec.fromString frameCodec whole with
-            | Ok frame -> deliver (Some frame)
-            | Error e -> JS.console.error ("frame decode failed: " + e))
+        match read msg with
+        | Ok frame -> deliver (Some frame)
+        | Error e -> JS.console.error ("frame decode failed: " + e))
 
     dc.onClosed (fun () ->
         if not closed then

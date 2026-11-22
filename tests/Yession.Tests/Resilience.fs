@@ -965,6 +965,46 @@ let private linkTests =
                 Expect.isTrue ended "the far end learns too — a lease held by a peer that is gone is nobody's"
             }
 
+        // What a client does while the session's first frames arrive, and what a session
+        // does while a client sends it a document: it hears, and it has nothing to say.
+        testCaseAsync "an end that hears and says nothing says that it is here, each tick" <|
+            async {
+                let clock = TestClock ()
+                let carrier, remote = Yession.Session.InMemoryChannel.createPair<string> ()
+                let _link = Link.supervise (linkPolicy clock (ResizeArray ())) carrier
+                do! remote.Send (traffic "one way")
+                clock.Tick ()
+                let! said = remote.Receive ()
+                Expect.equal said (Some (Control Pong)) "the far end hears the listener"
+            }
+
+        // The fault a phone on a relayed path showed, from the sender's side. The sender's
+        // probes wait behind the long frame in the ordered channel, so no answer to them
+        // comes. The listener is never quiet, so it used to send nothing. The sender then
+        // ended a link that was carrying its own data.
+        testCaseAsync "an end whose probes wait behind what it sends is not ended while the far end listens" <|
+            async {
+                let clock = TestClock ()
+                let seen = ResizeArray ()
+                let carrier, remote = Yession.Session.InMemoryChannel.createPair<string> ()
+                let behindTheFrame =
+                    { carrier with
+                        Send =
+                            fun frame ->
+                                async {
+                                    match frame with
+                                    | Control Ping -> ()
+                                    | _ -> do! carrier.Send frame
+                                } }
+                let sender = Link.supervise (linkPolicy clock seen) behindTheFrame
+                let _listener = Link.supervise (linkPolicy clock (ResizeArray ())) remote
+                for _ in 1 .. Link.LinkPolicy.quietTicksBeforeDeath * 3 do
+                    // A piece of the long frame, as the listener's carrier reads one.
+                    do! sender.Send (Control Pong)
+                    clock.Tick ()
+                Expect.isFalse (died seen) "the listener was heard at each tick"
+            }
+
         testCaseAsync "a probe is answered without ever reaching the pump" <|
             async {
                 let clock = TestClock ()

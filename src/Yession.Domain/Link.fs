@@ -28,6 +28,9 @@ open System
 /// * **Any inbound frame is proof of life.** A busy link is never probed; only a quiet one
 ///   is. That keeps the mechanism free where it would cost the most — a terminal streaming
 ///   output, a turn writing a message — and it is why the tick can afford to be short.
+///   A piece of a long frame is proof of life too: a carrier says each one as a `Pong`
+///   (`FramePieces.reader`). An end that only listens says a `Pong` each tick, because the
+///   far end hears nothing else from it while its own probes wait behind what it sends.
 /// * **A heartbeat is invisible above this module.** `Receive` answers an inbound `Ping` and
 ///   consumes it, and consumes a `Pong`, so neither pump ever sees one. That is not tidiness:
 ///   `PeerSession.run` rejects any first frame that is not `PeerHello`, and a refused peer
@@ -98,6 +101,14 @@ module Link =
         // Traffic since the last tick. Set by anything inbound — a probe's answer is not
         // special, it is just the frame a quiet link had to be asked for.
         let mutable heard = false
+        // Whether this end sent anything since the last tick: a frame of its consumer, a
+        // probe, or the answer to one.
+        let mutable said = false
+        let say (frame: SessionFrame<'State>) : Async<unit> =
+            async {
+                said <- true
+                do! channel.Send frame
+            }
 
         let deliver (item: SessionFrame<'State> option) =
             match pending with
@@ -123,7 +134,7 @@ module Link =
                     heard <- true
                     match frame with
                     | Control Ping ->
-                        do! channel.Send (Control Pong)
+                        do! say (Control Pong)
                         return! pump ()
                     | Control Pong -> return! pump ()
                     | _ ->
@@ -136,9 +147,17 @@ module Link =
         let rec beat (quiet: int) =
             async {
                 do! policy.Sleep policy.Tick
+                let spoke = said
+                said <- false
                 if ended then return ()
                 elif heard then
                     heard <- false
+                    // An end that hears and says nothing is quiet to the far end. The far
+                    // end's probes can be behind a long frame that it is sending, in the same
+                    // ordered channel, so it gets no answer to them in time. It then ends a
+                    // link that is carrying its own data. So a listener says that it is here.
+                    // Not through `say`: this must not count as speech at the next tick.
+                    if not spoke then do! channel.Send (Control Pong)
                     return! beat 0
                 else
                     let quiet = quiet + 1
@@ -149,14 +168,14 @@ module Link =
                         do! channel.Close ()
                     else
                         policy.Observe (LinkProbed quiet)
-                        do! channel.Send (Control Ping)
+                        do! say (Control Ping)
                         return! beat quiet
             }
 
         Async.StartImmediate (pump ())
         Async.StartImmediate (beat 0)
 
-        { Send = channel.Send
+        { Send = say
           Receive =
             fun () ->
                 Async.FromContinuations(fun (cont, _, _) ->

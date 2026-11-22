@@ -317,15 +317,12 @@ let private frameChannel (transport: Transport) : FrameChannel<string> =
             closed <- true
             stopLooking ()
             deliver None
-    let take = FramePieces.assembler ()
+    let read = FramePieces.reader (Codec.fromString frameCodec)
     channel.onmessage <-
         fun message ->
-            match take (string message.data) with
-            | None -> ()
-            | Some whole ->
-                match Codec.fromString frameCodec whole with
-                | Ok frame -> deliver (Some frame)
-                | Error detail -> JS.console.error ("frame decode failed: " + detail)
+            match read (string message.data) with
+            | Ok frame -> deliver (Some frame)
+            | Error detail -> JS.console.error ("frame decode failed: " + detail)
     channel.onclose <- fun _ -> finish ()
     onPeerFinished peer finish
     stopLooking <- onResume transport finish
