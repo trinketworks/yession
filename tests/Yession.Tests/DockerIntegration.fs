@@ -177,6 +177,23 @@ let private cloneThroughProxy : Async<SandboxRun * string> =
     }
 
 
+/// A network as a session makes one, with no container on it: what a session that the
+/// Manager killed leaves on the daemon.
+let private emptyNetwork () : Async<string> =
+    async {
+        let name = DockerFixture.name ()
+        do!
+            DK.create().createNetwork (
+                jsOptions<DK.NetworkCreateOptions> (fun o ->
+                    o.Name <- name
+                    o.Driver <- "bridge"
+                    o.Labels <- DK.Labels.ofList [ "yession-session", name ])
+            )
+            |> Interop.awaitPromise
+            |> Async.Ignore
+        return name
+    }
+
 // --- The suite ---------------------------------------------------------------------------
 
 let tests =
@@ -214,6 +231,22 @@ let tests =
                 let! _, sandbox = startOrFail alpineSpec
                 do! bytesGoThroughUnchanged sandbox
                 do! sandbox.Dispose ()
+            })
+
+            // What a refused create removes before it asks again (`reclaimNetworks`). Each
+            // case names its own network by the label's value. The product filters by the
+            // label's name alone, and on an operator's daemon that would reach the
+            // operator's sessions.
+            testCaseAsync "a labelled network with no container, older than the age, is reclaimed" (async {
+                let! name = emptyNetwork ()
+                let! reclaimed = Sandboxes.DockerSandbox.reclaimNetworks [ label name ] "0s"
+                Expect.equal reclaimed [ name ] "the daemon removed it"
+            })
+
+            testCaseAsync "a labelled network with no container, younger than the age, stays" (async {
+                let! name = emptyNetwork ()
+                let! reclaimed = Sandboxes.DockerSandbox.reclaimNetworks [ label name ] "10m"
+                Expect.equal reclaimed [] "a session that made its network a moment ago keeps it"
             })
 
             // The memory ceiling (`ContainerMemory`), read where the kernel keeps it: the
