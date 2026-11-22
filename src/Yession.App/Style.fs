@@ -1567,6 +1567,29 @@ module Style =
     /// as on the pivot; the way to the ones it does not list wears it too.
     let terminalEntry = chapterEntry
 
+    /// The sandboxes under the environment, as one stack, for the reason `chapterEntries` gives.
+    let sandboxEntries = "flex flex-col"
+    /// One sandbox that has a way in: a real `<details>`, like every other disclosure in the
+    /// product. The group has a name, so its mark turns with this fold and with no other.
+    let sandboxEntry = "group/sandbox min-w-0"
+    /// Its summary: the contents' entry, because the column holds one kind of list. The mark
+    /// is first, since the name is what the row unfolds and the state of a row follows its name.
+    let sandboxSummary = cls [ chapterEntry; "list-none" ]
+    /// A sandbox with no way in: the same row, with nothing to press. It keeps the padding of
+    /// an entry, so the names of all the sandboxes stand on one line down the column.
+    let sandboxPlain = cls [ person; "py-1.5 phone:py-3" ]
+    /// The mark that says a sandbox unfolds: it points on at rest, and down when the row is open.
+    let sandboxMark =
+        "self-center text-ink-faint transition-transform duration-150 ease-out motion-reduce:transition-none "
+        + "group-open/sandbox:rotate-90"
+    /// The place of that mark on a row that does not unfold: the same width, with nothing in it.
+    let sandboxNoMark = "w-3 shrink-0"
+    /// The name of the sandbox, in the terminal face as the list of places writes it.
+    let sandboxEntryName = "font-terminal truncate min-w-0"
+    /// The ways into the sandbox, under its name and on the column of the name: each is a
+    /// label over the box that holds its address.
+    let sandboxWays = "flex flex-col gap-1 pt-1 pb-2 pl-5.5"
+
     /// The generated read surface (Plan 15). A query answers with rows, fields, or one
     /// value, and these are the renderings — defined ONCE here because they are what every
     /// future query gets to look like, including the ones nobody has written.
@@ -5045,10 +5068,6 @@ module Style =
     /// What the place's file said it is for — prose somebody wrote, so wrapped and clamped
     /// rather than cut after its first words.
     let startInNote = "line-clamp-2 font-ui font-light text-small text-ink-faint"
-
-    /// A way into the place from outside the session: a command line that a person copies,
-    /// so it is in the face of code and it never breaks in the middle of a word.
-    let startInWay = "block font-mono text-small text-ink-dim break-all select-text"
 
     /// An artifact's row: the same row as a terminal's, so the two sections read as one list
     /// of things rather than two designs.

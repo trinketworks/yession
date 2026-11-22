@@ -698,6 +698,63 @@ module View =
     /// copy of it.
     let private environmentTerminalCap = 5
 
+    /// The name of a place where a terminal can start. A repo's place carries the repo's
+    /// name, since two repos may both declare `dev`.
+    let private placeName (sandbox: SandboxRef) : string =
+        match SandboxRef.scope sandbox with
+        | _ when sandbox = SandboxRef.defaultRef -> Dom.Text.defaultPlace
+        | SessionOwned -> SandboxName.value (SandboxRef.name sandbox)
+        | RepoOwned repo -> sprintf "%s:%s" (RepoRef.repo repo) (SandboxName.value (SandboxRef.name sandbox))
+
+    /// The sandboxes of the session, under the environment, and how a person comes into each
+    /// from outside the session.
+    ///
+    /// A sandbox that has a way in unfolds: under its name, each way is a label and a box
+    /// with the address, which a person copies. The deployment wrote the address
+    /// (`yession-enter --offer`), so the page shows the text and does not know what it means.
+    /// A sandbox with no way in is a plain row, because a fold with nothing in it promises
+    /// detail that is not there.
+    ///
+    /// With only the session's own place and no way into it, there is nothing to say, and
+    /// the list is not drawn.
+    let private environmentSandboxes (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+        let places = ClientModel.sandboxRows model
+        let waysTo (sandbox: SandboxRef) = WayProjection.openTo sandbox model.Timeline.Ways
+        let name (sandbox: SandboxRef) =
+            let face = if sandbox = SandboxRef.defaultRef then Style.givesWay else Style.sandboxEntryName
+            html $"""<span class="{face}">{placeName sandbox}</span>"""
+        let wayBox (sandbox: SandboxRef) (way: OpenWay) =
+            let box = Dom.Hooks.environmentWayBox (SandboxRef.render sandbox) way.OpenWayVia
+            // As the device code's box says it (`githubSection`): the answer to a copy
+            // replaces the address in the box, which is where the reader looks.
+            let justCopied = model.Copied |> Option.exists (fun copy -> copy.Box = box)
+            html $"""
+                <span class="{Style.label}">{way.OpenWayVia}</span>
+                <div class="{Style.codeBoxWrap}">
+                  <span class="{Style.codeBox}" data-environment-way="{way.OpenWayVia}" title="{way.OpenWayAddress}" aria-live="polite">{if justCopied then Dom.Text.copied else way.OpenWayAddress}</span>
+                  <button type="button" class="{Style.codeBoxAction}" data-environment-copy-way="{way.OpenWayVia}"
+                          aria-label="{if justCopied then Dom.Text.wayCopied way.OpenWayVia else Dom.Text.copyWay way.OpenWayVia}"
+                          @click={Ev(fun _ -> dispatch (CopyMsg (box, way.OpenWayAddress)))}>{if justCopied then Icon.check else Icon.copy}</button>
+                </div>"""
+        let row (sandbox: SandboxRef) =
+            match waysTo sandbox with
+            | [] ->
+                html $"""
+                    <div class="{Style.sandboxPlain}" data-environment-sandbox="{SandboxRef.render sandbox}">
+                      <span class="{Style.sandboxNoMark}"></span>{name sandbox}
+                    </div>"""
+            | ways ->
+                html $"""
+                    <details class="{Style.sandboxEntry}" data-environment-sandbox="{SandboxRef.render sandbox}">
+                      <summary class="{Style.sandboxSummary}">
+                        <span class="{Style.sandboxMark}" aria-hidden="true">{Icon.rightSm}</span>{name sandbox}
+                      </summary>
+                      <div class="{Style.sandboxWays}">{ways |> List.map (wayBox sandbox)}</div>
+                    </details>"""
+        match places with
+        | [ only ] when List.isEmpty (waysTo only) -> Lit.nothing
+        | places -> html $"""<div class="{Style.sandboxEntries}">{places |> List.map row}</div>"""
+
     /// The environment: whether it is up, and what is running in it — the session's open
     /// terminals, each the way into the pane on it.
     ///
@@ -740,6 +797,7 @@ module View =
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.navLane2 ]}" data-environment="{environmentLabel status}" data-environment-reason="{environmentReason status}">
               <div class="{Style.sideRow}"><span class="{Style.label}">environment</span><span class="{statusClass}">{statusInner}</span></div>
+              {environmentSandboxes dispatch model}
               {terminals}
             </section>"""
 
@@ -5487,12 +5545,6 @@ module View =
         // nothing to choose and the link that chooses is not drawn.
         let places = ClientModel.sandboxRows model
         let place = ClientModel.startIn model
-        // A repo's place carries the repo's name, since two repos may both declare `dev`.
-        let placeName (sandbox: SandboxRef) =
-            match SandboxRef.scope sandbox with
-            | _ when sandbox = SandboxRef.defaultRef -> Dom.Text.defaultPlace
-            | SessionOwned -> SandboxName.value (SandboxRef.name sandbox)
-            | RepoOwned repo -> sprintf "%s:%s" (RepoRef.repo repo) (SandboxName.value (SandboxRef.name sandbox))
         let isDefault (sandbox: SandboxRef) = sandbox = SandboxRef.defaultRef
         let choosing = model.ChoosingStartIn && List.length places > 1
         // The terminals under a heading of their own, which carries the one way to make one,
@@ -5549,12 +5601,6 @@ module View =
                     VisitProjection.openIn sandbox model.Timeline.Visits
                     |> List.map (fun visit ->
                         html $"""<span class="{Style.startInNote}" data-start-in-visitor="{visit.Visitor}">{SandboxVisit.here visit}</span>""")
-                // How a person comes into the place from outside the session: the address
-                // that the deployment offers, in its own words.
-                let ways =
-                    WayProjection.openTo sandbox model.Timeline.Ways
-                    |> List.map (fun way ->
-                        html $"""<span class="{Style.startInWay}" data-start-in-way="{way.OpenWayVia}">{way.OpenWayAddress}</span>""")
                 html $"""
                     <li class="{Style.startInRow}">
                       <button type="button" class="{Style.startInChoice}" data-start-in-choice="{SandboxRef.render sandbox}"
@@ -5565,7 +5611,6 @@ module View =
                         <span class="{Style.startInWho}">
                           <span class="{if isDefault sandbox then Style.startInChoiceNameDefault else Style.startInChoiceName}">{placeName sandbox}</span>
                           {note}
-                          {ways}
                           {visitors}
                         </span>
                       </button>

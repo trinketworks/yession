@@ -2979,7 +2979,7 @@ let private paneNewTests =
             let empty = sheet model |> Support.step (ChoosingStartInMsg true) |> Support.render
             Expect.isFalse (empty.Contains Dom.Hooks.startInVisitor) "and a place with nobody in it says nothing"
 
-        testCase "a place in the list says how a person comes into it" <| fun () ->
+        testCase "the environment offers the address of a way into a sandbox, with a way to take it" <| fun () ->
             // The deployment offers SSH into the repo's sandbox, and says the address.
             let model = withSandbox "octo/hello:dev"
             let way : OpenWay =
@@ -2987,11 +2987,39 @@ let private paneNewTests =
                   OpenWayVia = "ssh"
                   OpenWayAddress = "ssh -p 22005 root@host" }
             let offered = { model with Timeline = { model.Timeline with Ways = { OpenWays = [ way ] } } }
-            let html = sheet offered |> Support.step (ChoosingStartInMsg true) |> Support.render
-            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.startInWay "ssh")) "the row of the sandbox has the way"
-            Expect.isTrue (html.Contains "ssh -p 22005 root@host") "with the address, as the deployment wrote it"
-            let none = sheet model |> Support.step (ChoosingStartInMsg true) |> Support.render
-            Expect.isFalse (none.Contains Dom.Hooks.startInWay) "and a place with no way says nothing"
+            let html = Support.render offered
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.environmentSandbox "octo/hello:dev")) "the environment lists the sandbox"
+            let boxAt = html.IndexOf (Dom.attr Dom.Hooks.environmentWay "ssh")
+            Expect.isTrue (boxAt >= 0) "and the sandbox has the way"
+            let boxOpened = html.IndexOf ('>', boxAt)
+            Expect.equal
+                (html.Substring (boxOpened + 1, html.IndexOf ('<', boxOpened) - boxOpened - 1))
+                "ssh -p 22005 root@host"
+                "with the address, as the deployment wrote it"
+            // A real button with a name, as the control of the device code is.
+            let at = html.IndexOf Dom.Hooks.environmentCopyWay
+            Expect.isTrue (at >= 0) "a control offers to copy the address"
+            let start = html.LastIndexOf ("<", at)
+            let tag = html.Substring (start, html.IndexOf ('>', at) - start)
+            Expect.isTrue (tag.StartsWith "<button") (sprintf "the control is a button: %s" tag)
+            Expect.isTrue (tag.Contains "aria-label=") (sprintf "and it has an accessible name: %s" tag)
+            let none = Support.render model
+            Expect.isTrue (none.Contains (Dom.attr Dom.Hooks.environmentSandbox "octo/hello:dev")) "a sandbox with no way is listed"
+            Expect.isFalse (none.Contains Dom.Hooks.environmentWay) "and offers no address"
+
+        testCase "a copy of the address of a way is answered in its own box" <| fun () ->
+            let model = withSandbox "octo/hello:dev"
+            let way (via: string) (address: string) : OpenWay =
+                { OpenWayTo = SandboxRef.parse "octo/hello:dev" |> expect
+                  OpenWayVia = via
+                  OpenWayAddress = address }
+            let offered =
+                { model with
+                    Timeline = { model.Timeline with Ways = { OpenWays = [ way "ssh" "ssh -p 22005 root@host"; way "web" "https://host/dev" ] } }
+                    Copied = Some { Copy.Box = Dom.Hooks.environmentWayBox "octo/hello:dev" "ssh"; Copy.Nth = 1 } }
+            let html = Support.render offered
+            Expect.isFalse (html.Contains ">ssh -p 22005 root@host<") "the box that was copied says so in place of the address"
+            Expect.isTrue (html.Contains ">https://host/dev<") "and the box of the other way still holds its address"
 
         testCase "a place chosen is where New terminal starts the next one" <| fun () ->
             let dev = SandboxRef.parse "octo/hello:dev" |> expect

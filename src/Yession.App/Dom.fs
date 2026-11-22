@@ -171,6 +171,16 @@ module Dom =
         let environmentTerminals = "data-environment-terminals"
         let environmentTerminal = "data-environment-terminal"
         let environmentMore = "data-environment-more"
+        /// One per sandbox that the environment lists, carrying the rendered ref of the sandbox.
+        let environmentSandbox = "data-environment-sandbox"
+        /// The box that holds the address of one way into a sandbox. It carries the label of
+        /// the way (`ssh`, for example).
+        let environmentWay = "data-environment-way"
+        /// The control that puts that address on the clipboard.
+        let environmentCopyWay = "data-environment-copy-way"
+        /// The key under which a copy of that address is remembered (`ClientModel.Copied`).
+        /// One key for each way of each sandbox, so only the box that was copied says so.
+        let environmentWayBox (sandbox: string) (via: string) = sprintf "%s:%s:%s" environmentWay sandbox via
         /// The per-item actions control, valued by the message it acts on, and the menu it
         /// opens. `data-item-is-chapter` rides the CHAPTER entry rather than the control: what
         /// a test wants to read is which way the entry will go, and that is a property of
@@ -379,9 +389,6 @@ module Dom =
         /// On a place in that list, once for each person who is in the sandbox now through
         /// the door of the session. It carries the name that the person came with.
         let startInVisitor = "data-start-in-visitor"
-        /// On a place in that list, once for each way into the sandbox that the deployment
-        /// offers now. It carries the label of the way (`ssh`, for example).
-        let startInWay = "data-start-in-way"
         /// The list of places itself: a page on a phone, unfolded under the heading on a wide
         /// screen.
         let startInList = "data-start-in-list"
@@ -1159,6 +1166,10 @@ module Dom =
         let startInNamed (place: string) = sprintf "New terminals start in %s. Choose where" place
         /// The heading over the list of places, and its way back.
         let startInHeading = "start a terminal in sandbox"
+        /// The accessible name of the control that copies the address of a way into a
+        /// sandbox, before the copy and after it.
+        let copyWay (via: string) = sprintf "Copy the %s address" via
+        let wayCopied (via: string) = sprintf "The %s address is copied" via
         let backToList = "Back to terminals and files"
         /// The hidden pane's edge tab (P1-4): what the column holds, counted, so that a
         /// session with work in it says so with the pane shut. With none open it is still the
