@@ -232,8 +232,8 @@ let tests =
             // sandbox outright. Where the operator offers `github`, `git push` works.
             Expect.equal
                 (dev.Wants |> List.map ResourceName.value)
-                [ "github"; "nix-container-store" ]
-                "dev wishes for the GitHub connection and the warm store where an operator offers them"
+                [ "github"; "nix-container-store"; "remote-ssh" ]
+                "dev wishes for the GitHub connection, the warm store and SSH access where an operator offers them"
             // `gh` finds its repo from the checkout's remotes, and behind the git gateway's
             // `insteadOf` it finds none it recognises — so `dev`, where gh runs, names it.
             Expect.equal

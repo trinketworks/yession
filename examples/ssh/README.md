@@ -58,8 +58,42 @@ sandboxes:
 ```
 
 **The image** of that sandbox holds the OpenSSH server (`openssh-server` on Debian and
-Ubuntu). Nothing starts it. The sandbox runs as a user that is not root, and that user is the
-SSH login. `serve` refuses to run as root.
+Ubuntu, `pkgs.openssh` in a Nix shell). Nothing starts it. The user of the sandbox is the SSH
+login.
+
+### A sandbox that runs as root
+
+As root, `sshd` separates privileges: it changes its root directory and its user before the
+login, and changes user again after it. Yession starts a container with few capabilities, and
+`sshd` then stops with "Operation not permitted". The operator grants the three capabilities
+that `sshd` needs, in the same resource:
+
+```yaml
+# resources.yaml
+resources:
+  remote-ssh:
+    mount: { from: /var/lib/yession-ssh/share, at: /run/yession-ssh, mode: read }
+    capability: [ SETUID, SETGID, SYS_CHROOT ]
+```
+
+- `serve` makes the other things that `sshd` needs as root: the directory `/var/empty`, the
+  user `sshd`, and a root account that is not locked. It sets no password. Only a key logs in.
+- Without the capabilities, `serve` stops and names them.
+- The capabilities apply to each process in the sandbox, not only to `sshd`. With them, root
+  in the container can change user and change its root directory. A sandbox that does not
+  run as root needs none of them, which is the better design where the image permits it.
+- A test with the image `nixos/nix` and OpenSSH 10.3 passed: a command, a terminal, `scp`,
+  `sftp` and a local port forward.
+
+### A sandbox with an entrypoint
+
+Each entry runs behind the entrypoint of the sandbox, as each terminal does. When the
+entrypoint is slow, each SSH connection is slow by the same time. The sandbox of this
+repository has the entrypoint `nix develop --impure --command`, so each connection first
+evaluates the dev shell. VS Code opens more than one connection.
+
+`serve` gives the login the `PATH` that the entrypoint made, so a person has the tools of a
+terminal of the session. No other variable crosses, because a variable can hold a secret.
 
 ## Recipe A: one tailnet node for each sandbox
 
@@ -99,7 +133,7 @@ exec node listen.mjs --listen 127.0.0.1:2200 --proxy-protocol \
 
 ## Recipe B: one port for each sandbox on the node of the host
 
-The host is already a node of the tailnet. Each sandbox gets one TCP port of that node, and a
+This recipe is the smaller one. The host is already a node of the tailnet. Each sandbox gets one TCP port of that node, and a
 person runs `ssh -p 2201 dev@host`. This recipe needs no new credential.
 
 ```sh
@@ -135,12 +169,10 @@ first event has the subject and the label that `yession-enter` got as `--as` and
 
 - **No recording.** The session records that a person entered and left. It does not record
   what the person did ([GAPS.md](../../docs/GAPS.md)).
-- **The environment of the sandbox.** `sshd` starts a login shell with a new environment. The
-  variables that the session gave the sandbox are not in it, unless the shell profile of the
-  image sets them.
+- **The environment of the sandbox.** `sshd` starts a login shell with a new environment.
+  Only `PATH` crosses. The other variables that the session gave the sandbox are not in it.
 - **A Mac host sandbox.** The `sshd` of macOS accepts the key and then stops with "Could not
   create new audit session" when it does not run as root. Use a container sandbox.
-- **A sandbox that runs as root.**
 
 ## Try it with no deployment
 

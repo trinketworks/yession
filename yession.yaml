@@ -86,7 +86,13 @@ sandboxes:
     # substitutes into a store that outlives the sandbox. Where nobody offers either, the
     # line selects nothing and the build runs cold. `uses:` would refuse on every host
     # that offers none.
-    wants: [ github, nix-container-store ]
+    #
+    # `remote-ssh` is a wish too. Where the operator offers it, a person can connect to this
+    # sandbox with a plain `ssh` client (examples/ssh). The resource brings the script that
+    # serves one connection, the keys that can log in, and the capabilities that sshd needs
+    # in a container that runs as root. The dev shell brings sshd itself (devenv.nix).
+    # Nothing listens in the container, and where nobody offers the name, nothing changes.
+    wants: [ github, nix-container-store, remote-ssh ]
 
     # Which nix features this repo's build needs, plus where its artifacts substitute
     # from. In the container this is the whole nix configuration the devshell sees —
