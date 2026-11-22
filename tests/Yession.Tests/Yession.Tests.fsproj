@@ -179,6 +179,8 @@
     <!-- The door of a session: its wire, its record, and the `yession-enter` bin through a
          real socket. After ByteSpawn.fs, whose spawn it stands on. -->
     <Compile Include="EntryDoors.fs" />
+    <!-- The entries of one person as one visit, and the lines that a page shows for it. -->
+    <Compile Include="Visits.fs" />
     <Compile Include="VolumeLeases.fs" />
     <Compile Include="SeededFiles.fs" />
     <Compile Include="Properties.fs" />

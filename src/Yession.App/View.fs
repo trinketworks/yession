@@ -3626,6 +3626,20 @@ module View =
                   <span class="{Style.chatChipText}">typed in {where} for {length}</span>
                   <span class="shrink-0">{stretchEnding Style.statusFaint people stretch.End}</span>
                 </button>"""
+        // A visit to a sandbox through the door of the session: one line where it started and
+        // one where it ended. A line and not a button, because an entry has no recording to
+        // open. It has no author line: the person who came is not a member of the session,
+        // and the line names that person in its own words.
+        let visitStartedItem (visit: SandboxVisit) =
+            html $"""
+                <div class="{Style.chatVisit}" data-chat-visit="{string (EventOffset.value visit.VisitOffset)}">
+                  <span class="{Style.chatChipText}">{SandboxVisit.entered visit}</span>
+                </div>"""
+        let visitEndedItem (ended: VisitEnd) =
+            html $"""
+                <div class="{Style.chatVisit}" data-chat-visit-end="{string (EventOffset.value ended.EndedVisit.VisitOffset)}">
+                  <span class="{Style.chatChipText}">{SandboxVisit.left ended}</span>
+                </div>"""
         // One call the agent made. No pane tab: unlike a block there is nothing recorded to
         // open — but there IS something to read: what the call was given and what it answered.
         // Those used to sit on the line (the arguments, truncated, beside the name) and under
@@ -3852,6 +3866,8 @@ module View =
                 // a rule the type cannot hold — and this is the line that changes on the day
                 // somebody decides a screen should show it.
                 | RowItem (TimelineThought _) -> None
+                | RowItem (TimelineVisitStarted visit) -> Some (None, fun () -> visitStartedItem visit)
+                | RowItem (TimelineVisitEnded ended) -> Some (None, fun () -> visitEndedItem ended)
                 | RowWorkRun (turn, items) -> Some (Some ActorRef.Agent, fun () -> workRun turn items)
                 | RowTaskCard (turn, items) ->
                     let lines =
@@ -5527,6 +5543,11 @@ module View =
                     match ClientModel.sandboxPurpose sandbox model with
                     | None -> Lit.nothing
                     | Some purpose -> html $"""<span class="{Style.startInNote}">{purpose}</span>"""
+                // Who is in the place now through the door of the session.
+                let visitors =
+                    VisitProjection.openIn sandbox model.Timeline.Visits
+                    |> List.map (fun visit ->
+                        html $"""<span class="{Style.startInNote}" data-start-in-visitor="{visit.Visitor}">{SandboxVisit.here visit}</span>""")
                 html $"""
                     <li class="{Style.startInRow}">
                       <button type="button" class="{Style.startInChoice}" data-start-in-choice="{SandboxRef.render sandbox}"
@@ -5537,6 +5558,7 @@ module View =
                         <span class="{Style.startInWho}">
                           <span class="{if isDefault sandbox then Style.startInChoiceNameDefault else Style.startInChoiceName}">{placeName sandbox}</span>
                           {note}
+                          {visitors}
                         </span>
                       </button>
                     </li>"""
