@@ -286,6 +286,7 @@ let private policy : SandboxPolicy =
       Volumes = []
       SeatbeltRules = []
       Devices = []
+      LinuxCapabilities = []
       Realisation = []
       Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
       WorkingDirectory = None
