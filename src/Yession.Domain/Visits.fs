@@ -58,20 +58,29 @@ module SandboxVisit =
     /// How long the visit took.
     let duration (ended: VisitEnd) : System.TimeSpan = ended.VisitEnded - ended.EndedVisit.VisitStarted
 
-    /// "nick entered octo/hello:dev through ssh".
-    let entered (visit: SandboxVisit) : string =
-        sprintf "%s entered %s through %s" visit.Visitor (SandboxRef.render visit.VisitedSandbox) visit.VisitorCame
+    /// "entered sandbox octo/hello:dev through ssh". The line starts with the deed, as the
+    /// line of each other event does (`Phrase.deed`). The reader puts the visitor before it.
+    let entered (visit: SandboxVisit) : Phrase =
+        Phrase.deed
+            "entered"
+            [ Segment.Text "sandbox "
+              Segment.Ref (EntityRef.Sandbox visit.VisitedSandbox)
+              Segment.Text (sprintf " through %s" visit.VisitorCame) ]
 
-    /// "nick left octo/hello:dev after 12 minutes". The reason follows when it is not an
-    /// ordinary one: "nick left octo/hello:dev after 1 minute: session restarted".
-    let left (ended: VisitEnd) : string =
-        let said =
-            sprintf
-                "%s left %s after %s"
-                ended.EndedVisit.Visitor
-                (SandboxRef.render ended.EndedVisit.VisitedSandbox)
-                (Elapsed.inWords (duration ended))
-        if endedAsUsual ended.LastReason then said else sprintf "%s: %s" said ended.LastReason
+    /// "left sandbox octo/hello:dev after 12 minutes". The reason follows when it is not an
+    /// ordinary one: "left sandbox octo/hello:dev after 1 minute: session restarted".
+    let left (ended: VisitEnd) : Phrase =
+        let after = sprintf " after %s" (Elapsed.inWords (duration ended))
+        let why = if endedAsUsual ended.LastReason then "" else sprintf ": %s" ended.LastReason
+        Phrase.deed
+            "left"
+            [ Segment.Text "sandbox "
+              Segment.Ref (EntityRef.Sandbox ended.EndedVisit.VisitedSandbox)
+              Segment.Text (after + why) ]
+
+    /// The line as prose, with the visitor first: "nick entered sandbox octo/hello:dev
+    /// through ssh". For a reader that has no page.
+    let said (visitor: string) (phrase: Phrase) : string = sprintf "%s %s" visitor (Phrase.said phrase)
 
     /// "nick is here through ssh", for a row that already names the sandbox.
     let here (visit: SandboxVisit) : string = sprintf "%s is here through %s" visit.Visitor visit.VisitorCame
