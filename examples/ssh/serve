@@ -1,0 +1,192 @@
+#!/bin/sh
+# serve: one SSH connection, served on the input and the output of this script.
+#
+# This script runs IN a sandbox, as the command of one entry (`yession-enter ... -- serve`).
+# It starts `sshd -i`, which is the mode of sshd for one connection that is already open. No
+# daemon runs in the sandbox, and nothing in the sandbox listens on a port.
+#
+#   serve [AUTHORIZED_KEYS]
+#
+#   AUTHORIZED_KEYS   the public keys that can log in. Default: $YESSION_SSH_AUTHORIZED_KEYS,
+#                     then the file `authorized_keys` beside this script.
+#   YESSION_SSH_STATE the directory for the host key of this user. Default:
+#                     ${XDG_STATE_HOME:-$HOME/.local/state}/yession-ssh
+#   YESSION_SSH_SSHD  the sshd to run. Default: the first `sshd` on PATH, then /usr/sbin/sshd.
+#
+# The person logs in as the user that runs this script, which is the user of the sandbox.
+# For a sandbox that runs as root, see "a sandbox that runs as root" below.
+set -eu
+
+say() {
+    printf 'serve: %s\n' "$*" >&2
+}
+
+# has_entry NAME FILE: the file has a line for this name. The shell alone, with no grep.
+has_entry() {
+    [ -r "$2" ] || return 1
+    while IFS=: read -r name _; do
+        [ "$name" = "$1" ] && return 0
+    done < "$2"
+    return 1
+}
+
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+keys=${1:-${YESSION_SSH_AUTHORIZED_KEYS:-$here/authorized_keys}}
+state=${YESSION_SSH_STATE:-${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/yession-ssh}
+
+# sshd finds the home and the shell of the user in the password database.
+if ! id -un >/dev/null 2>&1; then
+    say "the user $(id -u) has no entry in the password database of this sandbox."
+    exit 78
+fi
+
+sshd=${YESSION_SSH_SSHD:-}
+if [ -z "$sshd" ]; then
+    sshd=$(command -v sshd 2>/dev/null || true)
+    if [ -z "$sshd" ] && [ -x /usr/sbin/sshd ]; then
+        sshd=/usr/sbin/sshd
+    fi
+fi
+if [ -z "$sshd" ] || [ ! -x "$sshd" ]; then
+    say 'sshd is not installed in this sandbox. Add the OpenSSH server to the image.'
+    exit 78
+fi
+
+# ssh-keygen is beside sshd in each OpenSSH package. PATH is the second place to look.
+keygen=$(dirname -- "$sshd")/ssh-keygen
+if [ ! -x "$keygen" ]; then
+    keygen=$(dirname -- "$(dirname -- "$sshd")")/bin/ssh-keygen
+fi
+if [ ! -x "$keygen" ]; then
+    keygen=$(command -v ssh-keygen 2>/dev/null || true)
+fi
+if [ -z "$keygen" ]; then
+    say 'ssh-keygen is not installed in this sandbox. It comes with the OpenSSH server.'
+    exit 78
+fi
+
+if [ ! -r "$keys" ]; then
+    say "no authorized keys at $keys. The resource of the operator supplies this file."
+    exit 78
+fi
+
+# One host key for each user of each sandbox, made at the first entry. A sandbox that keeps
+# its home keeps its key, and the client of the person then knows the sandbox again.
+key=$state/ssh_host_ed25519_key
+if [ ! -f "$key" ]; then
+    mkdir -p "$state"
+    chmod 700 "$state"
+    if ! "$keygen" -q -t ed25519 -N '' -f "$key.$$" </dev/null >&2; then
+        say 'ssh-keygen did not make a host key.'
+        exit 78
+    fi
+    # Two entries can start at the same time. The rename makes one of the two keys the key.
+    mv -f "$key.$$" "$key"
+    rm -f "$key.$$.pub"
+fi
+
+# --- a sandbox that runs as root ---------------------------------------------------------
+#
+# As root, sshd separates privileges. Before the login it changes its root directory to
+# /var/empty and becomes the user `sshd`. After the login it becomes the person's user. That
+# needs three capabilities that a hardened container does not have: SYS_CHROOT, SETUID and
+# SETGID. An operator grants them to a sandbox with a `capability:` resource. It also needs
+# the directory, the user, and a root account that is not locked. A container image that
+# never ran a daemon has none of the three, so this script makes them.
+root_login=no
+if [ "$(id -u)" = 0 ]; then
+    root_login=prohibit-password
+
+    # Bits 6 (SETGID), 7 (SETUID) and 18 (SYS_CHROOT) of the effective set.
+    # Read with the shell alone: an image can be without sed and grep.
+    effective=
+    if [ -r /proc/self/status ]; then
+        while read -r field value; do
+            [ "$field" = CapEff: ] && effective=$value
+        done < /proc/self/status
+    fi
+    if [ "${#effective}" = 16 ]; then
+        missing=
+        low=$((0x${effective#????????}))
+        [ $((low >> 7 & 1)) = 1 ] || missing="$missing SETUID"
+        [ $((low >> 6 & 1)) = 1 ] || missing="$missing SETGID"
+        [ $((low >> 18 & 1)) = 1 ] || missing="$missing SYS_CHROOT"
+        if [ -n "$missing" ]; then
+            say "this sandbox runs as root and does not have the capabilities:$missing."
+            say 'sshd needs them to change user. The resource of the operator grants them:'
+            say '  capability: [ SETUID, SETGID, SYS_CHROOT ]'
+            exit 78
+        fi
+    fi
+
+    if [ ! -d /var/empty ]; then
+        if ! mkdir -p /var/empty; then
+            say 'this script can not make the directory /var/empty, which sshd needs.'
+            exit 78
+        fi
+    fi
+    chmod 755 /var/empty
+
+    if ! has_entry sshd /etc/passwd; then
+        if ! printf 'sshd:x:74:74:sshd privilege separation:/var/empty:/bin/false\n' >> /etc/passwd; then
+            say 'this script can not add the user sshd to /etc/passwd, which sshd needs.'
+            exit 78
+        fi
+        has_entry sshd /etc/group || printf 'sshd:x:74:\n' >> /etc/group || true
+    fi
+
+    # sshd refuses a locked account before it reads a key. `!` in the password field is a
+    # lock. `*` is no password and no lock, so only a key can log in. The file is written
+    # in place, because a rename can not replace a file that is a mount.
+    if [ -f /etc/shadow ]; then
+        locked=no
+        unlocked=
+        while IFS= read -r line || [ -n "$line" ]; do
+            case $line in
+                'root:!'*)
+                    locked=yes
+                    rest=${line#root:}
+                    line="root:*:${rest#*:}"
+                    ;;
+            esac
+            unlocked="$unlocked$line
+"
+        done < /etc/shadow
+        if [ "$locked" = yes ] && ! printf %s "$unlocked" > /etc/shadow; then
+            say 'the account root is locked, and this script can not write /etc/shadow.'
+            exit 78
+        fi
+    fi
+fi
+
+# A login shell from sshd starts with a new environment. The PATH of this script is the PATH
+# that the entrypoint of the sandbox made, so the person gets the same tools as a terminal
+# of the session. No other variable crosses: a variable can hold a secret.
+set_path=
+case ${PATH:-} in
+    '' | *[!A-Za-z0-9_/.:+@%=-]*) ;;
+    *) set_path=yes ;;
+esac
+
+# -i   one connection, on the input and the output
+# -e   the log goes to the error output, which the host of the deployment keeps
+# -f /dev/null   no configuration file of the image changes what this script decides
+#
+# StrictModes is off for one reason: the authorized keys are a file of the operator on a
+# read-only mount, so its owner is not the user of the sandbox, and sshd in strict mode
+# refuses a key file that the user does not own. The mount is read-only, so the sandbox can
+# not add a key.
+exec "$sshd" -i -e -f /dev/null \
+    -o "HostKey=$key" \
+    -o "AuthorizedKeysFile=$keys" \
+    -o "PermitRootLogin=$root_login" \
+    -o PubkeyAuthentication=yes \
+    -o PasswordAuthentication=no \
+    -o KbdInteractiveAuthentication=no \
+    -o UsePAM=no \
+    -o StrictModes=no \
+    -o PidFile=none \
+    -o PrintMotd=no \
+    -o PrintLastLog=no \
+    ${set_path:+-o "SetEnv=PATH=$PATH"} \
+    -o 'Subsystem=sftp internal-sftp'

@@ -584,6 +584,10 @@ yession-enter --door <socket> --as <subject> --via <label> <sandbox> -- <command
 
 The session does not record the bytes of an entry (docs/GAPS.md).
 
+[`examples/ssh`](../examples/ssh/) composes the door, the `sandbox` announcement and `sshd -i`
+into SSH access to a sandbox. It has a follower that keeps one process for each announcement,
+which a deployment can use for other kinds too.
+
 ### Addressing
 
 A deployment is either **loopback** (nothing set, everything on `127.0.0.1`) or **fronted**

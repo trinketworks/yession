@@ -76,11 +76,17 @@ in
   # four literal characters, once per bootstrap prompt, ahead of every block (and so does
   # devenv's own `(devenv)` prompt branding, which assumes the same thing). Declaring it
   # here puts it ahead of the incidental one on PATH.
+  #
+  # openssh, on Linux: `sshd` for a person who connects to this repo's `dev` sandbox with
+  # SSH (yession.yaml `wants: remote-ssh`, examples/ssh/serve). git brings the ssh client as
+  # a dependency of its own, and does not put `sshd` on PATH. Nothing starts the daemon:
+  # `serve` runs `sshd -i` for one connection at a time.
   packages =
     [ pkgs.git pkgs.gh pkgs.actionlint pkgs.uv pkgs.python312 pkgs.caddy pkgs.zsh pkgs.jq
       pkgs.bashInteractive ]
     ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux
-         [ pkgs.dbus pkgs.gnome-keyring pkgs.bubblewrap pkgs.socat pkgs.ripgrep pkgs.eudev pkgs.procps ];
+         [ pkgs.dbus pkgs.gnome-keyring pkgs.bubblewrap pkgs.socat pkgs.ripgrep pkgs.eudev pkgs.procps
+           pkgs.openssh ];
 
   # Name the confinement tools for the srt backend exactly as the installable's wrappers do
   # (nix/packages.nix), so a dev-shell run and an installed run confine through the same
