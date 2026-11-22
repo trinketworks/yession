@@ -421,6 +421,29 @@ let private sigkill (pid: int) : unit = Fable.NodeExtras.Processes.kill pid "SIG
 
 let private processTests =
     testList "Session as an OS process (Step 23)" [
+        // The session removes the socket of its door when it stops. A stop ends the process
+        // with a signal, and a process that a signal ends runs no `exit` listener, so only a
+        // real session process can show this.
+        testCaseAsync "a session that the Manager stops removes the socket of its door" <|
+            async {
+                let dataDir =
+                    sprintf "tests/Yession.Tests/out/.data/door-%d" (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+                let! pm =
+                    ProcessManager.create
+                        { ProcessManager.Options.defaults dataDir nodePath [ "app/SessionMain.js" ] with
+                            Strategy = Some Strategy.localhost }
+                let doors = TestFiles.tempDir "yd-"
+                let socket = doors + "/door-stop.sock"
+                let record = pm.CreateSession "door-stop" "Door" |> expect
+                let! launched =
+                    Support.withEnv [ "YESSION_SESSION_DOORS", Some doors ] (fun () -> pm.Launch record.SessionId)
+                launched |> expect |> ignore
+                let whileItRan = TestFiles.exists socket
+                let! stopped = pm.Stop record.SessionId
+                stopped |> expect
+                do! pm.StopAll ()
+                Expect.equal (whileItRan, TestFiles.exists socket) (true, false) "a socket while it ran, and none after the stop"
+            }
         testCaseAsync "spawn contract: launch, serve, message, stop, resume with history, crash observation, manager restart" <|
             async {
                 let dataDir =

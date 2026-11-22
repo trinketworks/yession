@@ -164,6 +164,9 @@ let private doorSocket : string option =
 /// carry it.
 let mutable private doorListensAt : string option = None
 
+/// Close the door and remove its socket. Nothing, while this session has no door.
+let mutable private closeDoor : unit -> unit = ignore
+
 /// What the operator grants every work sandbox without it asking: the profile's `always`,
 /// flattened once at boot.
 ///
@@ -1766,7 +1769,12 @@ Async.StartImmediate (
             | Error reason -> failwith reason
             | Ok door ->
                 doorListensAt <- Some door.ListensAt
-                // The socket goes with the process, whatever ends it.
+                // The socket goes with the process. A stop calls `closeDoor` before the
+                // session sends itself the signal: a process that a signal ends does not
+                // run its `exit` listeners, and the socket of each stopped session stayed
+                // in the directory of the operator. The `exit` listener is for each other
+                // end.
+                closeDoor <- door.Close
                 Fable.NodeExtras.Processes.onEnding "exit" door.Close
         // The first set, and then a look after each append. The registry stream of the
         // Manager thus shows each sandbox from boot.
@@ -1982,6 +1990,7 @@ Async.StartImmediate (
                     async {
                         do! within hostStopDeadline (host.Stop ())
                         do! Telemetry.shutdownWithin clock Telemetry.shutdownDeadline telemetry
+                        closeDoor ()
                         finish ()
                     })
         // Sessions never outlive their Manager: spawned under the guard, the Manager's
