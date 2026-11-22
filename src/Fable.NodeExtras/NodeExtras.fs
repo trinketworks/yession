@@ -1773,6 +1773,10 @@ module HttpClient =
 /// a caller has nothing to say about it, and so nothing to get wrong.
 [<RequireQualifiedAccess>]
 type ResponseHeader =
+    /// The one origin that may read this answer from a page of a different origin.
+    | AccessControlAllowOrigin of string
+    /// Lets that page read an answer to a request it sent with credentials.
+    | AccessControlAllowCredentials
     | CacheControl of string
     | Connection of string
     | ContentDisposition of string
@@ -1782,6 +1786,8 @@ type ResponseHeader =
     | ETag of string
     | Location of string
     | SetCookie of string
+    /// The request headers that the answer depends on, for a cache between the two ends.
+    | Vary of string
 
 [<RequireQualifiedAccess>]
 module ResponseHeader =
@@ -1789,6 +1795,9 @@ module ResponseHeader =
     /// The name on the wire. Lowercase, which is what Node answers a request's with too.
     let name (header: ResponseHeader) : string =
         match header with
+        | ResponseHeader.AccessControlAllowOrigin _ -> "access-control-allow-origin"
+        | ResponseHeader.AccessControlAllowCredentials -> "access-control-allow-credentials"
+        | ResponseHeader.Vary _ -> "vary"
         | ResponseHeader.CacheControl _ -> "cache-control"
         | ResponseHeader.Connection _ -> "connection"
         | ResponseHeader.ContentDisposition _ -> "content-disposition"
@@ -1801,6 +1810,9 @@ module ResponseHeader =
 
     let value (header: ResponseHeader) : string =
         match header with
+        | ResponseHeader.AccessControlAllowCredentials -> "true"
+        | ResponseHeader.AccessControlAllowOrigin v
+        | ResponseHeader.Vary v
         | ResponseHeader.CacheControl v
         | ResponseHeader.Connection v
         | ResponseHeader.ContentDisposition v

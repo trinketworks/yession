@@ -65,6 +65,9 @@ type AuthorizationParameters =
     abstract state : string with get, set
     abstract code_challenge : string with get, set
     abstract code_challenge_method : string with get, set
+    /// How the provider is to answer. Unset = a redirect with the code in its query, which
+    /// is the standard answer.
+    abstract response_mode : string with get, set
 
 /// The checks `authorizationCodeGrant` holds the callback to.
 type AuthorizationChecks =

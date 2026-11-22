@@ -388,7 +388,12 @@ let start
                     [ ResponseHeader.ContentType "text/html; charset=utf-8"
                       ResponseHeader.CacheControl CachePolicy.shell
                       ResponseHeader.ETag shellEtag
-                      Ssr.ContentPolicy.header Ssr.ContentPolicy.Document.SessionShell nonce ])
+                      Ssr.ContentPolicy.header
+                          (Ssr.ContentPolicy.Document.SessionShell (
+                              auth
+                              |> Option.bind (fun a -> a.Provider ())
+                              |> Option.map (fun issuer -> (requestUrl issuer).origin)))
+                          nonce ])
                 res.``end`` (bootstrapHtml nonce)
         | Some (Asset (build, path)) ->
             // Whatever this build left in its asset directory — the bundle, the stylesheet, a
@@ -461,6 +466,8 @@ let start
             // painted, bounced and painted again; and by renavigation on a 401 from `/me`,
             // for a shell reached any other way. The cached shell itself never redirects,
             // preserving offline reopen.
+            let inBackground =
+                (requestUrl req.url).search = "?" + Access.BackgroundSignIn.loginQuery
             match auth with
             | None ->
                 res.writeHead (404, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
@@ -469,13 +476,25 @@ let start
             // restarted — the bounce would only mint the cookie it already carries, three
             // redirects later. `./` relative to `<mount>/login` is the shell, as `/callback`
             // spells it below.
+            //
+            // A page that signs in in the background asks for the same two answers as text
+            // (`BackgroundSignIn`): 204 where a redirect to the shell goes, and the authorize
+            // address in the body where a redirect to it goes. A page cannot read a redirect.
             | Some a when (a.IdentityOf req).IsSome ->
-                res.writeHead (302, [ ResponseHeader.Location "./"; ResponseHeader.CacheControl "no-store" ])
+                if inBackground then
+                    res.writeHead (204, [ ResponseHeader.CacheControl "no-store" ])
+                else
+                    res.writeHead (302, [ ResponseHeader.Location "./"; ResponseHeader.CacheControl "no-store" ])
                 res.``end`` ""
             | Some a ->
                 Async.StartImmediate (
                     async {
-                        match! a.BeginLogin () with
+                        match! a.BeginLogin (if inBackground then SessionAuth.SignInBy.Background else SessionAuth.SignInBy.Navigation) with
+                        | Some url when inBackground ->
+                            res.writeHead (
+                                200,
+                                [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
+                            res.``end`` url
                         | Some url ->
                             res.writeHead (302, [ ResponseHeader.Location url; ResponseHeader.CacheControl "no-store" ])
                             res.``end`` ""
