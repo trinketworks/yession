@@ -22,6 +22,8 @@ type ControlRoute =
     | Status
     /// Whether the session is in use (Plan 11).
     | Activity
+    /// What a session tells the hosts of the deployment: its whole set of announcements.
+    | Announce
     /// Dynamic client registration: bind this launch's OAuth client to its secret.
     | RegisterClient
     /// Declare what to forward from the Manager's hook endpoints.
@@ -62,6 +64,7 @@ module ControlRoute =
         [ ControlRoute.Name
           ControlRoute.Status
           ControlRoute.Activity
+          ControlRoute.Announce
           ControlRoute.RegisterClient
           ControlRoute.SubscribeHook
           ControlRoute.UnsubscribeHook
@@ -92,6 +95,7 @@ module ControlRoute =
         | ControlRoute.Name
         | ControlRoute.Status
         | ControlRoute.Activity
+        | ControlRoute.Announce
         | ControlRoute.RegisterClient
         | ControlRoute.SubscribeHook
         | ControlRoute.UnsubscribeHook
@@ -117,6 +121,7 @@ module ControlRoute =
         | ControlRoute.Name -> "/control/name"
         | ControlRoute.Status -> "/control/status"
         | ControlRoute.Activity -> "/control/activity"
+        | ControlRoute.Announce -> "/control/announce"
         | ControlRoute.RegisterClient -> "/control/register-client"
         | ControlRoute.SubscribeHook -> "/control/hooks/subscribe"
         | ControlRoute.UnsubscribeHook -> "/control/hooks/unsubscribe"

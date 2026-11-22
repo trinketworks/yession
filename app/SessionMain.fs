@@ -259,6 +259,11 @@ let private reportActivity =
 let private reportStatus =
     controlChannel |> Option.map (fun (url, secret) -> ControlClient.statusReporter url secret)
 
+// ...and what this session announces to the hosts of the deployment, which the Manager
+// relays in its registry stream. Absent without a control channel, as the three above are.
+let private reportAnnouncements =
+    controlChannel |> Option.map (fun (url, secret) -> ControlClient.announceReporter url secret)
+
 // Secrets (Plan 06): the session's write/list/delete surface over the same channel,
 // pre-bound to this session's own scope. Built after the session id parses (below).
 let private secretsCapabilitiesFor (sessionId: SessionId) =
@@ -670,6 +675,40 @@ let private reconcileWatches (watches: PrWatch list) =
 // log the registry appends to), so this cell is filled once `startFull` resolves — before
 // which no turn can run, because nothing is listening.
 let mutable private workSandboxes : WorkSandboxes.WorkSandboxes = WorkSandboxes.unavailable
+
+/// The `sandbox` announcements of this session: one for each sandbox that it has. The
+/// resources are the names that the sandbox holds on this host: what the operator always
+/// grants, what the sandbox uses, and what it wants where the operator offers it.
+let private sandboxAnnouncements () : Announcement list =
+    workSandboxes.Listed ()
+    |> List.map (fun sandbox ->
+        let held =
+            match resourceProfile with
+            | Some file ->
+                file.Always
+                @ ResourceProfile.selected file.Resources sandbox.Request.Spec.Uses sandbox.Request.Spec.Wants
+                |> List.distinct
+            | None -> []
+        ControlWire.SandboxAnnouncement.announce
+            { Sandbox = SandboxRef.render sandbox.Ref
+              Running = Option.isSome (sandbox.Environment.CurrentRef ())
+              Backend = sandbox.Backend
+              Resources = held |> List.map ResourceName.value })
+
+/// The set that the Manager has, as far as this session knows.
+let mutable private announced : Announcement list option = None
+
+/// Send the announcements of this session to the Manager when they are different from the
+/// last set. Each append to the log calls this, because a sandbox changes its state before
+/// it records the change. The comparison keeps the report to the changes.
+let private publishAnnouncements () =
+    match reportAnnouncements with
+    | Some report ->
+        let next = sandboxAnnouncements ()
+        if announced <> Some next then
+            announced <- Some next
+            Async.StartImmediate (report next)
+    | None -> ()
 
 
 // The terminal manager (Plan 25 needs it here for the `shell_profile` query and the command
@@ -1619,6 +1658,10 @@ Async.StartImmediate (
         // capabilities and the `work_sandboxes` query read is filled here — before the
         // readiness line, and therefore before any turn or any browser can ask.
         workSandboxes <- host.Sandboxes
+        // The first set, and then a look after each append. The registry stream of the
+        // Manager thus shows each sandbox from boot.
+        publishAnnouncements ()
+        log.OnAppended (fun _ -> publishAnnouncements ()) |> ignore
         terminals <- host.Terminals
         files <- host.Files
         wakeAgent.Value <- host.Wake

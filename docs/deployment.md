@@ -566,6 +566,43 @@ The template is not on the wire. The deployment applies its own to `id` and `por
 prefix has one home. [`examples/proxy/main.mjs`](../examples/proxy/)
 is a reference reconciler. [§Tailscale](#tailscale) composes it.
 
+##### Announcements
+
+Each entry has an `announcements` list. An announcement is a fact that the session tells the
+hosts of the deployment. The Manager relays it and does not read its `data`
+([decision](decisions/2026-11-22-a-session-announces-and-the-manager-relays.md)):
+
+```json
+{ "id": "local-session", "name": "…", "port": 57239, "pid": 95225,
+  "announcements": [
+    { "kind": "sandbox", "name": "octo/hello:dev",
+      "data": { "state": "running", "backend": "docker", "resources": ["ca", "github"] } } ] }
+```
+
+- `kind` says what the announcement is about. `name` says which one. One session has at most
+  one announcement for each pair of `kind` and `name`.
+- `data` is a JSON object. Its fields belong to the kind.
+- The list is empty for a session that announced nothing. A Manager older than the field
+  sends no list.
+
+A session announces the kind `sandbox` for each sandbox that it has:
+
+| Field of `data` | Value |
+| --- | --- |
+| `state` | `running`, or `not-running` for a sandbox that the session has and that does not run now. |
+| `backend` | The backend of the sandbox, for example `docker` or `seatbelt`. |
+| `resources` | The names of the operator's resources that the sandbox holds on this host. |
+
+A program that follows announcements obeys these rules:
+
+1. Apply each frame whole. An announcement that is not in the newest frame is gone. A session
+   that is not in the newest frame is gone, with each of its announcements.
+2. Ignore a kind that you do not know.
+3. Ignore a field of `data` that you do not know. A newer session can add a field.
+4. Identify an announcement by the session `id`, the `kind` and the `name`.
+5. Trust an announcement as much as you trust the session. The Manager checks the size of an
+   announcement, and does not check that it is true.
+
 ---
 
 ## Integrations

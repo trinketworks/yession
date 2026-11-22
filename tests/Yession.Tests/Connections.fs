@@ -1356,6 +1356,7 @@ let private startConnectionsServer (callers: (string * Control.ControlCaller) li
                         (fun _ _ -> async { return Ok () })
                         (fun _ _ -> async { return Ok () })
                         (fun _ _ -> async { return Ok () })
+                        (fun _ _ -> async { return Ok () })
                         (fun _ _ -> Subscription.none)
                         (fun _ _ _ -> Subscription.none)
                         dummyRegister

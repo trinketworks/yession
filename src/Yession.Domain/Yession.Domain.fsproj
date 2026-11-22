@@ -137,6 +137,9 @@
     <!-- What a session says about itself to whoever lists it, in the query vocabulary's
          tones. Before PrWatches.fs, whose summary is one. -->
     <Compile Include="Standings.fs" />
+    <!-- What a session tells the hosts of a deployment through the registry stream. Depends
+         on nothing: the data of an announcement is text that only its two ends read. -->
+    <Compile Include="Announcements.fs" />
     <!-- Watched pull requests (the projection and the transition algebra). After
          Events.fs like every projection; beside Repos.fs, whose shape it mirrors. -->
     <Compile Include="PrWatches.fs" />
