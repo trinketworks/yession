@@ -120,6 +120,7 @@ let private withTappedShellTerminal
             let environment : SessionEnvironment.SessionEnvironment =
                 { Ensure = fun _ _ -> async { return EnvironmentAvailable }
                   Spawn = fun exec onChunk -> sandbox.Spawn exec onChunk
+                  SpawnBytes = fun exec onChunk -> sandbox.SpawnBytes exec onChunk
                   SpawnPty =
                     fun exec cols rows onOutput ->
                         async {

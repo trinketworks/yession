@@ -175,6 +175,7 @@
          its own, as StandInMain.fs is: its top level runs only in a child started on it. -->
     <Compile Include="SupervisorRehearsalMain.fs" />
     <Compile Include="Supervisor.fs" />
+    <Compile Include="ByteSpawn.fs" />
     <Compile Include="VolumeLeases.fs" />
     <Compile Include="SeededFiles.fs" />
     <Compile Include="Properties.fs" />

@@ -208,6 +208,14 @@ let tests =
                 Expect.stringContains reason "could not be made. The daemon said: " "the refusal carries what the daemon said"
             })
 
+            // Docker frames the two outputs of an exec on one connection. The byte spawn
+            // decodes no frame as text.
+            testCaseAsync "the byte spawn changes no byte" (async {
+                let! _, sandbox = startOrFail alpineSpec
+                do! bytesGoThroughUnchanged sandbox
+                do! sandbox.Dispose ()
+            })
+
             // The memory ceiling (`ContainerMemory`), read where the kernel keeps it: the
             // container's own cgroup, which cgroup v2 mounts at /sys/fs/cgroup inside it.
             testCaseAsync "a container is created with the memory ceiling its declaration names" (async {

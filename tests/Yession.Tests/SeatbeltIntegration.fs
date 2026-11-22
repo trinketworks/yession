@@ -399,6 +399,14 @@ let private macCases () =
             Expect.equal (out.Trim ()) "confined" "its stdout reached the caller"
         })
 
+        // The supervisor holds the pipes of a command, and base64 carries the bytes on its
+        // wire in the two directions.
+        testCaseAsync "the byte spawn changes no byte" (async {
+            let! sandbox = startSandbox (policyIn (freshDir ()))
+            do! bytesGoThroughUnchanged sandbox
+            do! sandbox.Dispose ()
+        })
+
         testCaseAsync "a command writes the workspace it was given" (async {
             let workspace = freshDir ()
             let! sandbox = startSandbox (policyIn workspace)

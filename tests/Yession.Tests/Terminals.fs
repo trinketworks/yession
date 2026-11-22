@@ -2771,6 +2771,7 @@ let private scriptedEnvironment (script: string -> (OutputStream * string) list 
                               Kill = ignore
                               Exited = async { return SandboxExited code } }
                 }
+          SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
           SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> Some "scripted"
@@ -4702,6 +4703,7 @@ let private profileEnvironment (present: unit -> Set<string>) =
                               Kill = ignore
                               Exited = async { return SandboxExited code } }
                 }
+          SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
           SpawnPty =
             fun exec _ _ onOutput ->
                 async {
@@ -4765,6 +4767,7 @@ let private blockingEnvironment () =
                             }
                     return Ok { WriteStdin = ignore; CloseStdin = ignore; Kill = ignore; Exited = exited }
                 }
+          SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
           SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> Some "scripted"

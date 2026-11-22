@@ -21,6 +21,10 @@ open Fable.Core.JsInterop
 type [<AllowNullLiteral>] Stream =
     inherit Fable.NodeExtras.Readable
     abstract write: text: string -> bool
+    /// Write the bytes of an F# array, unchanged. `write` encodes its text as UTF-8, so a
+    /// process that reads bytes gets them only from this verb.
+    [<Emit("$0.write($1)")>]
+    abstract writeBytes: bytes: byte [] -> bool
     abstract ``end``: unit -> unit
 
 /// A `node:stream` PassThrough — a writable sink `demuxStream` pushes one output stream

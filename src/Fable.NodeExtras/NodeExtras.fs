@@ -1372,6 +1372,12 @@ type Writable =
     [<Emit("$0.write($1)")>]
     abstract writeText : text: string -> bool
 
+    /// Write the bytes of an F# array, unchanged. A `byte []` is a `Uint8Array` in the
+    /// compiled program, and Node writes a `Uint8Array` as it is. Answers what `writeBytes`
+    /// answers.
+    [<Emit("$0.write($1)")>]
+    abstract writeByteArray : bytes: byte [] -> bool
+
     /// `end()`: no more is coming. The reader sees the stream END — for a child's stdin, the
     /// same end of input it sees when the writer dies, which is what makes it the polite
     /// half of one protocol rather than a second one.
@@ -1453,6 +1459,14 @@ module Readables =
     let text (stream: Readable) (handler: string -> unit) : unit =
         stream.setEncoding BufferEncoding.Utf8 |> ignore
         onText stream handler
+
+    /// Every chunk as BYTES, unchanged. A stream that nobody told to decode gives a `Buffer`
+    /// for each chunk. A `Buffer` is a `Uint8Array`, and a `byte []` is a `Uint8Array` in the
+    /// compiled program, so the handler gets the bytes that the stream read.
+    ///
+    /// Do not use this verb and `text` on one stream: after `setEncoding`, a chunk is text.
+    [<Emit("$0.on('data', $1)")>]
+    let bytes (stream: Readable) (handler: byte [] -> unit) : unit = jsNative
 
 [<AutoOpen>]
 module FileStreams =

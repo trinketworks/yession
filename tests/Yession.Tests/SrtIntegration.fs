@@ -541,6 +541,15 @@ let tests =
                         SyncOptions.none
                 Expect.equal ran.stdout (Some "closed\n") (sprintf "descriptor 9 was closed inside; stderr: %A" ran.stderr)
              }))
+
+            // srt confines by the argv that it writes. The pipes of a command are those of
+            // the child, so nothing between the session and the command reads the bytes.
+            testCaseAsync "the byte spawn changes no byte" (async {
+                let workspace = TestFiles.canonical (TestFiles.tempDir "yession-srt-")
+                let! sandbox = startSandbox (policyIn workspace [])
+                do! bytesGoThroughUnchanged sandbox
+                do! sandbox.Dispose ()
+            })
         ])
 
 // --- [Srt, Ports]: two sandboxes, one session ----------------------------------------------

@@ -87,8 +87,20 @@ module Wire =
             arguments: string list *
             directory: string option *
             environment: Map<string, string>
-        /// Text for the input of a command.
+        /// Start one command whose streams carry bytes. The fields are those of `Run`. The
+        /// supervisor decodes no output of such a command, and each event for its output is
+        /// an `OutputBytes`.
+        | RunBytes of
+            id: int *
+            executable: string *
+            arguments: string list *
+            directory: string option *
+            environment: Map<string, string>
+        /// Text for the input of a command that `Run` started.
         | Input of id: int * text: string
+        /// Bytes for the input of a command that `RunBytes` started, as base64. A line of
+        /// JSON carries text, and base64 is text for each byte value.
+        | InputBytes of id: int * base64: string
         /// No more input comes for a command.
         | EndInput of id: int
         /// End a command, and each process in its process group.
@@ -100,6 +112,9 @@ module Wire =
         /// The supervisor has no proof, and why. It starts no command and ends no process.
         | Refused of reason: string
         | Output of id: int * stream: Stream * text: string
+        /// Bytes that a command of `RunBytes` wrote, as base64: one chunk as the supervisor
+        /// read it.
+        | OutputBytes of id: int * stream: Stream * base64: string
         /// A command ended, and each of its two streams closed. `None` is a command that a
         /// signal ended.
         | Ended of id: int * code: int option
@@ -124,21 +139,35 @@ module Wire =
             | "err" -> Decode.succeed Err
             | other -> Decode.fail (sprintf "no stream is named %s" other))
 
+    /// The start of a command as JSON, under the name of its request.
+    let private encodeStart
+        (name: string)
+        (id: int)
+        (executable: string)
+        (arguments: string list)
+        (directory: string option)
+        (environment: Map<string, string>)
+        =
+        Encode.object [
+            name,
+            Encode.object (
+                [ "id", Encode.int id
+                  "executable", Encode.string executable
+                  "arguments", arguments |> List.map Encode.string |> Encode.list
+                  "environment", environment |> Map.map (fun _ value -> Encode.string value) |> Encode.dict ]
+                @ (directory |> Option.map (fun directory -> "directory", Encode.string directory) |> Option.toList)
+            )
+        ]
+
     let request (request: Request) : string =
         match request with
         | Hello (parent, uid) -> Encode.object [ "hello", Encode.object [ "parent", Encode.int parent; "uid", Encode.int uid ] ]
-        | Run (id, executable, arguments, directory, environment) ->
-            Encode.object [
-                "run",
-                Encode.object (
-                    [ "id", Encode.int id
-                      "executable", Encode.string executable
-                      "arguments", arguments |> List.map Encode.string |> Encode.list
-                      "environment", environment |> Map.map (fun _ value -> Encode.string value) |> Encode.dict ]
-                    @ (directory |> Option.map (fun directory -> "directory", Encode.string directory) |> Option.toList)
-                )
-            ]
+        | Run (id, executable, arguments, directory, environment) -> encodeStart "run" id executable arguments directory environment
+        | RunBytes (id, executable, arguments, directory, environment) ->
+            encodeStart "runBytes" id executable arguments directory environment
         | Input (id, text) -> Encode.object [ "input", Encode.object [ "id", Encode.int id; "text", Encode.string text ] ]
+        | InputBytes (id, base64) ->
+            Encode.object [ "inputBytes", Encode.object [ "id", Encode.int id; "base64", Encode.string base64 ] ]
         | EndInput id -> Encode.object [ "endInput", Encode.int id ]
         | Cancel id -> Encode.object [ "cancel", Encode.int id ]
         |> Encode.toString 0
@@ -159,8 +188,21 @@ module Wire =
                         get.Required.Field "environment" (Decode.dict Decode.string)
                     )))
             Decode.field
+                "runBytes"
+                (Decode.object (fun get ->
+                    RunBytes (
+                        get.Required.Field "id" Decode.int,
+                        get.Required.Field "executable" Decode.string,
+                        get.Required.Field "arguments" (Decode.list Decode.string),
+                        get.Optional.Field "directory" Decode.string,
+                        get.Required.Field "environment" (Decode.dict Decode.string)
+                    )))
+            Decode.field
                 "input"
                 (Decode.object (fun get -> Input (get.Required.Field "id" Decode.int, get.Required.Field "text" Decode.string)))
+            Decode.field
+                "inputBytes"
+                (Decode.object (fun get -> InputBytes (get.Required.Field "id" Decode.int, get.Required.Field "base64" Decode.string)))
             Decode.field "endInput" Decode.int |> Decode.map EndInput
             Decode.field "cancel" Decode.int |> Decode.map Cancel
         ]
@@ -173,6 +215,11 @@ module Wire =
             Encode.object [
                 "output",
                 Encode.object [ "id", Encode.int id; "stream", Encode.string (streamName stream); "text", Encode.string text ]
+            ]
+        | OutputBytes (id, stream, base64) ->
+            Encode.object [
+                "outputBytes",
+                Encode.object [ "id", Encode.int id; "stream", Encode.string (streamName stream); "base64", Encode.string base64 ]
             ]
         | Ended (id, code) ->
             Encode.object [
@@ -196,6 +243,14 @@ module Wire =
                         get.Required.Field "id" Decode.int,
                         get.Required.Field "stream" decodeStream,
                         get.Required.Field "text" Decode.string
+                    )))
+            Decode.field
+                "outputBytes"
+                (Decode.object (fun get ->
+                    OutputBytes (
+                        get.Required.Field "id" Decode.int,
+                        get.Required.Field "stream" decodeStream,
+                        get.Required.Field "base64" Decode.string
                     )))
             Decode.field
                 "ended"
@@ -234,6 +289,18 @@ module Wire =
                     else wanted
                 cut upTo (Input (id, text.Substring (from, upTo - from)) :: pieces)
         cut 0 []
+
+    /// The most bytes that one `InputBytes` request carries. As base64 they are `inputLimit`
+    /// characters.
+    let inputBytesLimit : int = inputLimit / 4 * 3
+
+    /// The requests that carry `bytes` to the input of command `id`: pieces of
+    /// `inputBytesLimit` bytes at most, in order. Each piece is base64 of its own bytes, so
+    /// a reader decodes each piece alone.
+    let inputsOfBytes (id: int) (bytes: byte []) : Request list =
+        [ for from in 0 .. inputBytesLimit .. bytes.Length - 1 do
+              let count = min inputBytesLimit (bytes.Length - from)
+              InputBytes (id, System.Convert.ToBase64String bytes.[from .. from + count - 1]) ]
 
     /// The longest line that a reader takes, in characters. A request that starts a command
     /// holds its arguments and its environment, which the system limits to one mebibyte, and
@@ -557,8 +624,17 @@ let stop (ports: StopPorts) (atStart: ProofAtStart) : Async<Stop> =
 // --- The supervisor -----------------------------------------------------------------------------
 
 /// One command that a supervisor started, as the supervisor holds it.
+/// What the streams of a command carry.
+[<RequireQualifiedAccess>]
+type Carries =
+    /// Text. The supervisor decodes each output as UTF-8, and encodes the input as UTF-8.
+    | Text
+    /// Bytes. The supervisor changes no byte. Base64 carries the bytes on the wire.
+    | Bytes
+
 type Command =
-    { /// Text for the input of the command.
+    { /// Input for the command: text for a command that carries text, and base64 for a
+      /// command that carries bytes.
       Write : string -> unit
       /// No more input comes.
       EndInput : unit -> unit
@@ -574,12 +650,14 @@ type CommandEnd =
     /// The command did not start, and why.
     | NotStarted of reason: string
 
-/// Start one command (`Ports.Start`): its executable, its arguments, its directory, the
-/// whole of its environment, and three handlers. The first takes its output. The port
+/// Start one command (`Ports.Start`): what its streams carry, its executable, its arguments,
+/// its directory, the whole of its environment, and three handlers. The first takes its
+/// output: text for a command that carries text, and base64 for one that carries bytes. The port
 /// calls the second when the leader of the command ends, which can be before the command
 /// ends: a child of the leader can still hold an output. The third takes its end.
 type StartCommand =
-    string
+    Carries
+        -> string
         -> string list
         -> string option
         -> Map<string, string>
@@ -643,10 +721,13 @@ let create (ports: Ports) : Supervisor =
     // the command's own any more. The system can give its number to a different process, so
     // a cancel for it sends nothing, and the stop ends what the command left.
     let leaderless = System.Collections.Generic.HashSet<int> ()
+    // The ids of the commands that carry bytes and that have no end yet.
+    let binary = System.Collections.Generic.HashSet<int> ()
     let ended (id: int) (how: CommandEnd) =
         if running.Remove id then
             commands.Remove id |> ignore
             leaderless.Remove id |> ignore
+            binary.Remove id |> ignore
             match how with
             | CommandEnd.Ended code -> ports.Say (Wire.Ended (id, code))
             | CommandEnd.NotStarted reason -> ports.Say (Wire.NotStarted (id, reason))
@@ -668,11 +749,19 @@ let create (ports: Ports) : Supervisor =
                     ports.Leave ExitCode.refused
         }
         |> Async.StartImmediate
-    let run (id: int) (executable: string) (arguments: string list) (directory: string option) (environment: Map<string, string>) =
+    let run
+        (carries: Carries)
+        (id: int)
+        (executable: string)
+        (arguments: string list)
+        (directory: string option)
+        (environment: Map<string, string>)
+        =
         if running.Contains id then
             ports.Say (Wire.NotStarted (id, sprintf "the supervisor already runs a command with the id %d" id))
         else
             running.Add id |> ignore
+            if carries = Carries.Bytes then binary.Add id |> ignore
             // Node throws at once for some starts: a directory that is a file, a NUL in an
             // argument, an environment that is too long. That is one command that did not
             // start. It is not a fault of the supervisor, which has other commands to hold.
@@ -680,11 +769,15 @@ let create (ports: Ports) : Supervisor =
                 try
                     Ok (
                         ports.Start
+                            carries
                             executable
                             arguments
                             directory
                             environment
-                            (fun (stream, text) -> ports.Say (Wire.Output (id, stream, text)))
+                            (fun (stream, said) ->
+                                match carries with
+                                | Carries.Text -> ports.Say (Wire.Output (id, stream, said))
+                                | Carries.Bytes -> ports.Say (Wire.OutputBytes (id, stream, said)))
                             (fun () -> if running.Contains id then leaderless.Add id |> ignore)
                             (ended id)
                     )
@@ -736,11 +829,19 @@ let create (ports: Ports) : Supervisor =
                 // A second first line changes nothing: the proof is of the start.
                 | Wire.Hello _, _ -> ()
                 | Wire.Run (id, executable, arguments, directory, environment), Some (Ok _) ->
-                    run id executable arguments directory environment
+                    run Carries.Text id executable arguments directory environment
+                | Wire.RunBytes (id, executable, arguments, directory, environment), Some (Ok _) ->
+                    run Carries.Bytes id executable arguments directory environment
                 | Wire.Run (id, _, _, _, _), Some (Error _)
-                | Wire.Run (id, _, _, _, _), None ->
+                | Wire.Run (id, _, _, _, _), None
+                | Wire.RunBytes (id, _, _, _, _), Some (Error _)
+                | Wire.RunBytes (id, _, _, _, _), None ->
                     ports.Say (Wire.NotStarted (id, "the supervisor has no proof that a profile confines it, so it starts no command"))
-                | Wire.Input (id, text), _ -> find id (fun command -> command.Write text)
+                // An input goes only to a command that carries its type. Text for a command
+                // that carries bytes would not be base64, and the reverse would give the
+                // command base64 as its input.
+                | Wire.Input (id, text), _ -> if not (binary.Contains id) then find id (fun command -> command.Write text)
+                | Wire.InputBytes (id, base64), _ -> if binary.Contains id then find id (fun command -> command.Write base64)
                 | Wire.EndInput id, _ -> find id (fun command -> command.EndInput ())
                 | Wire.Cancel id, _ -> if not (leaderless.Contains id) then find id (fun command -> command.Cancel ())
             with thrown -> fault (sprintf "a request failed: %s" thrown.Message)
@@ -783,6 +884,7 @@ let ports (ending: string) : Ports =
         flowing.Add stream
         if held then stream.pause ()
     let start
+        (carries: Carries)
         (executable: string)
         (arguments: string list)
         (directory: string option)
@@ -808,8 +910,13 @@ let ports (ending: string) : Ports =
         // Node reports the end of the leader here, before the end of the command where a
         // child of the leader still holds an output.
         ChildProcessStreams.onExit child (fun _ -> onLeaderEnded ())
-        Readables.text output (fun text -> onOutput (Wire.Out, text))
-        Readables.text errors (fun text -> onOutput (Wire.Err, text))
+        match carries with
+        | Carries.Text ->
+            Readables.text output (fun text -> onOutput (Wire.Out, text))
+            Readables.text errors (fun text -> onOutput (Wire.Err, text))
+        | Carries.Bytes ->
+            Readables.bytes output (fun bytes -> onOutput (Wire.Out, System.Convert.ToBase64String bytes))
+            Readables.bytes errors (fun bytes -> onOutput (Wire.Err, System.Convert.ToBase64String bytes))
         reading output
         reading errors
         let ended (how: CommandEnd) =
@@ -818,7 +925,13 @@ let ports (ending: string) : Ports =
             onEnd how
         ChildProcessStreams.onError child (fun error -> ended (CommandEnd.NotStarted (StreamError.describe error)))
         ChildProcessStreams.onClose child (fun code -> ended (CommandEnd.Ended code))
-        { Write = fun text -> try input.writeText text |> ignore with _ -> ()
+        { // Base64 that is not base64 is one input that the command does not get, as a write
+          // to a command that has gone is.
+          Write =
+            match carries with
+            | Carries.Text -> fun text -> try input.writeText text |> ignore with _ -> ()
+            | Carries.Bytes ->
+                fun base64 -> try input.writeByteArray (System.Convert.FromBase64String base64) |> ignore with _ -> ()
           EndInput = fun () -> try input.finish () with _ -> ()
           // The group is the command's own: its leader is the child that started here. A
           // child that did not start has no pid, and thus no group to signal

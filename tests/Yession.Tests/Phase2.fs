@@ -30,6 +30,7 @@ let private tempDir () : string = TestFiles.tempDir "yession-tmp-"
 let private sandboxAnswering (answer: (OutputStream * string -> unit) -> Async<Result<SandboxProcessHandle, string>>) : Sandbox =
     { Ref = "fake"
       Spawn = fun _ onChunk -> answer onChunk
+      SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
       SpawnPty = None
       Shell = None
       Dispose = fun () -> async { return () } }

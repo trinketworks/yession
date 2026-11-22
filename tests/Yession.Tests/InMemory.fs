@@ -80,6 +80,7 @@ let private serving (lines: string list) (exits: int option) =
                                             return SandboxExited 0
                                     } }
                     }
+              SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
               SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
               Stop = fun () -> async { return () }
               CurrentRef = fun () -> Some "scripted"
@@ -710,6 +711,7 @@ let tests =
                                           Kill = ignore
                                           Exited = async { return SandboxExited 0 } }
                             }
+                      SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
                       SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some name
@@ -774,6 +776,7 @@ let tests =
                                           Kill = ignore
                                           Exited = async { return SandboxExited 0 } }
                             }
+                      SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
                       SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
@@ -861,6 +864,7 @@ let tests =
                                           Kill = ignore
                                           Exited = async { return SandboxExited 0 } }
                             }
+                      SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
                       SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
@@ -935,6 +939,7 @@ let tests =
                                                 return SandboxExited 0
                                             } }
                             }
+                      SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
                       SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
@@ -996,6 +1001,7 @@ let tests =
                                                 return SandboxExited 0
                                             } }
                             }
+                      SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
                       SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
@@ -1029,6 +1035,7 @@ let tests =
                                           Kill = ignore
                                           Exited = async { return SandboxExited 0 } }
                             }
+                      SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
                       SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
@@ -1067,6 +1074,7 @@ let tests =
                                           Kill = ignore
                                           Exited = async { return SandboxExited code } }
                             }
+                      SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
                       SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
@@ -1129,6 +1137,7 @@ let tests =
                                           Kill = ignore
                                           Exited = async { return SandboxExited 0 } }
                             }
+                      SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
                       SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
@@ -1174,6 +1183,7 @@ let tests =
                                           Kill = ignore
                                           Exited = async { return SandboxExited 0 } }
                             }
+                      SpawnBytes = fun _ _ -> async { return Error "no byte spawn in this fixture" }
                       SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
