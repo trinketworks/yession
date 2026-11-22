@@ -181,9 +181,17 @@ module Prompting =
           Text =
             $"Work continues while a person is away only through the connections that they allow offline. The turn's context lists the connections of the person whose turn it is, and says if each one works while they are away. Read that list before you start work that continues after your turn, such as watching a pull request with {ToolName.WatchPr} or waiting for checks. If the connection that the work needs does not work while the person is away, ask them to allow it with {ToolName.AskOfflineAccess}. In its why, tell them why: without offline access, the work stops when they leave." }
 
+    /// A question typed into the chat is easy to miss and has no shape to answer. A surface
+    /// puts the options in front of everybody, and the press wakes the agent. So the agent
+    /// asks there, and ends its turn rather than waiting.
+    let deciding =
+        { Name = "deciding"
+          Text =
+            $"When you need a decision that only a person here can make, ask it with {ToolName.ShowSurface}: the question and one button for each option, the one you recommend first. Then end your turn. The answer starts a new one. Do not ask in prose. Do not ask what you can decide yourself. Take the surface down when it is answered." }
+
     /// Every product section, in the order a strategy that takes them all reads them.
     let sections : Section list =
-        [ role; addressing; environments; files; skills; shell; scratch; background; away; communication; reporting; scope; care ]
+        [ role; addressing; environments; files; skills; shell; scratch; background; away; deciding; communication; reporting; scope; care ]
 
     /// Everything a strategy reads for one turn. Data only: the decisions are the rules'.
     [<RequireQualifiedAccess>]

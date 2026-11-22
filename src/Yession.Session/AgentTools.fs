@@ -51,6 +51,9 @@ module AgentTools =
         let StartWorkSandbox = "start_work_sandbox"
         [<Literal>]
         let ShareArtifact = "share_artifact"
+        /// `SurfaceTool.Name`, named here with the other tools the prompt steers by.
+        [<Literal>]
+        let ShowSurface = "show_surface"
         /// Contributed by `app/GitHubPrs.fs`, and named here so the prompt's `away` section
         /// and the tool cannot spell it two ways.
         [<Literal>]

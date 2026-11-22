@@ -2560,6 +2560,12 @@ let private promptTests =
             testCase "the away policy asks through the offline access tool" <| fun () ->
                 Expect.stringContains Prompting.away.Text Yession.Host.OfflineAccess.Name "names ask_offline_access"
 
+            // A decision asked in prose has no buttons and no wake-up. The prompt steers to the
+            // surface tool by its registered name.
+            testCase "the core steers decisions to the surface tool" <| fun () ->
+                Expect.stringContains core Prompting.deciding.Text "the deciding section is in the core"
+                Expect.equal AgentTools.ToolName.ShowSurface SurfaceTool.Name "the prompt names the tool as it is registered"
+
             testCase "a turn person with no connections of their own gets no connections note" <| fun () ->
                 let plan = Prompting.plan strategy (askedContext None)
                 Expect.isFalse (plan.Included |> List.contains "connections") "nothing to say"
