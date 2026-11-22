@@ -42,7 +42,8 @@ const usage = `usage: node listen.mjs --listen ADDRESS [--door PATH] [--sandbox 
                      prints JSON with UserProfile.LoginName (tailscale whois --json) or login.
                      Needs --proxy-protocol.
   --enter PATH       the yession-enter to run (default yession-enter)
-  COMMAND            the command of each entry, which runs in the sandbox
+  COMMAND            the command of each entry, which runs in the sandbox. An argument that
+                     is {subject} becomes the subject of the entry.
 
 The line "listen: listening on ADDRESS" on the error output gives the address in use.`
 
@@ -167,7 +168,12 @@ function enter(socket, subject, first) {
   const number = ++entries
   const child = spawn(
     options.enter,
-    ['--door', options.door, '--as', subject, '--via', options.via, options.sandbox, '--', ...command],
+    // The command can take the name that the host found, as the argument {subject}. A whole
+    // argument and not a part of one: the name is never text in a longer word.
+    [
+      '--door', options.door, '--as', subject, '--via', options.via, options.sandbox, '--',
+      ...command.map((word) => (word === '{subject}' ? subject : word)),
+    ],
     { stdio: ['pipe', 'pipe', 'inherit'] },
   )
   log(`entry ${number}: ${subject} enters ${options.sandbox}`)
