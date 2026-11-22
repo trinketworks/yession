@@ -367,7 +367,10 @@ type TimelineProjection =
       /// The visits that are open now (`VisitProjection`): who is in which sandbox through
       /// the door of the session. The fold needs it to know which entry starts a visit and
       /// which one ends it, and a surface reads it to say who is in a sandbox.
-      Visits : Yession.Domain.Sandboxes.VisitProjection }
+      Visits : Yession.Domain.Sandboxes.VisitProjection
+      /// The ways into the sandboxes that a deployment offers now (`WayProjection`). A
+      /// surface reads it to tell a person how to come into a sandbox.
+      Ways : Yession.Domain.Sandboxes.WayProjection }
 
 module TimelineProjection =
 
@@ -378,7 +381,8 @@ module TimelineProjection =
           ToolUses = Map.empty
           CurrentTurn = None
           BlockTurns = Map.empty
-          Visits = Yession.Domain.Sandboxes.VisitProjection.empty }
+          Visits = Yession.Domain.Sandboxes.VisitProjection.empty
+          Ways = Yession.Domain.Sandboxes.WayProjection.empty }
 
     /// The turn that started this block, when the agent started it. `None` for a human's
     /// command, for one the Session ran on its own behalf, and for any block whose
@@ -573,6 +577,11 @@ module TimelineProjection =
             | Some (Yession.Domain.Sandboxes.VisitWent ended) ->
                 { proj with Visits = visits; TerminalItems = proj.TerminalItems @ [ TimelineVisitEnded ended ] }
             | None -> { proj with Visits = visits }
+        // A way into a sandbox. It gives no item: the address is a fact of the sandbox, which
+        // its row shows, and not a thing that happened in the conversation.
+        | SessionEvent.SandboxWayOffered _
+        | SessionEvent.SandboxWayWithdrawn _ ->
+            { proj with Ways = Yession.Domain.Sandboxes.WayProjection.applyEvent proj.Ways envelope.Event }
         | SessionEvent.TerminalClosed e ->
             // The lease goes with the terminal, and WITHOUT a release event — that is the
             // Process's rule, so the stretch has to be closed here or it would never appear.

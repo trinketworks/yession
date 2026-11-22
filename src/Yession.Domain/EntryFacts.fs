@@ -55,3 +55,25 @@ module SandboxLeft =
     /// The words for an entry that a session found open when it started. The process that
     /// held the entry is gone, and the command went with it.
     let sessionRestarted = "session restarted"
+
+/// A deployment offered a way into a sandbox: an address that a person uses to come in
+/// through the door of the session. For SSH it is the command line that a person runs.
+///
+/// The deployment makes the way (a listener on a port, for example) and knows its address.
+/// The session does not. The deployment says the address through the door, and the page of
+/// the session shows it on the sandbox. The session shows the text and gives it no meaning.
+type SandboxWayOffered =
+    { /// The sandbox that the way goes to.
+      WayTo : SandboxRef
+      /// How a person comes, as the deployment labels it: `ssh`, for example. The same
+      /// label as the entries that come this way (`SandboxEntered.ViaLabel`). One sandbox
+      /// has one way for each label, and a second offer replaces the first.
+      WayVia : string
+      /// What a person runs or opens to come this way, in the words of the deployment:
+      /// `ssh -p 22005 root@host`, for example.
+      WayAddress : string }
+
+/// The deployment took a way back, or the session stopped following it.
+type SandboxWayWithdrawn =
+    { WithdrawnTo : SandboxRef
+      WithdrawnVia : string }

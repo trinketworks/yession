@@ -2979,6 +2979,20 @@ let private paneNewTests =
             let empty = sheet model |> Support.step (ChoosingStartInMsg true) |> Support.render
             Expect.isFalse (empty.Contains Dom.Hooks.startInVisitor) "and a place with nobody in it says nothing"
 
+        testCase "a place in the list says how a person comes into it" <| fun () ->
+            // The deployment offers SSH into the repo's sandbox, and says the address.
+            let model = withSandbox "octo/hello:dev"
+            let way : OpenWay =
+                { OpenWayTo = SandboxRef.parse "octo/hello:dev" |> expect
+                  OpenWayVia = "ssh"
+                  OpenWayAddress = "ssh -p 22005 root@host" }
+            let offered = { model with Timeline = { model.Timeline with Ways = { OpenWays = [ way ] } } }
+            let html = sheet offered |> Support.step (ChoosingStartInMsg true) |> Support.render
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.startInWay "ssh")) "the row of the sandbox has the way"
+            Expect.isTrue (html.Contains "ssh -p 22005 root@host") "with the address, as the deployment wrote it"
+            let none = sheet model |> Support.step (ChoosingStartInMsg true) |> Support.render
+            Expect.isFalse (none.Contains Dom.Hooks.startInWay) "and a place with no way says nothing"
+
         testCase "a place chosen is where New terminal starts the next one" <| fun () ->
             let dev = SandboxRef.parse "octo/hello:dev" |> expect
             let model =

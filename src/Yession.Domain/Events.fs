@@ -124,6 +124,11 @@ type SessionEvent =
     // command are not recorded.
     | SandboxEntered of SandboxEntered
     | SandboxLeft of SandboxLeft
+    // A way into a sandbox that a deployment offers through the door of the session: the
+    // address that a person uses, which only the deployment knows. Durable, so each page
+    // shows the same address. A session that starts withdraws each way that its log holds.
+    | SandboxWayOffered of SandboxWayOffered
+    | SandboxWayWithdrawn of SandboxWayWithdrawn
     // A declaration that did NOT become a sandbox (Plan 27). The sibling above announces the
     // starts; until this, only the starts were announced — so a file with a typo in it read
     // on the timeline exactly like a file nobody had written.

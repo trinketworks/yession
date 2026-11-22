@@ -1571,6 +1571,11 @@ After the fixes land, one pass rewrites it to what still reproduces.
   - Cost: a person who came through the door can change files that the agent works on, and
     the agent does not know why they changed.
   - Open: the two facts of a visit in the context of the next turn.
+- **The address of a way into a sandbox is the word of the caller of the door.**
+  `yession-enter --offer` gives the text, and the session shows it without a check
+  (`SandboxWayOffered`). A process that can dial the door can put a false address on the page.
+  The page shows the address as text and makes no link of it. The address is in the list of
+  places only, so a session with one place does not show it (the next item).
 - **A session with one place does not say who is in it.** The list of places is the only
   surface that names each sandbox, and the page draws it when the session has two places or
   more. With only the session's own sandbox, the two lines in the conversation are the record.

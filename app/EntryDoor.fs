@@ -31,6 +31,11 @@ let entryLimit = 16
 let private longestSubject = 128
 let private longestLabel = 32
 let private longestCommand = 8192
+let private longestAddress = 256
+
+/// The ways into its sandboxes that one session holds at one time. A deployment offers one
+/// way for each sandbox and label.
+let wayLimit = 16
 
 /// What a door needs from the session that it serves.
 [<NoEquality; NoComparison>]
@@ -125,6 +130,30 @@ let request (hello: EntryWire.Hello) : Result<SandboxRef * SandboxExec, string> 
                       Via = if hello.Bare then Direct else Entrypoint }
                 )
 
+/// Read the first line of a caller that offers a way into a sandbox. The answer is the
+/// sandbox, the label and the address, as the session records them. The error is the refusal
+/// that the caller gets.
+let offer (hello: EntryWire.Hello) (address: string) : Result<SandboxRef * string * string, string> =
+    match SandboxRef.parse hello.ToSandbox with
+    | Error reason -> Error (sprintf "'%s' does not name a sandbox: %s" hello.ToSandbox reason)
+    | Ok sandbox ->
+        if not (List.isEmpty hello.Argv) then Error "An offer of a way runs no command. Give --offer with no command."
+        elif System.String.IsNullOrWhiteSpace hello.Label || hello.Label.Length > longestLabel then
+            Error (sprintf "The label must have between 1 and %d characters." longestLabel)
+        elif System.String.IsNullOrWhiteSpace address || address.Length > longestAddress then
+            Error (sprintf "The address must have between 1 and %d characters." longestAddress)
+        elif address |> Seq.exists (fun letter -> letter < ' ') then
+            Error "The address must be one line of text."
+        else Ok (sandbox, hello.Label.Trim (), address.Trim ())
+
+/// The ways that the connections of one door hold now. The key is the sandbox and the label.
+/// The value says which connection holds the way: a second offer of the same way replaces
+/// the first, and the end of the first connection then withdraws nothing.
+[<NoEquality; NoComparison>]
+type private Ways =
+    { Holders : System.Collections.Generic.Dictionary<string, int>
+      mutable LastHolder : int }
+
 /// Where one connection is.
 [<RequireQualifiedAccess; NoEquality; NoComparison>]
 type private Phase =
@@ -134,15 +163,21 @@ type private Phase =
     | Starting
     /// The command runs.
     | Running of SandboxByteHandle
+    /// The caller offers a way, and runs no command. The way holds while the connection is
+    /// open.
+    | Offering
     /// The connection is of no more use.
     | Over
 
-/// Serve one connection: one entry, or one refusal.
-let private serve (config: Config) (openEntries: int ref) (connection: Duplex) : unit =
+/// Serve one connection: one entry, one way, or one refusal.
+let private serve (config: Config) (openEntries: int ref) (ways: Ways) (connection: Duplex) : unit =
     let mutable phase = Phase.Greeting (Array.zeroCreate 0)
     let mutable reader = EntryWire.FrameReader.empty
     let mutable callerClosed = false
     let mutable counted = false
+    // The way that this connection holds: its key, its holder number, and what to record
+    // when it goes.
+    let mutable held : (string * int * SandboxRef * string) option = None
     // What the caller sent while the command started, in order.
     let waiting = ResizeArray<byte []> ()
     let mutable waitingBytes = 0
@@ -195,6 +230,7 @@ let private serve (config: Config) (openEntries: int ref) (connection: Duplex) :
         | Phase.Running _ -> give handle (framesIn chunk)
         | Phase.Greeting _
         | Phase.Starting
+        | Phase.Offering
         | Phase.Over -> ()
 
     /// One chunk of the caller, for a command that did not start yet. A caller that sends
@@ -259,11 +295,49 @@ let private serve (config: Config) (openEntries: int ref) (connection: Duplex) :
                                   SandboxLeft.EndedBecause = reason })
             })
 
-    let greeted (text: string) (rest: byte []) : unit =
-        phase <- Phase.Starting
-        match EntryWire.readHello text |> Result.bind (fun hello -> request hello |> Result.map (fun asked -> hello, asked)) with
+    /// Take back the way that this connection holds, when it holds one and no later
+    /// connection took it over.
+    let withdraw () : unit =
+        match held with
+        | None -> ()
+        | Some (key, mine, sandbox, label) ->
+            held <- None
+            if ways.Holders.ContainsKey key && ways.Holders.[key] = mine then
+                ways.Holders.Remove key |> ignore
+                Async.StartImmediate (
+                    config.Record (
+                        SessionEvent.SandboxWayWithdrawn
+                            { SandboxWayWithdrawn.WithdrawnTo = sandbox
+                              SandboxWayWithdrawn.WithdrawnVia = label }))
+
+    /// A caller that offers a way. The session records the address and holds the way until
+    /// the connection closes.
+    let offered (hello: EntryWire.Hello) (address: string) : unit =
+        match offer hello address with
         | Error reason -> refuse reason
-        | Ok (hello, (sandbox, exec)) ->
+        | Ok (sandbox, label, said) ->
+            let key = SandboxRef.render sandbox + "\n" + label
+            if not (ways.Holders.ContainsKey key) && ways.Holders.Count >= wayLimit then
+                refuse (sprintf "This session has %d ways, which is its limit. Take one back, then try again." wayLimit)
+            else
+                ways.LastHolder <- ways.LastHolder + 1
+                let mine = ways.LastHolder
+                ways.Holders.[key] <- mine
+                held <- Some (key, mine, sandbox, label)
+                phase <- Phase.Offering
+                send (EntryWire.bytesOf (EntryWire.answer EntryWire.Answer.Admitted))
+                Async.StartImmediate (
+                    config.Record (
+                        SessionEvent.SandboxWayOffered
+                            { SandboxWayOffered.WayTo = sandbox
+                              SandboxWayOffered.WayVia = label
+                              SandboxWayOffered.WayAddress = said }))
+                if callerClosed then withdraw ()
+
+    let entered (hello: EntryWire.Hello) (rest: byte []) : unit =
+        match request hello with
+        | Error reason -> refuse reason
+        | Ok (sandbox, exec) ->
             if openEntries.Value >= config.Limit then
                 refuse (
                     sprintf
@@ -276,6 +350,15 @@ let private serve (config: Config) (openEntries: int ref) (connection: Duplex) :
                 keep rest
                 start hello sandbox exec
 
+    let greeted (text: string) (rest: byte []) : unit =
+        phase <- Phase.Starting
+        match EntryWire.readHello text with
+        | Error reason -> refuse reason
+        | Ok hello ->
+            match hello.Offer with
+            | Some address -> offered hello address
+            | None -> entered hello rest
+
     // An error on a connection that nobody listens for ends the process. The close that
     // follows it does the work.
     connection.onError ignore
@@ -287,6 +370,9 @@ let private serve (config: Config) (openEntries: int ref) (connection: Duplex) :
             handle.Kill ()
         // `start` ends the command when it has one, because the caller is gone.
         | Phase.Starting -> ()
+        | Phase.Offering ->
+            phase <- Phase.Over
+            withdraw ()
         | Phase.Greeting _
         | Phase.Over -> phase <- Phase.Over)
     let greet (soFar: byte []) (chunk: byte []) : unit =
@@ -299,6 +385,8 @@ let private serve (config: Config) (openEntries: int ref) (connection: Duplex) :
         | Phase.Greeting soFar -> greet soFar chunk
         | Phase.Starting -> keep chunk
         | Phase.Running handle -> takeWhileRunning handle chunk
+        // A caller that offers a way sends nothing that the session reads.
+        | Phase.Offering
         | Phase.Over -> ())
 
 /// Remove a socket that a process of this session left, when one is there. A session has one
@@ -314,7 +402,8 @@ let start (config: Config) : Async<Result<Door, string>> =
     Async.FromContinuations (fun (resolve, _, _) ->
         let openEntries = ref 0
         let mutable settled = false
-        let server = createNetServerServing (serve config openEntries)
+        let ways : Ways = { Holders = System.Collections.Generic.Dictionary<string, int> (); LastHolder = 0 }
+        let server = createNetServerServing (serve config openEntries ways)
         let close () : unit =
             try server.close () with _ -> ()
             removeStale config.SocketPath
@@ -338,7 +427,7 @@ let start (config: Config) : Async<Result<Door, string>> =
         removeStale config.SocketPath
         server.listen config.SocketPath)
 
-/// Close each entry that the log holds open. A session calls this when it starts: the
+/// Close each entry and withdraw each way that the log holds open. A session calls this when it starts: the
 /// process that held those entries is gone, and their commands went with it. An entry that
 /// stays open in the log keeps the session in use for all time.
 let closeLeftOpen (events: SessionEvent list) (record: SessionEvent -> Async<unit>) : Async<unit> =
@@ -350,7 +439,10 @@ let closeLeftOpen (events: SessionEvent list) (record: SessionEvent -> Async<uni
                 do! record next
                 return! closeEach rest
         }
-    events
-    |> List.fold (fun proj event -> EntryProjection.applyEvent proj System.DateTimeOffset.MinValue event) EntryProjection.empty
-    |> EntryProjection.closingAll
-    |> closeEach
+    let entries =
+        events
+        |> List.fold (fun proj event -> EntryProjection.applyEvent proj System.DateTimeOffset.MinValue event) EntryProjection.empty
+        |> EntryProjection.closingAll
+    // A way goes with the process too. The deployment offers it again to the new process.
+    let ways = events |> List.fold WayProjection.applyEvent WayProjection.empty |> WayProjection.withdrawingAll
+    closeEach (entries @ ways)

@@ -5549,6 +5549,12 @@ module View =
                     VisitProjection.openIn sandbox model.Timeline.Visits
                     |> List.map (fun visit ->
                         html $"""<span class="{Style.startInNote}" data-start-in-visitor="{visit.Visitor}">{SandboxVisit.here visit}</span>""")
+                // How a person comes into the place from outside the session: the address
+                // that the deployment offers, in its own words.
+                let ways =
+                    WayProjection.openTo sandbox model.Timeline.Ways
+                    |> List.map (fun way ->
+                        html $"""<span class="{Style.startInWay}" data-start-in-way="{way.OpenWayVia}">{way.OpenWayAddress}</span>""")
                 html $"""
                     <li class="{Style.startInRow}">
                       <button type="button" class="{Style.startInChoice}" data-start-in-choice="{SandboxRef.render sandbox}"
@@ -5559,6 +5565,7 @@ module View =
                         <span class="{Style.startInWho}">
                           <span class="{if isDefault sandbox then Style.startInChoiceNameDefault else Style.startInChoiceName}">{placeName sandbox}</span>
                           {note}
+                          {ways}
                           {visitors}
                         </span>
                       </button>

@@ -59,6 +59,8 @@ module Bootstrap =
         | SessionEvent.WorkSandboxStopped _ -> "work-sandbox-stopped"
         | SessionEvent.SandboxEntered _ -> "sandbox-entered"
         | SessionEvent.SandboxLeft _ -> "sandbox-left"
+        | SessionEvent.SandboxWayOffered _ -> "sandbox-way-offered"
+        | SessionEvent.SandboxWayWithdrawn _ -> "sandbox-way-withdrawn"
         | SessionEvent.RepoConfigRefused _ -> "repo-config-refused"
         | SessionEvent.RepoConfigWarned _ -> "repo-config-warned"
         | SessionEvent.RepoCapabilitiesChanged _ -> "repo-capabilities-changed"
