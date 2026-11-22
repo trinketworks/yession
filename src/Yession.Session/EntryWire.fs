@@ -54,7 +54,11 @@ module EntryWire =
           /// True when the command starts with no entrypoint of the sandbox before it
           /// (`ProcessEntry.Direct`). The entrypoint of a sandbox can take seconds, and a
           /// caller that makes one entry for each connection of a person pays it each time.
-          Bare : bool }
+          Bare : bool
+          /// `Some` for a caller that runs no command and offers a way into the sandbox: the
+          /// address that a person uses to come in (`SandboxWayOffered`). The offer holds
+          /// while the connection is open. The command is then empty.
+          Offer : string option }
 
     /// The answer to the first line.
     [<RequireQualifiedAccess>]
@@ -69,6 +73,11 @@ module EntryWire =
         // The field `bare` is written only when it is true. A line with no such field is
         // thus the line that each earlier build wrote.
         let bare : (string * JsonValue) list = if hello.Bare then [ "bare", Encode.bool true ] else []
+        // A session of an earlier build refuses the empty command of an offer, in words.
+        let offer : (string * JsonValue) list =
+            match hello.Offer with
+            | Some address -> [ "offer", Encode.string address ]
+            | None -> []
         let value : JsonValue =
             Encode.object (
                 [ "v", Encode.int version
@@ -77,6 +86,7 @@ module EntryWire =
                   "via", Encode.string hello.Label
                   "command", hello.Argv |> List.map Encode.string |> Encode.list ]
                 @ bare
+                @ offer
             )
         Encode.toString 0 value + "\n"
 
@@ -100,7 +110,8 @@ module EntryWire =
                       AsSubject = get.Required.Field "as" Decode.string
                       Label = get.Required.Field "via" Decode.string
                       Argv = get.Required.Field "command" (Decode.list Decode.string)
-                      Bare = get.Optional.Field "bare" Decode.bool |> Option.defaultValue false })
+                      Bare = get.Optional.Field "bare" Decode.bool |> Option.defaultValue false
+                      Offer = get.Optional.Field "offer" Decode.string })
             match Decode.fromString decoder line with
             | Ok read -> Ok read
             | Error _ -> Error "The first line does not name a sandbox, a subject, a label and a command."
@@ -296,6 +307,9 @@ module EntryWire =
     let private bareOption : Cli.Opt<bool> =
         Cli.flag "bare" None "start the command with no entrypoint of the sandbox before it"
 
+    let private offerOption : Cli.Opt<string option> =
+        Cli.value "offer" "address" "run no command: tell the session the address that a person uses to come this way"
+
     /// The options of `yession-enter`. The sandbox and the command are bare words, which
     /// `Cli` does not read: `words` takes them off first.
     let enterSpec : Cli.Spec =
@@ -303,9 +317,13 @@ module EntryWire =
         |> Cli.accepts asOption
         |> Cli.accepts viaOption
         |> Cli.accepts bareOption
+        |> Cli.accepts offerOption
 
     /// The form of the command line, for a refusal.
     let enterForm = "yession-enter --door <socket> --as <subject> --via <label> [--bare] <sandbox> -- <command> [argument ...]"
+
+    /// The form of the command line that offers a way, for a refusal.
+    let offerForm = "yession-enter --door <socket> --as <subject> --via <label> --offer <address> <sandbox>"
 
     /// The three parts of a command line: the options, the sandbox, and the command after
     /// `--`. The sandbox is the last word before `--`, when that word is not an option and is
@@ -315,7 +333,7 @@ module EntryWire =
             match args |> List.tryFindIndex (fun word -> word = "--") with
             | Some at -> List.take at args, List.skip (at + 1) args
             | None -> args, []
-        let takesValue (word: string) : bool = word = "--door" || word = "--as" || word = "--via"
+        let takesValue (word: string) : bool = word = "--door" || word = "--as" || word = "--via" || word = "--offer"
         match List.rev before with
         | last :: earlier when not (last.StartsWith "-") ->
             let isValue =
@@ -328,12 +346,16 @@ module EntryWire =
     /// The request of a parsed command line. The error is a sentence that names what is
     /// missing.
     let enterRequest (parsed: Cli.Parsed) (sandbox: string option) (command: string list) : Result<EnterRequest, string> =
+        let offer = Cli.valueOf offerOption parsed
+        let form = if Option.isSome offer then offerForm else enterForm
         match Cli.valueOf doorOption parsed, Cli.valueOf asOption parsed, Cli.valueOf viaOption parsed, sandbox, command with
-        | None, _, _, _, _ -> Error (sprintf "--door is missing. The form is: %s" enterForm)
-        | _, None, _, _, _ -> Error (sprintf "--as is missing. The form is: %s" enterForm)
-        | _, _, None, _, _ -> Error (sprintf "--via is missing. The form is: %s" enterForm)
-        | _, _, _, None, _ -> Error (sprintf "The sandbox is missing. The form is: %s" enterForm)
-        | _, _, _, _, [] -> Error (sprintf "The command after -- is missing. The form is: %s" enterForm)
+        | None, _, _, _, _ -> Error (sprintf "--door is missing. The form is: %s" form)
+        | _, None, _, _, _ -> Error (sprintf "--as is missing. The form is: %s" form)
+        | _, _, None, _, _ -> Error (sprintf "--via is missing. The form is: %s" form)
+        | _, _, _, None, _ -> Error (sprintf "The sandbox is missing. The form is: %s" form)
+        | _, _, _, _, [] when Option.isNone offer -> Error (sprintf "The command after -- is missing. The form is: %s" form)
+        | _, _, _, _, _ :: _ when Option.isSome offer ->
+            Error (sprintf "--offer runs no command, and this command line has one. The form is: %s" form)
         | Some door, Some subject, Some label, Some sandbox, command ->
             Ok
                 { DoorPath = door
@@ -342,7 +364,8 @@ module EntryWire =
                       AsSubject = subject
                       Label = label
                       Argv = command
-                      Bare = Cli.valueOf bareOption parsed } }
+                      Bare = Cli.valueOf bareOption parsed
+                      Offer = offer } }
 
 /// Where the door of a session is: the rules for the directory that an operator gives
 /// (`YESSION_SESSION_DOORS`), and the socket of one session in it.

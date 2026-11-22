@@ -621,6 +621,10 @@ module ConversationProjection =
         // an entry is not a thing that the agent did. `EntryProjection` holds the open ones.
         | SessionEvent.SandboxEntered _
         | SessionEvent.SandboxLeft _ -> proj
+        // A way into a sandbox is a fact of the deployment, for a person to read on the
+        // page. The agent does not act on it.
+        | SessionEvent.SandboxWayOffered _
+        | SessionEvent.SandboxWayWithdrawn _ -> proj
         // Tool use (Plan 16, part C) does not fold here either, and for the same hazard in
         // a sharper form: the agent MADE the call and already has the result in its own
         // transcript, so feeding it back would be pure duplication. It folds into

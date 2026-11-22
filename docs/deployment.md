@@ -559,6 +559,7 @@ YESSION_SESSION_DOORS=/run/yession/doors yession-manager …
 
 ```sh
 yession-enter --door <socket> --as <subject> --via <label> [--bare] <sandbox> -- <command> [argument ...]
+yession-enter --door <socket> --as <subject> --via <label> --offer <address> <sandbox>
 ```
 
 - `<socket>` is the `door` field of the sandbox's announcement
@@ -575,6 +576,12 @@ yession-enter --door <socket> --as <subject> --via <label> [--bare] <sandbox> --
   development shell. Use it for a command that starts many times and finds its tools by
   their full paths. A session of a build before this option ignores it.
 - The session refuses a sandbox that does not run. An entry does not start a sandbox.
+- `--offer <address>` runs no command. It tells the session the address that a person uses
+  to come this way, for example `ssh -p 22005 root@host`, and the page of the session shows
+  that text on the sandbox. Give no `--` and no command. `yession-enter` stays until
+  something ends it, and the session then takes the address off the page. One sandbox has
+  one address for each `--via` label, and one session holds 16 addresses at most. The
+  session shows the text and gives it no meaning.
 - One session has 16 open entries at most.
 - When `yession-enter` ends, the session ends the command.
 

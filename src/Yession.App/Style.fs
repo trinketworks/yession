@@ -5046,6 +5046,10 @@ module Style =
     /// rather than cut after its first words.
     let startInNote = "line-clamp-2 font-ui font-light text-small text-ink-faint"
 
+    /// A way into the place from outside the session: a command line that a person copies,
+    /// so it is in the face of code and it never breaks in the middle of a word.
+    let startInWay = "block font-mono text-small text-ink-dim break-all select-text"
+
     /// An artifact's row: the same row as a terminal's, so the two sections read as one list
     /// of things rather than two designs.
     let artifactListRow = terminalListRow

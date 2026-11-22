@@ -10,6 +10,10 @@ module Yession.Host.Enter
 // the sandbox, or with no entrypoint for `--bare`. When this process ends, the session ends
 // the command.
 //
+// With `--offer <address>` this bin runs no command. It tells the session the address that
+// a person uses to come into the sandbox, and stays until something ends it. The session
+// shows the address while this process holds the door open.
+//
 // This bin is the contract of the door. The bytes on the socket are private (`EntryWire`).
 // A deployment that gives a person a way into a sandbox calls this bin: for SSH, it runs
 // this bin with `sshd -i` as the command, one time for each connection.

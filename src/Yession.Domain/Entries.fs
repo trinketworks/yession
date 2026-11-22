@@ -60,3 +60,50 @@ module EntryProjection =
                 { SandboxLeft.LeftEntry = entry.OpenEntryId
                   SandboxLeft.ExitCode = None
                   SandboxLeft.EndedBecause = SandboxLeft.sessionRestarted })
+
+/// One way into a sandbox that a deployment offers now.
+type OpenWay =
+    { OpenWayTo : SandboxRef
+      OpenWayVia : string
+      OpenWayAddress : string }
+
+/// The ways into the sandboxes of a session that a deployment offers now, folded from its
+/// log. A surface reads it to tell a person how to come into a sandbox.
+type WayProjection = { OpenWays : OpenWay list }
+
+module WayProjection =
+
+    let empty : WayProjection = { OpenWays = [] }
+
+    let private isWay (sandbox: SandboxRef) (via: string) (way: OpenWay) : bool =
+        way.OpenWayTo = sandbox && way.OpenWayVia = via
+
+    /// Fold one event. One sandbox has one way for each label: an offer replaces the way
+    /// that has the same sandbox and label, and keeps its place. A withdrawal of a way that
+    /// is not open changes nothing, so a replay gives the same state.
+    let applyEvent (proj: WayProjection) (event: SessionEvent) : WayProjection =
+        match event with
+        | SessionEvent.SandboxWayOffered offered ->
+            let way =
+                { OpenWayTo = offered.WayTo
+                  OpenWayVia = offered.WayVia
+                  OpenWayAddress = offered.WayAddress }
+            if proj.OpenWays |> List.exists (isWay offered.WayTo offered.WayVia) then
+                { OpenWays = proj.OpenWays |> List.map (fun held -> if isWay offered.WayTo offered.WayVia held then way else held) }
+            else { OpenWays = proj.OpenWays @ [ way ] }
+        | SessionEvent.SandboxWayWithdrawn withdrawn ->
+            { OpenWays = proj.OpenWays |> List.filter (fun held -> not (isWay withdrawn.WithdrawnTo withdrawn.WithdrawnVia held)) }
+        | _ -> proj
+
+    /// The ways into one sandbox, oldest first.
+    let openTo (sandbox: SandboxRef) (proj: WayProjection) : OpenWay list =
+        proj.OpenWays |> List.filter (fun way -> way.OpenWayTo = sandbox)
+
+    /// The events that withdraw each open way, for a session that found them open when it
+    /// started. The process that held them is gone, and the deployment offers them again.
+    let withdrawingAll (proj: WayProjection) : SessionEvent list =
+        proj.OpenWays
+        |> List.map (fun way ->
+            SessionEvent.SandboxWayWithdrawn
+                { SandboxWayWithdrawn.WithdrawnTo = way.OpenWayTo
+                  SandboxWayWithdrawn.WithdrawnVia = way.OpenWayVia })

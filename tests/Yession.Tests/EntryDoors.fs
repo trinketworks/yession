@@ -52,7 +52,7 @@ let private someFrames : EntryWire.Frame list =
       EntryWire.Frame.Exited 7 ]
 
 let private aHello : EntryWire.Hello =
-    { ToSandbox = "octo/hello:dev"; AsSubject = "ada"; Label = "ssh"; Argv = [ "/run/yession-ssh/serve"; "-e" ]; Bare = false }
+    { ToSandbox = "octo/hello:dev"; AsSubject = "ada"; Label = "ssh"; Argv = [ "/run/yession-ssh/serve"; "-e" ]; Bare = false; Offer = None }
 
 let private parsedOptions (options: string list) : Cli.Parsed =
     match Cli.outcome EntryWire.enterSpec "test" (Array.ofList options) with
@@ -79,6 +79,17 @@ let private left (name: string) : SessionEvent =
         { SandboxLeft.LeftEntry = entry name
           SandboxLeft.ExitCode = Some 0
           SandboxLeft.EndedBecause = "the command ended" }
+
+let private wayOffered (sandbox: SandboxRef) (label: string) (address: string) : SessionEvent =
+    SessionEvent.SandboxWayOffered
+        { SandboxWayOffered.WayTo = sandbox
+          SandboxWayOffered.WayVia = label
+          SandboxWayOffered.WayAddress = address }
+
+let private wayWithdrawn (sandbox: SandboxRef) (label: string) : SessionEvent =
+    SessionEvent.SandboxWayWithdrawn
+        { SandboxWayWithdrawn.WithdrawnTo = sandbox
+          SandboxWayWithdrawn.WithdrawnVia = label }
 
 let private folded (events: SessionEvent list) : EntryProjection =
     events |> List.fold (fun proj event -> EntryProjection.applyEvent proj (DateTimeOffset (2026, 11, 22, 10, 30, 0, TimeSpan.Zero)) event) EntryProjection.empty
@@ -194,6 +205,69 @@ let wireTests =
                 (EntryDoor.request { aHello with Bare = true } |> Result.map (fun (_, exec) -> exec.Via))
                 (Ok Direct)
                 "bare"
+
+        testCase "a command line with --offer and no command offers a way" <| fun () ->
+            let line = [ "--door"; "/run/d.sock"; "--as"; "follow"; "--via"; "ssh"; "--offer"; "ssh -p 22005 root@host"; "octo/hello:dev" ]
+            let options, sandbox, command = EntryWire.words line
+            Expect.equal (sandbox, command) (Some "octo/hello:dev", []) "the sandbox is the last word, and no command follows"
+            Expect.equal
+                (EntryWire.enterRequest (parsedOptions options) sandbox command |> Result.map (fun asked -> asked.Request.Offer, asked.Request.Argv))
+                (Ok (Some "ssh -p 22005 root@host", []))
+                "the address, and no command"
+
+        testCase "a command line with --offer and a command is refused" <| fun () ->
+            let parsed = parsedOptions [ "--door"; "/run/d.sock"; "--as"; "follow"; "--via"; "ssh"; "--offer"; "ssh host" ]
+            Expect.isError (EntryWire.enterRequest parsed (Some "dev") [ "cat" ]) "an offer runs no command"
+
+        testCase "a first line that offers a way reads back as it was written" <| fun () ->
+            let offering = { aHello with Argv = []; Offer = Some "ssh -p 22005 root@host" }
+            Expect.equal (EntryWire.readHello (EntryWire.hello offering)) (Ok offering) "a round trip"
+
+        testCase "an offer gives the sandbox, the label and the address" <| fun () ->
+            Expect.equal
+                (EntryDoor.offer { aHello with Argv = [] } " ssh -p 22005 root@host ")
+                (Ok (dev, "ssh", "ssh -p 22005 root@host"))
+                "with no space at the ends"
+
+        testCase "an offer with an address of more than one line is refused" <| fun () ->
+            Expect.isError (EntryDoor.offer { aHello with Argv = [] } "ssh host\nrm") "one line of text"
+
+        testCase "an offer with a command is refused" <| fun () ->
+            Expect.isError (EntryDoor.offer aHello "ssh host") "an offer runs no command"
+
+        testCase "a way is open to its sandbox from its offer" <| fun () ->
+            let proj = [ wayOffered dev "ssh" "ssh -p 1 root@host" ] |> List.fold WayProjection.applyEvent WayProjection.empty
+            Expect.equal
+                (WayProjection.openTo dev proj |> List.map (fun way -> way.OpenWayVia, way.OpenWayAddress))
+                [ "ssh", "ssh -p 1 root@host" ]
+                "one way, with its label and its address"
+            Expect.equal (WayProjection.openTo SandboxRef.defaultRef proj) [] "and none to another sandbox"
+
+        testCase "a second offer of a way replaces its address" <| fun () ->
+            let proj =
+                [ wayOffered dev "ssh" "ssh -p 1 root@host"; wayOffered dev "ssh" "ssh -p 2 root@host" ]
+                |> List.fold WayProjection.applyEvent WayProjection.empty
+            Expect.equal (WayProjection.openTo dev proj |> List.map (fun way -> way.OpenWayAddress)) [ "ssh -p 2 root@host" ] "one way"
+
+        testCase "a way that the deployment took back is not open" <| fun () ->
+            let proj =
+                [ wayOffered dev "ssh" "ssh -p 1 root@host"; wayWithdrawn dev "ssh"; wayWithdrawn dev "ssh" ]
+                |> List.fold WayProjection.applyEvent WayProjection.empty
+            Expect.equal proj.OpenWays [] "no way, and a second withdrawal changes nothing"
+
+        testCase "a session that starts withdraws each way that the log holds open" <| fun () ->
+            let proj = [ wayOffered dev "ssh" "ssh -p 1 root@host" ] |> List.fold WayProjection.applyEvent WayProjection.empty
+            Expect.equal (WayProjection.withdrawingAll proj) [ wayWithdrawn dev "ssh" ] "one withdrawal"
+
+        testCase "the offer of a way reads back from the log" <| fun () ->
+            let original = envelopeOf (wayOffered dev "ssh" "ssh -p 22005 root@host")
+            let json = Codec.toString Events.sessionEventEnvelope original
+            Expect.equal (Codec.fromString Events.sessionEventEnvelope json) (Ok original) "a round trip"
+
+        testCase "the withdrawal of a way reads back from the log" <| fun () ->
+            let original = envelopeOf (wayWithdrawn dev "ssh")
+            let json = Codec.toString Events.sessionEventEnvelope original
+            Expect.equal (Codec.fromString Events.sessionEventEnvelope json) (Ok original) "a round trip"
 
         testCase "a command line with no command is refused" <| fun () ->
             let parsed = parsedOptions [ "--door"; "/run/d.sock"; "--as"; "ada"; "--via"; "ssh" ]
@@ -434,6 +508,44 @@ let doorTests =
                             SandboxLeft.ExitCode = Some 7
                             SandboxLeft.EndedBecause = "the command ended" } ]
                     "the start, and then the end with its code"
+            }))
+
+        testCaseAsync "a caller that offers a way holds it until the caller goes away" (withDoor 16 (fun socket recorded ->
+            async {
+                let offering = [ "--door"; socket; "--as"; "follow"; "--via"; "ssh"; "--offer"; "ssh -p 22005 root@host"; "default" ]
+                let caller = call offering []
+                do! waitUntil "the offer to be recorded" (fun () -> recorded.Count = 1)
+                Expect.equal
+                    recorded.[0]
+                    (SessionEvent.SandboxWayOffered
+                        { SandboxWayOffered.WayTo = SandboxRef.defaultRef
+                          SandboxWayOffered.WayVia = "ssh"
+                          SandboxWayOffered.WayAddress = "ssh -p 22005 root@host" })
+                    "the way, with its address"
+                Expect.isNone caller.Code "the caller stays while it holds the way"
+                ChildProcesses.signal caller.Process "SIGKILL" |> ignore
+                do! waitUntil "the withdrawal to be recorded" (fun () -> recorded.Count = 2)
+                Expect.equal
+                    recorded.[1]
+                    (SessionEvent.SandboxWayWithdrawn
+                        { SandboxWayWithdrawn.WithdrawnTo = SandboxRef.defaultRef
+                          SandboxWayWithdrawn.WithdrawnVia = "ssh" })
+                    "the way goes with the caller"
+            }))
+
+        testCaseAsync "a second caller that offers the same way takes it over" (withDoor 16 (fun socket recorded ->
+            async {
+                let offering (address: string) = [ "--door"; socket; "--as"; "follow"; "--via"; "ssh"; "--offer"; address; "default" ]
+                let first = call (offering "ssh -p 1 root@host") []
+                do! waitUntil "the first offer to be recorded" (fun () -> recorded.Count = 1)
+                let second = call (offering "ssh -p 2 root@host") []
+                do! waitUntil "the second offer to be recorded" (fun () -> recorded.Count = 2)
+                ChildProcesses.signal first.Process "SIGKILL" |> ignore
+                do! waitUntil "the first caller to end" (fun () -> Option.isSome first.Code)
+                ChildProcesses.signal second.Process "SIGKILL" |> ignore
+                do! waitUntil "the withdrawal to be recorded" (fun () -> recorded.Count = 3)
+                let ways = recorded |> List.ofSeq |> List.fold WayProjection.applyEvent WayProjection.empty
+                Expect.equal ways.OpenWays [] "one withdrawal, by the caller that held the way last"
             }))
 
         testCaseAsync "a sandbox that the session does not have is refused, with the code of a refusal" (withDoor 16 (fun socket _ ->

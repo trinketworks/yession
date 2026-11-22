@@ -379,6 +379,9 @@ module Dom =
         /// On a place in that list, once for each person who is in the sandbox now through
         /// the door of the session. It carries the name that the person came with.
         let startInVisitor = "data-start-in-visitor"
+        /// On a place in that list, once for each way into the sandbox that the deployment
+        /// offers now. It carries the label of the way (`ssh`, for example).
+        let startInWay = "data-start-in-way"
         /// The list of places itself: a page on a phone, unfolded under the heading on a wide
         /// screen.
         let startInList = "data-start-in-list"

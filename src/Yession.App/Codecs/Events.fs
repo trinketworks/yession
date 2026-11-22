@@ -1463,6 +1463,30 @@ module Events =
                   SandboxLeft.ExitCode = get.Optional.Field "exitCode" Decode.int
                   SandboxLeft.EndedBecause = get.Required.Field "ended" Decode.string }) }
 
+    let private sandboxWayOffered : Codec<SandboxWayOffered> =
+        { Encode =
+            fun (p: SandboxWayOffered) ->
+                Encode.object
+                    [ "sandbox", Codec.sandboxRef.Encode p.WayTo
+                      "via", Encode.string p.WayVia
+                      "address", Encode.string p.WayAddress ]
+          Decode =
+            Decode.object (fun get ->
+                { SandboxWayOffered.WayTo = get.Required.Field "sandbox" Codec.sandboxRef.Decode
+                  SandboxWayOffered.WayVia = get.Required.Field "via" Decode.string
+                  SandboxWayOffered.WayAddress = get.Required.Field "address" Decode.string }) }
+
+    let private sandboxWayWithdrawn : Codec<SandboxWayWithdrawn> =
+        { Encode =
+            fun (p: SandboxWayWithdrawn) ->
+                Encode.object
+                    [ "sandbox", Codec.sandboxRef.Encode p.WithdrawnTo
+                      "via", Encode.string p.WithdrawnVia ]
+          Decode =
+            Decode.object (fun get ->
+                { SandboxWayWithdrawn.WithdrawnTo = get.Required.Field "sandbox" Codec.sandboxRef.Decode
+                  SandboxWayWithdrawn.WithdrawnVia = get.Required.Field "via" Decode.string }) }
+
     let private shellProfileSet : Codec<ShellProfileSet> =
         { Encode =
             fun (p: ShellProfileSet) ->
@@ -1893,6 +1917,10 @@ module Events =
                     Encode.object [ "type", Encode.string "sandboxEntered"; "payload", sandboxEntered.Encode p ]
                 | SessionEvent.SandboxLeft p ->
                     Encode.object [ "type", Encode.string "sandboxLeft"; "payload", sandboxLeft.Encode p ]
+                | SessionEvent.SandboxWayOffered p ->
+                    Encode.object [ "type", Encode.string "sandboxWayOffered"; "payload", sandboxWayOffered.Encode p ]
+                | SessionEvent.SandboxWayWithdrawn p ->
+                    Encode.object [ "type", Encode.string "sandboxWayWithdrawn"; "payload", sandboxWayWithdrawn.Encode p ]
                 | RepoConfigRefused p ->
                     Encode.object [ "type", Encode.string "repoConfigRefused"; "payload", repoConfigRefused.Encode p ]
                 | RepoConfigWarned p ->
@@ -2023,6 +2051,10 @@ module Events =
                 | "workSandboxStopped" -> Decode.field "payload" workSandboxStopped.Decode |> Decode.map WorkSandboxStopped
                 | "sandboxEntered" -> Decode.field "payload" sandboxEntered.Decode |> Decode.map SessionEvent.SandboxEntered
                 | "sandboxLeft" -> Decode.field "payload" sandboxLeft.Decode |> Decode.map SessionEvent.SandboxLeft
+                | "sandboxWayOffered" ->
+                    Decode.field "payload" sandboxWayOffered.Decode |> Decode.map SessionEvent.SandboxWayOffered
+                | "sandboxWayWithdrawn" ->
+                    Decode.field "payload" sandboxWayWithdrawn.Decode |> Decode.map SessionEvent.SandboxWayWithdrawn
                 | "shellProfileSet" -> Decode.field "payload" shellProfileSet.Decode |> Decode.map ShellProfileSet
                 | "fileChanged" -> Decode.field "payload" fileChanged.Decode |> Decode.map SessionEvent.FileChanged
                 | "tabOpened" -> Decode.field "payload" tabOpened.Decode |> Decode.map SessionEvent.TabOpened
