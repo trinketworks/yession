@@ -88,6 +88,26 @@ share/
 - The name in the log of the session is then a name whose private key the person has. A
   process that gives the host a false name also needs the key of that person to log in.
 
+### A login with no key
+
+A deployment can know the person before SSH starts. A tailnet proves who dials, and its
+policy says who can reach the port. `serve --for '{subject}' --trusted` then believes that
+name and asks for no key. The operator keeps no file of keys:
+
+```sh
+node listen.mjs … --whois 'tailscale whois --json' -- /run/yession-ssh/serve --for '{subject}' --trusted
+```
+
+- Use `--trusted` only when each connection to the listener comes from the part of the
+  deployment that proved the name. A process that can dial the listener in a different way
+  enters with a name of its choice and no key.
+- For a listener on a loopback port, a rule of the host must close the port to each user
+  other than the user of the forwarder. [docs/deployment.md](../../docs/deployment.md)
+  says more.
+- `--trusted` needs a sandbox that runs as root. sshd accepts a login with no key only for
+  an account that has an empty password, so `serve` empties the password of root in the
+  sandbox. Each process in the sandbox can then become root.
+
 ### A sandbox that runs as root
 
 As root, `sshd` separates privileges: it changes its root directory and its user before the

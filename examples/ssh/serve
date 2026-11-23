@@ -5,12 +5,14 @@
 # It starts `sshd -i`, which is the mode of sshd for one connection that is already open. No
 # daemon runs in the sandbox, and nothing in the sandbox listens on a port.
 #
-#   serve [--for LOGIN] [--prepared] [AUTHORIZED_KEYS]
+#   serve [--for LOGIN] [--trusted] [--prepared] [AUTHORIZED_KEYS]
 #   serve --prepare
 #
 #   --for LOGIN       the person that the host named for this connection. When the directory
 #                     `authorized_keys.d` is beside this script, only the keys in the file
 #                     `authorized_keys.d/LOGIN` can log in. See "the keys of one person".
+#   --trusted         the host proved who the person is, so the person logs in with no key.
+#                     Needs `--for`. See "a login with no key".
 #   --prepare         make the host key and keep the PATH of this run, then stop. See "a
 #                     sandbox with a slow entrypoint".
 #   --prepared        use the PATH that `--prepare` kept, and not the PATH of this run.
@@ -38,6 +40,7 @@ has_entry() {
 }
 
 login=
+trusted=no
 prepare=no
 prepared=no
 while [ $# -gt 0 ]; do
@@ -49,6 +52,10 @@ while [ $# -gt 0 ]; do
             fi
             login=$2
             shift 2
+            ;;
+        --trusted)
+            trusted=yes
+            shift
             ;;
         --prepare)
             prepare=yes
@@ -95,7 +102,31 @@ keys=${1:-${YESSION_SSH_AUTHORIZED_KEYS:-$here/authorized_keys}}
 # supplies a directory `authorized_keys.d`, a name opens the sandbox only with a key from
 # its own file. A process that gives a false name to the host thus also needs the private
 # key of that person. A name with no file can not log in.
-if [ -n "$login" ] && [ -d "$here/authorized_keys.d" ]; then
+#
+# --- a login with no key -----------------------------------------------------------------
+#
+# A deployment can know the person before SSH starts: a tailnet proves who dials, for
+# example, and its policy says who can reach the port. With `--trusted`, this script
+# believes the name from `--for` and asks for no key. sshd then accepts the method `none`.
+#
+# Use it only when each connection to the listener comes from the part of the deployment
+# that proved the name. If another process on the host can dial the listener, that process
+# enters with a name of its choice and no key. docs/deployment.md says what the host must
+# then do.
+#
+# sshd accepts `none` only for an account whose password is empty, so this script empties
+# the password of root. It can do that only in a sandbox that runs as root.
+if [ "$trusted" = yes ]; then
+    if [ -z "$login" ]; then
+        say '--trusted needs --for, the name that the host proved.'
+        exit 64
+    fi
+    if [ "$(id -u)" != 0 ]; then
+        say '--trusted needs a sandbox that runs as root. This sandbox does not.'
+        exit 78
+    fi
+    keys=none
+elif [ -n "$login" ] && [ -d "$here/authorized_keys.d" ]; then
     case $login in
         */* | .* | '')
             say "the login '$login' is not a name of a file of keys."
@@ -139,7 +170,7 @@ if [ -z "$keygen" ]; then
     exit 78
 fi
 
-if [ "$prepare" != yes ] && [ ! -r "$keys" ]; then
+if [ "$prepare" != yes ] && [ "$trusted" != yes ] && [ ! -r "$keys" ]; then
     say "no authorized keys at $keys. The resource of the operator supplies this file."
     exit 78
 fi
@@ -177,6 +208,13 @@ fi
 root_login=no
 if [ "$(id -u)" = 0 ]; then
     root_login=prohibit-password
+    # What the password field of root must hold. `*` is no password and no lock, so only a
+    # key can log in. Empty is a password of nothing, which the method `none` needs.
+    field='*'
+    if [ "$trusted" = yes ]; then
+        root_login=yes
+        field=
+    fi
 
     # Bits 6 (SETGID), 7 (SETUID) and 18 (SYS_CHROOT) of the effective set.
     # Read with the shell alone: an image can be without sed and grep.
@@ -217,26 +255,40 @@ if [ "$(id -u)" = 0 ]; then
     fi
 
     # sshd refuses a locked account before it reads a key. `!` in the password field is a
-    # lock. `*` is no password and no lock, so only a key can log in. The file is written
-    # in place, because a rename can not replace a file that is a mount.
+    # lock. A login with a key changes only a lock. A login with no key changes each value
+    # that is not empty. The file is written in place, because a rename can not replace a
+    # file that is a mount.
     if [ -f /etc/shadow ]; then
-        locked=no
-        unlocked=
+        changed=no
+        written=
         while IFS= read -r line || [ -n "$line" ]; do
             case $line in
-                'root:!'*)
-                    locked=yes
+                root:*)
                     rest=${line#root:}
-                    line="root:*:${rest#*:}"
+                    now=${rest%%:*}
+                    change=no
+                    case $now in
+                        '!'*) change=yes ;;
+                    esac
+                    if [ "$trusted" = yes ] && [ -n "$now" ]; then
+                        change=yes
+                    fi
+                    if [ "$change" = yes ]; then
+                        changed=yes
+                        line="root:$field:${rest#*:}"
+                    fi
                     ;;
             esac
-            unlocked="$unlocked$line
+            written="$written$line
 "
         done < /etc/shadow
-        if [ "$locked" = yes ] && ! printf %s "$unlocked" > /etc/shadow; then
-            say 'the account root is locked, and this script can not write /etc/shadow.'
+        if [ "$changed" = yes ] && ! printf %s "$written" > /etc/shadow; then
+            say 'this script can not write the password field of root in /etc/shadow.'
             exit 78
         fi
+    elif [ "$trusted" = yes ]; then
+        say '--trusted needs the file /etc/shadow, and this sandbox has none.'
+        exit 78
     fi
 fi
 
@@ -261,6 +313,15 @@ esac
 #
 # The log goes to a file first (-E), and this script copies it to the error output when sshd
 # ends. This script reads the log to find how the connection ended, see below.
+#
+# A login with no key is the method `none`, which sshd accepts when it permits a password
+# of nothing. The person types no password, because the account has none.
+with_key=yes
+no_key=no
+if [ "$trusted" = yes ]; then
+    with_key=no
+    no_key=yes
+fi
 log=$state/sshd.$$.log
 mkdir -p "$state"
 code=0
@@ -268,8 +329,9 @@ code=0
     -o "HostKey=$key" \
     -o "AuthorizedKeysFile=$keys" \
     -o "PermitRootLogin=$root_login" \
-    -o PubkeyAuthentication=yes \
-    -o PasswordAuthentication=no \
+    -o "PubkeyAuthentication=$with_key" \
+    -o "PasswordAuthentication=$no_key" \
+    -o "PermitEmptyPasswords=$no_key" \
     -o KbdInteractiveAuthentication=no \
     -o UsePAM=no \
     -o StrictModes=no \
