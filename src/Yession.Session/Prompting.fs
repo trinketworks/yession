@@ -184,10 +184,14 @@ module Prompting =
     /// A question typed into the chat is easy to miss and has no shape to answer. A surface
     /// puts the options in front of everybody, and the press wakes the agent. So the agent
     /// asks there, and ends its turn rather than waiting.
+    ///
+    /// A button does not wrap, so an option that is a sentence goes in a choice picker, as the
+    /// example of the tool shows (`SurfaceTool.example`). The page shows each change to a
+    /// surface, so the agent does not report one in its message.
     let deciding =
         { Name = "deciding"
           Text =
-            $"When you need a decision that only a person here can make, ask it with {ToolName.ShowSurface}: the question and one button for each option, the one you recommend first. Then end your turn. The answer starts a new one. Do not ask in prose. Do not ask what you can decide yourself. Take the surface down when it is answered." }
+            $"When you need a decision that only a person here can make, ask it with {ToolName.ShowSurface}. Put the option that you recommend first. If each option is a few words, show the question and one button for each option. If an option needs more words, show the question, a ChoicePicker of variant mutuallyExclusive that holds the options, and one button that sends the choice. A button label is a few words, because a button does not wrap. Then end your turn. The answer starts a new one. Do not ask in prose. Do not ask what you can decide yourself. Take the surface down when it is answered. Do not say in your message that you showed, changed or took down a surface. The people here see each change to a surface." }
 
     /// Every product section, in the order a strategy that takes them all reads them.
     let sections : Section list =
