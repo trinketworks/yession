@@ -154,6 +154,7 @@ let private reposAnswering (add: RepoRef -> Async<Result<RepoListing, string>>) 
                 return added |> Result.map (fun listing -> { Repos.Recorded.Answer = listing; Repos.Recorded.RecordedAs = None })
             }
       ListRepos = fun () -> async { return Ok [] }
+      Cloning = fun () -> []
       SwitchBranch = fun _ _ _ _ -> async { return Error "not part of this test" }
       FetchRepo = fun _ _ -> async { return Error "not part of this test" }
       RepoStatus = denied
@@ -327,6 +328,24 @@ let private tests' =
                 let text = answered answer
                 Expect.stringContains text "added octo/hello" "the service's own words came back"
                 Expect.isFalse (text.Contains "WAITING") "nobody was waiting on anything"
+            }
+
+        // A clone takes seconds, and a person can ask for work on the repo before it ends. The
+        // listing used to answer `(none)` in that time, so the agent added a repo of its own
+        // guess (session B7DVT1S9).
+        testCaseAsync "a repo whose clone has not ended is a row of the repos query" <|
+            async {
+                let repo = RepoRef.create "octo/hello" |> expect
+                let service =
+                    { reposAnswering (fun _ -> async { return Error "not part of this test" }) with
+                        Cloning = fun () -> [ repo ] }
+                match! (Repos.query service).Read () with
+                | Ok (Yession.Domain.Tools.RowsOf [ row ]) ->
+                    let cell (key: string) = row |> List.tryFind (fun (k, _) -> k = key) |> Option.map snd
+                    Expect.equal (cell "repo") (Some (Yession.Domain.Tools.CellText "octo/hello")) "the row names the repo"
+                    Expect.equal (cell "path") (Some Yession.Domain.Tools.CellAbsent) "it has no path, because it is not a checkout yet"
+                    Expect.equal (cell "problem") (Some (Yession.Domain.Tools.CellText Repos.cloningProblem)) "and it says that the clone has not ended"
+                | other -> failwithf "expected one row for the clone, got %A" other
             }
 
         // Arguments the dispatch cannot read are not an empty call. They used to decode to
@@ -769,6 +788,7 @@ let private reposHolding (initial: RepoListing list) (clone: RepoRef -> Result<R
                         return Ok { Repos.Recorded.Answer = listing; Repos.Recorded.RecordedAs = None }
                 }
           ListRepos = fun () -> async { return Ok (listings |> List.map RepoRead.Listed) }
+          Cloning = fun () -> []
           SwitchBranch =
             fun caller repo branch _ ->
                 async {
