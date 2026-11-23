@@ -3684,21 +3684,6 @@ module View =
                   <span class="{Style.chatChipText}">typed in {where} for {length}</span>
                   <span class="shrink-0">{stretchEnding Style.statusFaint people stretch.End}</span>
                 </button>"""
-        // A visit to a sandbox through the door of the session: one line where it started and
-        // one where it ended. A line and not a button, because an entry has no recording to
-        // open. It has no author line: the person who came is not a member of the session,
-        // so the line names that person as text. The deed follows, drawn as each other deed
-        // is (`Entity.phrase`).
-        let visitStartedItem (visit: SandboxVisit) =
-            html $"""
-                <div class="{Style.chatVisit}" data-chat-visit="{string (EventOffset.value visit.VisitOffset)}">
-                  <span class="{Style.chatChipText}">{visit.Visitor} {Entity.phrase people ActorRef.System (SandboxVisit.entered visit)}</span>
-                </div>"""
-        let visitEndedItem (ended: VisitEnd) =
-            html $"""
-                <div class="{Style.chatVisit}" data-chat-visit-end="{string (EventOffset.value ended.EndedVisit.VisitOffset)}">
-                  <span class="{Style.chatChipText}">{ended.EndedVisit.Visitor} {Entity.phrase people ActorRef.System (SandboxVisit.left ended)}</span>
-                </div>"""
         // One call the agent made. No pane tab: unlike a block there is nothing recorded to
         // open — but there IS something to read: what the call was given and what it answered.
         // Those used to sit on the line (the arguments, truncated, beside the name) and under
@@ -3925,8 +3910,6 @@ module View =
                 // a rule the type cannot hold — and this is the line that changes on the day
                 // somebody decides a screen should show it.
                 | RowItem (TimelineThought _) -> None
-                | RowItem (TimelineVisitStarted visit) -> Some (None, fun () -> visitStartedItem visit)
-                | RowItem (TimelineVisitEnded ended) -> Some (None, fun () -> visitEndedItem ended)
                 | RowWorkRun (turn, items) -> Some (Some ActorRef.Agent, fun () -> workRun turn items)
                 | RowTaskCard (turn, items) ->
                     let lines =

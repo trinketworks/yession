@@ -114,14 +114,6 @@ type TimelineItem =
     /// Carried whole rather than by id — a thought resolves against nothing later, unlike a
     /// block or a call whose outcome arrives after it.
     | TimelineThought of EventOffset * AgentThought
-    /// A person entered a sandbox through the door of the session, at the offset of the
-    /// first entry of the visit (`SandboxVisit`). Carried whole: the line says who, where and
-    /// how, and those do not change.
-    | TimelineVisitStarted of Yession.Domain.Sandboxes.SandboxVisit
-    /// The visit ended, at the offset of the end of its last entry. A second item and not a
-    /// change to the first one: the two are two moments, and a reader sees what happened
-    /// between them.
-    | TimelineVisitEnded of Yession.Domain.Sandboxes.VisitEnd
 
 module TimelineItem =
 
@@ -133,8 +125,6 @@ module TimelineItem =
         | TimelineStretch stretch -> stretch.Offset
         | TimelineToolUse (offset, _) -> offset
         | TimelineThought (offset, _) -> offset
-        | TimelineVisitStarted visit -> visit.VisitOffset
-        | TimelineVisitEnded ended -> ended.VisitEndOffset
 
     /// What this item IS, as a string a screen can key it by: the id it was minted with (a
     /// message's, a block's, a call's), or for what has none, the offset it is anchored at.
@@ -148,8 +138,6 @@ module TimelineItem =
         | TimelineStretch stretch -> "stretch:" + TerminalStretch.key stretch
         | TimelineToolUse (_, id) -> "tool:" + ToolUseId.value id
         | TimelineThought (offset, _) -> "thought:" + string (EventOffset.value offset)
-        | TimelineVisitStarted visit -> "visit:" + string (EventOffset.value visit.VisitOffset)
-        | TimelineVisitEnded ended -> "visit-end:" + string (EventOffset.value ended.VisitEndOffset)
 
 /// What a task card says about one of its commands — coarser than `BlockStatus`, and
 /// coarser on purpose. A card is read at a glance to answer three questions: is anything
@@ -565,18 +553,14 @@ module TimelineProjection =
                                 Queueing = e.Queueing }
                             joined.ToolUses }
             | None -> proj
-        // An entry through the door of the session. The first entry of a visit gives one
-        // item and the end of the last one gives the other. An entry between them gives none.
+        // An entry through the door of the session. It gives no item: who is in a sandbox is
+        // a fact of the sandbox, which its row shows, and not a thing that happened in the
+        // conversation. A person who comes and goes many times does not fill the conversation.
         | SessionEvent.SandboxEntered _
         | SessionEvent.SandboxLeft _ ->
-            let visits, step =
+            let visits, _ =
                 Yession.Domain.Sandboxes.VisitProjection.applyEvent proj.Visits envelope.Offset envelope.Timestamp envelope.Event
-            match step with
-            | Some (Yession.Domain.Sandboxes.VisitBegan visit) ->
-                { proj with Visits = visits; TerminalItems = proj.TerminalItems @ [ TimelineVisitStarted visit ] }
-            | Some (Yession.Domain.Sandboxes.VisitWent ended) ->
-                { proj with Visits = visits; TerminalItems = proj.TerminalItems @ [ TimelineVisitEnded ended ] }
-            | None -> { proj with Visits = visits }
+            { proj with Visits = visits }
         // A way into a sandbox. It gives no item: the address is a fact of the sandbox, which
         // its row shows, and not a thing that happened in the conversation.
         | SessionEvent.SandboxWayOffered _
@@ -776,6 +760,4 @@ module TimelineProjection =
                 | None, Some (ToolCallFailed _) -> Some TaskFailed
             | None -> None
         | TimelineStretch _
-        | TimelineThought _
-        | TimelineVisitStarted _
-        | TimelineVisitEnded _ -> None
+        | TimelineThought _ -> None

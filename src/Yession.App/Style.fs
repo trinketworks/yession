@@ -3287,14 +3287,6 @@ module Style =
     let chatChipName = cls [ "text-small"; entityName ]
     /// A stretch item's sentence — prose, not mono: nothing was typed that we recorded.
     let chatChipText = "font-light text-small text-ink-dim truncate min-w-0 flex-1"
-    /// The line of a visit to a sandbox. It stands where a chip stands and has the edges of
-    /// one. It is not a control, so it does not point and does not brighten.
-    let chatVisit =
-        cls [ "w-full text-left"
-              readingColumn
-              "flex items-baseline gap-2 pl-rail py-0.5 phone:py-2.5 pr-8 max-md:pr-4"
-              "text-ink-dim" ]
-
     /// Where a turn stopped, and why: a SIGNPOST, not a message. It is one more line in the
     /// record of what the turn did, and the last. Drawn as prose it was read as the agent's
     /// closing sentence; the mark is what says "this is the machine's account".
