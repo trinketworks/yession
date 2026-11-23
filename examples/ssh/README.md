@@ -15,7 +15,7 @@ same for each network.
 | | |
 |---|---|
 | [follow.mjs](follow.mjs) | Follows the registry stream. It keeps one child process for each announcement that matches, and stops the child when the announcement goes away. It is not about SSH: it serves each kind of announcement. |
-| [listen.mjs](listen.mjs) | Listens on a port of the host. For each connection it runs one `yession-enter`, with the connection as the input and the output. It can read the PROXY protocol and ask the host who the peer is. |
+| [listen.mjs](listen.mjs) | Listens on a port of the host. For each connection it runs one `yession-enter`, with the connection as the input and the output. It asks the host who the peer is, from the address of the connection or from a PROXY header. |
 | [serve](serve) | Runs in the sandbox as the command of an entry. It starts `sshd -i`, which serves one connection that is already open. |
 
 ## The shape
@@ -101,8 +101,9 @@ node listen.mjs … --whois 'tailscale whois --json' -- /run/yession-ssh/serve -
 - Use `--trusted` only when each connection to the listener comes from the part of the
   deployment that proved the name. A process that can dial the listener in a different way
   enters with a name of its choice and no key.
-- For a listener on a loopback port, a rule of the host must close the port to each user
-  other than the user of the forwarder. [docs/deployment.md](../../docs/deployment.md)
+- A listener on an address of the tailnet, with `--whois` and no `--proxy-protocol`, is
+  such a deployment (Recipe B). A listener on a loopback port behind an ingress is not:
+  each process on the host can dial it. [docs/deployment.md](../../docs/deployment.md)
   says more.
 - `--trusted` needs a sandbox that runs as root. sshd accepts a login with no key only for
   an account that has an empty password, so `serve` empties the password of root in the
@@ -202,21 +203,25 @@ person runs `ssh -p 2201 dev@host`. This recipe needs no new credential.
 #!/bin/sh
 set -eu
 port=$(/etc/yession-ssh/port-for "$YESSION_SESSION_ID" "$YESSION_ANNOUNCEMENT_NAME")
-trap 'tailscale serve --tcp="$port" off' EXIT
-tailscale serve --bg --tcp="$port" --proxy-protocol=2 "tcp://127.0.0.1:$port"
 
-node listen.mjs --listen "127.0.0.1:$port" --proxy-protocol \
+exec node listen.mjs --listen "$(tailscale ip -4):$port" \
   --whois 'tailscale whois --json' \
   --address "ssh -p $port root@host" \
   --prepare '/run/yession-ssh/serve --prepare' --bare \
   -- /run/yession-ssh/serve --prepared --for '{subject}'
 ```
 
-- `tailscale serve` changes its configuration only for root when the configuration has a
-  UNIX socket target. In that deployment, root makes a fixed set of forwards one time, and
-  the script only chooses a port from the set.
-- `tailscale serve` does not send the PROXY header to a UNIX socket target. The listener
-  must thus be a loopback port, and not a socket in a private directory.
+- The listener is on the tailnet address of the host, and not on loopback. No ingress is
+  between the tailnet and the listener, so the system gives the listener the address of
+  the peer. No process can write that address.
+- With `--whois` and no `--proxy-protocol`, `listen.mjs` closes a peer that has an address
+  of this host. Each process of the host has those addresses, so such a peer proves no
+  name. A person on the host uses `yession-enter`.
+- The name is thus proved, and `serve --trusted` is safe here ("A login with no key").
+- The other shape is a loopback port behind `tailscale serve --tcp --proxy-protocol=2`,
+  with `listen.mjs --proxy-protocol`. Each process on the host can dial that port and write
+  a header, so that shape needs keys. `tailscale serve` does not send the header to a UNIX
+  socket target, so a socket in a private directory cannot replace the port.
 
 `port-for` is a rule of the deployment that gives each sandbox a port.
 
@@ -232,11 +237,12 @@ first event has the subject and the label that `yession-enter` got as `--as` and
 - The subject is the word of the caller. Yession does not check it. Each process that can
   dial the door can claim each name, so the permissions of the door directory are the trust.
 - `sshd` runs in the sandbox, and the sandbox can lie. The name thus comes from the host.
-  `listen.mjs --proxy-protocol --whois` gets it from the ingress.
+  `listen.mjs --whois` gets it from the address of the connection, or with
+  `--proxy-protocol` from the ingress.
 - With `--whois`, `listen.mjs` closes a connection whose peer the host does not know. With no
   `--whois`, each entry has the subject of `--as`.
-- The loopback port of `listen.mjs` has no PROXY header check of its own. Each process on
-  the host that can dial the port can write a header, and thus a name. With one file of
+- With `--proxy-protocol`, the port of `listen.mjs` has no check of who wrote the header.
+  Each process on the host that can dial the port can write a header, and thus a name. With one file of
   keys for each person ("The keys of one person"), that process also needs the private key
   of the person to log in. It can still make the session record that the person entered.
 - The exit code in `SandboxLeft` is the code of `serve`. It is 0 when a person logged in and
