@@ -516,6 +516,15 @@
     color-scheme: dark;
     overscroll-behavior: none;
   }
+
+  /* A select's popup takes its colours from the select. The model picker's is
+     `text-transparent` over a face span, so on Windows (where the popup is drawn from the
+     options' own inherited style) every option but the hovered one vanished into the dark
+     popup. The options say their own. */
+  option {
+    background-color: var(--color-surface);
+    color: var(--color-ink);
+  }
 }
 
 /* A `<summary>` we have styled ourselves — the chat's tool runs, a block's facts — draws
