@@ -440,6 +440,11 @@ type ReposService =
       /// never the listing's failure (`RepoRead`). `Error` is left for a listing that could
       /// not be made at all.
       ListRepos : unit -> Async<Result<RepoRead list, string>>
+      /// The repos whose clone has started and has not ended. None of them is a checkout
+      /// yet, so `ListRepos` has no row for one. The `repos` query shows each, because an
+      /// agent that reads an empty listing during a clone adds a repo of its own guess
+      /// (session B7DVT1S9).
+      Cloning : unit -> RepoRef list
       SwitchBranch : RepoCaller -> RepoRef -> string -> bool -> Async<Result<Recorded<RepoListing>, string>>
       FetchRepo : RepoCaller -> RepoRef -> Async<Result<string, string>>
       RepoStatus : RepoRef -> Async<Result<string, string>>
@@ -1065,7 +1070,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// for twice while the first is still running used to start a SECOND clone into the
         /// same directory. Joining the first is both correct and the answer the caller
         /// wanted — `Broker`'s token refresh is this shape for the same reason.
-        let cloning = Dictionary<string, JS.Promise<Result<Recorded<RepoListing>, string>>> ()
+        let cloning = Dictionary<string, RepoRef * JS.Promise<Result<Recorded<RepoListing>, string>>> ()
 
         let addRepo (caller: RepoCaller) (repo: RepoRef) : Async<Result<Recorded<RepoListing>, string>> =
             Telemetry.spanResult
@@ -1123,10 +1128,10 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     let key = RepoRef.value repo
                     let pending =
                         match cloning.TryGetValue key with
-                        | true, running -> running
+                        | true, (_, running) -> running
                         | _ ->
                             let running = cloneIntoPlace caller repo |> Async.StartAsPromise
-                            cloning.[key] <- running
+                            cloning.[key] <- (repo, running)
                             // Cleared on settle, so a clone that failed can be retried. The
                             // workflow answers with `Error` rather than rejecting, so this
                             // runs on both outcomes.
@@ -1227,6 +1232,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
 
         { AddRepo = addRepo
           ListRepos = listRepos
+          Cloning = fun () -> [ for entry in cloning.Values -> fst entry ]
           SwitchBranch = switchBranch
           FetchRepo = fetchRepo
           RepoStatus = inspect (fun path -> [ "-C"; path; "status"; "--porcelain=v1"; "--branch" ])
@@ -1270,7 +1276,8 @@ let private queryDef : QueryDef =
          default sandbox's terminals and file tools start (`.` when they start in it). The rows \
          come from the checkouts themselves, so they always agree with git. A checkout git \
          cannot read has a row of its own with git's reason under `problem`, and the rows \
-         around it are still read."
+         around it are still read. A repo whose clone has not ended has a row with no branch \
+         and no path, and `problem` says so."
       Shape =
         Rows
             [ QueryColumn.create "repo" "repo"
@@ -1279,6 +1286,18 @@ let private queryDef : QueryDef =
               QueryColumn.create "path" "path"
               QueryColumn.create "problem" "problem" ]
       Legend = [] }
+
+/// What `problem` says for a repo whose clone has not ended. It names `add_repo` because
+/// that tool waits for a clone in progress, so it is how an agent gets the checkout.
+let cloningProblem : string =
+    "The clone has not ended. This repo is not a checkout yet. To wait for it, use add_repo on it."
+
+let private cloningRow (repo: RepoRef) : (string * QueryCell) list =
+    [ "repo", CellText (RepoRef.value repo)
+      "branch", CellAbsent
+      "dirty", CellAbsent
+      "path", CellAbsent
+      "problem", CellText cloningProblem ]
 
 /// Register the listing as a query. The service keeps its typed `ListRepos` — the query
 /// is a projection of it, not a replacement — so the shape lives beside the thing it
@@ -1293,8 +1312,9 @@ let query (service: ReposService) : Queries.QueryRegistration =
                 | Ok reads ->
                     return
                         Ok (RowsOf (
-                            reads
-                            |> List.map (fun read ->
+                            service.Cloning ()
+                            |> List.map cloningRow
+                            |> List.append (reads |> List.map (fun read ->
                                 match read with
                                 | RepoRead.Listed listing ->
                                     [ "repo", CellText (RepoRef.value listing.Repo)
@@ -1307,5 +1327,5 @@ let query (service: ReposService) : Queries.QueryRegistration =
                                       "branch", CellAbsent
                                       "dirty", CellAbsent
                                       "path", CellText unreadable.Path
-                                      "problem", CellText unreadable.Reason ])))
+                                      "problem", CellText unreadable.Reason ]))))
             } }

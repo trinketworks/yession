@@ -581,6 +581,7 @@ let private reposReading (reposDir: string) (reads: unit -> RepoRead list) : Rep
     let denied _ = async { return Error "not part of this test" }
     { AddRepo = fun _ _ -> denied ()
       ListRepos = fun () -> async { return Ok (reads ()) }
+      Cloning = fun () -> []
       SwitchBranch = fun _ _ _ _ -> denied ()
       FetchRepo = fun _ _ -> denied ()
       RepoStatus = fun _ -> denied ()
