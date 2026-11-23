@@ -502,8 +502,6 @@ module Dom =
         /// the visit started and one where it ended. Each carries the offset that started the
         /// visit, which is the name of the visit. They are lines and not buttons: an entry
         /// has no recording to open.
-        let chatVisit = "data-chat-visit"
-        let chatVisitEnd = "data-chat-visit-end"
         /// A turn's tool calls in the CHAT (Plan 16, part C). A `<details>` per RUN of
         /// consecutive calls from one turn — expandable by construction, so it is keyboard-
         /// operable without a handler — carrying the turn id; and one row inside it per

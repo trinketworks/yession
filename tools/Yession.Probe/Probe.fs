@@ -209,13 +209,6 @@ let private lineFor (timeline: TimelineProjection) (item: TimelineItem) : string
     | TimelineBlock (_, terminal, block) ->
         Some (sprintf "%-9s %s in %s" "ran" (BlockId.value block) (TerminalId.value terminal))
     | TimelineStretch _ -> None
-    | TimelineVisitStarted visit ->
-        let said = Yession.Domain.Sandboxes.SandboxVisit.said visit.Visitor (Yession.Domain.Sandboxes.SandboxVisit.entered visit)
-        Some (sprintf "%-9s %s" "entered" said)
-    | TimelineVisitEnded ended ->
-        let visitor = ended.EndedVisit.Visitor
-        let said = Yession.Domain.Sandboxes.SandboxVisit.said visitor (Yession.Domain.Sandboxes.SandboxVisit.left ended)
-        Some (sprintf "%-9s %s" "left" said)
 
 // --- run ------------------------------------------------------------------------------------
 

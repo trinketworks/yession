@@ -1,15 +1,14 @@
 module Yession.Tests.Visits
 
 // The visits to a sandbox (`SandboxVisit`, `VisitProjection`): the entries of one person that
-// are open at the same time, as one visit. Also the two timeline items of a visit and the
-// words that a page shows for them. These cases start nothing.
+// are open at the same time, as one visit. Also the words that a row of a sandbox shows for
+// one, and that a visit gives the conversation no item. These cases start nothing.
 
 open System
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Chat
-open Yession.Host
 open Yession.Tests.Support
 
 let private sessionId : SessionId = SessionId.create "visits-tests" |> expect
@@ -37,7 +36,7 @@ let private leftBecause (reason: string) (code: int option) (name: string) : Ses
           SandboxLeft.ExitCode = code
           SandboxLeft.EndedBecause = reason }
 
-let private left (name: string) : SessionEvent = leftBecause SandboxVisit.commandEnded (Some 0) name
+let private left (name: string) : SessionEvent = leftBecause "the command ended" (Some 0) name
 
 /// One envelope at `offset`, stamped `minutes` after the epoch.
 let private at (offset: int64) (minutes: float) (event: SessionEvent) : EventEnvelope<SessionEvent> =
@@ -60,16 +59,6 @@ let private stepped (events: EventEnvelope<SessionEvent> list) : VisitProjection
             | Some (VisitWent ended) -> next, said @ [ sprintf "went:%d" (EventOffset.value ended.EndedVisit.VisitOffset) ]
             | None -> next, said)
         (VisitProjection.empty, [])
-
-/// The timeline items of the visits in a log, as the words that a page shows.
-let private lines (events: EventEnvelope<SessionEvent> list) : string list =
-    let timeline, _ = TimelineProjection.applyEvents None events TimelineProjection.empty
-    TimelineProjection.items ConversationProjection.empty timeline
-    |> List.choose (fun (item: TimelineItem) ->
-        match item with
-        | TimelineVisitStarted visit -> Some (SandboxVisit.said visit.Visitor (SandboxVisit.entered visit))
-        | TimelineVisitEnded ended -> Some (SandboxVisit.said ended.EndedVisit.Visitor (SandboxVisit.left ended))
-        | _ -> None)
 
 let tests =
     testList "The visits to a sandbox" [
@@ -140,48 +129,6 @@ let tests =
             Expect.equal said [ "began:1"; "went:1" ] "an entry that starts two times is one, and an end with no start is nothing"
             Expect.isEmpty proj.OpenVisits "nothing is open"
 
-        testCase "the words of a visit" <| fun () ->
-            Expect.equal
-                (lines [ at 1L 0.0 (entered "e1" dev); at 2L 12.0 (left "e1") ])
-                [ "ada entered sandbox octo/hello:dev through ssh"
-                  "ada left sandbox octo/hello:dev after 12 minutes" ]
-                "who, where, how, and for how long"
-
-        testCase "the time of a visit is from its first entry to the end of its last" <| fun () ->
-            Expect.equal
-                (lines
-                    [ at 1L 0.0 (entered "e1" dev)
-                      at 2L 10.0 (entered "e2" dev)
-                      at 3L 20.0 (left "e1")
-                      at 4L 90.0 (left "e2") ])
-                [ "ada entered sandbox octo/hello:dev through ssh"
-                  "ada left sandbox octo/hello:dev after 1 hour" ]
-                "one line for each end of the visit"
-
-        testCase "an end that is not an ordinary one says why" <| fun () ->
-            Expect.equal
-                (lines
-                    [ at 1L 0.0 (entered "e1" dev)
-                      at 2L 3.0 (leftBecause SandboxLeft.sessionRestarted None "e1") ])
-                [ "ada entered sandbox octo/hello:dev through ssh"
-                  "ada left sandbox octo/hello:dev after 3 minutes: session restarted" ]
-                "the reason follows the line"
-
-        testCase "a caller that closes the door is an ordinary end" <| fun () ->
-            Expect.equal
-                (lines [ at 1L 0.0 (entered "e1" dev); at 2L 2.0 (leftBecause SandboxVisit.callerClosed None "e1") ])
-                [ "ada entered sandbox octo/hello:dev through ssh"
-                  "ada left sandbox octo/hello:dev after 2 minutes" ]
-                "a person who closes an SSH connection left, and the line says no more"
-
-        testCase "the ordinary reasons are the words that the door writes" <| fun () ->
-            // The door writes the reason (`EntryDoor.ending`) and the page reads it
-            // (`SandboxVisit.endedAsUsual`). This case holds the two spellings together.
-            let _, ended, _, _ = EntryDoor.ending false (SandboxExited 0)
-            Expect.equal ended SandboxVisit.commandEnded "a command that ended by itself"
-            let _, closed, _, _ = EntryDoor.ending true (SandboxExited 0)
-            Expect.equal closed SandboxVisit.callerClosed "a caller that closed the door"
-
         testCase "a row of a sandbox says who is in it" <| fun () ->
             let proj, _ = stepped [ at 1L 0.0 (entered "e1" dev) ]
             Expect.equal
@@ -189,16 +136,16 @@ let tests =
                 [ "ada is here through ssh" ]
                 "the sandbox is on the row, so the words do not repeat it"
 
-        testCase "the two items of a visit stand where the visit started and ended" <| fun () ->
-            let timeline, _ =
-                TimelineProjection.applyEvents
-                    None
-                    [ at 4L 0.0 (entered "e1" dev); at 5L 0.5 (entered "e2" dev); at 7L 1.0 (left "e1"); at 9L 2.0 (left "e2") ]
-                    TimelineProjection.empty
-            let items = TimelineProjection.items ConversationProjection.empty timeline
+        testCase "a visit gives the conversation no item, and the sandbox knows who is in it" <| fun () ->
+            let folded (events: EventEnvelope<SessionEvent> list) : TimelineProjection =
+                TimelineProjection.applyEvents None events TimelineProjection.empty |> fst
+            let during = folded [ at 4L 0.0 (entered "e1" dev) ]
+            Expect.isEmpty (TimelineProjection.items ConversationProjection.empty during) "an entry is not a line"
             Expect.equal
-                (items |> List.map (fun item -> TimelineItem.key item, EventOffset.value (TimelineItem.offset item)))
-                [ "visit:4", 4L; "visit-end:9", 9L ]
-                "one item at the first entry and one at the end of the last"
-            Expect.isEmpty timeline.Visits.OpenVisits "and the visit is not open"
+                (VisitProjection.openIn dev during.Visits |> List.map (fun visit -> visit.Visitor))
+                [ "ada" ]
+                "the visit is open on the sandbox"
+            let after = folded [ at 4L 0.0 (entered "e1" dev); at 9L 2.0 (left "e1") ]
+            Expect.isEmpty (TimelineProjection.items ConversationProjection.empty after) "nor is the end of one"
+            Expect.isEmpty after.Visits.OpenVisits "and the visit is not open"
     ]

@@ -1564,13 +1564,15 @@ After the fixes land, one pass rewrites it to what still reproduces.
   the trust: a process that can dial the door can claim each name. A deployment that takes the
   name from its network (the login of a tailnet peer, for example) gives a true name. A name
   from a process in the sandbox is not one.
-- **The agent does not learn that a person is in a sandbox.** The session page shows a visit:
-  the conversation has one line where a person entered and one where the person left, and the
-  list of places says who is in a sandbox now (`SandboxVisit`). The context of the agent has
-  neither.
+- **The agent does not learn that a person is in a sandbox.** The list of places says who is
+  in a sandbox now (`SandboxVisit`). The context of the agent does not.
   - Cost: a person who came through the door can change files that the agent works on, and
     the agent does not know why they changed.
   - Open: the two facts of a visit in the context of the next turn.
+- **The page does not show a visit that ended.** The conversation has no line for a visit.
+  A person who uses SSH often filled it with lines that said nothing of the work. The log
+  keeps each entry (`sandboxEntered`, `sandboxLeft`).
+  - Cost: a reader of the page can not see who was in a sandbox, or when.
 - **The address of a way into a sandbox is the word of the caller of the door.**
   `yession-enter --offer` gives the text, and the session shows it without a check
   (`SandboxWayOffered`). A process that can dial the door can put a false address on the page.
@@ -1578,9 +1580,7 @@ After the fixes land, one pass rewrites it to what still reproduces.
   sidebar shows it under the environment, on the sandbox.
 - **A session with one place does not say who is in it.** The list of places is the only
   surface that names each sandbox, and the page draws it when the session has two places or
-  more. With only the session's own sandbox, the two lines in the conversation are the record.
-- **A line of a visit opens nothing.** An entry has no recording (the entry above), so the
-  line is text and not a control. It does not show the commands of the entries.
+  more. With only the session's own sandbox, the page names no visitor.
 - **`renewable` is a provider's claim about its own tool, and nothing verifies it** (Plan 19,
   step 4). A closed stream offers a way back when the provider said asking again is safe.
   Pressing it replays that tool call with its original arguments, so a provider that marks a
