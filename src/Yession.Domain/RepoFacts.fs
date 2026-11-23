@@ -379,7 +379,7 @@ module RepoAwaitsPerson =
 module RepoTrusted =
 
     let phrase (t: RepoTrusted) : Phrase =
-        Phrase.deed "trusts" [ Segment.Ref (EntityRef.Repo t.Repo) ]
+        Phrase.deed "granted" [ Segment.Text "capabilities to "; Segment.Ref (EntityRef.Repo t.Repo) ]
 
 module RepoConfigRefused =
 
