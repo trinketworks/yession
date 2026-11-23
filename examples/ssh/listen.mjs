@@ -12,11 +12,18 @@
 // Under `follow.mjs` the door and the sandbox come from the environment, so the same command
 // line serves each sandbox.
 //
-// WHO entered is the hard part. This program can not see the person: the ingress in front of
-// it can. An ingress that speaks the PROXY protocol (`tailscale serve --tcp --proxy-protocol`)
-// sends the address of the peer before the first byte of the connection. `--proxy-protocol`
-// reads that header, and `--whois` asks a command of the host who has that address. The
-// answer is the subject of the entry. With no `--whois`, each entry has the subject of `--as`.
+// WHO entered is the hard part. `--whois` asks a command of the host who has the address of
+// the peer, and the answer is the subject of the entry. With no `--whois`, each entry has the
+// subject of `--as`. The address of the peer comes from one of two places:
+//
+//   - The connection. This program listens on an address of a network that proves each
+//     address (a tailnet address of the host, for example). The system gives the address of
+//     the peer, and no process can write it. A peer on this host proves nothing, because each
+//     process of the host has the addresses of the host. This program closes such a peer.
+//   - A PROXY header (`--proxy-protocol`). An ingress in front of this program
+//     (`tailscale serve --tcp --proxy-protocol`) sends the address of the peer before the
+//     first byte of the connection. Each process that can dial this program can write a
+//     header, so the port must be closed to each process but the ingress.
 //
 // A connection whose header is wrong, or whose peer the host does not know, is closed. This
 // program never starts an entry for a person that it could not name when it was told to
@@ -27,6 +34,7 @@
 import { spawn, execFile } from 'node:child_process'
 import { createServer } from 'node:net'
 import { unlinkSync } from 'node:fs'
+import { networkInterfaces } from 'node:os'
 
 const usage = `usage: node listen.mjs --listen ADDRESS [--door PATH] [--sandbox NAME] [--via LABEL]
                       [--as SUBJECT] [--proxy-protocol] [--whois COMMAND] [--enter PATH]
@@ -41,7 +49,9 @@ const usage = `usage: node listen.mjs --listen ADDRESS [--door PATH] [--sandbox 
   --proxy-protocol   each connection starts with a PROXY protocol header, version 1 or 2
   --whois COMMAND    a command that gets the address of the peer as its last argument and
                      prints JSON with UserProfile.LoginName (tailscale whois --json) or login.
-                     Needs --proxy-protocol.
+                     With --proxy-protocol the address is the one in the header. With no
+                     --proxy-protocol it is the address of the connection, and a peer on
+                     this host is closed.
   --enter PATH       the yession-enter to run (default yession-enter)
   --bare             each entry starts with no entrypoint of the sandbox before it
   --prepare COMMAND  one entry behind the entrypoint, which runs this command one time before
@@ -99,7 +109,8 @@ for (let i = 0; i < own.length; i++) {
 if (!options.listen) fail('--listen is required')
 if (!options.door) fail('--door is required (or YESSION_DATA_DOOR)')
 if (!options.sandbox) fail('--sandbox is required (or YESSION_ANNOUNCEMENT_NAME)')
-if (options.whois && !options['proxy-protocol']) fail('--whois needs --proxy-protocol, which gives the address of the peer')
+if (options.whois && !options['proxy-protocol'] && options.listen.startsWith('unix:'))
+  fail('--whois with a UNIX socket needs --proxy-protocol, because the socket gives no address of the peer')
 const whois = options.whois ? options.whois.split(/\s+/).filter(Boolean) : null
 
 // --- the PROXY protocol ------------------------------------------------------------------
@@ -208,13 +219,48 @@ function enter(socket, subject, first) {
   })
 }
 
+/** The address of the peer as the system gives it, with no IPv4-in-IPv6 prefix and no zone. */
+function peerOf(socket) {
+  const address = socket.remoteAddress
+  if (typeof address !== 'string' || address === '') return null
+  return address.replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/i, '').replace(/%.*$/, '')
+}
+
+/**
+ * True when the address is one of this host. A loopback address is one, and so is each
+ * address of an interface. Each connection reads the interfaces again, because a host
+ * gets addresses and loses addresses while this program runs.
+ */
+function isThisHost(address) {
+  if (address === '::1' || /^127\./.test(address)) return true
+  for (const list of Object.values(networkInterfaces())) {
+    for (const own of list ?? []) {
+      if (own.address.replace(/%.*$/, '').toLowerCase() === address.toLowerCase()) return true
+    }
+  }
+  return false
+}
+
 function accept(socket) {
-  if (!options['proxy-protocol']) return enter(socket, options.as, Buffer.alloc(0))
-  let seen = Buffer.alloc(0)
   const refuse = (why) => {
     log(`a connection was closed: ${why}`)
     socket.destroy()
   }
+  if (!options['proxy-protocol']) {
+    if (!whois) return enter(socket, options.as, Buffer.alloc(0))
+    // The name comes from the address of the connection. This program reads nothing before
+    // it has the name, so the first bytes of the person wait in the socket.
+    socket.on('error', () => {})
+    socket.pause()
+    const peer = peerOf(socket)
+    if (peer === null) return refuse('the connection has no address of the peer')
+    if (isThisHost(peer)) return refuse(`the peer ${peer} is this host, which proves no name`)
+    return loginOf(peer).then(
+      (login) => (socket.destroyed ? undefined : enter(socket, login, Buffer.alloc(0))),
+      (error) => refuse(error.message),
+    )
+  }
+  let seen = Buffer.alloc(0)
   const late = setTimeout(() => refuse('no PROXY header in time'), headerWaitMs)
   socket.on('error', () => {})
   socket.on('close', () => clearTimeout(late))

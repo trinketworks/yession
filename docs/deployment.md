@@ -633,37 +633,35 @@ node follow.mjs --manager unix:/var/lib/yession/manager.sock --as ssh-follow \
 ```
 
 `/etc/yession-ssh/node` runs one time for each sandbox that selected the resource. It
-chooses a port and keeps a listener on it:
+chooses a port and keeps a listener on that port of the tailnet address of the host:
 
 ```sh
 #!/bin/sh
 set -eu
 port=$(/etc/yession-ssh/port-for "$YESSION_SESSION_ID" "$YESSION_ANNOUNCEMENT_NAME")
-exec node listen.mjs --listen "127.0.0.1:$port" --proxy-protocol \
+exec node listen.mjs --listen "$(tailscale ip -4):$port" \
   --whois 'tailscale whois --json' --via ssh \
   --address "ssh -p $port root@host" \
   --prepare '/run/yession-ssh/serve --prepare' --bare \
-  -- /run/yession-ssh/serve --prepared --for '{subject}'
-```
-
-Root forwards a fixed set of tailnet ports to the same loopback ports, one time:
-
-```sh
-for port in $(seq 22000 22015); do
-  tailscale serve --bg --tcp="$port" --proxy-protocol=2 "tcp://127.0.0.1:$port"
-done
+  -- /run/yession-ssh/serve --prepared --for '{subject}' --trusted
 ```
 
 What each part gives:
 
-- **The tailnet** decides who can reach a port. `tailscale serve` sends the address of the
-  peer in a PROXY header.
-- **`listen.mjs`** reads the header and asks `tailscale whois` for the login. That login is
-  the subject that the session records. A peer that the tailnet does not know gets no entry.
-- **`serve --for`** lets that login in only with a key from its own file. The keys are on a
-  read-only mount, so the sandbox cannot add one.
-- **The session** records `sandboxEntered` and `sandboxLeft` for each connection, and its
-  page shows one line where a person entered and one where the person left.
+- **The tailnet** decides who can reach a port, and proves the address of each peer. The
+  listener is on the tailnet address and not on loopback, so no ingress is between the two
+  and the system gives the listener the address of the peer.
+- **`listen.mjs`** asks `tailscale whois` for the login of that address. That login is the
+  subject that the session records. A peer that the tailnet does not know gets no entry. A
+  peer on the host itself gets no entry: each process of the host has the addresses of the
+  host, so such a peer proves no name.
+- **`serve --for --trusted`** lets that login in with no key, because the host already
+  proved the name. The policy of the tailnet for the ports is thus the full list of who can
+  enter. `--trusted` needs a sandbox that runs as root. With no `--trusted`, `serve --for`
+  lets the login in only with a key from its own file. The keys are on a read-only mount,
+  so the sandbox cannot add one.
+- **The session** records `sandboxEntered` and `sandboxLeft` for each connection, and the
+  list of places on its page says who is in a sandbox now.
 - **`--address`** puts the command line on the page of the session, on the sandbox, so a
   person does not ask the operator for the port (`yession-enter --offer`).
 - **`--prepare` and `--bare`** keep the entrypoint of the sandbox out of each connection. The
@@ -671,21 +669,18 @@ What each part gives:
 
 The limits of this example:
 
-- Each process on the host that can dial a loopback port can write a PROXY header, and thus
-  a login. It cannot log in without the private key of that login. It can make the session
-  record that the login entered. `tailscale serve` does not send the header to a UNIX socket,
-  so a socket in a private directory cannot replace the port.
+- A person on the host itself cannot use the address. That person has the host, and enters
+  a sandbox with `yession-enter`.
+- The listener stops when the host has no tailnet address at the start of the script.
 - The set of ports is the limit on the number of sandboxes that have SSH at one time.
 
-**With no keys.** The tailnet already proved who the person is, so the keys are a second
-check. `serve --for '{subject}' --trusted` lets the login in with no key, and the policy of
-the tailnet for the ports is then the full list of who can enter. First close the loopback
-ports to each user other than root, which is the user of `tailscaled`. If you do not, each
-process on the host enters each sandbox as a person of its choice. The packet filter of the
-host can make that rule from the user of the socket that dials.
-
-The listener cannot see that the rule is there. Make the script of the listener dial its
-own port before it uses `--trusted`, and use keys when the port answers.
+**Behind an ingress.** A listener on loopback behind `tailscale serve --tcp
+--proxy-protocol=2` gets the address of the peer from a PROXY header
+(`listen.mjs --proxy-protocol`). Each process on the host that can dial the loopback port
+can write a header, and thus a login. Do not use `--trusted` there. With keys, such a
+process cannot log in without the private key of that login, but it can make the session
+record that the login entered. `tailscale serve` does not send the header to a UNIX socket,
+so a socket in a private directory cannot replace the port.
 - The page shows the address in its sidebar, under the environment. A person unfolds the
   sandbox there and copies the address. The address is the text that the deployment gave
   with `--address`, so the host name in it is the choice of the deployment.
