@@ -47,13 +47,6 @@ module private Col =
     /// The row's attention mark (`Style.recordLeadingCell`): 32px, the mark on the page's rail
     /// at every width.
     let mark = "w-8"
-    /// The session's state in words, as a column of its own on a wide screen, so every row's
-    /// state starts on one rail and a scan down the column reads what the marks beside the
-    /// names only rank. Wide enough for the longest state word (`failed to start`) and some
-    /// of the tail after it — a running session's standings, a failed launch's reason —
-    /// which clips rather than wraps. Yields on a phone, where the mark says the rank and
-    /// the unfolded row says the words.
-    let status = "w-[240px] phone:hidden"
     /// The MCP table's audience column.
     let reaches = "w-[256px] max-xl:w-[100px]"
     /// `2026-08-18 09:12Z` in the 12px mono face, plus the cell's gutter. MEASURED like the
@@ -63,7 +56,7 @@ module private Col =
     let created = "w-[144px] phone:hidden"
     /// The row's disclosure (`Style.recordChevronPress`): a thumb's 44px, in its own column at
     /// the row's TRAILING edge — never yields on a phone, unlike the columns before it (`id`,
-    /// `status`, `created`), the one thing a reader must always be able to reach to unfold a
+    /// `created`), the one thing a reader must always be able to reach to unfold a
     /// row. Last in the head's own order too, so it lands on the table's own right rail at
     /// every width, where a disclosure control is looked for.
     let chevron = "w-11"
@@ -77,79 +70,17 @@ module private Col =
     /// Hierarchy of controls), a word that fits in 100px with the cell's 16px gutter.
     let rail = "w-[100px]"
 
-/// The session's state, and beside it what the session says about ITSELF: the wide screen's
-/// status column (`Col.status`). A phone reads the same words in the row's unfolded lines
-/// (`rowSays`), behind the mark that ranks them.
-///
-/// A STATUS, in the product's one voice for one: the caps label step, in its role's colour
-/// (docs/visual-design.md, Colour — "a status is text in its colour, and it leads with a
-/// mark"). It was 13px lowercase with no mark, which is the voice of a sentence, and read as
-/// something to press beside the bare verbs in the same row.
-///
-/// Running and stopped are the exception: this page's own roster already says "running" by the
-/// row's own spin mark (`recordLeadingCell`, at every width) and "stopped" by nothing under way at
-/// all, so the word here carries no second mark of its own — plain text is unambiguous and a
-/// mark beside it would only repeat what the rail already drew. Every other state here still
-/// leads with one, because it is the only place that state is said at this width: `starting` is
-/// a wait, so `ink-dim` with the spin mark; a launch that failed or an exit is WRONG, so it is
-/// the one red word in its row, leading with a dot; `archived` one step further back again,
-/// also a dot. The word is always there beside the colour, so nothing rests on colour alone
-/// (WCAG 2.0 SC 1.4.1). The name above carries the same fact by weight of ink (`nameText`),
-/// which is what lets a blurred screen find what is live.
-///
-/// The red words are counted per ROW, which is the surface a row's hover tone, its rail of
-/// verbs and its one record make it. A registry of twenty exited sessions is twenty records,
-/// and dimming all but the newest would be this page guessing which fault anybody came for.
-///
-/// Absent from the list, and deliberately: `port · pid · build`. That was plumbing — the
-/// answer to "which process, running what" — and a diagnostic does not outrank the reason a
-/// reader is scanning the column. The build is still on the wire the registry stream carries.
-///
-/// A longer line is CLIPPED rather than wrapped, because a row that changes height when a
-/// session picks up a third pull request is a list you cannot keep your place in. The
-/// clipping is the line's own (`truncate` on the block; `overflow` does nothing to an inline
-/// span). The worst it can lose is the tail of a count; the state is first and always whole.
-let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
-    let nothing = html $""""""
-    // ONE shape for every state, so no state can arrive wearing a voice of its own: the status
-    // word in its role's face, leading with its dot, then whatever this row has to add in the
-    // line's own small voice. No block of its own: the cell carries the voice and the clipping
-    // (`rowTemplate`).
-    let dotMark (dot: string) = html $"""<span class="{dot}" aria-hidden="true"></span>"""
-    let line (face: string) (mark: TemplateResult) (hook: string) (word: string) (rest: TemplateResult) =
-        html $"""<span class="{face}" data-status="{hook}">{mark}{word}</span>{rest}"""
+/// The hook a row's state word carries (`Dom.Manager.status`), so a script or a test can read
+/// the state off the markup without parsing the word. A running session carries it whatever it
+/// says about itself: the state is that the process is up, and its standings are what it adds.
+let private stateHook (view: ProcessManager.SessionView) : string =
     match view.Record.ArchivedAt, view.Status with
-    // An operator's decision, not a process state — but it belongs on this line, because
-    // "archived" is the answer a reader wants here and "stopped" for a session that can no
-    // longer start is true and useless. A step fainter than `stopped`: it is the one state
-    // nothing can be done to without first being undone.
-    | Some _, _ -> line Style.statusFaint (dotMark Style.statusDot) Dom.Manager.statusArchived "archived" nothing
-    | None, ProcessManager.NotRunning -> line Style.statusWait nothing Dom.Manager.statusStopped "stopped" nothing
-    | None, ProcessManager.Running _ ->
-        // Each standing in the tone the SESSION gave it: the Manager never learns what a
-        // standing is about, so a colour it chose would be one it guessed. Worst first, so
-        // the clip at the line's end takes the least urgent. It exists in this arm alone
-        // because standings are launch-scoped — a session that is not running has no work in
-        // flight to describe.
-        let standings =
-            Standing.byConcern view.Standings
-            |> List.map (fun s ->
-                html $"""<span> · </span><span class="{Style.attentionInk s.Attention}" data-session-standing="{s.Facet}">{s.Word}</span>""")
-        line Style.statusOk nothing Dom.Manager.statusRunning "running" (html $"""{standings}""")
-    | None, ProcessManager.Launching ->
-        line Style.statusWait Icon.spinLead Dom.Manager.statusStarting "starting" nothing
-    | None, ProcessManager.LaunchFailed reason ->
-        // The reason stays in the line's own voice: the red is the WORD's, and a sentence set
-        // in it would be the red statement the doctrine allows one of, twice.
-        line
-            Style.statusErr
-            (dotMark Style.statusDot)
-            Dom.Manager.statusFailed
-            "failed to start"
-            (html $"""<span title="{reason}"> · {reason}</span>""")
-    | None, ProcessManager.Exited code ->
-        let reason = code |> Option.map string |> Option.defaultValue "signal"
-        line Style.statusErr (dotMark Style.statusDot) Dom.Manager.statusExited (sprintf "exited (%s)" reason) nothing
+    | Some _, _ -> Dom.Manager.statusArchived
+    | None, ProcessManager.NotRunning -> Dom.Manager.statusStopped
+    | None, ProcessManager.Running _ -> Dom.Manager.statusRunning
+    | None, ProcessManager.Launching -> Dom.Manager.statusStarting
+    | None, ProcessManager.LaunchFailed _ -> Dom.Manager.statusFailed
+    | None, ProcessManager.Exited _ -> Dom.Manager.statusExited
 
 /// What a row says when it unfolds, one line each, worst first: a running session's own
 /// standings, or, for every other state, the state. Each is an attention, a word, and the
@@ -176,7 +107,7 @@ let private rowSays (view: ProcessManager.SessionView) : (Attention * string * s
         [ Wrong, sprintf "exited (%s)" reason, None ]
 
 /// The name text, styled by state but carrying no link of its own — the cell around it
-/// (`rowTemplate`) is the one hit area, covering this and `stateLine` both. A session that
+/// (`rowTemplate`) is the one hit area, covering this and the status head above it both. A session that
 /// has no way in (archived) renders the same step-back ink it always has; the distinction
 /// that used to live in "is this an `<a>`" now lives in whether `rowTemplate` wraps the cell
 /// at all.
@@ -274,18 +205,17 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
 /// column. The row leads with its attention mark, so it reads mark → name → state.
 ///
 /// At rest a row is ONE line at every width, and the same height whatever its state: the
-/// mark on the page's rail (`Col.mark`), then the name; a wide screen adds the state in words
-/// as a column of its own (`Col.status`), so every row's state starts on one rail, and the
-/// chevron closes the row at its own TRAILING edge (`Col.chevron`), the table's own right rail
-/// at every width. The table is fixed-layout (`Col`) and each text cell clips rather than
+/// mark on the page's rail (`Col.mark`), then the name. The state is not a column: it is said
+/// when the row unfolds. The chevron closes the row at its own TRAILING edge (`Col.chevron`),
+/// the table's own right rail at every width. The table is fixed-layout (`Col`) and each text cell clips rather than
 /// wraps. Rows that jump as processes start and stop make a list you cannot keep your place in.
 ///
 /// The chevron is the press. It lives in its own column, last, at the row's trailing edge: the
-/// columns before it yield on a phone (`id`, `status`, `created`), the chevron never does. It
-/// UNFOLDS the row, under the name: one line per thing the row says (`rowSays`), each mark
-/// under the row's mark and each word on the name's rail, and then the verbs. The first line's
-/// mark IS the row's own attention mark, riding down to it on a faint track
-/// (`Style.recordMarkRider`), so what the mark ranked first is never drawn twice. The server
+/// columns before it yield on a phone (`id`, `created`), the chevron never does. It UNFOLDS
+/// the row: one line per thing the row says (`rowSays`). The first line is the row's own
+/// mark's, said ABOVE the name (`Style.recordStatusHead`), so the mark and its status stay
+/// where they are and the name steps down. The rest are under the name, each with a mark of
+/// its own, and then the verbs. The server
 /// always renders a row folded; which row is open is the page's own state (`ManagerPage.fs`),
 /// carried across every frame the rows stream swaps in.
 ///
@@ -312,16 +242,21 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
         | None ->
             let openUrl = ManagerRoute.path (ManagerRoute.OpenSession view.Record.SessionId)
             html $"""<a class="{Style.recordRowLink}" href="{openUrl}" target="_blank" data-open>{line}</a>"""
-    // The first line's mark is the row's own, which rides down to it (`Style.recordMarkRider`);
-    // its seat in the line stays, empty, so the word keeps the name's rail.
-    let saidLine (index: int) (attention: Attention, word: string, facet: string option) =
-        let word =
-            match facet with
-            | Some facet ->
-                html $"""<span class="{Style.cls [ Style.recordDetailWord; Style.attentionInk attention ]}" data-session-standing="{facet}">{word}</span>"""
-            | None ->
-                html $"""<span class="{Style.cls [ Style.recordDetailWord; Style.attentionInk attention ]}">{word}</span>"""
-        if index = 0 then html $"""<span></span>{word}""" else html $"""{Icon.attention attention}{word}"""
+    let wordOf (attention: Attention) (word: string) (facet: string option) (hook: string option) =
+        let face = Style.cls [ Style.recordDetailWord; Style.attentionInk attention ]
+        match facet, hook with
+        | Some facet, Some hook -> html $"""<span class="{face}" data-status="{hook}" data-session-standing="{facet}">{word}</span>"""
+        | Some facet, None -> html $"""<span class="{face}" data-session-standing="{facet}">{word}</span>"""
+        | None, Some hook -> html $"""<span class="{face}" data-status="{hook}">{word}</span>"""
+        | None, None -> html $"""<span class="{face}">{word}</span>"""
+    // The first line is the row's own mark's: it sits in the head above the name, on the
+    // mark's line, so the mark stays where it is and the name steps down when the row opens.
+    // The lines after it each draw a mark of their own, under the name.
+    let headLine =
+        let _, word, facet = List.head says
+        wordOf attention word facet (Some (stateHook view))
+    let saidLine (attention: Attention, word: string, facet: string option) =
+        html $"""{Icon.attention attention}{wordOf attention word facet None}"""
     let detailId = sprintf "row-detail-%s" id
     // The chevron's name says the session and what it ranked first: the press is the one
     // thing a screen reader meets on a folded row besides the name.
@@ -329,20 +264,22 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
     html $"""
         <tr class="{Style.tableRow}" data-session="{id}">
           <td class="{Style.recordLeadingCell} {Col.mark}">
-            <span class="{Style.recordMarkSeatWrap}" aria-hidden="true"><span class="{Style.recordMarkSeat}"></span><span class="{Style.recordMarkTrack}"></span><span class="{Style.recordMarkRider}">{Icon.attention attention}</span></span>
+            <span class="{Style.recordMarkSeatWrap}" aria-hidden="true">{Icon.attention attention}</span>
           </td>
           <td class="{Style.tableCell}" title="{name}">
+            <div class="{Style.recordDetail}">
+              <div class="{Style.recordStatusHead}">{headLine}</div>
+            </div>
             {nameLine}
             <div class="{Style.recordDetail}" id="{detailId}" data-row-detail>
               <div class="{Style.recordDetailInner}">
                 <div class="{Style.recordDetailLines}">
-                  {says |> List.mapi saidLine}
+                  {says |> List.tail |> List.map saidLine}
                   <div class="{Style.recordDetailVerbs}">{actions view}</div>
                 </div>
               </div>
             </div>
           </td>
-          <td class="{Style.tableCell} {Style.small} truncate {Col.status}">{stateLine view}</td>
           <td class="{Style.tableCell} {Style.monoFaint} truncate {Col.yields}">{idCell}</td>
           <td class="{Style.tableCell} {Style.monoFaint} tabular-nums truncate {Col.yields}">{createdView view.Record.CreatedAt}</td>
           <td class="{Style.recordLeadingCell} {Col.chevron}">
@@ -413,7 +350,7 @@ let private tableTemplate
         | [] ->
             [ html $"""
                 <tr>
-                  <td colspan="6" class="{Style.tableEmpty}">{emptyWord}</td>
+                  <td colspan="5" class="{Style.tableEmpty}">{emptyWord}</td>
                 </tr>""" ]
         | views -> views |> List.map rowTemplate
     // The `created` header IS the sort control — the canonical accessible table sort, and it
@@ -466,7 +403,6 @@ let private tableTemplate
               <tr class="{Style.tableRule}">
                 <th scope="col" class="{Col.mark}"><span class="sr-only">attention</span></th>
                 <th scope="col" class="{Style.tableHead}">name</th>
-                <th scope="col" class="{Style.tableHead} {Col.status}">status</th>
                 <th scope="col" class="{Style.tableHead} {Col.id}">id</th>
                 <th scope="col" class="{Style.tableHead} {Col.created}" aria-sort="{sortedBy}">
                   <a class="{Style.sortHeader}" href="{sortHref}" data-filter="sort">created {sortMark}</a>

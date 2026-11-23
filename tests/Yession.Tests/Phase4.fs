@@ -839,18 +839,21 @@ let private uiRenderTests =
                     { Record = uiRecord; Status = ProcessManager.Running (8199, 42, None); Standings = [ working; stalled ]; Announcements = [] }
             Expect.isTrue (running.Contains "aria-expanded=\"false\"") "the mark is a press that says the row is folded"
             Expect.isTrue (running.Contains "aria-controls=\"row-detail-ui-render\"") "and which region it unfolds"
-            let detail = running.Substring (running.IndexOf "id=\"row-detail-ui-render\"")
+            let detailAt = running.IndexOf "id=\"row-detail-ui-render\""
+            let detail = running.Substring (detailAt, running.IndexOf Dom.Manager.rowMark - detailAt)
             Expect.isTrue (detail.Contains Dom.Manager.rowDetail) "the region is the row's detail"
-            let stalledAt = detail.IndexOf "3 PRs · 1 stalled"
+            // The worst standing is the first line: said above the name, on the mark's own
+            // line, so the mark and its status stay put and the name steps down.
+            let stalledAt = running.IndexOf "3 PRs · 1 stalled"
+            let nameAt = running.IndexOf "data-open"
+            Expect.isTrue (stalledAt >= 0 && stalledAt < nameAt) "the first line is said above the name"
+            Expect.isFalse (detail.Contains "3 PRs · 1 stalled") "and not again below it"
             let workingAt = detail.IndexOf "working"
-            Expect.isTrue (stalledAt >= 0 && workingAt > stalledAt) "every standing, worst first"
+            Expect.isTrue (workingAt >= 0) "the rest are under the name"
             Expect.isTrue (detail.IndexOf (Dom.attr Dom.Manager.stop "ui-render") > workingAt) "then the verbs"
             Expect.isFalse (running.Contains (Dom.Manager.expanded + "=")) "and no row is rendered open"
-            // The row's own mark rides down to the first line, so that line draws none, and
-            // the lines after it each draw their own.
-            Expect.isFalse (detail.Substring(0, stalledAt).Contains "data-attention=") "the first line repeats no mark"
             // The later line's mark spells its level, so anchor on the mark, not the word.
-            Expect.isTrue (detail.IndexOf "data-attention=\"working\"" > stalledAt) "a later line draws its own"
+            Expect.isTrue (detail.IndexOf "data-attention=\"working\"" >= 0) "a later line draws its own mark"
 
         // The FLOOR. A row says its state in words, in every arm. Drop a word and four of the
         // six states are one solid dot — stopped, archived, failed to start and exited — and

@@ -722,21 +722,27 @@ module Style =
     /// so this is attention's colour alone, not a control: `aria-hidden` at the call site, same
     /// as the dot it wraps.
     ///
-    /// `translate-y-0.5` (2px) nudges the whole seat/track/rider assembly down from where
+    /// `translate-y-0.5` (2px) nudges the mark down from where
     /// `items-center` would otherwise put it. `items-center` centres on the 44px box, which
     /// is the geometric middle of the name's 24px line — correct for the mono, all-caps id a
     /// session starts with, but a name is usually lower-case prose, and lower-case ink sits
     /// LOW in its line (ascenders reach the cap line; nothing but a rare descender goes past
     /// the baseline). Measured live against Noto Sans 15px/300: the x-height centre of an
     /// ordinary letter sits ~2px below the line's geometric middle, which is what the mark
-    /// should look level with, not the box a reader never sees. The same 2px carries the mark
-    /// to the row it rides to when unfolded (`recordMarkRider`'s own translate stacks on top
-    /// of this one, on the parent, so the ride's `--spacing-mark-slide` math is untouched).
+    /// should look level with, not the box a reader never sees. The status word above the
+    /// name when the row is unfolded (`recordStatusHead`) is lower-case prose too.
     let recordMarkSeatWrap = "relative -ml-3 w-11 h-11 pl-3 flex items-center translate-y-0.5"
+
+    /// The first thing a row says, in the name's cell ABOVE the name: folded at rest, so the
+    /// name is the row's one line, and unfolded with the row, so the word sits on the mark's
+    /// own line (the mark never moves) and the name steps down beneath it. One name-line tall
+    /// (24px) and centred, so the word and the mark agree. Wrapped by `recordDetail`, which
+    /// does the fold.
+    let recordStatusHead = cls [ Motion.unfoldInner; "h-6 flex items-center" ]
 
     /// The row's disclosure: a thumb's whole 44px, in its own column at the row's TRAILING edge
     /// (`ManagerUi.Col.chevron`) — the table's own right rail at every width, where a disclosure
-    /// is looked for. Never yields on a phone, unlike the columns before it (`id`, `status`,
+    /// is looked for. Never yields on a phone, unlike the columns before it (`id`,
     /// `created`) — the one thing a reader must always be able to reach. It unfolds the row
     /// (`aria-expanded`); no ground of its own, for the same reason the mark never wore one —
     /// the unfolded lines under it already say the row is open.
@@ -747,39 +753,9 @@ module Style =
     /// The chevron itself: `Icon.caret`, the fold's own disclosure-over-one mark (never
     /// `right`, `rights`, `down` or a text glyph — principle 5, one mark per job; `Icon.down`
     /// is the jump-to-end arrow, never a disclosure). Pointing down at rest, the ordinary shape
-    /// of "this unfolds beneath", and turned to point up by the same `data-expanded` the mark's
-    /// slide reads below, so the two always agree without a second state to drift from the first.
+    /// of "this unfolds beneath", and turned to point up by the same `data-expanded` the unfolded lines read, so the two always
+    /// agree without a second state to drift from the first.
     let recordChevronMark = cls [ "block"; Motion.turn; "[[data-expanded]_&]:rotate-180" ]
-
-    /// The row's mark, which RIDES when the row unfolds: down a track to the first unfolded
-    /// line, which is the one it ranks first, so that line says its word with no mark of its
-    /// own rather than repeating the one above it (`--spacing-mark-slide`). A wrapper, so the
-    /// mark's own motion (`statusSpinCw` and its siblings) runs on undisturbed while it
-    /// travels.
-    let recordMarkRider =
-        cls [ "relative flex transition-[translate]"; Motion.pace
-              "[[data-expanded]_&]:translate-y-(--spacing-mark-slide)" ]
-
-    /// What the mark leaves behind as it rides: a line from its seat to where it stops, drawn
-    /// down with it (scaled from the top, at the same pace). The weight and ink of a causal
-    /// link's rail (`causeRail`): one pixel of `edge`, because it joins two things the way
-    /// those do, and a track that read as heavy as the mark competed with it. Centred on the
-    /// mark's 12px box: the box sits 12px into the press, so its centre is 18px in — the
-    /// pixel straddles 18, which a 2x screen draws as two whole device pixels — and the
-    /// press's own middle down.
-    let recordMarkTrack =
-        cls [ "absolute left-[17.5px] top-1/2 w-px h-(--spacing-mark-slide) bg-edge origin-top scale-y-0"
-              "transition-[scale]"; Motion.pace
-              "[[data-expanded]_&]:scale-y-100" ]
-
-    /// The track's start: a 3px point on the mark's seat, centred on the same 18px, so the
-    /// line begins round rather than squared without the point outweighing the line. Its own
-    /// element, not the line's `::before`, so the line's scale does not squash it; it fades in
-    /// where the mark leaves rather than travelling.
-    let recordMarkSeat =
-        cls [ "absolute left-[16.5px] top-1/2 -mt-[1.5px] size-[3px] rounded-full bg-edge opacity-0"
-              "transition-[opacity]"; Motion.pace
-              "[[data-expanded]_&]:opacity-100" ]
 
     /// What a row unfolds to, under its name: each thing it says, then its verbs. Folded at
     /// rest — `visibility` takes the verbs out of the tab order with it — and unfolded by
