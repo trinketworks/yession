@@ -676,6 +676,16 @@ The limits of this example:
   record that the login entered. `tailscale serve` does not send the header to a UNIX socket,
   so a socket in a private directory cannot replace the port.
 - The set of ports is the limit on the number of sandboxes that have SSH at one time.
+
+**With no keys.** The tailnet already proved who the person is, so the keys are a second
+check. `serve --for '{subject}' --trusted` lets the login in with no key, and the policy of
+the tailnet for the ports is then the full list of who can enter. First close the loopback
+ports to each user other than root, which is the user of `tailscaled`. If you do not, each
+process on the host enters each sandbox as a person of its choice. The packet filter of the
+host can make that rule from the user of the socket that dials.
+
+The listener cannot see that the rule is there. Make the script of the listener dial its
+own port before it uses `--trusted`, and use keys when the port answers.
 - The page shows the address in its sidebar, under the environment. A person unfolds the
   sandbox there and copies the address. The address is the text that the deployment gave
   with `--address`, so the host name in it is the choice of the deployment.
