@@ -506,7 +506,9 @@ The last section holds trust boundaries as sharp as the first section's.
   `CAP_SETFCAP` and an uncovered `/proc`. No measurement says what Docker's default seccomp and
   AppArmor profiles add. `check` asks srt's own command line to run the configured profile before
   it declares the `Sandbox` capability, and refuses `Srt` (confinement under test) under `weak`.
-- **The Docker backend runs through the `dockerode` SDK, and the `verify` gate tests it.** The
+- **The Docker backend runs through the `dockerode` SDK, and the `verify` gate tests it.** It
+  builds an image with the docker CLI's `buildx build` (`YESSION_BIN_DOCKER`), because the Engine
+  API builds with BuildKit only for a client that holds a session. The
   session id (Crockford base32, always a valid Docker object name) names the containers and a
   per-sandbox named workspace volume. The backend interprets all of `EnvironmentSpec`:
   image/build, mounts (including the workspace volume), working directory, env-var refs, and
@@ -545,6 +547,8 @@ The last section holds trust boundaries as sharp as the first section's.
 
   Known and accepted for now:
   - No backend has resource limits.
+  - An image build has no memory ceiling. buildx accepts `--memory` and ignores it, and the
+    daemon's BuildKit takes no limit per build.
   - A docker exec has no kill. "Kill" closes the stdin stream, so a runaway that ignores EOF
     burns CPU until the sandbox goes.
   - The operator's resource ceiling is global: one profile for every repo the session hosts. An

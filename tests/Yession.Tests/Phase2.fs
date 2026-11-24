@@ -658,6 +658,27 @@ let private sandboxPolicyTests =
                  |> List.contains { Source = NamedVolume "warm"; Target = "/nix"; Mode = ReadOnly })
                 "the sandbox cannot write what each other session builds from"
 
+        // The daemon answers 200 and then writes a failed pull's error as the last line of
+        // the stream, which ends normally.
+        testCaseAsync "a progress stream whose last event is an error drains to that error" <| async {
+            let client = Fable.Dockerode.create ()
+            let stream = Fable.Dockerode.createPassThrough ()
+            stream.write "{\"status\":\"Pulling fs layer\",\"id\":\"a1\"}\n" |> ignore
+            stream.write "{\"errorDetail\":{\"message\":\"unexpected EOF\"},\"error\":\"unexpected EOF\"}\n" |> ignore
+            stream.``end`` ()
+            let! drained = Sandboxes.DockerSandbox.drainProgress client stream
+            Expect.equal drained (Error "unexpected EOF") "the daemon's message, not Ok"
+        }
+
+        testCaseAsync "a progress stream with no error event drains to Ok" <| async {
+            let client = Fable.Dockerode.create ()
+            let stream = Fable.Dockerode.createPassThrough ()
+            stream.write "{\"status\":\"Status: Downloaded newer image for alpine:3\"}\n" |> ignore
+            stream.``end`` ()
+            let! drained = Sandboxes.DockerSandbox.drainProgress client stream
+            Expect.equal drained (Ok ()) "a pull that finished"
+        }
+
         testCase "a workspace already provided by any mount gets no volume over it" <| fun () ->
             // The checkout case: the workdir sits under the /repos bind, and a workspace
             // volume at the deeper path would shadow it with an empty directory.

@@ -685,6 +685,49 @@ let tests =
                 do! sandbox.Dispose ()
             })
 
+            testCaseAsync "an image build takes BuildKit syntax: RUN --mount, COPY --parents and **" (async {
+                let spec =
+                    alpineSpec
+                    |> withContainer (fun c ->
+                        { c with
+                            Image = None
+                            Build = Some { ContextPath = "tests/fixtures/docker-buildkit"; DockerfilePath = None } })
+                let! _, sandbox = startOrFail spec
+                let! run, _, _ = runInSandbox sandbox "test" [ "-f"; "/x/sub/dir/keep.toml" ] Map.empty None
+                do! sandbox.Dispose ()
+                Expect.equal run (SandboxExited 0) "COPY --parents kept the file's directories"
+            })
+
+            testCaseAsync "a build whose step fails refuses the start with the failing step, not a missing image" (async {
+                let spec =
+                    alpineSpec
+                    |> withContainer (fun c ->
+                        { c with
+                            Image = None
+                            Build = Some { ContextPath = "tests/fixtures/docker-fails"; DockerfilePath = None } })
+                match! start envSecrets spec with
+                | Ok (_, sandbox) ->
+                    do! sandbox.Dispose ()
+                    failwith "a Dockerfile that runs `false` built"
+                | Error reason ->
+                    Expect.stringContains reason "image build failed" "it says the build failed"
+                    Expect.stringContains reason "RUN false" "it names the step that failed"
+                    Expect.isFalse (reason.Contains "No such image") (sprintf "not the later 404, said: %s" reason)
+            })
+
+            testCaseAsync "a pull of an image that does not exist refuses the start in Docker's words" (async {
+                let spec =
+                    alpineSpec
+                    |> withContainer (fun c -> { c with Image = Some { Name = "yession-tests/does-not-exist"; Tag = Some "nope" } })
+                match! start envSecrets spec with
+                | Ok (_, sandbox) ->
+                    do! sandbox.Dispose ()
+                    failwith "an image that does not exist was pulled"
+                | Error reason ->
+                    Expect.stringContains reason "repository does not exist" "the registry's answer, as Docker gives it"
+                    Expect.isFalse (reason.Contains "No such image") (sprintf "not the later 404, said: %s" reason)
+            })
+
             // A Dockerfile can make a user who owns the session's checkouts, because the build
             // is told whose they are.
             testCaseAsync "an image build gets the session's uid and gid as build args" (async {

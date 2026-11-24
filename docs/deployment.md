@@ -98,6 +98,11 @@ writes, and keeps srt only as the proxy that filters egress. It opens no termina
 terminal there runs each block as its own process (docs/GAPS.md lists the rest). A session on
 any other platform refuses to start with it.
 
+A docker sandbox with a `build:` builds its image with `docker buildx build`, on the daemon's
+own BuildKit. The session runs the docker CLI that `YESSION_BIN_DOCKER` names, else `docker` on
+`PATH`, and that CLI needs the buildx plugin. The Nix package names a CLI that has it. The
+build has no memory ceiling, because buildx ignores `--memory`.
+
 `YESSION_SESSION_REPO_BACKEND` lets a repository run a sandbox on this host's own userland.
 A repo's `yession.yaml` asks for that with a `host:` block. When you do not set the variable,
 the session refuses such a sandbox, and each repo's sandbox must be a container. Set it to
@@ -1071,8 +1076,8 @@ Any reconciler against the stream should keep three rules:
 
 `packages.<system>.default` is `yession-manager`, `yession-session` and `yession-enter`
 ([`nix/packages.nix`](../nix/packages.nix)). The package wraps them with the native WebRTC
-addon, which it builds from source, and defaults `YESSION_BIN_CLAUDE` and `YESSION_BIN_GIT` to
-store paths.
+addon, which it builds from source, and defaults `YESSION_BIN_CLAUDE`, `YESSION_BIN_GIT` and
+`YESSION_BIN_DOCKER` to store paths.
 
 Pin the input and leave its nixpkgs alone, because the package builds the addon against that
 pin:
