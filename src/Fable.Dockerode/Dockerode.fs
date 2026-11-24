@@ -67,19 +67,6 @@ module Labels =
 
     let ofList (labels: (string * string) list) : Labels = ofEntries (Array.ofList labels)
 
-/// An image build's `--build-arg`s: names to values. Opaque, and made only by
-/// `BuildArgs.ofList`, for the reason `Labels` is: an argument's NAME is the Dockerfile's.
-type BuildArgs =
-    interface end
-
-[<RequireQualifiedAccess>]
-module BuildArgs =
-
-    [<Emit("Object.fromEntries($0)")>]
-    let private ofEntries (entries: (string * string) array) : BuildArgs = jsNative
-
-    let ofList (args: (string * string) list) : BuildArgs = ofEntries (Array.ofList args)
-
 /// What a `HostConfig.Mounts` entry's source is: a host path bound in, or a named volume.
 [<StringEnum; RequireQualifiedAccess>]
 type MountType =
@@ -232,26 +219,6 @@ type ExecStartOptions =
     abstract stdin: bool with get, set
     abstract Tty: bool with get, set
 
-/// `buildImage`'s context: a directory, and the files in it to send.
-[<AllowNullLiteral>]
-type BuildContext =
-    abstract context: string with get, set
-    abstract src: string array with get, set
-
-/// `buildImage`'s options.
-[<AllowNullLiteral>]
-type BuildOptions =
-    /// The tag the built image gets.
-    abstract t: string with get, set
-    /// Relative to the context. Absent, the context's own `Dockerfile`.
-    abstract dockerfile: string with get, set
-    /// The build's memory ceiling, in bytes.
-    abstract memory: float with get, set
-    /// Memory plus swap, in bytes. Equal to `memory`, a build gets no swap.
-    abstract memswap: float with get, set
-    /// `--build-arg`s. docker-modem writes the object as the JSON that the Engine API reads.
-    abstract buildargs: BuildArgs with get, set
-
 /// A running `docker exec` handle.
 type [<AllowNullLiteral>] Exec =
     /// Start the exec; resolves to the (multiplexed) output stream.
@@ -350,13 +317,37 @@ type [<AllowNullLiteral>] Image =
     /// Resolves if the image exists locally; rejects otherwise.
     abstract inspect: unit -> JS.Promise<ImageInspect>
 
+/// One JSON line of a pull's progress stream, of it: the line that ends a failed pull.
+type [<AllowNullLiteral>] ProgressErrorDetail =
+    abstract message: string option
+
+type [<AllowNullLiteral>] ProgressEvent =
+    abstract error: string option
+    abstract errorDetail: ProgressErrorDetail option
+
+[<RequireQualifiedAccess>]
+module ProgressEvent =
+
+    /// The daemon's message, where this event says the pull failed.
+    let reason (event: ProgressEvent) : string option =
+        if isNull event then None
+        else
+            match event.errorDetail |> Option.bind (fun detail -> if isNull detail then None else detail.message) with
+            | Some message when message <> "" -> Some message
+            | _ -> event.error |> Option.filter (fun message -> message <> "")
+
 /// docker-modem: the low-level plumbing dockerode exposes for stream handling.
 type [<AllowNullLiteral>] Modem =
     /// Split Docker's multiplexed exec stream into stdout/stderr sinks.
     abstract demuxStream: source: Stream * stdout: PassThrough * stderr: PassThrough -> unit
-    /// Drain a build/pull progress stream, calling back once when it finishes: `(err, output)`,
-    /// where `err` is `null` — `None` — when it finished well.
-    abstract followProgress: source: Stream * onFinished: (Fable.NodeExtras.StreamError option -> Unread -> unit) -> unit
+    /// Drain a pull's progress stream, calling back once when it ends: `(err, output)`. `err` is
+    /// only a failure of the stream itself. A pull the daemon gave up on ends the stream
+    /// normally, with an event that carries the error (`ProgressEvent.reason`).
+    abstract followProgress: source: Stream * onFinished: (Fable.NodeExtras.StreamError option -> ProgressEvent array -> unit) -> unit
+    /// The socket this client reaches the daemon by where `DOCKER_HOST` is unset: the first of
+    /// `~/.docker/run/docker.sock` and `/var/run/docker.sock` that exists (a pipe on Windows).
+    /// Where `DOCKER_HOST` names a TCP address, docker-modem returns no promise, so do not ask.
+    abstract getSocketPath: unit -> JS.Promise<string>
 
 /// What `docker.info()` answers with, of it.
 type [<AllowNullLiteral>] DockerInfo =
@@ -382,8 +373,6 @@ type [<AllowNullLiteral>] Docker =
     abstract getImage: name: string -> Image
     /// Pull an image; resolves to the progress stream to drain before use.
     abstract pull: tag: string -> JS.Promise<Stream>
-    /// Build an image from a directory and the files in it to send.
-    abstract buildImage: context: BuildContext * options: BuildOptions -> JS.Promise<Stream>
     abstract listContainers: options: ListContainersOptions -> JS.Promise<ContainerSummary array>
     abstract modem: Modem
 

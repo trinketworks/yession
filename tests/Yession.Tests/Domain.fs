@@ -3043,10 +3043,6 @@ let private configTests =
                 match ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "cgroup-parent": "yession" } } } }""" with
                 | Ok _ -> failwith "a repository named a cgroup"
                 | Error reason -> Expect.stringContains reason "belongs to the operator" "it says who owns it"
-            testCase "an image build runs under the memory ceiling with no swap" <| fun () ->
-                let limits = limitsOf ContainerSpec.defaults ceiling |> expect
-                let build = ContainerLimits.buildMemory limits
-                Expect.equal (build.Memory, build.MemorySwap) (4L * gib, 4L * gib) "memory and memswap, equal"
             testCase "the operator profile reads its container block" <| fun () ->
                 let profile =
                     OperatorProfile.parse

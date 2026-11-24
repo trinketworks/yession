@@ -103,6 +103,10 @@ in
   env.YESSION_BIN_SETSID =
     lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${lib.getExe' pkgs.util-linux "setsid"}";
 
+  # The docker CLI that builds a docker sandbox's image, as the installable's wrappers name it.
+  # nixpkgs' docker-client carries the buildx plugin, which the build needs.
+  env.YESSION_BIN_DOCKER = "${pkgs.docker-client}/bin/docker";
+
   env.UV_PYTHON = "${pkgs.python312}/bin/python3.12";
   env.UV_PYTHON_DOWNLOADS = "never";
 

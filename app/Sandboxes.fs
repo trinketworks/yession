@@ -1745,13 +1745,17 @@ module DockerSandbox =
                     | _ -> return! made ()
         }
 
-    /// Drain a build/pull progress stream; resolves when Docker signals completion.
-    let private drainProgress (client: DK.Docker) (stream: DK.Stream) : Async<Result<unit, string>> =
+    /// Drain a pull's progress stream. A pull that fails after the daemon answered 200 ends
+    /// the stream normally, with its error as the last event, so the events are read too.
+    let drainProgress (client: DK.Docker) (stream: DK.Stream) : Async<Result<unit, string>> =
         Async.FromContinuations(fun (cont, _, _) ->
-            client.modem.followProgress (stream, fun err _ ->
+            client.modem.followProgress (stream, fun err events ->
                 match err with
-                | None -> cont (Ok ())
-                | Some error -> cont (Error (StreamError.describe error))))
+                | Some error -> cont (Error (StreamError.describe error))
+                | None ->
+                    match events |> Array.tryPick DK.ProgressEvent.reason with
+                    | Some reason -> cont (Error reason)
+                    | None -> cont (Ok ())))
 
     /// Count containers (running or not) carrying a `yession-session` label value — lets
     /// tests assert a stopped session leaves nothing behind.
@@ -2047,6 +2051,101 @@ module DockerSandbox =
     let private ownerBuildArgs () : (string * string) list =
         ContainerBuildSpec.ownerArgs (int (Node.Api.``process``.getuid ())) (int (Node.Api.``process``.getgid ()))
 
+    /// The docker CLI that builds images: `YESSION_BIN_DOCKER`, else `docker` on PATH.
+    let private dockerCli () : string = Interop.envOr "YESSION_BIN_DOCKER" "docker"
+
+    /// How many lines of a failed build's output its error keeps. BuildKit's plain progress
+    /// ends with the step that failed, the Dockerfile lines around it and the error.
+    let private buildTailLines = 30
+
+    /// The output a build may write before Node kills it. Node's default is 1 MiB, which a
+    /// long build's progress passes.
+    let private buildMaxBuffer = 64 * 1024 * 1024
+
+    /// `DOCKER_HOST` for the CLI, set to the daemon that `client` reaches. Without it the CLI
+    /// uses its current context, which can name another daemon than dockerode's default
+    /// socket, and `createContainer` then does not find the image.
+    let private cliDaemon (client: DK.Docker) : Async<Map<string, string>> =
+        async {
+            match ProcessEnv.get "DOCKER_HOST" with
+            | Some host when host <> "" -> return Map.empty
+            | _ ->
+                let! socket = client.modem.getSocketPath () |> Interop.awaitPromise
+                let scheme = if socket.StartsWith "//./pipe/" then "npipe://" else "unix://"
+                return Map.ofList [ "DOCKER_HOST", scheme + socket ]
+        }
+
+    /// Build `tag` from `build` with `docker buildx build` on the daemon's own BuildKit.
+    /// The Engine API builds with BuildKit only for a client that holds a session, which the
+    /// CLI does and dockerode does not. Without a session the daemon either uses the classic
+    /// builder, which refuses `RUN --mount`, `COPY --parents` and `**`, or cannot pull a base
+    /// image ("no active sessions"). The CLI also reads `.dockerignore` as docker does.
+    ///
+    /// The build has no memory ceiling: buildx accepts `--memory` and ignores it.
+    let private buildImage (client: DK.Docker) (tag: string) (build: ContainerBuildSpec) : Async<Result<unit, string>> =
+        async {
+            let docker = dockerCli ()
+            let! daemon = cliDaemon client
+            let run (arguments: string list) =
+                AsyncChildProcesses.execFile
+                    docker
+                    arguments
+                    { Cwd = None
+                      Env = ChildEnv.Adding daemon
+                      MaxBuffer = Some buildMaxBuffer
+                      Timeout = None
+                      KillSignal = None
+                      Input = Some "" }
+            let said (result: ExecResult) =
+                [ result.Stderr; result.Stdout ]
+                |> List.choose id
+                |> String.concat "\n"
+                |> fun text -> text.Split '\n'
+                |> Array.map (fun line -> line.TrimEnd ())
+                |> Array.filter (fun line -> line <> "")
+                |> fun lines -> Array.skip (max 0 (lines.Length - buildTailLines)) lines
+                |> String.concat "\n"
+            let! buildx = run [ "buildx"; "version" ]
+            match buildx.Status with
+            | None ->
+                return
+                    Error (
+                        sprintf
+                            "docker sandbox failed: an image build runs the docker CLI, and '%s' did not start. Install docker with its buildx plugin, or name the CLI with YESSION_BIN_DOCKER."
+                            docker
+                    )
+            | Some status when status <> 0 ->
+                return
+                    Error (
+                        sprintf
+                            "docker sandbox failed: an image build needs docker's buildx plugin, and `%s buildx version` exited %d: %s"
+                            docker
+                            status
+                            (said buildx)
+                    )
+            | Some _ ->
+                let file =
+                    match build.DockerfilePath with
+                    | Some dockerfile -> [ "--file"; Node.Api.path.resolve (build.ContextPath, dockerfile) ]
+                    | None -> []
+                let args = ownerBuildArgs () |> List.collect (fun (name, value) -> [ "--build-arg"; name + "=" + value ])
+                let! built =
+                    run (
+                        [ "buildx"; "build"; "--builder"; "default"; "--load"; "--progress"; "plain"; "--tag"; tag ]
+                        @ file
+                        @ args
+                        @ [ build.ContextPath ]
+                    )
+                match built.Status with
+                | Some 0 -> return Ok ()
+                | status ->
+                    let ended =
+                        match status with
+                        | Some code -> sprintf "exited %d" code
+                        | None -> "did not finish"
+                    return Error (sprintf "docker sandbox failed: image build failed: `docker buildx build` %s:\n%s" ended (said built))
+        }
+
     let create (network: Network) (name: string) (spec: EnvironmentSpec) (container: ContainerSpec) : CreateSandbox =
         fun policy ->
             async {
@@ -2075,25 +2174,8 @@ module DockerSandbox =
                             match container.Build with
                             | Some build ->
                                 let tag = "yession-build-" + name.ToLower ()
-                                let src = Node.Api.fs.readdirSync (U2.Case1 build.ContextPath) |> Array.ofSeq
-                                let context =
-                                    jsOptions<DK.BuildContext> (fun c ->
-                                        c.context <- build.ContextPath
-                                        c.src <- src)
-                                let opts =
-                                    jsOptions<DK.BuildOptions> (fun o ->
-                                        o.t <- tag
-                                        build.DockerfilePath |> Option.iter (fun d -> o.dockerfile <- d)
-                                        // The repository's Dockerfile runs under the
-                                        // container's own memory ceiling, with no swap
-                                        // (`ContainerLimits.buildMemory`).
-                                        let ceiling = ContainerLimits.buildMemory limits
-                                        o.buildargs <- DK.BuildArgs.ofList (ownerBuildArgs ())
-                                        o.memory <- float ceiling.Memory
-                                        o.memswap <- float ceiling.MemorySwap)
-                                let! stream = client.buildImage (context, opts) |> Interop.awaitPromise
-                                let! drained = drainProgress client stream
-                                return drained |> Result.map (fun () -> tag)
+                                let! built = buildImage client tag build
+                                return built |> Result.map (fun () -> tag)
                             | None ->
                                 let image = imageRef container
                                 // Pull only when the image is absent locally — matches
@@ -2110,7 +2192,10 @@ module DockerSandbox =
                                 else
                                     let! stream = client.pull image |> Interop.awaitPromise
                                     let! drained = drainProgress client stream
-                                    return drained |> Result.map (fun () -> image)
+                                    return
+                                        drained
+                                        |> Result.map (fun () -> image)
+                                        |> Result.mapError (sprintf "docker sandbox failed: image pull failed: %s")
                         }
                     match imageResult with
                     | Error reason -> return Error reason

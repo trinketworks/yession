@@ -373,6 +373,9 @@ let
   # `YESSION_BIN_GIT` below is the same argument and NOT Linux-only, because macOS is
   # where PATH's git is worst: `/usr/bin/git` there is a shim that resolves a developer
   # directory before it is git, through files a scoped sandbox denies.
+  #
+  # `YESSION_BIN_DOCKER` names the CLI that builds a docker sandbox's image. nixpkgs'
+  # docker-client carries the buildx plugin, which a docker CLI on PATH can lack.
   srtToolFlags = lib.optionalString pkgs.stdenv.isLinux ''
     \
         --set-default YESSION_BIN_BWRAP ${pkgs.bubblewrap}/bin/bwrap \
@@ -438,7 +441,8 @@ let
         makeWrapper ${node}/bin/node "$out/bin/$name" \
           --add-flags "$out/libexec/yession/$entry" \
           --set-default YESSION_BIN_CLAUDE ${claude-code}/bin/claude \
-          --set-default YESSION_BIN_GIT ${pkgs.git}/bin/git ${srtToolFlags}
+          --set-default YESSION_BIN_GIT ${pkgs.git}/bin/git \
+          --set-default YESSION_BIN_DOCKER ${pkgs.docker-client}/bin/docker ${srtToolFlags}
       done < bins.tsv
       rm bins.tsv
 

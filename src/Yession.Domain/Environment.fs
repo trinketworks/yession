@@ -414,16 +414,6 @@ type ContainerLimits =
       /// Spelled for the daemon's cgroup driver. `None` keeps the daemon's own parent.
       CgroupParent : CgroupParent option }
 
-module ContainerLimits =
-
-    /// The memory an image BUILD runs under: the container's ceiling, as `memory` and
-    /// `memswap` with equal values, so a build gets no swap. A repository's Dockerfile is
-    /// its code running on the host as much as its container is, and a build with no
-    /// ceiling is the overrun that `ContainerMemory` exists to contain, moved earlier.
-    let buildMemory (limits: ContainerLimits) : {| Memory : int64; MemorySwap : int64 |} =
-        let bytes = ContainerMemory.bytes limits.Memory
-        {| Memory = bytes; MemorySwap = bytes |}
-
 /// What a CONTAINER is. Every field here is one only a container has — an image to run, a
 /// filesystem to build, volumes to mount, a process to be.
 type ContainerSpec =
