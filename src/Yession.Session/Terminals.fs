@@ -1103,6 +1103,9 @@ module SessionTerminals =
             match ledgers.TryGetValue key with
             | true, ledger -> ledger
             | _ -> PromptLedger.Owed 0
+        /// The cycle of each terminal's last primary prompt, so a redraw — the same cycle
+        /// again (`MarkPromptStart`) — is not counted as a prompt that answered a line.
+        let promptCycles = Collections.Generic.Dictionary<string, int> ()
         /// Each instrumented terminal's nonce, so that what its shell said can be quoted
         /// without it (`LineAnswer`). Minted where the shell is opened; held here because
         /// the block that quotes the shell is written somewhere else.
@@ -1561,10 +1564,15 @@ module SessionTerminals =
                                             match answers.TryGetValue key with
                                             | true, answer -> answers.[key] <- LineAnswer.printed clean answer
                                             | _ -> ()
-                                | Marked MarkPromptStart ->
+                                | Marked (MarkPromptStart cycle) ->
                                     ready.Value <- true
                                     let arrived = atPrompt.Add key
-                                    prompted true
+                                    let redrawn =
+                                        match cycle, promptCycles.TryGetValue key with
+                                        | Some cycle, (true, last) -> cycle = last
+                                        | _ -> false
+                                    cycle |> Option.iter (fun cycle -> promptCycles.[key] <- cycle)
+                                    if not redrawn then prompted true
                                     onReady.Value ()
                                     // What a queue held for the prompt was waiting for. A
                                     // block's own end drains on its own, once it is not busy.
@@ -1708,6 +1716,7 @@ module SessionTerminals =
                                 // prompts after `PS1` is armed. The profile's `cd` ahead of
                                 // the rc is answered before any prompt carries a mark.
                                 ledgers.[key] <- PromptLedger.opened instrumentation
+                                promptCycles.Remove key |> ignore
                                 lines.Split '\n' |> Array.iter (fun line -> pty.Write (line + "\r"))
                                 match! started with
                                 | Ok () ->
@@ -2024,6 +2033,7 @@ module SessionTerminals =
                     awaitingStart.Remove (TerminalId.value id) |> ignore
                     answers.Remove (TerminalId.value id) |> ignore
                     ledgers.Remove (TerminalId.value id) |> ignore
+                    promptCycles.Remove (TerminalId.value id) |> ignore
                     nonces.Remove (TerminalId.value id) |> ignore
                     // The SOURCE stays. Everything else here is about a terminal that is
                     // running and this is not: "did its output resolve into blocks" is asked

@@ -469,6 +469,21 @@ let private refusedLineTests =
                     Expect.equal next (Some (CommandSucceeded 0)) "history expansion is off, so the line runs"
                 })
 
+        // A block that asks for a width resizes the pty just before its line is typed, and
+        // the shell redraws its idle prompt for the SIGWINCH after the line is on its way.
+        // The first block takes the bootstrap's leftover prompts, so the second block's
+        // line is the only one owed a prompt when the redraw arrives.
+        for shell, label in [ TerminalShell.bash, "bash"; TerminalShell.zsh, "zsh" ] do
+            testCaseAsync (sprintf "%s: a block typed straight after a resize runs, though the shell redraws its prompt" label) <|
+                withShellTerminal shell SessionTerminals.BlockLoans.none (fun _ -> async { return () }) (label + "-redraw") (fun terminals id _ log _ _ ->
+                    async {
+                        let ada = Principal.Peer (PeerId.create "ada" |> expect)
+                        let! _ = ranTo terminals id log (queueEntry id ada "1") "echo first"
+                        let sized = { queueEntry id ada "2" with Size = Some { Cols = 95; Rows = 40 } }
+                        let! next = ranTo terminals id log sized "echo resized"
+                        Expect.equal next (Some (CommandSucceeded 0)) "the redrawn prompt is not a refusal"
+                    })
+
         // A quote left open puts bash at its continuation prompt, where the line is neither
         // run nor refused: no prompt says anything, and the detector calls the terminal lost.
         // The author's ^C abandons the continuation and bash prompts again — which only the
@@ -1551,7 +1566,7 @@ let tests =
                         // first prompt, then each command's done mark — rather than after a
                         // guess at how long a shell takes, which is what these marks are for.
                         let completed () = marks |> Seq.filter (function MarkCommandDone _ -> true | _ -> false) |> Seq.length
-                        let! prompted = until 5000 (fun () -> marks |> Seq.exists ((=) MarkPromptStart))
+                        let! prompted = until 5000 (fun () -> marks |> Seq.exists (function MarkPromptStart _ -> true | _ -> false))
                         Expect.isTrue prompted "the shell drew its first prompt"
                         // Counted from here: the prompt hook marks a done before each prompt,
                         // the first one included, so a done can already be in hand.

@@ -31,7 +31,14 @@ open Yession.Domain
 type Mark =
     /// `A` — the shell is about to print its prompt. The handshake the open-probe waits for,
     /// and the only evidence that instrumentation took at all.
-    | MarkPromptStart
+    ///
+    /// `n=` is the prompt's cycle, where the dialect can carry one (`Marks.rcFor`): it moves
+    /// on every prompt the shell prints for a line, and a REDRAW repeats it. A resize sends
+    /// the shell SIGWINCH, and readline and zle answer it at an idle prompt by printing the
+    /// prompt again, mark included — after a block's line was typed and before its start
+    /// mark. That prompt answers no line, and counted as an answer it settled the block as
+    /// refused while the command ran.
+    | MarkPromptStart of cycle: int option
     /// `A;k=s` — the shell is about to print its CONTINUATION prompt (`PS2`): it has read a
     /// line that does not finish a command and is waiting for more. kitty's spelling of a
     /// secondary prompt, so it stays a legal OSC 133 sequence.
@@ -155,7 +162,19 @@ module Marks =
         else
             match parts with
             | "A" :: rest when List.contains "k=s" rest -> Some MarkContinuationPrompt
-            | "A" :: _ -> Some MarkPromptStart
+            | "A" :: rest ->
+                // A cycle that will not parse is no cycle: a bash with `promptvars` off
+                // prints the arithmetic as written, the same text on every prompt, and
+                // read as a number every prompt after the first would look redrawn.
+                let cycle =
+                    rest
+                    |> List.tryPick (fun p ->
+                        if p.StartsWith "n=" then
+                            match System.Int32.TryParse (p.Substring 2) with
+                            | true, value -> Some value
+                            | _ -> None
+                        else None)
+                Some (MarkPromptStart cycle)
             | "C" :: _ -> Some MarkCommandStart
             | "D" :: code :: _ ->
                 // A `D` whose code will not parse is still a completion — the shell said the
@@ -373,6 +392,15 @@ module Marks =
     /// Every line typed here is machine-authored, never a recall from history, so there is
     /// nothing for expansion to do. First, because expansion happens as each line is
     /// READ: the line that turns it off is the one line it still applies to.
+    ///
+    /// bash and zsh number their primary prompts (`MarkPromptStart`), each where a redraw
+    /// does not move the number. bash counts in `PS1` itself: readline redraws the prompt
+    /// it already expanded, and a line refused for a `!` event is answered by a prompt
+    /// expanded again WITHOUT `PROMPT_COMMAND` running. zsh counts in `precmd` and reads
+    /// the count through `psvar`, because zle expands the prompt again to redraw it, and
+    /// `%v` needs no `PROMPT_SUBST`. Index 99 keeps clear of the low slots themes use.
+    /// The `sh` dialect has no count: its prompt runs in a command substitution, where
+    /// nothing it adds to survives. dash does not redraw; bash running as `sh` does.
     let rcFor (shell: string) (nonce: string) : ShellInstrumentation option =
         let promptStart = emit nonce "A"
         // Armed BEFORE `PS1` in every dialect, so it adds no prompt cycle after the first
@@ -408,7 +436,7 @@ module Marks =
                           " " + envFunction
                           " PROMPT_COMMAND='__y_post'"
                           " PS2='\\[" + continuation + "\\]'\"$PS2\""
-                          " PS1='\\[" + promptStart + "\\]'\"$PS1\""
+                          " PS1='\\[" + emit nonce "A;n=$((__y_p+=1))" + "\\]'\"$PS1\""
                           " __y_armed=1"
                           " trap '__y_pre' DEBUG" ] }
         | "zsh" ->
@@ -420,7 +448,7 @@ module Marks =
                     String.concat "\n"
                         [ " unsetopt BANG_HIST"
                           " __y_pre() { command -p printf '" + commandStart + "'; }"
-                          " __y_post() { __y_code=$?; command -p printf '" + commandDone + "' \"$__y_code\"; }"
+                          " __y_post() { __y_code=$?; command -p printf '" + commandDone + "' \"$__y_code\"; psvar[99]=$((__y_p+=1)); }"
                           " autoload -Uz add-zsh-hook"
                           " add-zsh-hook preexec __y_pre"
                           " add-zsh-hook precmd __y_post"
@@ -431,7 +459,7 @@ module Marks =
                           // zsh terminal never became ready — every block on it hung. `%{…%}`
                           // is zsh's own "zero width" bracket, bash's `\[…\]`.
                           " PS2=$'%{" + continuation + "%}'\"$PS2\""
-                          " PS1=$'%{" + promptStart + "%}'\"$PS1\"" ] }
+                          " PS1=$'%{" + emit nonce "A;n=%99v" + "%}'\"$PS1\"" ] }
         | "sh"
         | "dash" ->
             // A bare POSIX shell has NO prompt hook, so the marks ride inside PS1, which the
