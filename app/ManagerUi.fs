@@ -268,7 +268,7 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
           </td>
           <td class="{Style.tableCell}" title="{name}">
             <div class="{Style.recordDetail}">
-              <div class="{Style.recordStatusHead}">{headLine}</div>
+              <div class="{Style.recordStatusHead}"><div class="{Style.recordStatusLine}">{headLine}</div></div>
             </div>
             {nameLine}
             <div class="{Style.recordDetail}" id="{detailId}" data-row-detail>

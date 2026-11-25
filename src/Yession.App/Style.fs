@@ -737,8 +737,11 @@ module Style =
     /// name is the row's one line, and unfolded with the row, so the word sits on the mark's
     /// own line (the mark never moves) and the name steps down beneath it. One name-line tall
     /// (24px) and centred, so the word and the mark agree. Wrapped by `recordDetail`, which
-    /// does the fold.
-    let recordStatusHead = cls [ Motion.unfoldInner; "h-6 flex items-center" ]
+    /// does the fold. The 24px is on the line INSIDE (`recordStatusLine`): a definite height on
+    /// the clipped item itself holds its grid track open at `0fr`, so the folded head would
+    /// still push the name down.
+    let recordStatusHead = Motion.unfoldInner
+    let recordStatusLine = "h-6 flex items-center"
 
     /// The row's disclosure: a thumb's whole 44px, in its own column at the row's TRAILING edge
     /// (`ManagerUi.Col.chevron`) — the table's own right rail at every width, where a disclosure
