@@ -761,7 +761,17 @@ let private markTests =
 
         testCase "the prompt mark is what the open-probe waits for" <| fun () ->
             let marks, _, _ = scan1 (mark "A")
-            Expect.equal marks [ MarkPromptStart ] "A is the handshake that instrumentation took"
+            Expect.equal marks [ MarkPromptStart None ] "A is the handshake that instrumentation took"
+
+        testCase "a prompt mark carries the cycle it was printed for" <| fun () ->
+            let marks, _, _ = scan1 (mark "A;n=7")
+            Expect.equal marks [ MarkPromptStart (Some 7) ] "the cycle a redraw repeats"
+
+        // bash with `promptvars` off prints the arithmetic unexpanded, the same text on every
+        // prompt; read as one cycle, every prompt after the first would be a redraw.
+        testCase "a cycle that is not a number is no cycle" <| fun () ->
+            let marks, _, _ = scan1 (mark "A;n=$((__y_p+=1))")
+            Expect.equal marks [ MarkPromptStart None ] "a prompt, counted as before"
 
         // A shell mid-command is not at a prompt anybody can type at, and reading its `PS2`
         // as an `A` would settle a block whose line it has not finished reading.
@@ -864,7 +874,7 @@ let private markTests =
             // arrive in one read. Recorded in order, the line lands inside the block and the
             // prompt outside it; the old two-valued scan put the prompt in the block.
             let scanned, carry = Marks.scan nonce "" ("last\r\n" + mark "D;0" + mark "A" + "$ ")
-            Expect.equal scanned [ Printed "last\r\n"; Marked (MarkCommandDone 0); Marked MarkPromptStart; Printed "$ " ]
+            Expect.equal scanned [ Printed "last\r\n"; Marked (MarkCommandDone 0); Marked (MarkPromptStart None); Printed "$ " ]
                 "each piece on its own side of the marks"
             Expect.equal carry "" "nothing hangs"
 
@@ -897,7 +907,7 @@ let private markTests =
             // A shell without readline (dash) prints the brackets as bytes. Around our mark
             // they are protocol and come off with it; around anyone else's they are output.
             let marks, output, carry = scan1 ("out\u0001" + mark "D;0" + mark "A" + "\u0002")
-            Expect.equal marks [ MarkCommandDone 0; MarkPromptStart ] "both marks are read"
+            Expect.equal marks [ MarkCommandDone 0; MarkPromptStart None ] "both marks are read"
             Expect.equal output "out" "and neither bracket reaches the transcript"
             Expect.equal carry "" "nothing hangs"
             let _, foreignOut, _ = scan1 ("\u0001" + foreign "A" + "\u0002")
@@ -911,7 +921,7 @@ let private markTests =
             Expect.isEmpty marks1 "not a mark yet"
             Expect.equal out1 "x" "the bracket is held back"
             let marks2, out2, carry2 = scan3 carry1 (mark "A" + "\u0002y")
-            Expect.equal marks2 [ MarkPromptStart ] "the mark arrives whole"
+            Expect.equal marks2 [ MarkPromptStart None ] "the mark arrives whole"
             Expect.equal out2 "y" "with both brackets gone"
             Expect.equal carry2 "" "and nothing left hanging"
             let marks3, out3, carry3 = scan3 "" ("x\u0001" + (mark "A").Substring (0, 6))
@@ -926,7 +936,7 @@ let private markTests =
             // it exactly as written — the two literal characters `\` and `[` (or `]`),
             // visibly, around every mark on every prompt.
             let marks, output, carry = scan1 ("out\\[" + mark "D;0" + mark "A" + "\\]")
-            Expect.equal marks [ MarkCommandDone 0; MarkPromptStart ] "both marks are read"
+            Expect.equal marks [ MarkCommandDone 0; MarkPromptStart None ] "both marks are read"
             Expect.equal output "out" "and neither literal bracket reaches the transcript"
             Expect.equal carry "" "nothing hangs"
             let _, foreignOut, _ = scan1 ("\\[" + foreign "A" + "\\]")
@@ -939,7 +949,7 @@ let private markTests =
             Expect.isEmpty marks1 "not a mark yet, not even a bracket yet"
             Expect.equal out1 "x" "the lone backslash is held back, in case it is one of ours"
             let marks2, out2, carry2 = scan3 carry1 ("[" + mark "A" + "\\]y")
-            Expect.equal marks2 [ MarkPromptStart ] "the mark arrives whole"
+            Expect.equal marks2 [ MarkPromptStart None ] "the mark arrives whole"
             Expect.equal out2 "y" "with both brackets gone"
             Expect.equal carry2 "" "and nothing left hanging"
     ]
@@ -5575,6 +5585,43 @@ let private refusedLineTests =
                 do! waitUntil "the block to end" (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
                 let! completions = completionsOf log id
                 Expect.equal completions [ CommandSucceeded 0 ] "it ran"
+            }
+
+        // A resize sends the shell SIGWINCH, and readline answers it at its idle prompt by
+        // printing that prompt again — mark and all, with the counter it was expanded with —
+        // when the block's line is already on its way. That prompt answers no line.
+        testCaseAsync "a prompt redrawn after a resize does not answer the block's line" <|
+            async {
+                let! terminals, id, log, _, _, say, mark = blockAtASpeakingShell TerminalShell.bash byAda "echo ok"
+                for cycle in 2..3 do
+                    mark "D;0"
+                    mark (sprintf "A;n=%d" cycle)
+                    say "$ "
+                say "\r\u001b[K\r"
+                mark "A;n=3"
+                say "$ echo ok\r\n"
+                mark "C"
+                say "ok\r\n"
+                mark "D;0"
+                mark "A;n=4"
+                do! waitUntil "the block to end" (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+                let! completions = completionsOf log id
+                Expect.equal completions [ CommandSucceeded 0 ] "it ran"
+            }
+
+        testCaseAsync "a prompt of a new cycle still answers the block's line" <|
+            async {
+                let! terminals, id, log, _, _, say, mark = blockAtASpeakingShell TerminalShell.bash byAda "echo ("
+                for cycle in 2..3 do
+                    mark "D;0"
+                    mark (sprintf "A;n=%d" cycle)
+                    say "$ "
+                say "echo (\r\nbash: syntax error near unexpected token `newline'\r\n"
+                mark "D;2"
+                mark "A;n=4"
+                do! waitUntil "the block to end" (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+                let! completions = completionsOf log id
+                Expect.equal completions [ CommandNotRun "bash: syntax error near unexpected token `newline'" ] "refused"
             }
 
         // The agent's lines are a brace group over two lines (`BlockStdin.wrap`), and a shell
