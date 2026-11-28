@@ -315,7 +315,7 @@ The last section holds trust boundaries as sharp as the first section's.
   (`<data>/agent-home`, so `~/.claude` state lives and dies with the session), exactly one
   credential, and a process-group kill on the SDK's forwarded abort signal. srt adds OS
   confinement: the CLI reads and writes its scratch HOME, reads the host runtime, touches no other
-  operator file, and reaches only `AgentSandbox`'s domains (`YESSION_SESSION_AGENT_NET`). Docker
+  operator file, and reaches only the hosts the profile allows (`agent.network.allow`). Docker
   is BY DESIGN not an agent backend: a container per session boot is the opposite of the
   sub-second start the agent needs.
   - **The default is `host`, and unlike the WorkSandbox's that is a shortfall, not a decision.**

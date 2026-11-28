@@ -742,7 +742,7 @@ let runRenewing
             // in the same scratch HOME, so its prompt is the next message there and not the
             // turn again.
             let attempt (credential: (string * string) option) (conversation: string option) =
-                let cli = Sandboxes.AgentSandbox.prepare backend dataDir credential
+                let cli = Sandboxes.AgentSandbox.prepare backend profile.Network dataDir credential
                 runQuery
                     (Prompting.systemBlocks dynamicBoundary plan)
                     (match conversation with

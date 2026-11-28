@@ -448,6 +448,13 @@ let tests =
                 Expect.isTrue (message.Contains r.Was) (sprintf "names %s" r.Was)
                 Expect.isTrue (message.Contains r.Now) (sprintf "and its option %s" r.Now)
 
+        // The agent's egress moved into the profile. A deployment that still sets the old
+        // variable would otherwise run under the profile's list and never learn its own was
+        // dropped.
+        testCase "a session refuses the agent network variable, and names the profile key" <| fun () ->
+            let found = Retirements.found Retirements.session (fun name -> if name = "YESSION_SESSION_AGENT_NET" then "gateway.internal" else "")
+            Expect.stringContains (Retirements.complaint found) "agent.network.allow" "says where it went"
+
         testCase "every option a retirement points at is one the Manager declares" <| fun () ->
             // Against the bin's OWN spec, not a copy of it. This case first went red for the
             // wrong reason: it listed the options by hand, so the first retirement added

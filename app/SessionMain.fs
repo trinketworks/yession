@@ -26,6 +26,13 @@ open Yession.Manager
 // will do without a session.
 Interop.parseOrExit (Cli.spec "yession-session") Version.current |> ignore
 
+// Before anything is read: does the environment still set something that moved into the
+// operator's profile? Refused, every one named at once — see Retirements for why a moved
+// setting must never be merely ignored.
+match Retirements.found Retirements.session (fun name -> Interop.envOr name "") with
+| [] -> ()
+| stale -> failwith (Retirements.complaint stale)
+
 /// How long the process had been running when this module's own code began: the first
 /// statement here that is not an import, so every module this session is made of has been
 /// read and evaluated by now. The first part of a boot (`BootPhase.Load`).
@@ -144,6 +151,8 @@ let private resourceProfile =
             for r in Option.toList read do
                 eprintfn "%s: agent prompt: %s" path (PromptStrategy.name r.Profile.Agent.Prompt)
                 eprintfn "%s: agent web search: %s" path (if r.Profile.Agent.WebSearch then "on" else "off")
+                eprintfn "%s: agent web fetch: %s" path (if r.Profile.Agent.WebFetch then "on" else "off")
+                eprintfn "%s: agent network: %s" path (r.Profile.Agent.Network |> List.map AgentHost.value |> String.concat ", ")
             read |> Option.map (fun r -> r.Profile)
         | Error e -> failwith e
 
@@ -222,6 +231,15 @@ let private agentBackend =
     match SandboxBackend.parseAgent (Interop.envOr "YESSION_SESSION_AGENT_BACKEND" "host") with
     | Ok backend -> backend
     | Error e -> failwithf "agent sandbox: %s" e
+
+// What the operator's profile asks of the agent, judged against the backend the CLI runs
+// under, at boot: a `web-fetch` that only srt can hold to its network list stops a session
+// on `host` here, and not at the first fetch (`AgentProfile.admits`).
+do
+    let agent = resourceProfile |> Option.map (fun profile -> profile.Agent) |> Option.defaultValue AgentProfile.defaults
+    match AgentProfile.admits agentBackend agent with
+    | Ok () -> ()
+    | Error e -> failwith e
 
 // The git sandbox's backend (`YESSION_SESSION_GIT_BACKEND`): where the session's own git
 // verbs run — clone, fetch, switch, status, log and diff. host or srt, default srt

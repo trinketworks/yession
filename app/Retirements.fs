@@ -37,6 +37,12 @@ let manager : Retirement list =
       // this one listed, and a deployment that set one set this too.
       retired "YESSION_WEBHOOK_ENDPOINTS" "--webhook" ]
 
+/// What a session no longer reads, because the operator now says it in the profile
+/// (`YESSION_SESSION_RESOURCES`). The agent's egress moved there so it is described once,
+/// beside `web-fetch`, which it limits.
+let session : Retirement list =
+    [ retired "YESSION_SESSION_AGENT_NET" "agent.network.allow in the profile that YESSION_SESSION_RESOURCES names" ]
+
 /// Every retirement `lookup` still finds a value for. Reported together, not one per boot:
 /// a deployment that moved one of these moved all of them at the same time, and finding out
 /// about the next one only after fixing this one is a boot cycle spent per variable.
@@ -59,6 +65,6 @@ let assignedIn (retirements: Retirement list) (text: string) : Retirement list =
 let complaint (found: Retirement list) : string =
     let lines = found |> List.map (fun r -> sprintf "  %s is now %s" r.Was r.Now) |> String.concat "\n"
     sprintf
-        "the environment sets %d variable(s) that this bin no longer reads:\n%s\n\nSet the option instead. This bin refuses them and does not ignore them. If nothing reads a setting, the behaviour you asked for silently does not happen."
+        "the environment sets %d variable(s) that this bin no longer reads:\n%s\n\nSet what replaced each one instead. This bin refuses them and does not ignore them. If nothing reads a setting, the behaviour you asked for silently does not happen."
         (List.length found)
         lines

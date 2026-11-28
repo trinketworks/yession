@@ -1254,15 +1254,12 @@ let private sandboxPolicyTests =
                 "'/bin/echo' 'two words' 'it'\\''s' '$HOME' 'a;b'"
                 "spaces, quotes, expansions and separators are all inert"
 
-        testCase "the agent's egress: a known default, replaceable wholesale" <| fun () ->
-            Expect.equal
-                (Sandboxes.AgentSandbox.domainsFrom Map.empty)
-                Sandboxes.AgentSandbox.defaultDomains
-                "unconfigured, the CLI reaches the API and the console it refreshes a credential against"
-            Expect.equal
-                (Sandboxes.AgentSandbox.domainsFrom (Map.ofList [ "YESSION_SESSION_AGENT_NET", "gateway.internal" ]))
-                [ "gateway.internal" ]
-                "a deployment that fronts the API elsewhere replaces the list, it does not add to it"
+        // The profile's list is the agent's whole egress: srt is handed it as written, and
+        // nothing is added to it on the way.
+        testCase "the agent's egress is the profile's network list, and only it" <| fun () ->
+            let docs = Yession.Domain.Agent.AgentHost.create "docs.rs" |> Result.defaultWith failwith
+            let policy = Sandboxes.AgentSandbox.policyFor [ docs ] "/data/agent-home" Map.empty
+            Expect.equal policy.AllowedDomains (Some [ "docs.rs" ]) "the one host the operator named"
 
         testCase "policy assembly: spec variables win over the baseline; docker takes no baseline" <| fun () ->
             let ambient = Map.ofList [ "PATH", "/usr/bin"; "HOME", "/home/u" ]

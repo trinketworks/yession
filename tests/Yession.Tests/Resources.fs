@@ -769,6 +769,52 @@ let tests =
             Expect.isTrue (read """, "agent": { "web-search": true }""") "named alone, it is on"
             Expect.isFalse (read """, "agent": { "web-search": false }""") "named off, it is off"
 
+        // The agent's network is the operator's whole statement: unnamed, the API hosts the
+        // agent needs; named, exactly the list, the API hosts restated in it.
+        testCase "a profile that names no agent network gets the API hosts" <| fun () ->
+            let profile = OperatorProfile.parse """{ "version": 1, "resources": {} }""" |> expect
+            Expect.equal profile.Agent.Network AgentProfile.defaultNetwork "the default list"
+
+        testCase "an agent network replaces the default list whole" <| fun () ->
+            let profile =
+                OperatorProfile.parse """
+                    { "version": 1, "resources": {},
+                      "agent": { "network": { "allow": [ "api.anthropic.com", "Docs.rs", "*.python.org:443" ] } } }"""
+                |> expect
+            Expect.equal
+                (profile.Agent.Network |> List.map AgentHost.value)
+                [ "api.anthropic.com"; "docs.rs"; "*.python.org:443" ]
+                "the operator's hosts, lower-cased, and nothing added"
+
+        // An empty list would leave the CLI unable to reach the API it runs on, and a turn
+        // would find that out where nobody reads the reason.
+        testCase "an agent network that allows no host is refused" <| fun () ->
+            Expect.isError
+                (OperatorProfile.parse """{ "version": 1, "resources": {}, "agent": { "network": { "allow": [] } } }""")
+                "no host is no agent"
+
+        // Each a form srt would refuse or read differently, so the boot says so and not a turn.
+        testCase "a network entry srt would not read as a host is refused" <| fun () ->
+            for entry in [ "https://docs.rs"; "docs.rs/crates"; "**.python.org"; "10.0.0.0/8"; "*.com"; "*"; "docs.rs:0"; "" ] do
+                match AgentHost.create entry with
+                | Ok _ -> failwithf "'%s' was accepted as a host" entry
+                | Error _ -> ()
+
+        testCase "web fetch is off unless the agent block turns it on" <| fun () ->
+            let read agent = (OperatorProfile.parse (sprintf """{ "version": 1, "resources": {}%s }""" agent) |> expect).Agent.WebFetch
+            Expect.isFalse (read "") "no block, no fetch"
+            Expect.isTrue (read """, "agent": { "web-fetch": true }""") "named, it is on"
+
+        // A fetch reaches what the CLI's process reaches, and only srt narrows that to the
+        // network list: on `host` the list would be words nothing enforces.
+        testCase "web fetch is refused unless the agent CLI runs under srt" <| fun () ->
+            let fetching = { AgentProfile.defaults with WebFetch = true }
+            Expect.isError (AgentProfile.admits Yession.Domain.Sandboxes.HostBackend fetching) "host: nothing holds the fetch to the list"
+            Expect.isOk (AgentProfile.admits Yession.Domain.Sandboxes.SrtBackend fetching) "srt: the list is the egress"
+
+        testCase "a host without web fetch runs the agent on any backend" <| fun () ->
+            Expect.isOk (AgentProfile.admits Yession.Domain.Sandboxes.HostBackend AgentProfile.defaults) "nothing to enforce"
+
         // The policy the file's two halves express: `resources` is the menu, `always` is what
         // is served whether or not anybody ordered it. A name in one and not the other is the
         // state this model exists to make expressible — available, and not granted.

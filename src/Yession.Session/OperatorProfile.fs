@@ -29,7 +29,8 @@ module OperatorProfile =
 
     let private fileKeys = [ "version"; "resources"; "always"; "agent"; "sandboxes"; "container" ]
     let private containerKeys = [ "mem_limit"; "pids_limit"; "cgroup_parent" ]
-    let private agentKeys = [ "guidance"; "prompt"; "web-search" ]
+    let private agentKeys = [ "guidance"; "prompt"; "network"; "web-search"; "web-fetch" ]
+    let private networkKeys = [ "allow" ]
     let private leafKeys =
         [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "connection"; "seatbelt"; "device"; "capability" ]
     let private mountKeys = [ "from"; "at"; "mode" ]
@@ -409,28 +410,53 @@ module OperatorProfile =
                         raw
                         (PromptStrategy.all |> List.map PromptStrategy.name |> String.concat ", ")))
 
+    /// Where the agent's CLI may reach: `allow`, every host, in the form `AgentHost` reads.
+    /// The list replaces the default whole, so it names the API hosts too. A list with no
+    /// host is refused: the CLI could not reach the API it runs on, and a turn would find
+    /// that out where nobody reads the reason.
+    let private network : Decoder<AgentHost list> =
+        noUnknownKeys networkKeys
+        |> Decode.andThen (fun () -> Decode.field "allow" (Decode.list Decode.string))
+        |> Decode.andThen (fun raws ->
+            match raws with
+            | [] ->
+                Decode.fail "agent network allows no host, so the agent could not reach its API. List every host it may reach, api.anthropic.com among them. Otherwise, remove 'network'"
+            | raws ->
+                raws
+                |> List.fold
+                    (fun acc raw -> acc |> Result.bind (fun taken -> AgentHost.create raw |> Result.map (fun host -> taken @ [ host ])))
+                    (Ok [])
+                |> function
+                    | Ok hosts -> Decode.succeed (List.distinct hosts)
+                    | Error e -> Decode.fail (sprintf "agent network: %s" e))
+
     /// What the operator says about the agent: its guidance, the strategy that puts its
-    /// prompt together, and whether it may search the web. Each key may be left out, and a
-    /// missing one is the default (`AgentProfile.defaults`), because that is what a host that
-    /// says nothing gets. An `agent:` block with no key is refused: it reads as configuration
-    /// and is none.
+    /// prompt together, where it may reach, and the built-ins it may use. Each key may be
+    /// left out, and a missing one is the default (`AgentProfile.defaults`), because that is
+    /// what a host that says nothing gets. An `agent:` block with no key is refused: it reads
+    /// as configuration and is none.
     let private agent : Decoder<AgentProfile> =
         noUnknownKeys agentKeys
         |> Decode.andThen (fun () ->
-            Decode.map3
-                (fun words strategy search -> words, strategy, search)
+            Decode.map5
+                (fun words strategy hosts search fetch -> words, strategy, hosts, search, fetch)
                 (Decode.optional "guidance" guidance)
                 (Decode.optional "prompt" promptStrategy)
-                (Decode.optional "web-search" Decode.bool))
-        |> Decode.andThen (fun (words, strategy, search) ->
-            match words, strategy, search with
-            | None, None, None ->
-                Decode.fail "the agent block says nothing. Give it guidance (what the agent should know about this host), a prompt strategy or web-search. Otherwise, remove the block"
+                (Decode.optional "network" network)
+                (Decode.optional "web-search" Decode.bool)
+                (Decode.optional "web-fetch" Decode.bool))
+        |> Decode.andThen (fun (words, strategy, hosts, search, fetch) ->
+            match words, strategy, hosts, search, fetch with
+            | None, None, None, None, None ->
+                Decode.fail "the agent block says nothing. Give it guidance (what the agent should know about this host), a prompt strategy, a network, web-search or web-fetch. Otherwise, remove the block"
             | _ ->
+                let defaults = AgentProfile.defaults
                 Decode.succeed
                     { Guidance = words
-                      Prompt = strategy |> Option.defaultValue AgentProfile.defaults.Prompt
-                      WebSearch = search |> Option.defaultValue AgentProfile.defaults.WebSearch })
+                      Prompt = strategy |> Option.defaultValue defaults.Prompt
+                      Network = hosts |> Option.defaultValue defaults.Network
+                      WebSearch = search |> Option.defaultValue defaults.WebSearch
+                      WebFetch = fetch |> Option.defaultValue defaults.WebFetch })
 
     /// A value judged after it is read, so a refused one is refused in the one sentence
     /// that says why.
