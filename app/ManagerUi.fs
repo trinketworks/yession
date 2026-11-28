@@ -595,10 +595,10 @@ let mcpSection (views: ProcessManager.SessionView list) (declarations: McpDeclar
 let private bandLockup : TemplateResult =
     // No page word beside the lockup: the <title> says "manager", and the page shows it.
     html
-        $"""<h1 class="{Style.pageBandLockup}"><span class="{Style.pageBandMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.pageBandWordmark}">yession</span></h1>"""
+        $"""<h1 class="{Style.lockup}"><span class="{Style.lockupMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.lockupWord}">yession</span></h1>"""
 
 // The page keeps the workspace anatomy: the band every head in the product shares
-// (`Style.pageBand` — `spacing-band`, and one thumb-sized row on a phone, hairline below),
+// (`Style.pageBand` — `spacing-band`, `spacing-band-phone` on a phone, hairline below),
 // then labelled sections on one rail (`Style.pageRail`). The body shell is `Style.app` (the
 // visible viewport's height, overflow-hidden), so <main> owns the scrolling — a long registry
 // scrolls under a fixed viewport instead of clipping.
@@ -618,9 +618,8 @@ let private bodyTemplate
                rail. Inset to the rail, it was a card whose edges stopped mid-canvas against
                the black page — 168px short of each side at 1440. It is sticky over the
                registry that scrolls under it, and opaque: the one band in the product that
-               was frosted grey where every other is black.
-               On a phone the band is one thumb-sized row, and the lockup steps down into it
-               (`Style.pageBandMark`, `Style.pageBandWordmark`). -->
+               was frosted grey where every other is black. The lockup is the sidebar head's
+               (`Style.lockup`), centred on the band at every width. -->
           <header class="{Style.pageBand}">
             <div class="{Style.pageRail} w-full">{bandLockup}</div>
           </header>

@@ -234,12 +234,16 @@ module Style =
     /// longer stands alone — beside the mark (`lockup`) the extralight read thin, and the
     /// full stop that was its one colour is the mark's job now (assets/logo/lockup.svg).
     let wordmark = "font-normal text-wordmark tracking-wordmark text-ink"
-    /// The mark and the wordmark on one line, the lockup's own proportions scaled to the
-    /// band: the mark 56px to the word's 32 (the lockup file draws 64 to 32, which the
-    /// band has no room for), its foot 15px below the word's line box so the x-height band
-    /// sits where the lockup puts it — on the mark's optical middle, a little above its own.
-    let lockup = "flex items-end gap-2"
-    let lockupMark = "block w-14 h-14 -mb-[15px] shrink-0 [&>svg]:block [&>svg]:w-full [&>svg]:h-full"
+    /// The mark and the wordmark on one line, in the band's row (`sideHead`, `pageBand`).
+    /// The word is the title's step (`text-pivot`), so the two heads either side of the
+    /// sidebar's edge stand on one baseline, and the mark is the control height
+    /// (`spacing-control`), the most of the row it can take and still leave the row air.
+    /// Both centre on the row, so the cube's middle is the row's. `gap-1` is the lockup
+    /// file's own space between the cube's ink and the word, 0.4em of the word: the cube's
+    /// ink stands 3.5px inside its box, and 4px more is 7.5 of 19 (the file draws 13 of 30).
+    let lockup = "flex items-center gap-1"
+    let lockupMark = "block w-control h-control shrink-0 [&>svg]:block [&>svg]:w-full [&>svg]:h-full"
+    let lockupWord = "font-normal text-pivot tracking-wordmark text-ink"
     let heading = "font-extralight text-heading tracking-display lowercase text-ink truncate"
     let body = "font-light text-body text-ink"
     /// The body voice one step back: worn by a record that is not live — a stopped, exited or
@@ -1005,8 +1009,12 @@ module Style =
     /// On a phone the glyph stays small and the BOX does not: it grows to `spacing-touch`
     /// each way, with the glyph centred in it. The `-m-1.5` still pays the padding back to
     /// the flow, so a site that needs the rest paid back too says so itself (`navReopen`).
+    ///
+    /// Every one of them stands in the band, beside a line of the pivot step (the wordmark,
+    /// the title), so the glyph drops 1.5px off the line's middle onto the middle stroke of
+    /// its lowercase `e` (`navReopen` says how that was measured).
     let private navChevronBase =
-        bareBox + " cursor-pointer text-ink-faint hover:text-ink text-small p-1.5 -m-1.5 "
+        bareBox + " cursor-pointer text-ink-faint hover:text-ink text-small p-1.5 -m-1.5 *:first:translate-y-[1.5px] "
         + "flex items-center gap-1 transition-[translate,color] duration-150 ease-out "
         + "phone:min-w-touch phone:min-h-touch phone:justify-center "
         + "motion-reduce:transition-none " + focusRing
@@ -1463,14 +1471,13 @@ module Style =
     /// notice took the first slot (docs/visual-design.md, Space: the hairline under the band
     /// runs across every column at one height).
     ///
-    /// BREAKS the second half of that rule, and says so here rather than pretending: on a
-    /// phone the band is `spacing-band-phone` and this head is still `spacing-band`, so a
-    /// drawer open over the conversation shows two hairlines 28px apart. It cannot take the
-    /// phone band as it stands — the head holds the lockup, whose mark is 56px with its foot
-    /// 15px below the wordmark's line box, and no bottom padding seats 71px of object inside
-    /// 60px of band. The fix is a phone step on `lockup`/`lockupMark`/`wordmark` (Typography),
-    /// after which this is one `phone:h-band-phone` and a smaller `pb`.
-    let sideHead = "h-band shrink-0 flex items-end justify-between pb-band-foot " + Stroke.dividerBottom
+    /// The lockup centres on the band's row like every other head's line (`header`), so the
+    /// wordmark and the title stand on one baseline. On a phone the head is the phone's band
+    /// and its row stands over the same foot the header's does, so a drawer open over the
+    /// conversation draws its hairline on the header's. It could not while the lockup was
+    /// 56px: no foot seated it in a phone's row, and the two hairlines stood 32px apart.
+    let sideHead =
+        "h-band shrink-0 flex items-center justify-between phone:h-band-phone phone:pb-band-foot " + Stroke.dividerBottom
     /// A group in the column: its head, then its rows. There is one of these and not two —
     /// a `sideSectionFirst` stood beside it, byte for byte the same value, left over from when
     /// the first group carried the rule the head now owns. A second name for one way of
@@ -1809,27 +1816,20 @@ module Style =
     /// `flex-1` alone takes what the sidebar leaves, same as an uncapped column always did.
     let chatColumn = "flex-1 min-h-0 flex flex-col min-w-0 mx-(--column-gutter)"
 
-    /// The phone's band is a ROW, not a compressed copy of the desktop's stack: the two
-    /// doors a phone always has in this band — the sidebar's chevron and the terminals' mark — and the
-    /// title between them, on one line, because that is what they are. Stacked, the 28/32
-    /// heading over its id spent 80px of an 844px screen (10%) restating the tab you are on;
-    /// the title steps down a size (`titleInput`) and the id keeps hanging out of flow under
-    /// it (`titleId`), which seats the whole band in 60px.
+    /// The band is a ROW: the sidebar's chevron, the title and the terminals' door, on one
+    /// line, because that is what they are. Everything centres on the row, and the title's
+    /// 24px line centred in the 44px row is the line every head in the band stands on: the
+    /// wordmark across the sidebar's edge (`lockup`) is the same step, so the two share a
+    /// baseline with no nudge to keep them there.
     ///
-    /// `pb-[15px]` leaves the row 44px over the band's 1px rule, which is what every control
-    /// in it is on a phone: the chevrons, the edge tab and the title's own box are thumb-sized
-    /// and fill the row exactly, and the id hangs into the 15px under it. It was 11px in a
-    /// 56px band, which left the id's ink under 6px off the hairline.
+    /// It was a stack on a wide screen: a 28/32 heading over its id, standing on a 24px foot
+    /// in a 92px band, beside a 56px lockup. The pane's tabs fill the band's height
+    /// (`panePivotRow`), so the stack made every tab a 92px column.
     ///
-    /// On a wide screen the stack stays: the header and the sidebar wordmark share one bottom edge
-    /// (`h-band`, `items-end`), and that shared baseline is the whole reason the band exists.
-    ///
-    /// Both heights are the band's TOKEN — `h-band` wide, `h-band-phone` on a phone
-    /// (docs/visual-design.md, Space: the band is `spacing-band`, and on a phone it is
-    /// `spacing-band-phone`). The phone one was the literal `h-14`, which is the same 56px
-    /// said in a second place, and a second place is where two heads come to disagree: the
-    /// column's own head is still the full `spacing-band` under a thumb, so the two hairlines a
-    /// drawer shows at once sit 32px apart (see `sideHead`).
+    /// On a phone the id has no width beside the title, so it hangs under it (`titleId`),
+    /// into the band's foot (`pb-band-foot`, `spacing-band-phone`). The row is still 44px
+    /// over the foot and the rule, which is what every control in it is on a phone: the
+    /// chevrons, the edge tab and the title's own box are thumb-sized and fill the row exactly.
     ///
     /// The left padding is the timeline's own plus `--column-gutter` (`mainColumn`), so the
     /// title stands in exactly as far as the conversation does: with the pane shut and the
@@ -1838,8 +1838,8 @@ module Style =
     /// the band's right-hand group is the way to the pane, and it stays at the edge the pane
     /// opens from.
     let header =
-        "relative h-band shrink-0 flex items-end gap-4 pl-[calc(var(--column-gutter)+2rem)] pr-8 pb-band-foot "
-        + "phone:h-band-phone phone:items-center phone:gap-2 phone:px-4 phone:pb-[15px] "
+        "relative h-band shrink-0 flex items-center gap-4 pl-[calc(var(--column-gutter)+2rem)] pr-8 "
+        + "phone:h-band-phone phone:gap-2 phone:px-4 phone:pb-band-foot "
         + Stroke.dividerBottom
 
     /// A slow catch-up's progress, drawn ON the header's bottom rule: the rule is the one
@@ -1854,12 +1854,12 @@ module Style =
 
     /// The header's right-hand group: the way back to the terminals. The session's standings
     /// are the sidebar's (`standingsSection`), and the band only wears the worst of them,
-    /// under the chevron that opens it (`navReopenMark`). On a wide screen the door carries
-    /// words ("2 terminals", `View.contentReopen`), and `pb-[5px]` centres their lowercase on
-    /// the title's: 13px words stood on a 28px title's baseline read as sitting low, under the
-    /// stroke the mark beside them points at (`terminalReopen`). On a phone the group centres
-    /// on the title's line.
-    let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-[5px] phone:items-center phone:gap-3 phone:pb-0"
+    /// beside the chevron that opens it (`navReopenMark`). On a wide screen the door carries
+    /// words ("2 terminals", `View.contentReopen`). It centres on the row as the title does,
+    /// which puts the lowercase of its 13/16 words on the lowercase of the 19/24 title to
+    /// under half a pixel: centred lines of the one face hold their x-height middles 0.12em
+    /// under the line's, and 0.12em of the 6px between the two sizes is 0.7px.
+    let headerAside = "ml-auto shrink-0 flex items-center gap-5 phone:gap-3"
     let headerStatus = "shrink-0"
 
     /// The nav column's own mount of the connection report. Hidden on a phone, where the bar
@@ -2047,22 +2047,32 @@ module Style =
 
     // --- Editable session title ------------------------------------------------------------
 
-    /// The title block: the editable heading over its dim secondary id. `relative` anchors
-    /// the absolutely-positioned remote-cursor overlays; `ml-8` keeps it on the content column.
-    /// On a phone the chevron is in the row and pays part of that indent: it occupies 12px
-    /// of flow (`navReopen`) plus the row's 8px gap, so 12px more is what puts the heading
-    /// back on the 32px rail every message below it sits on — measured live at 390, where the
-    /// title's text and the timeline's caret both start at x=48.
+    /// The title block: the editable heading and its dim secondary id. `ml-8` keeps it on the
+    /// content column. On a phone the chevron is in the row and pays part of that indent: it
+    /// occupies 12px of flow (`navReopen`) plus the row's 8px gap, so 12px more is what puts
+    /// the heading back on the 32px rail every message below it sits on — measured live at
+    /// 390, where the title's text and the timeline's caret both start at x=48.
     /// `phone:flex-1` is what makes the phone's band a row: the title takes the space the
     /// two chevrons leave rather than sizing to an input's default 20 characters.
     ///
-    /// The wrap, not the field, wears the title's rule (`titleInput` says why, and why not on a
-    /// phone). The field pays its 8px padding back with `-mx-2`, so the wrap's box is the
-    /// text's own extent: the rule starts at the first glyph and ends at the last. The field's
-    /// box still reaches 8px past it, so `wide:mr-2` keeps the band's gap between that box and
-    /// the terminals' door (measured live with a title the band cannot hold).
+    /// On a wide screen the id follows the title on its line, on its baseline (`items-baseline`):
+    /// a second, smaller face run in after the first, which is how a line says "and this is
+    /// its number". `gap-4` clears the field's box, which reaches 8px past the text, and the
+    /// focus ring 4px past that. On a phone the id hangs under the title (`titleId`), and this
+    /// is the box it hangs from.
+    let titleBlock = "relative flex items-baseline gap-4 min-w-0 ml-8 phone:ml-3 phone:flex-1"
+
+    /// The title's own box, which wears its rule (`titleInput` says why, and why not on a
+    /// phone). The field pays its 8px padding back with `-mx-2`, so this box is the text's
+    /// own extent: the rule starts at the first glyph and ends at the last. `relative`
+    /// anchors the absolutely-positioned remote-cursor overlays.
+    ///
+    /// The rule is a pixel under the title's 24px line, and `-mb-px` gives that pixel back to
+    /// the row, so it is the LINE that centres in the band: its baseline is the wordmark's
+    /// across the sidebar's edge to the pixel, where a centred box of line and rule held it
+    /// half a pixel high.
     let titleWrap =
-        cls [ "relative wide:top-[2px] flex flex-col min-w-0 ml-8 wide:mr-2 phone:ml-3 phone:flex-1"
+        cls [ "relative flex flex-col min-w-0 wide:-mb-px phone:flex-1"
               Stroke.underline; Stroke.rim; "phone:border-b-0" ]
 
     /// The title itself: the heading, worn by a text input — and it says SO AT REST, with the
@@ -2086,7 +2096,7 @@ module Style =
     /// control at rest (`rim`, a step brighter than the quiet separator).
     ///
     /// `phone:border-b-0`, and this is a measurement rather than a preference. On a wide screen
-    /// the box is the title's line alone, so the rule lands at y=68 with the id starting at 71:
+    /// the box is the title's line alone, so the rule lands under the line and nothing else:
     /// a heading with a rule under it, which is what it is. On a phone the box reaches down over
     /// the id (below), so the rule lands at 53-54 — flush under the id's own text box, which
     /// ends at 54, and one pixel of black above the band's hairline at 55-56. That draws a rule
@@ -2114,8 +2124,8 @@ module Style =
     /// "session" ran 300px, twice the word, and began 8px before it in the padding below.
     /// `field-sizing:content` sizes the box to the value, or to the placeholder while there
     /// is none, so an empty title still wears a rule as long as its placeholder. It sizes the height
-    /// too, and a placeholder's line is taller than the value's (38px against 32, measured
-    /// live), so `wide:h-8` holds the box to the heading's line. The wrap is that
+    /// too, and a placeholder's line is taller than the value's (measured live), so `wide:h-6`
+    /// holds the box to the title's 24px line. The wrap is that
     /// wide, and the field stretches across it, so a long title the band cannot hold shrinks
     /// the wrap (`min-w-0`) and truncates as before. On a phone the wrap takes the row
     /// (`titleWrap`) and `phone:w-full` keeps the field the box it was, the thumb's target
@@ -2125,11 +2135,9 @@ module Style =
     /// pointer, but it is a tone step on a dark ground; the ring is the product's own
     /// vocabulary and the UI baseline's floor (AGENTS.md), so the two ride together.
     ///
-    /// The wrap's `wide:top-[2px]` (`titleWrap`) is optical, and it moves this field and its
-    /// rule together: a 28/32 line box holds its baseline 2px higher over the shared bottom
-    /// edge than the wordmark's 32/36 does, so the title steps down to put both on one line
-    /// (measured live). A phone has no cross-column baseline to meet and no room
-    /// for 28px in a 56px row, so it takes the pivot step (19/24) and no nudge.
+    /// One step at every width, the pivot's (19/24), in the display tracking: the band is one
+    /// row, and the title is the line that row stands on (`header`). It was the heading step
+    /// (28/32) on a wide screen, which only a stacked band held.
     ///
     /// And on a phone the field is a thumb's height, which a 24px line in a 60px band does
     /// not leave room for — unless the box takes in the id under it. So it does: 44px tall,
@@ -2140,39 +2148,33 @@ module Style =
     /// `Render.placeInputCursor`'s marker subtracts the padding and the border off the live box,
     /// so a collaborator's caret stays the height of the line.
     let titleInput =
-        cls [ bareBox; "[field-sizing:content] wide:h-8 phone:w-full min-w-0 bg-transparent px-2 -mx-2 py-0 phone:h-11 phone:pb-5 phone:-mb-5"
+        cls [ bareBox; "[field-sizing:content] wide:h-6 phone:w-full min-w-0 bg-transparent px-2 -mx-2 py-0 phone:h-11 phone:pb-5 phone:-mb-5"
               "hover:bg-surface-2 focus:bg-surface-2 transition-colors"; focusRing
-              "font-extralight text-heading phone:text-pivot tracking-[-0.01em] lowercase text-ink"
+              "font-extralight text-pivot tracking-display lowercase text-ink"
               "placeholder:text-ink-faint truncate relative" ]
 
-    /// The session id, shown small and dim under the title as a stable secondary identifier.
-    /// It hangs OUT OF FLOW below the title, into the band's bottom padding: in flow it added
-    /// 18px under the title inside the bottom-aligned stack and lifted the title's baseline
-    /// that far off the wordmark's (measured 41.5 vs 61 at 1440) — and on a phone it is what
-    /// made the band a stack rather than the row it now is.
-    /// `mt-1` rather than the old `mt-0.5`: the title now draws a focus ring 2px outside its
-    /// own box, and 2px of clearance is what keeps that ring off this line on a desktop. On a
-    /// phone the title's box reaches down behind this line (`titleInput`), but the id still
-    /// takes the presses that land ON it: it is a thing people copy, and a press that fell
-    /// through to the field could only ever edit the title, never select the id.
-    /// Its `mt-1` and its line are `--spacing-id-drop`, which the chevron's mark lands on
-    /// (`navReopenMark`): change one and change the other.
-    /// On a wide screen the wrap carries the title's 2px optical drop and its 1px rule
-    /// (`titleWrap`), which together put the padding box's bottom 1px lower than the line the
-    /// id hung from when the field wore both. `wide:top-[calc(100%-1px)]` pays it back.
-    /// On a wide screen it is as wide as its own text, not the title's: held to the wrap
-    /// (`right-0`), a short title or the empty one cut the 26-character id to about 11
-    /// (measured at 1440 under "session"). Nothing stands to its right on the band but the
-    /// terminals' door, far past it. A phone's wrap is the row, so there it stays bounded.
-    let titleId = "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full wide:top-[calc(100%-1px)] left-0 phone:right-0 select-text"
+    /// The session id, small and dim, a stable secondary identifier. On a wide screen it runs
+    /// in after the title, on the title's baseline (`titleBlock`), as wide as its own text:
+    /// the title gives way before it does, because a cut id is one nobody can read back.
+    ///
+    /// On a phone the row has no width for it, so it hangs OUT OF FLOW under the title, into
+    /// the band's foot (`header`): in flow it made the band a stack rather than the row it
+    /// is. `mt-1` keeps 4px between it and the title's line. The title's box reaches down
+    /// behind it there (`titleInput`), but the id still takes the presses that land ON it: it
+    /// is a thing people copy, and a press that fell through to the field could only ever
+    /// edit the title, never select the id. Its `mt-1` and its line are `--spacing-id-drop`,
+    /// which the chevron's mark lands on (`navReopenMark`): change one and change the other.
+    let titleId =
+        "font-terminal text-code-sm text-ink-faint truncate wide:shrink-0 select-text "
+        + "phone:absolute phone:top-full phone:left-0 phone:right-0 phone:mt-1"
 
     /// A collaborator's selection highlight in the title: an absolutely-positioned span the
     /// browser places and sizes against the input's own box by measurement (the translucent
-    /// background is set inline). The `h-8` is the desktop line box, and it is only what the
-    /// span wears until that measurement lands — the title is 28/32 at one width and 19/24 at
-    /// the other, so the height a marker keeps is the one the browser read off the field.
+    /// background is set inline). The `h-6` is the title's line box, and it is only what the
+    /// span wears until that measurement lands, because the height a marker keeps is the one
+    /// the browser read off the field.
     /// Ignores pointer events so it never blocks typing; a collapsed selection has zero width.
-    let remoteCursor = "absolute top-0 h-8 pointer-events-none rounded-sm"
+    let remoteCursor = "absolute top-0 h-6 pointer-events-none rounded-sm"
     /// The caret bar inside a remote selection, offset to the peer's `head` by the browser.
     /// Full height of the marker, so it answers to that one measurement rather than a second.
     let remoteCursorCaret = "absolute top-0 w-0.5 h-full -ml-px"
@@ -2191,12 +2193,12 @@ module Style =
     /// On a wide screen it stands in by `--column-gutter` as the title does (`header`), so
     /// with the conversation centred it stays beside the title rather than at the window's
     /// edge, which is where #1521 left it (measured at 1280: chevron at x=15, title at 306).
-    /// And it stands on the title's LINE, as it does on a phone: the title's middle is 35px
-    /// over the band's floor (`pb-band-foot`, the field's 1px rule, half its 32px line, less
-    /// the field's 2px `top` nudge), and the foot and 10px, with the 6px `-m-1.5` takes back,
-    /// puts the glyph's middle on it (measured live at 1280 and 1600: glyph and title both at
-    /// y=86). It is placed from the foot's token so the two cannot part when the band grows.
-    /// It sat on `bottom-4.5` once, 12px under the title's middle.
+    /// And it stands on the title's LINE, as it does on a phone: the title's line centres on
+    /// the band's row (`header`), so its middle is half the row (`spacing-touch`), and the
+    /// glyph starts at the `top` this box is placed by, as it starts at its `left` — the
+    /// `-m-1.5` and the `p-1.5` cancel, and the 14px glyph overflows the 12px of content left
+    /// from its start — so `top` is half the glyph over the row's middle. It is placed from
+    /// the row's token so the two cannot part when the band changes.
     ///
     /// Across, it stands on the AVATAR's column: the glyph and the mark under it centred on the
     /// middle of the `w-5` every group head's avatar fills (`messageGroupHead`), so the band's
@@ -2212,42 +2214,43 @@ module Style =
     /// Down, the glyph points at the middle stroke of the title's lowercase `e`, not at the
     /// middle of its line box: a lowercase title's ink is its x-height, and the line's middle
     /// is above it. Noto Sans ExtraLight holds that stroke 0.28em over the baseline, which
-    /// lands 3.2px under the line's middle at 28/32 and 1.7px under it at 19/24 (measured
-    /// live at 390, 1024 and 1440 by scanning a drawn `e`). Only the GLYPH drops
-    /// (`*:first`, the button's first child; not `[&>svg]`, because a `>` in a class string
+    /// lands 1.7px under the line's middle at 19/24 (measured live at 390, 1024 and 1440 by
+    /// scanning a drawn `e`). Only the GLYPH drops (`navChevronBase`'s
+    /// `*:first`, the button's first child; not `[&>svg]`, because a `>` in a class string
     /// ends the tag for the tests that read classes off the render, and not `[&_svg]`,
-    /// because the mark is an svg too), so the box, and the mark placed from it (`navReopenMark`), stay on the
-    /// id's line. The terminals' mark across the band drops the same way (`terminalReopen`).
+    /// because the mark is an svg too), so the box, and the mark placed from it
+    /// (`navReopenMark`), stay where they are. Every chevron in the band drops the same way.
     let navReopen =
-        "absolute left-[calc(var(--column-gutter)+var(--spacing-rail)+0.625rem-7px)] bottom-[calc(var(--spacing-band-foot)+10px)] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
-        + "*:first:translate-y-[3px] phone:*:first:translate-y-[1.5px] "
+        "absolute left-[calc(var(--column-gutter)+var(--spacing-rail)+0.625rem-7px)] top-[calc(var(--spacing-touch)/2-7px)] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
         + "phone:relative phone:inset-auto phone:grid phone:[.nav-alt_&]:hidden phone:-ml-3 phone:-mr-5"
+    /// The same, while a mark rides it (`navReopenMark`), which the model says (`View.header`):
+    /// a wide screen's box reaches 16px further left to hold the mark — the 12px mark and the
+    /// 4px between it and the glyph — and pays the 16px back as padding, so the glyph does not
+    /// move and the ring a keyboard sees goes round both. Left outside the box, the mark sat
+    /// under the ring.
+    let navReopenMarked = navReopen + " wide:w-10 wide:pl-[22px] wide:-ml-[22px]"
 
-    /// The session's worst standing, under the reopen chevron: the column it opens is where
-    /// the standings are said, so the way in carries the one that matters most. Centred on
-    /// the chevron's axis, and centred on the session id's LINE: the chevron sits on the
-    /// title's line, so the pair reads as one column beside the two lines, the glyph against
-    /// the title and the mark against the id. It adds a mark and not a pixel to the band.
+    /// The session's worst standing, beside the reopen chevron: the column it opens is where
+    /// the standings are said, so the way in carries the one that matters most. It adds a
+    /// mark and not a pixel to the band.
     ///
-    /// It is placed from the chevron's box, and the id from the title's, so the drop between
-    /// them is named once (`--spacing-id-drop`, `titleId`'s `mt-1` plus half its 16px line)
-    /// and the rest is where each screen puts the two boxes:
+    /// - A wide screen's band is one line, so the mark leads the chevron on it, in the room
+    ///   the box makes for it on the glyph's left (`navReopenMarked`): 6px in, as the glyph is
+    ///   (`p-1.5`), so its middle is 12px in, and 4px clear of the glyph. Down, it is on the
+    ///   glyph's line: the glyph starts 6px into the box and overflows its content from there,
+    ///   so its middle is 13px down, and 1.5px more for its drop onto the title's `e` stroke
+    ///   (`navChevronBase`).
+    /// - A phone centres the chevron on the title's line and hangs the mark under it, on the
+    ///   id's (`titleId`), so the pair reads as one column beside the two lines: the title
+    ///   line's middle is the 44px target's middle, and the id's is 12px (half the 24px
+    ///   `text-pivot` line) and the drop under it (`--spacing-id-drop`, `titleId`'s `mt-1`
+    ///   plus half its 16px line).
     ///
-    /// - A phone centres both on one line, so the title line's middle is the 44px target's
-    ///   middle, and the id's is 12px (half the 24px `text-pivot` line) and the drop under it.
-    ///   The glyph is centred in the target, so the target's middle is the glyph's.
-    /// - A wide screen bottoms the title on the band's `pb-band-foot` and lifts the box with
-    ///   its glyph onto the title's middle (`navReopen`), which leaves the id's middle, the
-    ///   drop under the title's foot, the drop and 4px under the box's. The 14px glyph
-    ///   overflows the 24px box's 12px of content to the right, so its middle is 13px in (the
-    ///   `p-1.5` and half the glyph), not the box's 12.
-    ///
-    /// `-translate-y-1/2` makes it the mark's centre that lands, so the mark's own size never
-    /// moves it. Measured live: at 390 the mark hung 8px over the id's line when it was placed
-    /// from the target's foot, and at 1280 10px under it when the margin was not counted.
+    /// `-translate-1/2` makes it the mark's centre that lands, so the mark's own size never
+    /// moves it.
     let navReopenMark =
-        "absolute left-[13px] -translate-x-1/2 -translate-y-1/2 pointer-events-none "
-        + "top-[calc(100%+4px+var(--spacing-id-drop))] "
+        "absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none "
+        + "left-[12px] top-[14.5px] "
         + "phone:left-1/2 phone:top-[calc(50%+12px+var(--spacing-id-drop))]"
 
     // --- Timeline --------------------------------------------------------------------------
@@ -4391,8 +4394,13 @@ module Style =
     /// The settings face's header band: the same band rhythm as the nav and the main header, so
     /// the three baselines still align when the column changes face — the nav's head, hairline
     /// and all, so the band's rule does not come and go as the faces turn.
-    let settingsHead = sideHead
-    let settingsTitle = "font-extralight text-heading tracking-[-0.01em] lowercase text-ink"
+    /// The settings face floats over the nav's (`settingsPane`, `acrylic`), so its rim is a
+    /// pixel of border over the head, and `-mt-px` pays it back: the head and its hairline
+    /// stand on the band, where they stood a pixel under it.
+    let settingsHead = sideHead + " -mt-px"
+    /// The settings face's head says where you are in the title's own voice and step
+    /// (`titleInput`), so it stands on the band's line as the wordmark it replaces does.
+    let settingsTitle = "font-extralight text-pivot tracking-display lowercase text-ink"
 
     /// Two acts of a flow side by side in a lane — approve and cancel, complete and cancel.
     ///
@@ -4528,6 +4536,10 @@ module Style =
     /// up with nothing" names and accepts for a two-row head in general; this one head instead
     /// pins its FIRST row to the token, so it needs no second row to land on the band.
     ///
+    /// On a wide screen the band is one row of this strip's own square acts (`paneStripAct`,
+    /// `spacing-touch`) and its rule, so a tab is the acts' height. It was 92px, the height
+    /// a stacked title once made the band, and every tab was a column of it.
+    ///
     /// `items-stretch`, not the chat header's own `items-end` + `pb-5` (`phone:items-center` +
     /// `phone:pb-[15px]`) copied at first, because that alignment is the header's TEXT settling
     /// short of the hairline with room a title doesn't need to fill. A tab is not text: a
@@ -4604,8 +4616,10 @@ module Style =
     /// pane's below, and a hairline on each side closes it — the same open tab the list button
     /// is with its list up (`paneListButtonOn`). `divide-x` already draws its right side
     /// unless it is last, and nothing draws its left when it is first; `border-r` and
-    /// `first:border-l` cover both.
-    let private pivotItemChosen = "border-r first:border-l border-hair text-ink"
+    /// `first:border-l` cover both. The pixel it keeps is padding (`pb-px`), so its name
+    /// centres on the row the other names do: centred in the taller box, it sat half a pixel
+    /// under them, and selecting moved it.
+    let private pivotItemChosen = "pb-px border-r first:border-l border-hair text-ink"
     let pivotItem = cls [ pivotItemBase; "mb-px bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
     let pivotItemOn = cls [ pivotItemBase; pivotItemChosen; "bg-panel" ]
     /// The selected tab under a command's preview: the preview's lifted ground, so the tab and
@@ -4645,9 +4659,11 @@ module Style =
     /// The same with its list up: a tab. It fills the strip's height and one pixel more
     /// (`-mb-px`), so its ground covers the strip's rule (`panePivotRow`) and runs straight
     /// into the list's (`allPanel`, `surface`) — the open tab and the page under it read as
-    /// one surface. A hairline on its right closes the tab's side against the strip.
+    /// one surface. A hairline on its right closes the tab's side against the strip. The
+    /// pixel is padding (`pb-px`), so the glyph stays centred on the row, as a chosen tab's
+    /// name does (`pivotItemChosen`).
     let paneListButtonOn =
-        cls [ paneListButtonBase; "self-stretch -mb-px border-hair bg-surface text-ink" ]
+        cls [ paneListButtonBase; "self-stretch -mb-px pb-px border-hair bg-surface text-ink" ]
 
     /// Everything under the strip: the toolbar and the body.
     let paneUnderStrip = "relative flex-1 min-h-0 flex flex-col"
@@ -5416,11 +5432,10 @@ module Style =
     /// merely invisible is still in the tab order.
     ///
     /// Its glyph sits on the title's x-height, so the two marks either side of the title
-    /// point at one stroke (`navReopen`). On a phone it drops by the chevron's own amount. On
-    /// a wide screen the button centres its words on that stroke (`headerAside`), and the
-    /// glyph's box sits a pixel above it, so it drops by that pixel.
-    let terminalReopen =
-        navChevronBack + " shrink-0 *:first:translate-y-[1px] phone:*:first:translate-y-[1.5px]"
+    /// point at one stroke (`navReopen`): the button centres on the band's row as the title's
+    /// line does (`headerAside`), and the glyph drops by every chevron's amount
+    /// (`navChevronBase`).
+    let terminalReopen = navChevronBack + " shrink-0"
     /// Its face says what it opens on a wide screen ("2 terminals", `View.contentReopen`), and
     /// only the count on a phone, whose band has no room for the words. Exactly one of the two
     /// is drawn at any size, by the one pair of variants that split the screens.
@@ -5624,9 +5639,13 @@ module Style =
     // `spacing-band`.
 
     /// The band every Manager page shares: `spacing-band` tall, `spacing-band-phone` on a
-    /// phone, its contents standing on the band's bottom edge so the lockup sits where the
-    /// shell's wordmark does (docs/visual-design.md, Space). The hairline under it runs the
-    /// width of the viewport; only what is IN it keeps to the rail.
+    /// phone, its lockup (`lockup`) centred on it as the shell's sidebar head centres the
+    /// same lockup (docs/visual-design.md, Space). The hairline under it runs the width of
+    /// the viewport; only what is IN it keeps to the rail.
+    ///
+    /// The wordmark is the lockup's one word at every width. It used to go on a phone, as the
+    /// session's own phone band drops it (`header`); but this band has no title beside it to
+    /// say whose product this is, and a mark alone said nothing a reader could read.
     ///
     /// OPAQUE, and sticky over a registry that scrolls under it. It wore the `acrylic` for a
     /// while, which made the one band in the product that is frosted grey where every other
@@ -5638,20 +5657,8 @@ module Style =
     /// `phone:`, not a width: a phone turned sideways is still a phone, and this is the shell's
     /// layout question rather than a reading column's (docs/visual-design.md, Phone and wide).
     let pageBand =
-        cls [ "h-band phone:h-band-phone shrink-0 sticky top-0 z-ground bg-bg"
-              "flex items-end pb-band-foot phone:items-center phone:pb-0"
+        cls [ "h-band phone:h-band-phone shrink-0 sticky top-0 z-ground bg-bg flex items-center"
               Stroke.dividerBottom ]
-
-    /// The lockup in that band. On a phone the band is one thumb-sized row, which cannot hold
-    /// 32px type beside a 56px mark — so the mark steps down to 32px and the wordmark to the
-    /// pivot step (19px to the mark's 32 is the lockup's own ratio, 32 to 56, near enough), and
-    /// the two centre on the row rather than standing on its edge. The wordmark used to go on
-    /// a phone, as the session's own phone band drops it (`header`); but this band has no title
-    /// beside it to say whose product this is, and a mark alone said nothing a reader could
-    /// read.
-    let pageBandLockup = lockup + " phone:items-center"
-    let pageBandMark = lockupMark + " phone:w-8 phone:h-8 phone:mb-0"
-    let pageBandWordmark = wordmark + " phone:text-pivot"
 
     /// The page's content rail: the registry's measure, centred, with `spacing-rail` between
     /// its text and the page's edge and the shell's own narrower gutter on a phone. Worn by

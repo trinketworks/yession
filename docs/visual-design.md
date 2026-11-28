@@ -199,9 +199,13 @@ it for themselves.
 *Test: shorten the screen until a column has less room than one item. The column is gone, and
 one press on the surface over it brings the column back.*
 
-The header band is `spacing-band` tall, and `spacing-band-phone` on a phone. That is the
-height of a one-row head, and every such head shares it. The hairline under it runs across
-every column at one height.
+The header band is one row and the hairline under it (`spacing-band`). The row is
+`spacing-touch` tall, the height of the square acts that stand in it, and everything in it
+centres on the row. Its lines are one step (`text-pivot`), so the wordmark and the title
+stand on one baseline across the sidebar's edge. Every one-row head shares the band. On a
+phone the band adds a foot under the row (`spacing-band-phone`): a phone's row has no width
+for the session id, so the id hangs there. The hairline under the band runs across every
+column at one height.
 
 A head with two rows of controls is taller, because each row meets the touch target and the
 floor is never traded for the band. Such a head states its rows, not its total. Its hairline is
