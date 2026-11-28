@@ -1557,9 +1557,10 @@ module View =
             | Some standing ->
                 html $"""<span class="{Style.navReopenMark}" data-reopen-attention>{Icon.attention standing.Attention}</span>"""
             | None -> Lit.nothing
+        let reopenBox = if Option.isSome worst then Style.navReopenMarked else Style.navReopen
         html $"""
             <header class="{Style.header}">
-              <button type="button" class="{Style.cls [ Style.navChevronForward; Style.navReopen ]}" aria-label="{reopenLabel}" data-nav-toggle="show" @click={Ev(fun _ -> dispatch ToggleNavMsg)}>{Icon.right}{reopenMark}</button>
+              <button type="button" class="{Style.cls [ Style.navChevronForward; reopenBox ]}" aria-label="{reopenLabel}" data-nav-toggle="show" @click={Ev(fun _ -> dispatch ToggleNavMsg)}>{Icon.right}{reopenMark}</button>
               <div class="{Style.titleBlock}">
                 <div class="{Style.titleWrap}">
                   <!-- `enterkeyhint="done"` because that is what the return key now does here

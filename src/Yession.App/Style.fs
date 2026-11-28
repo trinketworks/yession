@@ -2220,22 +2220,22 @@ module Style =
     /// ends the tag for the tests that read classes off the render, and not `[&_svg]`,
     /// because the mark is an svg too), so the box, and the mark placed from it
     /// (`navReopenMark`), stay where they are. Every chevron in the band drops the same way.
-    ///
-    /// Where a mark rides it (`navReopenMark`), a wide screen's box reaches 16px further left
-    /// to hold it — the 12px mark and the 4px between it and the glyph — and pays the 16px back
-    /// as padding, so the glyph does not move and the ring a keyboard sees goes round both. Left
-    /// outside the box, the mark sat under the ring.
     let navReopen =
         "absolute left-[calc(var(--column-gutter)+var(--spacing-rail)+0.625rem-7px)] top-[calc(var(--spacing-touch)/2-7px)] w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
-        + "wide:has-[[data-reopen-attention]]:w-10 wide:has-[[data-reopen-attention]]:pl-[22px] wide:has-[[data-reopen-attention]]:-ml-[22px] "
         + "phone:relative phone:inset-auto phone:grid phone:[.nav-alt_&]:hidden phone:-ml-3 phone:-mr-5"
+    /// The same, while a mark rides it (`navReopenMark`), which the model says (`View.header`):
+    /// a wide screen's box reaches 16px further left to hold the mark — the 12px mark and the
+    /// 4px between it and the glyph — and pays the 16px back as padding, so the glyph does not
+    /// move and the ring a keyboard sees goes round both. Left outside the box, the mark sat
+    /// under the ring.
+    let navReopenMarked = navReopen + " wide:w-10 wide:pl-[22px] wide:-ml-[22px]"
 
     /// The session's worst standing, beside the reopen chevron: the column it opens is where
     /// the standings are said, so the way in carries the one that matters most. It adds a
     /// mark and not a pixel to the band.
     ///
     /// - A wide screen's band is one line, so the mark leads the chevron on it, in the room
-    ///   the box makes for it on the glyph's left (`navReopen`): 6px in, as the glyph is
+    ///   the box makes for it on the glyph's left (`navReopenMarked`): 6px in, as the glyph is
     ///   (`p-1.5`), so its middle is 12px in, and 4px clear of the glyph. Down, it is on the
     ///   glyph's line: the glyph starts 6px into the box and overflows its content from there,
     ///   so its middle is 13px down, and 1.5px more for its drop onto the title's `e` stroke
