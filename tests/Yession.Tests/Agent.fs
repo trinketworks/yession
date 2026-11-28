@@ -1997,6 +1997,95 @@ module private Renewal =
     let refusedAgain : Yession.Host.Agent.Attempt =
         { Answer = Error "Failed to authenticate"; Usage = spending 5; Refused = Some "c1" }
 
+// -----------------------------------------------------------------------------
+// The built-ins a turn called. A built-in runs inside the CLI and passes through no registry,
+// so the conversation is the only trace of it, and the chat draws it from there.
+// -----------------------------------------------------------------------------
+
+module private Builtins =
+
+    open Fable.ClaudeAgentSdk
+    open Yession.Domain.Tools
+
+    let private block (fill: ApiBlock -> unit) : ApiBlock = jsOptions<ApiBlock> fill
+
+    let private apiMessage (blocks: ApiBlock list) : ApiMessage =
+        jsOptions<ApiMessage> (fun m -> m.content <- box (Array.ofList blocks))
+
+    /// The model calling `name` with `input`, as the call `id`.
+    let called (id: string) (name: string) (input: obj) : Message =
+        jsOptions<AssistantMessage> (fun m ->
+            m.``type`` <- "assistant"
+            m.message <- apiMessage [ block (fun b -> b.``type`` <- "tool_use"; b.id <- id; b.name <- name; b.input <- input) ])
+        :> Message
+
+    /// The answer to call `id`.
+    let answered (id: string) (isError: bool) : Message =
+        jsOptions<UserMessage> (fun m ->
+            m.``type`` <- "user"
+            m.message <- apiMessage [ block (fun b -> b.``type`` <- "tool_result"; b.tool_use_id <- id; b.is_error <- Some isError) ])
+        :> Message
+
+    /// What a log was told, in order: each start as its tool and arguments, each finish as
+    /// its outcome.
+    type Told =
+        | Began of Yession.Domain.Tools.ToolUseBegin
+        | Ended of Yession.Domain.Tools.ToolOutcome
+
+    /// Record `messages` as a turn does, then end the turn; answer what the log was told.
+    let recorded (messages: Message list) : Async<Told list> =
+        async {
+            let told = ResizeArray<Told> ()
+            let mutable minted = 0
+            let log =
+                { Yession.Domain.Tools.ToolUseLog.none with
+                    Started =
+                        fun began ->
+                            async {
+                                told.Add (Began began)
+                                minted <- minted + 1
+                                return Some (ToolUseId.create (sprintf "u%d" minted) |> expect)
+                            }
+                    Finished = fun _ ended -> async { told.Add (Ended ended.Outcome) } }
+            let calls = Collections.Generic.Dictionary<string, ToolUseId> ()
+            for message in messages do
+                do! Yession.Host.Agent.BuiltinCalls.record log calls message
+            do! Yession.Host.Agent.BuiltinCalls.abandon log calls
+            return List.ofSeq told
+        }
+
+    let search = createObj [ "query" ==> "fable 5 release notes" ]
+
+let private builtinCallTests =
+    testList "The built-ins a turn called" [
+        testCaseAsync "a built-in the model called is recorded as Claude Code's, with its arguments" <| async {
+            let! told = Builtins.recorded [ Builtins.called "t1" "WebSearch" Builtins.search; Builtins.answered "t1" false ]
+            Expect.equal
+                (List.head told)
+                (Builtins.Began ({ Namespace = "claude"; Name = "WebSearch"; Arguments = Some """{"query":"fable 5 release notes"}""" } : Yession.Domain.Tools.ToolUseBegin))
+                "the chip names the tool and what it searched for"
+        }
+
+        testCaseAsync "the answer to a built-in finishes its record" <| async {
+            let! told = Builtins.recorded [ Builtins.called "t1" "WebSearch" Builtins.search; Builtins.answered "t1" false ]
+            Expect.equal (List.last told) (Builtins.Ended Yession.Domain.Tools.ToolCallOk) "answered once, as it answered"
+        }
+
+        testCaseAsync "a built-in the turn ended without an answer to is finished as failed" <| async {
+            let! told = Builtins.recorded [ Builtins.called "t1" "WebSearch" Builtins.search ]
+            match List.last told with
+            | Builtins.Ended (Yession.Domain.Tools.ToolCallFailed _) -> ()
+            | other -> failwithf "expected the call closed as failed, got %A" other
+        }
+
+        // The registry records its own calls where they run (`ToolUseLog.wrap`), so a second
+        // record from the conversation would draw every one of them twice.
+        testCaseAsync "a call to a registry tool is not recorded from the conversation" <| async {
+            let! told = Builtins.recorded [ Builtins.called "t1" "mcp__yession__repo_status" (createObj []); Builtins.answered "t1" false ]
+            Expect.isEmpty told "the registry's record is the only one"
+        }
+    ]
+
 let private renewalTests =
     testList "A turn that outlives its credential" [
         testCase "a request the provider refused for its credential names the conversation to continue" <| fun () ->
@@ -2891,6 +2980,7 @@ let tests =
         argumentTests
         failureReasonTests
         renewalTests
+        builtinCallTests
         sessionTimeTests
         resumeTests
         wakeTests
