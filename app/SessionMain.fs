@@ -233,13 +233,17 @@ let private agentBackend =
     | Error e -> failwithf "agent sandbox: %s" e
 
 // What the operator's profile asks of the agent, judged against the backend the CLI runs
-// under, at boot: a `web-fetch` that only srt can hold to its network list stops a session
-// on `host` here, and not at the first fetch (`AgentProfile.admits`).
+// under, at boot: a network srt cannot hold the CLI to stops a session here, and not at
+// the first turn (`AgentProfile.admits`).
 do
     let agent = resourceProfile |> Option.map (fun profile -> profile.Agent) |> Option.defaultValue AgentProfile.defaults
     match AgentProfile.admits agentBackend agent with
     | Ok () -> ()
     | Error e -> failwith e
+    // Said, because nothing else would: outside srt the list is the operator's words and
+    // the CLI's reach is the host's.
+    if agentBackend <> SrtBackend then
+        eprintfn "agent network: the agent CLI runs unconfined under %A, so it reaches every host this machine reaches, whatever agent.network.allow lists" agentBackend
 
 // The git sandbox's backend (`YESSION_SESSION_GIT_BACKEND`): where the session's own git
 // verbs run — clone, fetch, switch, status, log and diff. host or srt, default srt
