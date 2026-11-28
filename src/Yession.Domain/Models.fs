@@ -157,26 +157,104 @@ module PromptStrategy =
     /// Every strategy. A new case breaks `name` above, which is the reminder to list it here.
     let all : PromptStrategy list = [ PromptStrategy.Static; PromptStrategy.ClaudeCodeLike ]
 
+/// One host the agent's CLI may reach, in the form srt's `allowedDomains` matches: a name
+/// (`docs.rs`), or `*.` and a name for every subdomain of it at any depth (`*.python.org`),
+/// either with an optional `:port`. Checked when the profile is read, so an entry srt would
+/// refuse stops the boot and not the first turn, and an entry srt would read differently
+/// (`**.`, a CIDR range, a scheme or a path) is refused rather than guessed at.
+type AgentHost = private AgentHost of string
+
+module AgentHost =
+
+    let private label (text: string) =
+        text <> ""
+        && text.Length <= 63
+        && not (text.StartsWith "-")
+        && not (text.EndsWith "-")
+        && text |> Seq.forall (fun c -> (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c = '-')
+
+    let private name (text: string) = text.Split '.' |> Array.forall label
+
+    let private port (text: string) =
+        match System.Int32.TryParse text with
+        | true, n -> n >= 1 && n <= 65535 && string n = text
+        | _ -> false
+
+    /// A host from what an operator wrote, lower-cased, or the sentence saying why it is not one.
+    let create (raw: string) : Result<AgentHost, string> =
+        let entry = raw.Trim().ToLowerInvariant ()
+        let host, portOk =
+            match entry.LastIndexOf ':' with
+            | -1 -> entry, true
+            | at -> entry.Substring (0, at), port (entry.Substring (at + 1))
+        let wild = host.StartsWith "*."
+        let named = if wild then host.Substring 2 else host
+        if entry = "" then Error "a network entry is empty. Write a host, like docs.rs"
+        elif not portOk then Error (sprintf "'%s' has a port that is not a number from 1 to 65535" raw)
+        elif not (name named) then
+            Error (
+                sprintf
+                    "'%s' is not a host. Write a name (docs.rs) or a name under '*.' (*.python.org), with an optional :port. A scheme, a path, '**.' and an address range are not hosts"
+                    raw)
+        elif wild && not (named.Contains ".") then
+            Error (sprintf "'%s' allows every host under a top-level domain. Name the domain under it, like *.example.com" raw)
+        else Ok (AgentHost entry)
+
+    let value (AgentHost host) : string = host
+
 /// What this host's operator says about the agent (`agent:` in the profile): words for it, the
-/// strategy that puts its prompt together, and the SDK built-ins it may use. Read once at
-/// boot, because a host does not change its mind between turns.
+/// strategy that puts its prompt together, where its CLI may reach, and the SDK built-ins it
+/// may use. Read once at boot, because a host does not change its mind between turns.
 type AgentProfile =
     { /// Appended after the product's system prompt, introduced as the operator's. `None`
       /// appends nothing.
       Guidance : string option
       Prompt : PromptStrategy
+      /// Every host the agent's CLI may reach under srt (`agent.network.allow`): the API it
+      /// talks to, and whatever a fetch may read. ONE list, because the CLI is one process
+      /// and srt confines it whole — the hosts the CLI needs and the hosts `WebFetch` may
+      /// read cannot be told apart below it. A profile that names a list replaces the
+      /// default whole, so the boot reports one list and nothing is merged.
+      Network : AgentHost list
       /// The SDK's own `WebSearch`. The provider runs the search, so it reaches no host the
       /// CLI does not already reach; it is still the operator's opt-in, because not every
       /// provider offers it and what a turn may look up is this host's policy.
-      WebSearch : bool }
+      WebSearch : bool
+      /// The SDK's own `WebFetch`. The CLI fetches the page itself, so `Network` is the
+      /// whole of what it may read, and only srt enforces that (`admits`).
+      WebFetch : bool }
 
 module AgentProfile =
 
-    /// A host that says nothing about the agent: no guidance, the static prompt, and no
-    /// built-ins.
-    let defaults : AgentProfile = { Guidance = None; Prompt = PromptStrategy.Static; WebSearch = false }
+    /// The hosts the agent needs and nothing else: the API, and the console and site it
+    /// refreshes an OAuth credential against.
+    let defaultNetwork : AgentHost list =
+        [ AgentHost "api.anthropic.com"; AgentHost "console.anthropic.com"; AgentHost "claude.ai" ]
+
+    /// A host that says nothing about the agent: no guidance, the static prompt, the default
+    /// network, and no built-ins.
+    let defaults : AgentProfile =
+        { Guidance = None
+          Prompt = PromptStrategy.Static
+          Network = defaultNetwork
+          WebSearch = false
+          WebFetch = false }
 
     /// The SDK built-ins a turn on this host may use, by the SDK's own names. Every other
     /// built-in stays out of the model's context (`Agent.optionsFor`).
     let builtinTools (profile: AgentProfile) : string list =
-        [ if profile.WebSearch then "WebSearch" ]
+        [ if profile.WebSearch then "WebSearch"
+          if profile.WebFetch then "WebFetch" ]
+
+    /// Whether the agent's CLI may run as this profile says under `backend`. A fetch reaches
+    /// what the CLI's process can reach, and only srt narrows that to `Network`: under
+    /// `host` the same fetch reaches this machine's loopback, the Manager's port and every
+    /// network the host is on. So `WebFetch` without srt is refused at boot, not run with a
+    /// list nothing enforces.
+    let admits (backend: Yession.Domain.Sandboxes.SandboxBackend) (profile: AgentProfile) : Result<unit, string> =
+        match backend with
+        | Yession.Domain.Sandboxes.SrtBackend -> Ok ()
+        | _ when not profile.WebFetch -> Ok ()
+        | _ ->
+            Error
+                "agent web-fetch needs the agent CLI under srt, which is what limits a fetch to agent.network.allow. Set YESSION_SESSION_AGENT_BACKEND=srt, or remove web-fetch"

@@ -333,14 +333,38 @@ has:
   a note on tools from other MCP servers, follow the SDK's dynamic boundary. The turn's
   context arrives as `<system-reminder>` blocks beside the message the turn answers.
 
-`agent.web-search: true` gives the agent Claude Code's `WebSearch` tool. It is off by
-default. The provider runs the search, so the CLI reaches no host it did not reach before,
-and every other Claude Code built-in (`WebFetch`, `Bash` and the rest) stays out. Turn it on
-only where your provider offers server-side web search: the Anthropic API does, and a Bedrock
-or Vertex deployment may not.
+`agent.network.allow` lists every host the agent's CLI may reach under srt
+(`YESSION_SESSION_AGENT_BACKEND=srt`). It replaces the default list whole, so name the API
+hosts in it too:
 
-A session reads the file at boot and reports on its stderr which strategy it chose, and
-whether web search is on. To say nothing about the agent, leave the block out. Yession refuses a block that says nothing. It
+```yaml
+agent:
+  network:
+    allow: [ api.anthropic.com, console.anthropic.com, claude.ai, docs.rs, "*.python.org" ]
+  web-fetch: true
+```
+
+Without the block, the CLI reaches `api.anthropic.com`, `console.anthropic.com` and
+`claude.ai`. An entry is a host (`docs.rs`), or `*.` and a domain for every subdomain of it at
+any depth (`*.python.org`), either with an optional `:port`. Yession refuses anything else when
+it reads the file: a scheme, a path, `**.`, an address range, `*.` over a top-level domain, and
+an empty list. srt also refuses a host that resolves to a loopback, link-local or cloud
+metadata address. Under `host` the CLI is not confined, and the list limits nothing.
+`agent.network.allow` replaces `YESSION_SESSION_AGENT_NET`, and a session that finds the
+variable set refuses to start.
+
+`agent.web-search: true` gives the agent Claude Code's `WebSearch` tool. The provider runs the
+search, so the CLI reaches no new host. Turn it on only where your provider offers server-side
+web search: the Anthropic API does, and a Bedrock or Vertex deployment may not.
+
+`agent.web-fetch: true` gives the agent Claude Code's `WebFetch` tool. The CLI fetches the page
+itself, so `agent.network.allow` is the whole of what it may read, and a fetch to another host
+fails. Only srt enforces that list, so a session that turns `web-fetch` on under the `host`
+agent backend refuses to start. Both tools are off by default, and every other Claude Code
+built-in (`Bash`, `Read` and the rest) stays out.
+
+A session reads the file at boot and reports on its stderr which strategy it chose, whether
+web search and web fetch are on, and the agent's network list. To say nothing about the agent, leave the block out. Yession refuses a block that says nothing. It
 also refuses a strategy that the build does not have.
 
 ---

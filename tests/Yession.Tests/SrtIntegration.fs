@@ -382,7 +382,7 @@ let tests =
                 let home = TestFiles.tempDir "yession-srt-"
                 let ambient = Sandboxes.ambientEnv ()
                 let policy =
-                    Sandboxes.AgentSandbox.policyFor ambient home (Sandboxes.AgentSandbox.envFor ambient home None)
+                    Sandboxes.AgentSandbox.policyFor AgentProfile.defaultNetwork home (Sandboxes.AgentSandbox.envFor ambient home None)
                 let! sandbox = startSandbox policy
                 let! run, out, _ = runInSandbox sandbox (nodePath ()) [ "--version" ] Map.empty (Some home)
                 Expect.equal (exitCode run) 0 "the interpreter the CLI runs on is readable under the agent's policy"

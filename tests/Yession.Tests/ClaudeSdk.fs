@@ -164,6 +164,12 @@ let private optionTests =
             Expect.equal options.tools [| "WebSearch" |] "WebSearch alone, not WebFetch or Bash"
             Expect.isTrue (options.allowedTools |> Array.contains "WebSearch") "auto-approved"
 
+        testCase "web fetch the operator opted into is a built-in of the turn, auto-approved" <| fun () ->
+            let builtins = AgentProfile.builtinTools { AgentProfile.defaults with WebFetch = true }
+            let options = turnOptionsWith builtins "/data/agent-home"
+            Expect.equal options.tools [| "WebFetch" |] "WebFetch alone"
+            Expect.isTrue (options.allowedTools |> Array.contains "WebFetch") "auto-approved: srt, not a prompt, decides where it may go"
+
         testCase "adaptive thinking asks for the summary" <| fun () ->
             let thinking = Thinking.adaptive Summarized
             Expect.equal thinking.display "summarized" "a summary rather than a signed empty block"

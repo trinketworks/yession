@@ -145,7 +145,7 @@ let environment (image: Map<string, string>) (policy: SandboxPolicy) : Map<strin
 /// is what the unconfining backends are and all srt can honestly report for them; srt
 /// itself has no unrestricted mode, so a confined sandbox always carries a list —
 /// `YESSION_SESSION_WORK_NET` (comma- or space-separated), the counterpart of the agent's
-/// `YESSION_SESSION_AGENT_NET`.
+/// `agent.network.allow` in the operator profile.
 ///
 /// Empty where the operator named none, and deliberately so: what hosts an agent's
 /// commands legitimately need is not something this code can guess, and egress is the
@@ -4132,6 +4132,8 @@ let agentPassthroughNames : string list =
 /// Host tier here; the srt wrap arrives with the srt backend.
 module AgentSandbox =
 
+    open Yession.Domain.Agent
+
     /// The spawned CLI's WHOLE environment: the host baseline + proxy passthrough, a
     /// per-session scratch HOME (the CLI writes `~/.claude` state there), and exactly
     /// one credential — the turn's resolved credential displaces both ambient
@@ -4151,29 +4153,14 @@ module AgentSandbox =
                 |> Map.ofList
         mergeEnv baseline (Map.add "HOME" home credentials)
 
-    /// Where the confined CLI may reach. The agent's egress needs are known — the API it
-    /// talks to, and the console it refreshes an OAuth credential against — so unlike the
-    /// work sandbox's, this allowlist has a real default. `YESSION_SESSION_AGENT_NET` replaces
-    /// it wholesale for a deployment that fronts the API somewhere else.
-    let defaultDomains : string list =
-        [ "api.anthropic.com"; "console.anthropic.com"; "claude.ai" ]
-
-    let domainsFrom (ambient: Map<string, string>) : string list =
-        match ambient |> Map.tryFind "YESSION_SESSION_AGENT_NET" with
-        | None -> defaultDomains
-        | Some raw ->
-            raw.Split ([| ','; ' '; '\t'; '\n' |])
-            |> Array.map (fun domain -> domain.Trim ())
-            |> Array.filter (fun domain -> domain <> "")
-            |> List.ofArray
-
     /// The agent's own sandbox policy: it reads and writes its scratch HOME and nothing
-    /// else of the operator's, and reaches only the API hosts above. `WorkingDirectory`
-    /// is left to the SDK, which asks for the scratch HOME (`Agent.optionsFor`).
-    let policyFor (ambient: Map<string, string>) (home: string) (env: Map<string, string>) : SandboxPolicy =
+    /// else of the operator's, and reaches only the hosts the operator's profile allows
+    /// (`AgentProfile.Network`). `WorkingDirectory` is left to the SDK, which asks for the
+    /// scratch HOME (`Agent.optionsFor`).
+    let policyFor (network: AgentHost list) (home: string) (env: Map<string, string>) : SandboxPolicy =
         { ReadPaths = [ home ]
           WritePaths = [ home ]
-          AllowedDomains = Some (domainsFrom ambient)
+          AllowedDomains = Some (network |> List.map AgentHost.value)
           // The agent CLI talks to no local daemon. A socket nobody named is unreachable,
           // which is what this says.
           Sockets = []
@@ -4359,7 +4346,13 @@ module AgentSandbox =
 
     /// The spawner for the configured agent backend. Docker and seatbelt are not one:
     /// `parseAgent` refused each at boot.
-    let claudeSpawnerFor (backend: SandboxBackend) (ambient: Map<string, string>) (home: string) (env: Map<string, string>) : Sdk.Spawner =
+    let claudeSpawnerFor
+        (backend: SandboxBackend)
+        (network: AgentHost list)
+        (ambient: Map<string, string>)
+        (home: string)
+        (env: Map<string, string>)
+        : Sdk.Spawner =
         match backend with
         | SrtBackend ->
             // The tools parse fail-closed, and SessionMain has already had this value
@@ -4367,7 +4360,7 @@ module AgentSandbox =
             match SrtSandbox.toolsFrom ambient with
             | Error reason -> failwithf "agent sandbox: %s" reason
             | Ok tools ->
-                let policy = policyFor ambient home env
+                let policy = policyFor network home env
                 srtClaudeSpawner (SrtSandbox.wrapperFor tools policy)
         | HostBackend
         | SeatbeltBackend
@@ -4390,6 +4383,7 @@ module AgentSandbox =
     /// for, srt. `YES008` is what keeps it to one reader.
     let prepare
         (backend: SandboxBackend)
+        (network: AgentHost list)
         (dataDir: string)
         (credential: (string * string) option)
         : {| Env : Map<string, string>; Home : string; Spawner : Sdk.Spawner |} =
@@ -4397,7 +4391,7 @@ module AgentSandbox =
         Fs.ensureDir home
         let ambient = ambientEnv ()
         let env = envFor ambient home credential
-        {| Env = env; Home = home; Spawner = claudeSpawnerFor backend ambient home env |}
+        {| Env = env; Home = home; Spawner = claudeSpawnerFor backend network ambient home env |}
 
 // --- Backend selection --------------------------------------------------------------------
 
