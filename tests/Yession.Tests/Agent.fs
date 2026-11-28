@@ -2013,10 +2013,10 @@ module private Builtins =
         jsOptions<ApiMessage> (fun m -> m.content <- box (Array.ofList blocks))
 
     /// The model calling `name` with `input`, as the call `id`.
-    let called (id: string) (name: string) (input: obj) : Message =
+    let called (id: string) (name: string) (input: Thoth.Json.JsonValue) : Message =
         jsOptions<AssistantMessage> (fun m ->
             m.``type`` <- "assistant"
-            m.message <- apiMessage [ block (fun b -> b.``type`` <- "tool_use"; b.id <- id; b.name <- name; b.input <- input) ])
+            m.message <- apiMessage [ block (fun b -> b.``type`` <- "tool_use"; b.id <- id; b.name <- name; b.input <- box input) ])
         :> Message
 
     /// The answer to call `id`.
@@ -2054,7 +2054,7 @@ module private Builtins =
             return List.ofSeq told
         }
 
-    let search = createObj [ "query" ==> "fable 5 release notes" ]
+    let search = Thoth.Json.Encode.object [ "query", Thoth.Json.Encode.string "fable 5 release notes" ]
 
 let private builtinCallTests =
     testList "The built-ins a turn called" [
@@ -2081,7 +2081,7 @@ let private builtinCallTests =
         // The registry records its own calls where they run (`ToolUseLog.wrap`), so a second
         // record from the conversation would draw every one of them twice.
         testCaseAsync "a call to a registry tool is not recorded from the conversation" <| async {
-            let! told = Builtins.recorded [ Builtins.called "t1" "mcp__yession__repo_status" (createObj []); Builtins.answered "t1" false ]
+            let! told = Builtins.recorded [ Builtins.called "t1" "mcp__yession__repo_status" (Thoth.Json.Encode.object []); Builtins.answered "t1" false ]
             Expect.isEmpty told "the registry's record is the only one"
         }
     ]
