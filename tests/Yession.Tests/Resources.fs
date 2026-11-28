@@ -795,7 +795,7 @@ let tests =
 
         // Each a form srt would refuse or read differently, so the boot says so and not a turn.
         testCase "a network entry srt would not read as a host is refused" <| fun () ->
-            for entry in [ "https://docs.rs"; "docs.rs/crates"; "**.python.org"; "10.0.0.0/8"; "*.com"; "*"; "docs.rs:0"; "" ] do
+            for entry in [ "https://docs.rs"; "docs.rs/crates"; "**.python.org"; "10.0.0.0/8"; "*.com"; "*:443"; "docs.rs:0"; "" ] do
                 match AgentHost.create entry with
                 | Ok _ -> failwithf "'%s' was accepted as a host" entry
                 | Error _ -> ()
@@ -805,15 +805,21 @@ let tests =
             Expect.isFalse (read "") "no block, no fetch"
             Expect.isTrue (read """, "agent": { "web-fetch": true }""") "named, it is on"
 
-        // A fetch reaches what the CLI's process reaches, and only srt narrows that to the
-        // network list: on `host` the list would be words nothing enforces.
-        testCase "web fetch is refused unless the agent CLI runs under srt" <| fun () ->
-            let fetching = { AgentProfile.defaults with WebFetch = true }
-            Expect.isError (AgentProfile.admits HostBackend fetching) "host: nothing holds the fetch to the list"
-            Expect.isOk (AgentProfile.admits SrtBackend fetching) "srt: the list is the egress"
+        testCase "'*' is a network that allows every host" <| fun () ->
+            let profile =
+                OperatorProfile.parse """{ "version": 1, "resources": {}, "agent": { "network": { "allow": [ "*" ] } } }"""
+                |> expect
+            Expect.isTrue (AgentHost.allowsEvery profile.Agent.Network) "every host"
 
-        testCase "a host without web fetch runs the agent on any backend" <| fun () ->
-            Expect.isOk (AgentProfile.admits HostBackend AgentProfile.defaults) "nothing to enforce"
+        // srt refuses `*` in its allowlist, so the boot says so rather than the first spawn.
+        testCase "a network that allows every host is refused under srt" <| fun () ->
+            let everywhere = { AgentProfile.defaults with Network = [ AgentHost.create "*" |> expect ] }
+            Expect.isError (AgentProfile.admits SrtBackend everywhere) "srt cannot confine to every host"
+
+        // Outside srt the CLI is unconfined, and the operator decides what it may use.
+        testCase "web fetch runs on an unconfined agent backend" <| fun () ->
+            let fetching = { AgentProfile.defaults with WebFetch = true }
+            Expect.isOk (AgentProfile.admits HostBackend fetching) "host: the operator's call"
 
         // The policy the file's two halves express: `resources` is the menu, `always` is what
         // is served whether or not anybody ordered it. A name in one and not the other is the

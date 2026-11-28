@@ -349,8 +349,12 @@ Without the block, the CLI reaches `api.anthropic.com`, `console.anthropic.com` 
 any depth (`*.python.org`), either with an optional `:port`. Yession refuses anything else when
 it reads the file: a scheme, a path, `**.`, an address range, `*.` over a top-level domain, and
 an empty list. srt also refuses a host that resolves to a loopback, link-local or cloud
-metadata address. Under `host` the CLI is not confined, and the list limits nothing.
-`agent.network.allow` replaces `YESSION_SESSION_AGENT_NET`, and a session that finds the
+metadata address.
+
+`*` alone allows every host: `allow: [ "*" ]`. srt refuses it, so a session with the agent
+CLI under srt refuses to start with it. Under `host` the CLI is not confined, so it reaches
+every host this machine reaches whatever the list says, and the session says so on its stderr
+at boot. `agent.network.allow` replaces `YESSION_SESSION_AGENT_NET`, and a session that finds the
 variable set refuses to start.
 
 `agent.web-search: true` gives the agent Claude Code's `WebSearch` tool. The provider runs the
@@ -358,9 +362,9 @@ search, so the CLI reaches no new host. Turn it on only where your provider offe
 web search: the Anthropic API does, and a Bedrock or Vertex deployment may not.
 
 `agent.web-fetch: true` gives the agent Claude Code's `WebFetch` tool. The CLI fetches the page
-itself, so `agent.network.allow` is the whole of what it may read, and a fetch to another host
-fails. Only srt enforces that list, so a session that turns `web-fetch` on under the `host`
-agent backend refuses to start. Both tools are off by default, and every other Claude Code
+itself. Under srt, `agent.network.allow` is the whole of what it may read, and a fetch to
+another host fails. Under `host`, a fetch reaches whatever this machine reaches: its loopback,
+the Manager's port and every network the host is on. Both tools are off by default, and every other Claude Code
 built-in (`Bash`, `Read` and the rest) stays out.
 
 A session reads the file at boot and reports on its stderr which strategy it chose, whether

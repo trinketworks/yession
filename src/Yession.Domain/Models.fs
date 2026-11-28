@@ -159,7 +159,8 @@ module PromptStrategy =
 
 /// One host the agent's CLI may reach, in the form srt's `allowedDomains` matches: a name
 /// (`docs.rs`), or `*.` and a name for every subdomain of it at any depth (`*.python.org`),
-/// either with an optional `:port`. Checked when the profile is read, so an entry srt would
+/// either with an optional `:port`. `*` alone is every host, which only an unconfined CLI
+/// can honour: srt refuses it, so `AgentProfile.admits` refuses it under srt at boot. Checked when the profile is read, so an entry srt would
 /// refuse stops the boot and not the first turn, and an entry srt would read differently
 /// (`**.`, a CIDR range, a scheme or a path) is refused rather than guessed at.
 type AgentHost = private AgentHost of string
@@ -189,7 +190,8 @@ module AgentHost =
             | at -> entry.Substring (0, at), port (entry.Substring (at + 1))
         let wild = host.StartsWith "*."
         let named = if wild then host.Substring 2 else host
-        if entry = "" then Error "a network entry is empty. Write a host, like docs.rs"
+        if entry = "*" then Ok (AgentHost entry)
+        elif entry = "" then Error "a network entry is empty. Write a host, like docs.rs"
         elif not portOk then Error (sprintf "'%s' has a port that is not a number from 1 to 65535" raw)
         elif not (name named) then
             Error (
@@ -201,6 +203,9 @@ module AgentHost =
         else Ok (AgentHost entry)
 
     let value (AgentHost host) : string = host
+
+    /// Whether `hosts` allows every host (`*`).
+    let allowsEvery (hosts: AgentHost list) : bool = hosts |> List.exists (fun (AgentHost host) -> host = "*")
 
 /// What this host's operator says about the agent (`agent:` in the profile): words for it, the
 /// strategy that puts its prompt together, where its CLI may reach, and the SDK built-ins it
@@ -221,7 +226,8 @@ type AgentProfile =
       /// provider offers it and what a turn may look up is this host's policy.
       WebSearch : bool
       /// The SDK's own `WebFetch`. The CLI fetches the page itself, so `Network` is the
-      /// whole of what it may read, and only srt enforces that (`admits`).
+      /// whole of what it may read under srt. Under any other backend the CLI is not
+      /// confined and a fetch reaches whatever the host reaches, which the boot says.
       WebFetch : bool }
 
 module AgentProfile =
@@ -246,15 +252,13 @@ module AgentProfile =
         [ if profile.WebSearch then "WebSearch"
           if profile.WebFetch then "WebFetch" ]
 
-    /// Whether the agent's CLI may run as this profile says under `backend`. A fetch reaches
-    /// what the CLI's process can reach, and only srt narrows that to `Network`: under
-    /// `host` the same fetch reaches this machine's loopback, the Manager's port and every
-    /// network the host is on. So `WebFetch` without srt is refused at boot, not run with a
-    /// list nothing enforces.
+    /// Whether the agent's CLI may run as this profile says under `backend`. srt refuses
+    /// `*` in its allowlist, so a network that allows every host is refused under srt at
+    /// boot, not at the first turn's spawn. Every other backend leaves the CLI unconfined,
+    /// so every network is honoured there: `*` is what that backend does anyway.
     let admits (backend: Yession.Domain.Sandboxes.SandboxBackend) (profile: AgentProfile) : Result<unit, string> =
         match backend with
-        | Yession.Domain.Sandboxes.SrtBackend -> Ok ()
-        | _ when not profile.WebFetch -> Ok ()
-        | _ ->
+        | Yession.Domain.Sandboxes.SrtBackend when AgentHost.allowsEvery profile.Network ->
             Error
-                "agent web-fetch needs the agent CLI under srt, which is what limits a fetch to agent.network.allow. Set YESSION_SESSION_AGENT_BACKEND=srt, or remove web-fetch"
+                "agent.network.allow has '*', every host, and srt confines the agent CLI to a list of hosts. List the hosts, or run the agent CLI unconfined (YESSION_SESSION_AGENT_BACKEND=host)"
+        | _ -> Ok ()
