@@ -809,11 +809,11 @@ let tests =
         // network list: on `host` the list would be words nothing enforces.
         testCase "web fetch is refused unless the agent CLI runs under srt" <| fun () ->
             let fetching = { AgentProfile.defaults with WebFetch = true }
-            Expect.isError (AgentProfile.admits Yession.Domain.Sandboxes.HostBackend fetching) "host: nothing holds the fetch to the list"
-            Expect.isOk (AgentProfile.admits Yession.Domain.Sandboxes.SrtBackend fetching) "srt: the list is the egress"
+            Expect.isError (AgentProfile.admits HostBackend fetching) "host: nothing holds the fetch to the list"
+            Expect.isOk (AgentProfile.admits SrtBackend fetching) "srt: the list is the egress"
 
         testCase "a host without web fetch runs the agent on any backend" <| fun () ->
-            Expect.isOk (AgentProfile.admits Yession.Domain.Sandboxes.HostBackend AgentProfile.defaults) "nothing to enforce"
+            Expect.isOk (AgentProfile.admits HostBackend AgentProfile.defaults) "nothing to enforce"
 
         // The policy the file's two halves express: `resources` is the menu, `always` is what
         // is served whether or not anybody ordered it. A name in one and not the other is the

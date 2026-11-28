@@ -1257,7 +1257,7 @@ let private sandboxPolicyTests =
         // The profile's list is the agent's whole egress: srt is handed it as written, and
         // nothing is added to it on the way.
         testCase "the agent's egress is the profile's network list, and only it" <| fun () ->
-            let docs = Yession.Domain.Agent.AgentHost.create "docs.rs" |> Result.defaultWith failwith
+            let docs = AgentHost.create "docs.rs" |> Result.defaultWith failwith
             let policy = Sandboxes.AgentSandbox.policyFor [ docs ] "/data/agent-home" Map.empty
             Expect.equal policy.AllowedDomains (Some [ "docs.rs" ]) "the one host the operator named"
 

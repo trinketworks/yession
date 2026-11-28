@@ -4132,6 +4132,8 @@ let agentPassthroughNames : string list =
 /// Host tier here; the srt wrap arrives with the srt backend.
 module AgentSandbox =
 
+    open Yession.Domain.Agent
+
     /// The spawned CLI's WHOLE environment: the host baseline + proxy passthrough, a
     /// per-session scratch HOME (the CLI writes `~/.claude` state there), and exactly
     /// one credential — the turn's resolved credential displaces both ambient
@@ -4155,10 +4157,10 @@ module AgentSandbox =
     /// else of the operator's, and reaches only the hosts the operator's profile allows
     /// (`AgentProfile.Network`). `WorkingDirectory` is left to the SDK, which asks for the
     /// scratch HOME (`Agent.optionsFor`).
-    let policyFor (network: Yession.Domain.Agent.AgentHost list) (home: string) (env: Map<string, string>) : SandboxPolicy =
+    let policyFor (network: AgentHost list) (home: string) (env: Map<string, string>) : SandboxPolicy =
         { ReadPaths = [ home ]
           WritePaths = [ home ]
-          AllowedDomains = Some (network |> List.map Yession.Domain.Agent.AgentHost.value)
+          AllowedDomains = Some (network |> List.map AgentHost.value)
           // The agent CLI talks to no local daemon. A socket nobody named is unreachable,
           // which is what this says.
           Sockets = []
@@ -4346,7 +4348,7 @@ module AgentSandbox =
     /// `parseAgent` refused each at boot.
     let claudeSpawnerFor
         (backend: SandboxBackend)
-        (network: Yession.Domain.Agent.AgentHost list)
+        (network: AgentHost list)
         (ambient: Map<string, string>)
         (home: string)
         (env: Map<string, string>)
@@ -4381,7 +4383,7 @@ module AgentSandbox =
     /// for, srt. `YES008` is what keeps it to one reader.
     let prepare
         (backend: SandboxBackend)
-        (network: Yession.Domain.Agent.AgentHost list)
+        (network: AgentHost list)
         (dataDir: string)
         (credential: (string * string) option)
         : {| Env : Map<string, string>; Home : string; Spawner : Sdk.Spawner |} =
