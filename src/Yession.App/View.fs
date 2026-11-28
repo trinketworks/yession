@@ -1286,7 +1286,7 @@ module View =
         html $"""
             <div class="{Style.navPane}">
               <div class="{Style.cls [ Style.sideHead; Style.navLane0 ]}">
-                <span class="{Style.lockup}"><span class="{Style.lockupMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.wordmark}">yession</span></span>
+                <span class="{Style.lockup}"><span class="{Style.lockupMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.lockupWord}">yession</span></span>
                 <button type="button" class="{Style.navChevronBack}" aria-label="Collapse sidebar" data-nav-toggle="hide" @click={Ev(fun _ -> dispatch ToggleNavMsg)}>{Icon.left}</button>
               </div>
               {connectionSection dispatch model}
@@ -1560,24 +1560,26 @@ module View =
         html $"""
             <header class="{Style.header}">
               <button type="button" class="{Style.cls [ Style.navChevronForward; Style.navReopen ]}" aria-label="{reopenLabel}" data-nav-toggle="show" @click={Ev(fun _ -> dispatch ToggleNavMsg)}>{Icon.right}{reopenMark}</button>
-              <div class="{Style.titleWrap}">
-                <!-- `enterkeyhint="done"` because that is what the return key now does here
-                     (`commitOnEnter`): it finishes with the field. A phone draws the hint on
-                     the key itself, so the promise is legible before it is pressed rather
-                     than only after. -->
-                <input type="text" class="{Style.titleInput}" data-session-title aria-label="Session title" placeholder="{Dom.Text.sessionTitlePlaceholder}"
-                       autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
-                       enterkeyhint="done"
-                       value="{titleStr}"
-                       .value={titleStr}
-                       @input={EvVal(fun v -> dispatch (EditTitleMsg (Ylmish.Text.edit v model.Synced.Title)))}
-                       @keydown={Ev(Events.key commitOnEnter)}
-                       @keyup={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
-                       @click={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
-                       @select={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
-                       @focus={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
-                       @blur={Ev(fun _ -> actions.ReportFieldSelection Title None)}>
-                {cursors}
+              <div class="{Style.titleBlock}">
+                <div class="{Style.titleWrap}">
+                  <!-- `enterkeyhint="done"` because that is what the return key now does here
+                       (`commitOnEnter`): it finishes with the field. A phone draws the hint on
+                       the key itself, so the promise is legible before it is pressed rather
+                       than only after. -->
+                  <input type="text" class="{Style.titleInput}" data-session-title aria-label="Session title" placeholder="{Dom.Text.sessionTitlePlaceholder}"
+                         autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+                         enterkeyhint="done"
+                         value="{titleStr}"
+                         .value={titleStr}
+                         @input={EvVal(fun v -> dispatch (EditTitleMsg (Ylmish.Text.edit v model.Synced.Title)))}
+                         @keydown={Ev(Events.key commitOnEnter)}
+                         @keyup={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
+                         @click={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
+                         @select={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
+                         @focus={Ev(fun e -> actions.ReportFieldSelection Title (selectionOf e))}
+                         @blur={Ev(fun _ -> actions.ReportFieldSelection Title None)}>
+                  {cursors}
+                </div>
                 <span class="{Style.titleId}" data-session-id>{sessionIdText}</span>
               </div>
               <div class="{Style.headerAside}">

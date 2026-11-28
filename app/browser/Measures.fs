@@ -209,6 +209,16 @@ let private grabEdgeClear () : string list =
         [ if Css.computedProperty (edge :?> HTMLElement) "opacity" <> "0" then "the edge is still drawn"
           if paintedAt edge (e.left + 2.0) (e.top + e.height / 2.0) then "the edge is still what a press at the screen's edge lands on" ]
 
+/// How far under its line's middle a line of Noto Sans at `size` px holds the middle stroke of
+/// its lowercase `e`, and its lowercase middle. The line box centres the face's ascent and
+/// descent (1.069em and 0.293em), each rounded to whole pixels as Chromium lays them out, so the
+/// baseline is half their difference under the middle whatever the line's height. The stroke
+/// stands 0.28em over the baseline and the x-height is 0.536em. 1.7px and 1.9px at 19px; 3.2px
+/// and 3.5px at 28px.
+let private underLineMiddle (size: float) : float * float =
+    let baseline = (round (1.069 * size) - round (0.293 * size)) / 2.0
+    baseline - 0.28 * size, baseline - 0.268 * size
+
 let private edgeTabOnBand (desktop: bool) : string list =
     match first Root.Document "#shell [data-content-toggle=\"show\"]", first Root.Document "#shell header" with
     | Some tab, Some header ->
@@ -229,16 +239,17 @@ let private edgeTabOnBand (desktop: bool) : string list =
           if desktop then
               // The mark's middle is on the middle stroke of the title's lowercase `e`, as the
               // sidebar's chevron across the band is (`Style.navReopen`), and the words' lowercase
-              // middle is on the title's lowercase middle, so the small words do not sit low. At
-              // 28/32 in Noto Sans the stroke is 3px under the line's middle, the baseline 10.9px
-              // and the x-height 15px, so the lowercase middle is 3.4px under it. The title is an
-              // input, so no marker can go in it.
+              // middle is on the title's lowercase middle, so the small words do not sit low. The
+              // title is an input, so no marker can go in it: where those two lie under its
+              // line's middle is said from its size instead (`underLineMiddle`).
               match first (Root.Under tab) "svg", first (Root.Under tab) "[data-terminals-count] > span", first Root.Document "#shell [data-session-title]" with
               | Some mark, Some words, Some title ->
                   let m = mark.getBoundingClientRect ()
                   let t = title.getBoundingClientRect ()
                   let middle = t.top + t.height / 2.0
-                  let drift = (m.top + m.height / 2.0) - middle - 3.0
+                  let stroke, lowercase =
+                      underLineMiddle (float ((Css.computedProperty (title :?> HTMLElement) "font-size").Replace ("px", "")))
+                  let drift = (m.top + m.height / 2.0) - middle - stroke
                   if abs drift > 0.75 then sprintf "off the title's e stroke by %gpx" drift
                   // A zero-wide box one x-height tall, after the words: it spans their lowercase.
                   let marker = document.createElement "span"
@@ -246,7 +257,7 @@ let private edgeTabOnBand (desktop: bool) : string list =
                   words.appendChild marker |> ignore
                   let x = marker.getBoundingClientRect ()
                   marker.remove ()
-                  let off = (x.top + x.height / 2.0) - middle - 3.4
+                  let off = (x.top + x.height / 2.0) - middle - lowercase
                   if abs off > 0.75 then sprintf "the words' lowercase middle is %gpx off the title's" off
               | _ -> "the tab's mark, its words or the title is missing" ]
     | _ -> [ "the edge tab or the header is missing" ]
