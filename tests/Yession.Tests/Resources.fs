@@ -760,6 +760,15 @@ let tests =
                 for strategy in PromptStrategy.all do
                     Expect.stringContains e $"{PromptStrategy.name strategy}" "the refusal lists every strategy"
 
+        // Web search is the operator's to give: off unless the block says so, and a block
+        // that says only that is configuration, not a block that says nothing.
+        testCase "web search is off unless the agent block turns it on" <| fun () ->
+            let read agent = (OperatorProfile.parse (sprintf """{ "version": 1, "resources": {}%s }""" agent) |> expect).Agent.WebSearch
+            Expect.isFalse (read "") "no block, no search"
+            Expect.isFalse (read """, "agent": { "guidance": "x" }""") "a block that does not name it, no search"
+            Expect.isTrue (read """, "agent": { "web-search": true }""") "named alone, it is on"
+            Expect.isFalse (read """, "agent": { "web-search": false }""") "named off, it is off"
+
         // The policy the file's two halves express: `resources` is the menu, `always` is what
         // is served whether or not anybody ordered it. A name in one and not the other is the
         // state this model exists to make expressible — available, and not granted.

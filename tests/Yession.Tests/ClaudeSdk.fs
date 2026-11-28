@@ -105,18 +105,21 @@ let private answerTests =
 
 // --- the options one turn runs under ------------------------------------------------------
 
-/// The options `Agent.optionsFor` assembles for a turn with no tools, whose CLI's scratch HOME
-/// is `home`. Nothing is run: the spawner refuses.
-let private turnOptions (home: string) : Options =
+/// The options `Agent.optionsFor` assembles for a turn with no registry tools and the given
+/// built-ins, whose CLI's scratch HOME is `home`. Nothing is run: the spawner refuses.
+let private turnOptionsWith (builtins: string list) (home: string) : Options =
     Agent.optionsFor
         [| "be terse" |]
         None
         Yession.Domain.Tools.ToolRegistry.empty
+        builtins
         (Fable.NodeExtras.Aborting.abortController ())
         ""
         (Environment.ofMap Map.empty)
         home
         (Spawner (fun _ -> failwith "this case spawns nothing"))
+
+let private turnOptions (home: string) : Options = turnOptionsWith [] home
 
 let private optionTests =
     testList "the turn's options" [
@@ -145,6 +148,20 @@ let private optionTests =
         testCase "a turn's CLI starts in its scratch HOME" <| fun () ->
             let options = turnOptions "/data/agent-home"
             Expect.equal options.cwd "/data/agent-home" "the CLI's working directory is its HOME"
+
+        // A host that opts into nothing hands the model no built-in at all.
+        testCase "a host that opts into no built-in gives the turn none" <| fun () ->
+            let options = turnOptions "/data/agent-home"
+            Expect.equal options.tools [||] "no built-in in the model's context"
+            Expect.isFalse (options.allowedTools |> Array.contains "WebSearch") "and none auto-approved"
+
+        // The operator's opt-in is the built-in, and only it: every other built-in stays
+        // out, and the one let in runs without a permission round-trip nobody can answer.
+        testCase "web search the operator opted into is the turn's one built-in, auto-approved" <| fun () ->
+            let builtins = Yession.Domain.Agent.AgentProfile.builtinTools { Yession.Domain.Agent.AgentProfile.defaults with WebSearch = true }
+            let options = turnOptionsWith builtins "/data/agent-home"
+            Expect.equal options.tools [| "WebSearch" |] "WebSearch alone, not WebFetch or Bash"
+            Expect.isTrue (options.allowedTools |> Array.contains "WebSearch") "auto-approved"
 
         testCase "adaptive thinking asks for the summary" <| fun () ->
             let thinking = Thinking.adaptive Summarized

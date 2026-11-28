@@ -414,6 +414,7 @@ let optionsFor
     (systemPrompt: string array)
     (model: string option)
     (registry: ToolRegistry)
+    (builtins: string list)
     (controller: Fable.NodeExtras.AbortController)
     (claudePath: string)
     (agentEnv: Environment)
@@ -445,15 +446,17 @@ let optionsFor
         o.thinking <- Thinking.adaptive Summarized
         o.includePartialMessages <- true
         o.mcpServers <- serversOf registry
-        // The turn's ONLY tools are the registry's. `tools = [||]` drops every built-in
-        // (Bash/Read/Glob/Grep/WebFetch/Agent/Skill) from the model's context; MCP servers
-        // ride a separate channel, so the registry's tools survive it. `allowedTools` is
-        // NOT a restriction — it is the auto-approve list, and on its own it left the
-        // read-only built-ins reachable (a session could list the host filesystem). It
-        // stays so our tools run without a permission round-trip, and it is COMPUTED from
-        // the same descriptors the servers were built from, so the two cannot drift.
-        o.tools <- [||]
-        o.allowedTools <- ToolRegistry.allowedTools registry |> Array.ofList
+        // The turn's ONLY tools are the registry's, plus the built-ins the operator opted
+        // into (`AgentProfile.builtinTools`). `tools` is the BASE set of built-ins, so
+        // naming them drops every other one (Bash/Read/Glob/Grep/WebFetch/Agent/Skill) from
+        // the model's context; MCP servers ride a separate channel, so the registry's tools
+        // survive it. `allowedTools` is NOT a restriction — it is the auto-approve list, and
+        // on its own it left the read-only built-ins reachable (a session could list the
+        // host filesystem). It stays so our tools and the opted-in built-ins run without a
+        // permission round-trip, and it is COMPUTED from the same lists the tools were
+        // built from, so the two cannot drift.
+        o.tools <- Array.ofList builtins
+        o.allowedTools <- (ToolRegistry.allowedTools registry @ builtins) |> Array.ofList
         o.abortController <- controller
         if claudePath <> "" then o.pathToClaudeCodeExecutable <- claudePath
         o.env <- agentEnv
@@ -520,6 +523,7 @@ let private runQuery
     (prompt: string)
     (model: string option)
     (registry: ToolRegistry)
+    (builtins: string list)
     (agentEnv: Environment)
     (home: string)
     (claudePath: string)
@@ -537,7 +541,7 @@ let private runQuery
         try
             let controller = Fable.NodeExtras.Aborting.abortController ()
             registerAbort (fun () -> controller.abort ())
-            let options = optionsFor systemPrompt model registry controller claudePath agentEnv home claudeSpawner
+            let options = optionsFor systemPrompt model registry builtins controller claudePath agentEnv home claudeSpawner
             match conversation with
             | Some id -> options.resume <- id
             | None -> ()
@@ -669,6 +673,7 @@ let runRenewing
                     // one, so a person changing it changes the next turn and nothing else.
                     (context.Model |> Option.map ModelId.value)
                     registry
+                    (AgentProfile.builtinTools profile)
                     (Environment.ofMap cli.Env)
                     cli.Home
                     (claudePath ())

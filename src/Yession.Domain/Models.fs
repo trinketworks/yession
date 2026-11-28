@@ -157,16 +157,26 @@ module PromptStrategy =
     /// Every strategy. A new case breaks `name` above, which is the reminder to list it here.
     let all : PromptStrategy list = [ PromptStrategy.Static; PromptStrategy.ClaudeCodeLike ]
 
-/// What this host's operator says about the agent (`agent:` in the profile): words for it, and
-/// the strategy that puts its prompt together. Read once at boot, because a host does not
-/// change its mind between turns.
+/// What this host's operator says about the agent (`agent:` in the profile): words for it, the
+/// strategy that puts its prompt together, and the SDK built-ins it may use. Read once at
+/// boot, because a host does not change its mind between turns.
 type AgentProfile =
     { /// Appended after the product's system prompt, introduced as the operator's. `None`
       /// appends nothing.
       Guidance : string option
-      Prompt : PromptStrategy }
+      Prompt : PromptStrategy
+      /// The SDK's own `WebSearch`. The provider runs the search, so it reaches no host the
+      /// CLI does not already reach; it is still the operator's opt-in, because not every
+      /// provider offers it and what a turn may look up is this host's policy.
+      WebSearch : bool }
 
 module AgentProfile =
 
-    /// A host that says nothing about the agent: no guidance, and the static prompt.
-    let defaults : AgentProfile = { Guidance = None; Prompt = PromptStrategy.Static }
+    /// A host that says nothing about the agent: no guidance, the static prompt, and no
+    /// built-ins.
+    let defaults : AgentProfile = { Guidance = None; Prompt = PromptStrategy.Static; WebSearch = false }
+
+    /// The SDK built-ins a turn on this host may use, by the SDK's own names. Every other
+    /// built-in stays out of the model's context (`Agent.optionsFor`).
+    let builtinTools (profile: AgentProfile) : string list =
+        [ if profile.WebSearch then "WebSearch" ]

@@ -333,8 +333,14 @@ has:
   a note on tools from other MCP servers, follow the SDK's dynamic boundary. The turn's
   context arrives as `<system-reminder>` blocks beside the message the turn answers.
 
-A session reads the file at boot and reports on its stderr which strategy it chose. To say
-nothing about the agent, leave the block out. Yession refuses a block that says nothing. It
+`agent.web-search: true` gives the agent Claude Code's `WebSearch` tool. It is off by
+default. The provider runs the search, so the CLI reaches no host it did not reach before,
+and every other Claude Code built-in (`WebFetch`, `Bash` and the rest) stays out. Turn it on
+only where your provider offers server-side web search: the Anthropic API does, and a Bedrock
+or Vertex deployment may not.
+
+A session reads the file at boot and reports on its stderr which strategy it chose, and
+whether web search is on. To say nothing about the agent, leave the block out. Yession refuses a block that says nothing. It
 also refuses a strategy that the build does not have.
 
 ---
