@@ -358,6 +358,9 @@ module Turn =
                 let said = result.result
                 { state with Body = (if String.IsNullOrEmpty said then "" else said) }, []
             else { state with Failed = Some ("agent run ended: " + result.subtype) }, []
+        // A tool's answer coming back. What the turn SAYS is read off the deltas; the calls
+        // a message carries are `BuiltinCalls`' to read.
+        | MessageCase.User _ -> state, []
         | MessageCase.Other _ -> state, []
 
     /// What the turn answers with: the reason it stopped, or what the model said.
@@ -405,6 +408,78 @@ module Turn =
             | StreamEnded -> outcome state
             | Threw reason -> Error reason
         pending, answer, state.Usage
+
+// --- the built-ins a turn called -----------------------------------------------------------
+
+/// The SDK built-ins a turn called, read off the messages its query yields, so the chat draws
+/// them as it draws the session's own tools.
+///
+/// The registry's tools are recorded where they run (`ToolUseLog.wrap`), and that is the one
+/// place every call through the registry passes. A built-in the operator opted into
+/// (`AgentProfile.builtinTools`) runs inside the CLI and passes through no registry, so the
+/// only trace of it is the conversation: the model's `tool_use` block, then the
+/// `tool_result` that answers it. The same log records both kinds, so a reader sees one kind
+/// of chip whoever ran the call.
+module BuiltinCalls =
+
+    /// The namespace a built-in is recorded under. A chip says `claude/WebSearch`: the tool
+    /// is Claude Code's own and not this session's.
+    [<Literal>]
+    let Namespace = "claude"
+
+    /// What one message says about a built-in call.
+    type Seen =
+        /// The model called a built-in: the call's id in the conversation, the tool, and the
+        /// arguments as the JSON object the model wrote.
+        | Called of call: string * name: string * arguments: string
+        /// An answer came back to the call with that id. Answers to the registry's calls come
+        /// back the same way; the runner keeps only those it saw called here.
+        | Answered of call: string * outcome: ToolOutcome
+
+    /// The built-in calls one message says something about, in its order. A `mcp__` call is
+    /// the registry's, already recorded where it ran.
+    let read (message: Message) : Seen list =
+        match Message.classify message with
+        | MessageCase.Assistant said ->
+            ApiMessage.blocks said.message
+            |> List.filter (fun block -> block.``type`` = "tool_use" && not (block.name.StartsWith "mcp__"))
+            |> List.map (fun block -> Called (block.id, block.name, JS.JSON.stringify block.input))
+        | MessageCase.User answer ->
+            ApiMessage.blocks answer.message
+            |> List.filter (fun block -> block.``type`` = "tool_result")
+            |> List.map (fun block ->
+                let outcome =
+                    match block.is_error with
+                    | Some true -> ToolCallFailed "the tool answered with an error"
+                    | _ -> ToolCallOk
+                Answered (block.tool_use_id, outcome))
+        | _ -> []
+
+    /// Record what one message says on `log`. `open'` holds the built-in calls that started
+    /// and have no answer yet, by their id in the conversation.
+    let record (log: ToolUseLog) (open': Collections.Generic.Dictionary<string, ToolUseId>) (message: Message) : Async<unit> =
+        async {
+            for seen in read message do
+                match seen with
+                | Called (call, name, arguments) ->
+                    let! handle = log.Started { Namespace = Namespace; Name = name; Arguments = Some arguments }
+                    handle |> Option.iter (fun id -> open'.[call] <- id)
+                | Answered (call, outcome) ->
+                    match open'.TryGetValue call with
+                    | true, id ->
+                        open'.Remove call |> ignore
+                        do! log.Finished id { Outcome = outcome; Block = None; Result = None; Queueing = None }
+                    | _ -> ()
+        }
+
+    /// Close every call the turn ended without an answer to, so no chip runs forever.
+    let abandon (log: ToolUseLog) (open': Collections.Generic.Dictionary<string, ToolUseId>) : Async<unit> =
+        async {
+            let pending = List.ofSeq open'.Values
+            open'.Clear ()
+            for id in pending do
+                do! log.Finished id { Outcome = ToolCallFailed "the turn ended before it answered"; Block = None; Result = None; Queueing = None }
+        }
 
 // --- one turn, run ------------------------------------------------------------------------
 
@@ -524,6 +599,7 @@ let private runQuery
     (model: string option)
     (registry: ToolRegistry)
     (builtins: string list)
+    (log: ToolUseLog)
     (agentEnv: Environment)
     (home: string)
     (claudePath: string)
@@ -538,6 +614,7 @@ let private runQuery
         // reports a non-success ending by THROWING, and what the turn thought and spent
         // before that has to survive the throw. See the `with` below.
         let mutable state = Turn.empty
+        let builtinCalls = Collections.Generic.Dictionary<string, ToolUseId> ()
         try
             let controller = Fable.NodeExtras.Aborting.abortController ()
             registerAbort (fun () -> controller.abort ())
@@ -554,6 +631,8 @@ let private runQuery
                     let next, chunks = Turn.step state step.value
                     state <- next
                     chunks |> List.iter forward
+                    do! BuiltinCalls.record log builtinCalls step.value
+            do! BuiltinCalls.abandon log builtinCalls
             let pending, answer, usage = Turn.finish Turn.StreamEnded state
             pending |> List.iter forward
             return { Answer = answer; Usage = usage; Refused = Turn.refused state }
@@ -572,6 +651,7 @@ let private runQuery
             // the thinking of every turn that ended the way turns actually end was dropped.
             let pending, answer, usage = Turn.finish (Turn.Threw (Http.reasonOf error)) state
             pending |> List.iter forward
+            do! BuiltinCalls.abandon log builtinCalls
             return { Answer = answer; Usage = usage; Refused = Turn.refused state }
     }
 
@@ -674,6 +754,7 @@ let runRenewing
                     (context.Model |> Option.map ModelId.value)
                     registry
                     (AgentProfile.builtinTools profile)
+                    capabilities.Tools.Record
                     (Environment.ofMap cli.Env)
                     cli.Home
                     (claudePath ())

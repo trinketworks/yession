@@ -439,6 +439,33 @@ type [<AllowNullLiteral>] Message =
     /// `Options.resume` takes. The SDK sets it on each message that it builds.
     abstract session_id : string with get, set
 
+/// One content block of an API message, declared for the tool calls in it: a `tool_use`
+/// block's `id`, `name` and `input`, and a `tool_result` block's `tool_use_id` and
+/// `is_error`. `type` says which a block is, and the fields of the other kind are absent.
+type [<AllowNullLiteral>] ApiBlock =
+    abstract ``type`` : string with get, set
+    abstract id : string with get, set
+    abstract name : string with get, set
+    /// The arguments the model produced, as the JSON object it produced.
+    abstract input : obj with get, set
+    abstract tool_use_id : string with get, set
+    abstract is_error : bool option with get, set
+
+/// The Messages API message an SDK message wraps. `content` is a list of blocks on every
+/// assistant message; on a user message it is that or a bare string, so read it through
+/// `ApiMessage.blocks`, never directly.
+type [<AllowNullLiteral>] ApiMessage =
+    abstract content : obj with get, set
+
+module ApiMessage =
+
+    /// The blocks of a message: none for a missing message, and none for a user message
+    /// whose content is a bare string, which carries no tool call.
+    let blocks (message: ApiMessage) : ApiBlock list =
+        if isNull message || isNull message.content then []
+        elif JS.Constructors.Array.isArray message.content then List.ofArray (unbox<ApiBlock array> message.content)
+        else []
+
 /// A message from the model, or one the CLI wrote in its place. When a request to the
 /// provider fails, the CLI writes the failure as an assistant message and names the kind of
 /// failure in `error` (`SDKAssistantMessageError` in `sdk.d.ts`). `None` is a message with
@@ -446,6 +473,14 @@ type [<AllowNullLiteral>] Message =
 type [<AllowNullLiteral>] AssistantMessage =
     inherit Message
     abstract error : string option with get, set
+    /// The model's message, block by block: what it said and the tools it called.
+    abstract message : ApiMessage with get, set
+
+/// A message on the user's side of the conversation. In a turn's stream it is how a tool's
+/// answer comes back: its `tool_result` blocks name the call each one answers.
+type [<AllowNullLiteral>] UserMessage =
+    inherit Message
+    abstract message : ApiMessage with get, set
 
 type [<AllowNullLiteral>] StreamEventMessage =
     inherit Message
@@ -524,11 +559,12 @@ module StreamEvent =
         | other -> StreamEventCase.Other other
 
 /// What one message off the query is. The SDK's union has thirty-odd members; these are the
-/// three this repository reads, and `Other` carries the tag of everything else.
+/// four this repository reads, and `Other` carries the tag of everything else.
 [<RequireQualifiedAccess>]
 type MessageCase =
     | StreamEvent of StreamEventMessage
     | Assistant of AssistantMessage
+    | User of UserMessage
     | Result of ResultMessage
     | Other of tag: string
 
@@ -538,6 +574,7 @@ module Message =
         match message.``type`` with
         | "stream_event" -> MessageCase.StreamEvent !!message
         | "assistant" -> MessageCase.Assistant !!message
+        | "user" -> MessageCase.User !!message
         | "result" -> MessageCase.Result !!message
         | other -> MessageCase.Other other
 
