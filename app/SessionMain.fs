@@ -143,6 +143,7 @@ let private resourceProfile =
             // reports says: the operator reads here which one their file chose.
             for r in Option.toList read do
                 eprintfn "%s: agent prompt: %s" path (PromptStrategy.name r.Profile.Agent.Prompt)
+                eprintfn "%s: agent web search: %s" path (if r.Profile.Agent.WebSearch then "on" else "off")
             read |> Option.map (fun r -> r.Profile)
         | Error e -> failwith e
 

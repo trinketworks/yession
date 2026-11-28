@@ -29,7 +29,7 @@ module OperatorProfile =
 
     let private fileKeys = [ "version"; "resources"; "always"; "agent"; "sandboxes"; "container" ]
     let private containerKeys = [ "mem_limit"; "pids_limit"; "cgroup_parent" ]
-    let private agentKeys = [ "guidance"; "prompt" ]
+    let private agentKeys = [ "guidance"; "prompt"; "web-search" ]
     let private leafKeys =
         [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "connection"; "seatbelt"; "device"; "capability" ]
     let private mountKeys = [ "from"; "at"; "mode" ]
@@ -409,25 +409,28 @@ module OperatorProfile =
                         raw
                         (PromptStrategy.all |> List.map PromptStrategy.name |> String.concat ", ")))
 
-    /// What the operator says about the agent: its guidance, and the strategy that puts its
-    /// prompt together. Each key may be left out, and a missing one is the default
-    /// (`AgentProfile.defaults`), because that is what a host that says nothing gets. An
-    /// `agent:` block with neither key is refused: it reads as configuration and is none.
+    /// What the operator says about the agent: its guidance, the strategy that puts its
+    /// prompt together, and whether it may search the web. Each key may be left out, and a
+    /// missing one is the default (`AgentProfile.defaults`), because that is what a host that
+    /// says nothing gets. An `agent:` block with no key is refused: it reads as configuration
+    /// and is none.
     let private agent : Decoder<AgentProfile> =
         noUnknownKeys agentKeys
         |> Decode.andThen (fun () ->
-            Decode.map2
-                (fun words strategy -> words, strategy)
+            Decode.map3
+                (fun words strategy search -> words, strategy, search)
                 (Decode.optional "guidance" guidance)
-                (Decode.optional "prompt" promptStrategy))
-        |> Decode.andThen (fun (words, strategy) ->
-            match words, strategy with
-            | None, None ->
-                Decode.fail "the agent block says nothing. Give it guidance (what the agent should know about this host) or a prompt strategy. Otherwise, remove the block"
+                (Decode.optional "prompt" promptStrategy)
+                (Decode.optional "web-search" Decode.bool))
+        |> Decode.andThen (fun (words, strategy, search) ->
+            match words, strategy, search with
+            | None, None, None ->
+                Decode.fail "the agent block says nothing. Give it guidance (what the agent should know about this host), a prompt strategy or web-search. Otherwise, remove the block"
             | _ ->
                 Decode.succeed
                     { Guidance = words
-                      Prompt = strategy |> Option.defaultValue AgentProfile.defaults.Prompt })
+                      Prompt = strategy |> Option.defaultValue AgentProfile.defaults.Prompt
+                      WebSearch = search |> Option.defaultValue AgentProfile.defaults.WebSearch })
 
     /// A value judged after it is read, so a refused one is refused in the one sentence
     /// that says why.
