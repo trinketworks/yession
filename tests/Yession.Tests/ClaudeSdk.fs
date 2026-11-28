@@ -21,6 +21,7 @@ open Fable.Core.JsInterop
 open Fable.Pyxpecto
 open Fable.ClaudeAgentSdk
 open Thoth.Json
+open Yession.Domain.Agent
 open Yession.Host
 
 /// Whether a JS object HAS a key, which is the question `jsOptions` exists to answer: an
@@ -158,7 +159,7 @@ let private optionTests =
         // The operator's opt-in is the built-in, and only it: every other built-in stays
         // out, and the one let in runs without a permission round-trip nobody can answer.
         testCase "web search the operator opted into is the turn's one built-in, auto-approved" <| fun () ->
-            let builtins = Yession.Domain.Agent.AgentProfile.builtinTools { Yession.Domain.Agent.AgentProfile.defaults with WebSearch = true }
+            let builtins = AgentProfile.builtinTools { AgentProfile.defaults with WebSearch = true }
             let options = turnOptionsWith builtins "/data/agent-home"
             Expect.equal options.tools [| "WebSearch" |] "WebSearch alone, not WebFetch or Bash"
             Expect.isTrue (options.allowedTools |> Array.contains "WebSearch") "auto-approved"
